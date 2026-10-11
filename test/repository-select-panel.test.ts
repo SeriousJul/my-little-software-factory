@@ -143,7 +143,7 @@ describe("the repository select panel", () => {
 				fake.set("gh", viewerArgs(), { stdout: viewerJson() });
 			},
 		});
-		const runner = planeRecord.fakeRunner;
+		const _runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
 				setup.mockInput.pressKey("o");

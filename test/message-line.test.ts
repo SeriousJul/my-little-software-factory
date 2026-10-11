@@ -53,7 +53,7 @@ import {
 	callsReached,
 	cleanupStateFixtures,
 	freshState,
-	issuesConfig,
+	issuesSourceConfig,
 	issueTicket,
 	RATE_LIMITED,
 	seedAwaitingTurn,
@@ -208,7 +208,7 @@ const WORKING_TICKET = {
 };
 
 /** The issues source config the stateful tests' standings carry. */
-const issueSource = issuesConfig.sources[0]!;
+const issueSource = issuesSourceConfig;
 
 describe("the permanent Message line", () => {
 	test("never shifts the layout for or against it", async () => {

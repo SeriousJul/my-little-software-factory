@@ -604,7 +604,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: auth review looks sound");
 			},
 			runner: (fake) =>
@@ -714,7 +714,7 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 		],
 		config: { consultationTypes: grillTypes },
 		commands: (fake, home) => {
-			const checkout = join(home, "src", "factory");
+			const _checkout = join(home, "src", "factory");
 			stubPaneReadText(fake, paneId, "Agent: the review is underway");
 		},
 		runner: (fake) =>
@@ -1232,7 +1232,7 @@ describe("Consultation responses through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, `pane-${RESPONSE_ID.slice(0, 8)}`, "Agent: waiting");
 			},
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
@@ -1283,7 +1283,7 @@ describe("Consultation responses through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				fake.set("herdr", ["agent", "prompt", AGENT, "follow up"], {
 					code: 1,
 					stderr: "refused\n",
@@ -1335,7 +1335,7 @@ describe("Consultation responses through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: the design holds");
 			},
 			runner: (fake) =>
@@ -1403,7 +1403,7 @@ describe("Agent interaction through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: working");
 				stubPaneReadAnsi(fake, paneId, "\u001b[31mERROR: authz\u001b[0m and more");
 			},
@@ -1474,7 +1474,7 @@ describe("Consultation close and cleanup through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, `pane-${a}`, "Agent: done a");
 				stubPaneReadText(fake, `pane-${b}`, "Agent: done b");
 				stubPaneReadText(fake, `pane-${c}`, "Agent: done c");
@@ -1563,7 +1563,7 @@ describe("Consultation close and cleanup through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, `pane-${short}`, "Agent: closing output");
 				stubTopology(
 					fake,
@@ -1754,7 +1754,7 @@ describe("Consultation close and cleanup through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				fake.set("herdr", ["tab", "list", "--workspace", `ws-${gone8}`], {
 					stdout: JSON.stringify({ result: { tabs: [{ tab_id: `tab-${gone8}` }] } }),
 				});
@@ -1826,7 +1826,7 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, `pane-${WORKING_ID.slice(0, 8)}`, "Agent: working");
 			},
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
@@ -1923,7 +1923,7 @@ describe("Consultation attention through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: answer one");
 			},
 			runner: (fake) =>
@@ -1995,7 +1995,7 @@ describe("Consultation attention through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: answer one");
 			},
 			runner: (fake) =>
@@ -2110,7 +2110,7 @@ describe("Consultation attention through the UI", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: waiting");
 			},
 			runner: (fake) =>
@@ -2291,7 +2291,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 			},
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
-		const checkout = join(planeRecord.home, "src", "factory");
+		const _checkout = join(planeRecord.home, "src", "factory");
 		try {
 			await withApp(
 				async (setup) => {
@@ -2785,7 +2785,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 			},
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
-		const checkout = join(planeRecord.home, "src", "factory");
+		const _checkout = join(planeRecord.home, "src", "factory");
 		try {
 			await withApp(
 				async (setup) => {
@@ -2877,7 +2877,7 @@ describe("Consultation response gating by observed Agent status", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: blocked on approval");
 				stubPaneReadAnsi(fake, paneId, "agent: waiting for input");
 			},
@@ -2945,7 +2945,7 @@ describe("Consultation response gating by observed Agent status", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: now idle");
 			},
 			runner: (fake) =>
@@ -3003,7 +3003,7 @@ describe("Consultation response gating by observed Agent status", () => {
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: working");
 				stubPaneReadAnsi(fake, paneId, "agent: typing...");
 			},
@@ -3078,7 +3078,7 @@ for (const exitCase of interactionExitCases) {
 			config: { consultationTypes: grillTypes, interactionExitKey: exitCase.config },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				stubPaneReadText(fake, paneId, "Agent: working");
 				stubPaneReadAnsi(fake, paneId, "agent: waiting for input");
 			},
@@ -3151,7 +3151,7 @@ describe("The full Consultation operator flow", () => {
 					agentListJson([{ ...launchedAgent, status: "working", seq: 1 }]),
 				)),
 		});
-		const checkout = join(planeRecord.home, "src", "factory");
+		const _checkout = join(planeRecord.home, "src", "factory");
 		try {
 			await withApp(
 				async (setup) => {
@@ -3508,7 +3508,7 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 			config: { consultationTypes: grillTypes },
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake, home) => {
-				const checkout = join(home, "src", "factory");
+				const _checkout = join(home, "src", "factory");
 				fake.set("herdr", ["workspace", "get", workspaceId], {
 					stdout: workspaceGetJson(workspaceId, label),
 				});
@@ -3823,7 +3823,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 			},
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
 		});
-		const checkout = join(planeRecord.home, "src", "factory");
+		const _checkout = join(planeRecord.home, "src", "factory");
 		try {
 			await withApp(
 				async (setup) => {

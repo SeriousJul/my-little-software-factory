@@ -16,8 +16,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { widthOf } from "../src/components/text.ts";
 import type { AppLoopPolicy } from "../src/components/app.ts";
+import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
@@ -48,9 +48,9 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
-import { plane, type SeededPlane } from "./seeded-plane.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import { plane, type SeededPlane } from "./seeded-plane.ts";
 
 let home = "";
 
@@ -585,11 +585,8 @@ describe("the merged Main view", () => {
 				expect(headerOf(collapsedAgain, "Tickets").startsWith("▸")).toBe(true);
 				expect(paneTopRows(collapsedAgain)).toBe(1);
 				expect(detailPaneText(collapsedAgain)).toContain("consultation-cccccccc");
-				const restored = await press(
-					setup,
-					"x",
-					"the Consultation section to expand again",
-					(f) => headerOf(f, "Consultations").startsWith("▾"),
+				const restored = await press(setup, "x", "the Consultation section to expand again", (f) =>
+					headerOf(f, "Consultations").startsWith("▾"),
 				);
 				// The Ticket section stayed collapsed: only the Consultation
 				// box came back, beside the always-visible Work box.
@@ -744,17 +741,14 @@ describe("the merged Main view", () => {
 			sources: [],
 			config: noSource,
 		});
-		await booted(
-			async (setup) => {
-				// Refresh answers for the whole plane from either section: no
-				// section switch is needed to reach the Ticket sources.
-				const refreshed = await press(setup, "r", "the no-op refresh", (f) =>
-					messageRowOf(f).includes("no Ticket sources exist"),
-				);
-				expect(messageRowOf(refreshed)).not.toContain("refreshing 0 sources");
-			},
-			planeRecord,
-		);
+		await booted(async (setup) => {
+			// Refresh answers for the whole plane from either section: no
+			// section switch is needed to reach the Ticket sources.
+			const refreshed = await press(setup, "r", "the no-op refresh", (f) =>
+				messageRowOf(f).includes("no Ticket sources exist"),
+			);
+			expect(messageRowOf(refreshed)).not.toContain("refreshing 0 sources");
+		}, planeRecord);
 	});
 
 	test("refresh reports an in-flight Ticket source without fake progress", async () => {
@@ -768,17 +762,14 @@ describe("the merged Main view", () => {
 			config,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
-		await booted(
-			async (setup) => {
-				await awaitFrame(setup, () => source.calls === 1, "the Ticket source refresh");
-				const refused = await press(setup, "r", "the in-flight refresh refusal", (f) =>
-					messageRowOf(f).includes("every Ticket source is already refreshing"),
-				);
-				expect(messageRowOf(refused)).not.toContain("refreshing 0 sources");
-				source.settle(sampleOutcome());
-			},
-			planeRecord,
-		);
+		await booted(async (setup) => {
+			await awaitFrame(setup, () => source.calls === 1, "the Ticket source refresh");
+			const refused = await press(setup, "r", "the in-flight refresh refusal", (f) =>
+				messageRowOf(f).includes("every Ticket source is already refreshing"),
+			);
+			expect(messageRowOf(refused)).not.toContain("refreshing 0 sources");
+			source.settle(sampleOutcome());
+		}, planeRecord);
 	});
 
 	test("the Consultation header carries the attention facts, and adds no row", async () => {
@@ -1217,25 +1208,22 @@ describe("the merged Main view", () => {
 			config,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
-		await booted(
-			async (setup) => {
-				source.settle(sampleOutcome());
-				await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
-				// Move the Ticket selection, then collapse the section.
-				await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "x", "the Ticket section to collapse", (f) =>
-					headerOf(f, "Tickets").startsWith("▸"),
-				);
-				// Coming back finds the same Ticket selected: the collapse
-				// kept the section's state rather than rebuilding it.
-				const back = await press(setup, "x", "the Ticket section to expand", (f) =>
-					headerOf(f, "Tickets").startsWith("▾"),
-				);
-				expect(markerRowOf(back)).toBe(4);
-				expect(back).toContain("Fix pan drift");
-			},
-			planeRecord,
-		);
+		await booted(async (setup) => {
+			source.settle(sampleOutcome());
+			await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
+			// Move the Ticket selection, then collapse the section.
+			await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 4);
+			await press(setup, "x", "the Ticket section to collapse", (f) =>
+				headerOf(f, "Tickets").startsWith("▸"),
+			);
+			// Coming back finds the same Ticket selected: the collapse
+			// kept the section's state rather than rebuilding it.
+			const back = await press(setup, "x", "the Ticket section to expand", (f) =>
+				headerOf(f, "Tickets").startsWith("▾"),
+			);
+			expect(markerRowOf(back)).toBe(4);
+			expect(back).toContain("Fix pan drift");
+		}, planeRecord);
 	});
 
 	/**
@@ -1425,7 +1413,12 @@ describe("the merged Main view", () => {
 				);
 				expect(headerOf(collapsedBell, "Consultations").startsWith("▸")).toBe(true);
 			},
-			{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "polled", intervalMs: 50 } },
+			{
+				width: WIDTH,
+				height: 32,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 50 },
+			},
 		);
 	});
 

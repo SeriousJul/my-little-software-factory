@@ -40,20 +40,20 @@ import {
 	settle,
 	spanColorAt,
 	startingFaceOf,
-	waitSourceHealthy,
 	WIDTH,
+	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
 import {
 	agentListJson,
-	FakeRunner,
+	type FakeRunner,
 	tabCreateJson,
 	workspaceCreateJson,
 	workspaceListJson,
 } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner } from "./gated-runner.ts";
-import { plane, ticketOf, type SeededPlane } from "./seeded-plane.ts";
+import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
 import "./theme-isolation.ts";
 
 const paths: string[] = [];
@@ -305,11 +305,8 @@ const settledList = () =>
 
 describe("the Starting window's timeline", () => {
 	test("the manual hand-off wears the face from the keypress to the first observation", async () => {
-		const { plane: app, gate } = await seededFace(
-			"open",
-			{},
-			{},
-			(command) => command.includes("agent start"),
+		const { plane: app, gate } = await seededFace("open", {}, {}, (command) =>
+			command.includes("agent start"),
 		);
 		const src = app.sources[0] as FakeSource;
 		stubCheckout(app.fakeRunner, checkoutOf(app.config));
@@ -343,16 +340,18 @@ describe("the Starting window's timeline", () => {
 				expect(face(running)).toBeNull();
 				expect(running).toContain("open: 0  running: 1  awaiting: 0");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: app, loopPolicy: { kind: "polled", intervalMs: POLL_MS } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
 	});
 
 	test("a failed start drops the face and returns the row to its state", async () => {
-		const { plane: app, gate } = await seededFace(
-			"open",
-			{},
-			{},
-			(command) => command.startsWith("herdr workspace create"),
+		const { plane: app, gate } = await seededFace("open", {}, {}, (command) =>
+			command.startsWith("herdr workspace create"),
 		);
 		const src = app.sources[0] as FakeSource;
 		stubCheckout(app.fakeRunner, checkoutOf(app.config));
@@ -392,16 +391,18 @@ describe("the Starting window's timeline", () => {
 					'Warning: queued handoff for "Persist source facts" was not run: error: the workspace is not creatable',
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: app, loopPolicy: { kind: "polled", intervalMs: POLL_MS } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
 	});
 
 	test("the auto hand-off wears the face while its start stands", async () => {
-		const { plane: app, gate } = await seededFace(
-			"open",
-			{},
-			{ autoMode: true },
-			(command) => command.includes("agent start"),
+		const { plane: app, gate } = await seededFace("open", {}, { autoMode: true }, (command) =>
+			command.includes("agent start"),
 		);
 		const src = app.sources[0] as FakeSource;
 		stubCheckout(app.fakeRunner, checkoutOf(app.config));
@@ -421,7 +422,12 @@ describe("the Starting window's timeline", () => {
 				await releaseHeld(gate);
 				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: app, loopPolicy: { kind: "polled", intervalMs: POLL_MS } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
 	});
 
@@ -471,10 +477,14 @@ describe("the Starting window's timeline", () => {
 		app.fakeRunner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
 			stdout: tabCreateJson("pane-9", "tab-9"),
 		});
-		app.fakeRunner.set("herdr", ["agent", "start", AGENT_NAME, "--kind", "pi", "--pane", "pane-9"], {
-			code: 1,
-			stderr: "error: the pane is gone\n",
-		});
+		app.fakeRunner.set(
+			"herdr",
+			["agent", "start", AGENT_NAME, "--kind", "pi", "--pane", "pane-9"],
+			{
+				code: 1,
+				stderr: "error: the pane is gone\n",
+			},
+		);
 		await withApp(
 			async (setup) => {
 				src.settle(success);
@@ -517,7 +527,12 @@ describe("the Starting window's timeline", () => {
 				// And the decision stands where the ask put it.
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: app, loopPolicy: { kind: "polled", intervalMs: POLL_MS } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
 	});
 
@@ -583,7 +598,12 @@ describe("the Starting window's timeline", () => {
 				app.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working") });
 				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: app, loopPolicy: { kind: "polled", intervalMs: POLL_MS } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
 	});
 
@@ -621,7 +641,12 @@ describe("the Starting window's timeline", () => {
 				expect(resting).not.toContain("[handed-off]");
 				expect(faceCount(resting)).toBe(0);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: app, loopPolicy: { kind: "polled", intervalMs: POLL_MS } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
 	});
 
@@ -644,7 +669,7 @@ describe("the Starting window's timeline", () => {
 					workspaceId: "ws-1",
 					agent: "pi",
 					status: "blocked",
-					},
+				},
 			]),
 		});
 		await withApp(
@@ -663,7 +688,12 @@ describe("the Starting window's timeline", () => {
 				expect(blocked).not.toContain("[handed-off]");
 				expect(faceCount(blocked)).toBe(0);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: app, loopPolicy: { kind: "polled", intervalMs: POLL_MS } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
 	});
 
@@ -683,7 +713,12 @@ describe("the Starting window's timeline", () => {
 				expect(face(resting)).toBeNull();
 				expect(resting).not.toContain(" starting");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: app, loopPolicy: { kind: "polled", intervalMs: POLL_MS } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
 	});
 });
@@ -695,14 +730,14 @@ describe("the no-color presentation", () => {
 			await withApp(async (setup) => {
 				// The sample data carries a handed-off ticket, so its face stands
 				// on the boot frame; selecting it puts the same face in the detail.
-					await settle(setup);
-					const booted = await settle(setup);
-					const faceRow = rowsOf(booted).findIndex((row) => startingFaceOf(row) !== null);
-					expect(faceRow).toBeGreaterThanOrEqual(0);
-					// The standing opens on the awaiting lead; the running ticket
-					// rests on its badge, and the face is one step further down.
-					await press(setup, "j", "the running ticket", (f) => f.includes("[running]"));
-					await press(setup, "j", "the handed-off ticket", (f) => faceCount(f) === 2);
+				await settle(setup);
+				const booted = await settle(setup);
+				const faceRow = rowsOf(booted).findIndex((row) => startingFaceOf(row) !== null);
+				expect(faceRow).toBeGreaterThanOrEqual(0);
+				// The standing opens on the awaiting lead; the running ticket
+				// rests on its badge, and the face is one step further down.
+				await press(setup, "j", "the running ticket", (f) => f.includes("[running]"));
+				await press(setup, "j", "the handed-off ticket", (f) => faceCount(f) === 2);
 				const frame = await settle(setup);
 				// The row and the detail face both wear the written word. The
 				// identity is one line now, so the two faces can stand on the

@@ -49,6 +49,7 @@ import {
 	cleanupStateFixtures,
 	freshState,
 	issuesConfig,
+	issuesSourceConfig,
 	issueTicket,
 	success,
 } from "./state-fixture.ts";
@@ -272,7 +273,7 @@ describe("the in-app Key guide", () => {
 				});
 				const planeRecord = await plane({
 					existing: state,
-					sources: [{ config: issuesConfig.sources[0]!, tickets: [ticketOf(issueTicket())] }],
+					sources: [{ config: issuesSourceConfig, tickets: [ticketOf(issueTicket())] }],
 					config: issuesConfig,
 					applyFetch: false,
 					runner: () => missingRunner,
@@ -350,7 +351,7 @@ describe("the in-app Key guide", () => {
 			};
 			const planeRecord = await plane({
 				existing: state,
-				sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+				sources: [{ config: issuesSourceConfig, tickets: [] }],
 				config: zeroSeatConfig,
 				applyFetch: false,
 				runner: () => runner,
@@ -1001,7 +1002,7 @@ describe("the in-app Key guide", () => {
 		try {
 			const planeRecord = await plane({
 				existing: state,
-				sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+				sources: [{ config: issuesSourceConfig, tickets: [] }],
 				config: issuesConfig,
 				applyFetch: false,
 			});

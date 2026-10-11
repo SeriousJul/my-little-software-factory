@@ -782,7 +782,7 @@ pull-request-facts = []
 				boundSources: [],
 			}),
 		});
-		const state = planeRecord.state;
+		const _state = planeRecord.state;
 		const configPath = planeRecord.configPath;
 
 		await withApp(

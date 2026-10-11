@@ -13,11 +13,11 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { loadConfigFile } from "../src/config.ts";
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
-import { FakeRunner } from "./fake-runner.ts";
+import type { FakeRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-import { plane, type SeededPlane, type SeededPlaneStanding, withPlane } from "./seeded-plane.ts";
+import { plane, type SeededPlane, withPlane } from "./seeded-plane.ts";
 
-const ISSUES = { name: "issues", kind: "github-issues" };
+const _ISSUES = { name: "issues", kind: "github-issues" };
 
 /** The standing's rows, by identity, read through the state module's list rule. */
 function viewsOf(p: SeededPlane) {

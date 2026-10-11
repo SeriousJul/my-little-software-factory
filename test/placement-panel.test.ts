@@ -23,12 +23,12 @@ import {
 	rgb,
 	rowSelected,
 	spanColors,
-	waitSourceHealthy,
 	WIDTH,
+	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
-import { FakeSource } from "./fake-source.ts";
-import { plane, ticketOf, type SeededPlane } from "./seeded-plane.ts";
+import type { FakeSource } from "./fake-source.ts";
+import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
 import "./theme-isolation.ts";
 
 const repoIdentity = "github.com/acme/factory";
@@ -96,10 +96,12 @@ async function seeded(machine: WorkflowState[] | null): Promise<Seeded> {
 	// repository (ADR 0066), so the fixture holds the flat axis.
 	const planeRecord = await plane({
 		groupingAxis: "none",
-		sources: [{
-			config: source,
-			tickets: [ticketOf(fetched())],
-		}],
+		sources: [
+			{
+				config: source,
+				tickets: [ticketOf(fetched())],
+			},
+		],
 		repos: { [repoIdentity]: "checkout" },
 		config: {
 			...(machine === null ? {} : { workflowStates: machine }),
@@ -151,7 +153,12 @@ describe("the Task row's placement note", () => {
 				// the note writes carries no third, warning, paint.
 				expect(spanColors(setup, "review")).toEqual([tone("focusedText"), tone("detail")]);
 			},
-			{ width: WIDTH, height: 30, plane: app.plane, loopPolicy: { kind: "polled", intervalMs: 40 } },
+			{
+				width: WIDTH,
+				height: 30,
+				plane: app.plane,
+				loopPolicy: { kind: "polled", intervalMs: 40 },
+			},
 		);
 	});
 
@@ -215,7 +222,12 @@ describe("the Task row's placement note", () => {
 				expect(frameText(implement)).not.toContain("not offered by any state");
 				expect(spanColors(setup, "implement")).toEqual([tone("focusedText")]);
 			},
-			{ width: WIDTH, height: 30, plane: app.plane, loopPolicy: { kind: "polled", intervalMs: 40 } },
+			{
+				width: WIDTH,
+				height: 30,
+				plane: app.plane,
+				loopPolicy: { kind: "polled", intervalMs: 40 },
+			},
 		);
 	});
 });

@@ -18,8 +18,8 @@ import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import { resolveTheme, type ThemeRole } from "../src/components/shared/theme.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
 import type { Logger } from "../src/logging.ts";
-import type { FactoryState } from "../src/state.ts";
 import { NOOP_LOGGER } from "../src/logging.ts";
+import type { FactoryState } from "../src/state.ts";
 import { flushPassiveNow } from "./passive-flush-hold.ts";
 import { plane, type SeededPlane } from "./seeded-plane.ts";
 import "./theme-isolation.ts";
@@ -1448,8 +1448,7 @@ export async function settle(setup: Setup, maxMs = 300): Promise<string> {
 export async function waitSourceHealthy(state: FactoryState): Promise<void> {
 	const deadline = Date.now() + 2000;
 	for (;;) {
-		if (state.sourceFact.sourceHealths().every((health) => health.health === "healthy"))
-			return;
+		if (state.sourceFact.sourceHealths().every((health) => health.health === "healthy")) return;
 		if (Date.now() >= deadline)
 			throw new Error(
 				`the sources did not stand healthy: ${JSON.stringify(state.sourceFact.sourceHealths())}`,

@@ -19,7 +19,6 @@ import {
 	cellColors,
 	FRAME_DEADLINE_MS,
 	HEIGHT,
-	markerRowOf,
 	messageRowOf,
 	press,
 	rgb,

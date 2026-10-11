@@ -21,7 +21,6 @@ import {
 	withApp,
 } from "./app-harness.ts";
 
-
 /** The `resize` listeners one live renderer holds. */
 function resizeListeners(setup: AppSetup): number {
 	return setup.renderer.listenerCount("resize");
@@ -63,12 +62,12 @@ async function toFirstOpenTicket(setup: AppSetup): Promise<void> {
 describe("the renderer's resize listeners", () => {
 	test("one surface costs one listener, and a nested stack stays under the limit", async () => {
 		await withApp(
-				async (setup) => {
-					// The boot read settles on the seeded snapshot: the open rows
-					// stand healthy, and the panel's handoff gate can pass them.
-					setup.plane.settleFirstFetch();
-					await settle(setup);
-					const base = await settledListeners(setup);
+			async (setup) => {
+				// The boot read settles on the seeded snapshot: the open rows
+				// stand healthy, and the panel's handoff gate can pass them.
+				setup.plane.settleFirstFetch();
+				await settle(setup);
+				const base = await settledListeners(setup);
 				expect(base).toBeGreaterThan(0);
 
 				// The Key guide over the base frame: one component, one listener.

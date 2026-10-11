@@ -33,11 +33,11 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import type { FakeSource } from "./fake-source.ts";
 import { agentListJson, tabCreateJson, workspaceListJson } from "./fake-runner.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { plane, ticketOf } from "./seeded-plane.ts";
 
-const source = { name: "issues", kind: "github-issues" };
+const _source = { name: "issues", kind: "github-issues" };
 const identityA = "github:github.com:I_5";
 const identityB = "github:github.com:I_6";
 const identityC = "github:github.com:I_7";
@@ -177,19 +177,19 @@ describe("the held turn through the real app flow", () => {
 		});
 
 		await withApp(
-				async (setup) => {
+			async (setup) => {
 				const state = setup.plane.state;
 				const src = setup.plane.sources[0] as FakeSource;
-					src.settle({
-						status: "success",
-						fetchedAt: "2026-08-31T10:02:00Z",
-						tickets: [
-							fetched(5, "Persist source facts"),
-							fetched(6, "Second open ticket"),
-							fetched(7, "Third open ticket"),
-							fetched(8, "Fourth open ticket"),
-						],
-					});
+				src.settle({
+					status: "success",
+					fetchedAt: "2026-08-31T10:02:00Z",
+					tickets: [
+						fetched(5, "Persist source facts"),
+						fetched(6, "Second open ticket"),
+						fetched(7, "Third open ticket"),
+						fetched(8, "Fourth open ticket"),
+					],
+				});
 				// The auto-handoffs settle: two of the three open tickets
 				// are running; the third waits on the agent limit.
 				await waitUntil("the auto-handoffs to be running", () =>

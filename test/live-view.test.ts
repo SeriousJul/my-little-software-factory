@@ -111,7 +111,7 @@ function settledSession(text: string): string {
 	return file;
 }
 
-const source = { name: "issues", kind: "github-issues" };
+const _source = { name: "issues", kind: "github-issues" };
 const identity = "github:github.com:I_5";
 const repoIdentity = "github.com/acme/factory";
 

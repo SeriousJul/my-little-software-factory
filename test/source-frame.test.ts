@@ -20,7 +20,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
@@ -39,8 +39,9 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { FakeSource } from "./fake-source.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { plane } from "./seeded-plane.ts";
+import { issuesSourceConfig } from "./state-fixture.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -102,18 +103,18 @@ const issuesConfig: FactoryConfig = {
 	],
 };
 
+/** The pulls source beside the shared issues source, on the same repository. */
+const pullsSourceConfig: TicketSourceConfig = {
+	name: "pulls",
+	kind: "github-pull-requests",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
+};
+
 const pullsConfig: FactoryConfig = {
 	...issuesConfig,
-	sources: [
-		...issuesConfig.sources,
-		{
-			name: "pulls",
-			kind: "github-pull-requests",
-			refreshIntervalSeconds: 60,
-			repositories: ["acme/factory"],
-			host: "github.com",
-		},
-	],
+	sources: [...issuesConfig.sources, pullsSourceConfig],
 };
 
 const HANDOFF_CHOICE = {
@@ -153,7 +154,7 @@ describe("source-driven frames", () => {
 		// The plane holds its first fetch: the state stands without the source
 		// rows, and the app's own fetch is the one the test settles.
 		const planeRecord = await plane({
-			sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
 			groupingAxis: "none",
 			applyFetch: false,
@@ -188,7 +189,7 @@ describe("source-driven frames", () => {
 
 	test("shows no tickets match the configured sources after a successful empty refresh", async () => {
 		const planeRecord = await plane({
-			sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
 			groupingAxis: "none",
 			applyFetch: false,
@@ -215,7 +216,7 @@ describe("source-driven frames", () => {
 
 	test("a failed refresh makes the source stale, keeps its tickets, and refuses a new handoff", async () => {
 		const planeRecord = await plane({
-			sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
 			groupingAxis: "none",
 			applyFetch: false,
@@ -310,7 +311,7 @@ describe("source-driven frames", () => {
 
 	test("the detail pane carries the source facts of the selected ticket", async () => {
 		const planeRecord = await plane({
-			sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
 			groupingAxis: "none",
 			applyFetch: false,
@@ -370,7 +371,7 @@ describe("source-driven frames", () => {
 			],
 		};
 		const planeRecord = await plane({
-			sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config,
 			groupingAxis: "none",
 			applyFetch: false,
@@ -411,8 +412,8 @@ describe("source-driven frames", () => {
 		// matches no rule and falls back to the configured default.
 		const planeRecord = await plane({
 			sources: [
-				{ config: pullsConfig.sources[0]!, tickets: [] },
-				{ config: pullsConfig.sources[1]!, tickets: [] },
+				{ config: issuesSourceConfig, tickets: [] },
+				{ config: pullsSourceConfig, tickets: [] },
 			],
 			config: pullsConfig,
 			groupingAxis: "none",
@@ -520,14 +521,14 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			existing: state,
 			sources: [
-				{ config: pullsConfig.sources[0]!, tickets: [] },
-				{ config: pullsConfig.sources[1]!, tickets: [] },
+				{ config: issuesSourceConfig, tickets: [] },
+				{ config: pullsSourceConfig, tickets: [] },
 			],
 			config: pullsConfig,
 			groupingAxis: "none",
 		});
 		const issuesSource = planeRecord.sources[0] as FakeSource;
-		const pullsSource = planeRecord.sources[1] as FakeSource;
+		const _pullsSource = planeRecord.sources[1] as FakeSource;
 		await withApp(
 			async (setup) => {
 				// While both sources still load, both open tickets are not
@@ -582,82 +583,82 @@ describe("source-driven frames", () => {
 			title: "Second ticket",
 		});
 		const planeRecord = await plane({
-			sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
 			groupingAxis: "none",
 			applyFetch: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
-				async (setup) => {
-					source.settle(success([first, second]));
-					await awaitFrame(setup, (f) => listRowOf(f, "First ticket") >= 0, "the first ticket");
+			async (setup) => {
+				source.settle(success([first, second]));
+				await awaitFrame(setup, (f) => listRowOf(f, "First ticket") >= 0, "the first ticket");
 
-					// A refresh alone no longer reorders the open band: the tickets
-					// read by ticket number (ADR 0065), and a number never changes.
-					// A state change still reorders the list, and the selection must
-					// ride the ticket, not the row.
-					const db = new Database(planeRecord.state.path);
-					db.prepare(
-						"UPDATE tickets SET state = 'running' WHERE identity = 'github:github.com:I_6'",
-					).run();
-					db.close();
-					setup.mockInput.pressKey("r");
-					await callsReached(source, 2);
-					source.settle(success([first, second]));
-					await awaitFrame(
-						setup,
-						(f) => listRowOf(f, "Second ticket") < listRowOf(f, "First ticket"),
-						"the list to reorder",
-					);
-					// The selection stayed on the first ticket, not the first row.
-					const frame = await settle(setup);
-					const markerRow = rowsOf(frame)[markerRowOf(frame)];
-					expect(markerRow).toContain("First ticket");
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					plane: planeRecord,
-					loopPolicy: { kind: "production" },
-				},
-			);
+				// A refresh alone no longer reorders the open band: the tickets
+				// read by ticket number (ADR 0065), and a number never changes.
+				// A state change still reorders the list, and the selection must
+				// ride the ticket, not the row.
+				const db = new Database(planeRecord.state.path);
+				db.prepare(
+					"UPDATE tickets SET state = 'running' WHERE identity = 'github:github.com:I_6'",
+				).run();
+				db.close();
+				setup.mockInput.pressKey("r");
+				await callsReached(source, 2);
+				source.settle(success([first, second]));
+				await awaitFrame(
+					setup,
+					(f) => listRowOf(f, "Second ticket") < listRowOf(f, "First ticket"),
+					"the list to reorder",
+				);
+				// The selection stayed on the first ticket, not the first row.
+				const frame = await settle(setup);
+				const markerRow = rowsOf(frame)[markerRowOf(frame)];
+				expect(markerRow).toContain("First ticket");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
+		);
 	});
 
 	test("r refreshes the sources and skips a source that is already fetching", async () => {
 		const planeRecord = await plane({
-			sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
 			groupingAxis: "none",
 			applyFetch: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
-				async (setup) => {
-					source.settle(success([ticket()]));
-					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
-					expect(source.calls).toBe(1);
+			async (setup) => {
+				source.settle(success([ticket()]));
+				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+				expect(source.calls).toBe(1);
 
-					// Two rapid manual refreshes start one fetch, not two.
-					setup.mockInput.pressKey("r");
-					setup.mockInput.pressKey("r");
-					await callsReached(source, 2);
-					const fresh = ticket("github:github.com:I_6", {
-						externalKey: "#6",
-						title: "Second ticket",
-						externalUpdatedAt: "2026-08-31T11:00:00Z",
-					});
-					source.settle(success([fresh, ticket()]));
-					await awaitFrame(setup, (f) => f.includes("Second ticket"), "the new ticket");
-					expect(source.calls).toBe(2);
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					plane: planeRecord,
-					loopPolicy: { kind: "production" },
-				},
-			);
+				// Two rapid manual refreshes start one fetch, not two.
+				setup.mockInput.pressKey("r");
+				setup.mockInput.pressKey("r");
+				await callsReached(source, 2);
+				const fresh = ticket("github:github.com:I_6", {
+					externalKey: "#6",
+					title: "Second ticket",
+					externalUpdatedAt: "2026-08-31T11:00:00Z",
+				});
+				source.settle(success([fresh, ticket()]));
+				await awaitFrame(setup, (f) => f.includes("Second ticket"), "the new ticket");
+				expect(source.calls).toBe(2);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
+		);
 	});
 
 	test("a ticket with an unresolved handoff attempt refuses a new handoff and asks for recovery", async () => {
@@ -675,7 +676,7 @@ describe("source-driven frames", () => {
 
 		const planeRecord = await plane({
 			existing: state,
-			sources: [{ config: issuesConfig.sources[0]!, tickets: [] }],
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
 			groupingAxis: "none",
 		});

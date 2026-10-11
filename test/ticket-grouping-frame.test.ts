@@ -19,7 +19,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
-import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { GroupingAxis } from "../src/domain/grouping.ts";
 import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
@@ -46,8 +46,8 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { FakeSource } from "./fake-source.ts";
-import { plane, ticketOf, type SeededPlane } from "./seeded-plane.ts";
+import type { FakeSource } from "./fake-source.ts";
+import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
 import { callsReached } from "./state-fixture.ts";
 
 let home = "";
@@ -134,8 +134,8 @@ function crowdFirst(extra: number): FetchedTicket[] {
 	];
 }
 
-const ISSUES = { name: "issues", kind: "github-issues" };
-const TRIAGE = { name: "triage", kind: "github-issues" };
+const _ISSUES = { name: "issues", kind: "github-issues" };
+const _TRIAGE = { name: "triage", kind: "github-issues" };
 
 const success = (listed: FetchedTicket[]): FetchOutcome => ({
 	status: "success",
@@ -153,6 +153,23 @@ function triageListing(): FetchedTicket[] {
 	];
 }
 
+/** The Group frame's two issue sources: issues beside triage. */
+const groupIssuesConfig: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: [FACTORY, BILLING],
+	host: "github.com",
+};
+
+const groupTriageConfig: TicketSourceConfig = {
+	name: "triage",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: [FACTORY],
+	host: "github.com",
+};
+
 /**
  * The config the grouping frames run on.
  *
@@ -165,22 +182,7 @@ const groupConfig: FactoryConfig = {
 	...BASE_CONFIG,
 	agentPollIntervalSeconds: 60,
 	maxParallelAgents: 4,
-	sources: [
-		{
-			name: "issues",
-			kind: "github-issues",
-			refreshIntervalSeconds: 60,
-			repositories: [FACTORY, BILLING],
-			host: "github.com",
-		},
-		{
-			name: "triage",
-			kind: "github-issues",
-			refreshIntervalSeconds: 60,
-			repositories: [FACTORY],
-			host: "github.com",
-		},
-	],
+	sources: [groupIssuesConfig, groupTriageConfig],
 	workflowStates: [
 		{
 			name: "ready-for-agent",
@@ -239,10 +241,13 @@ async function groupedPlane(
 		statePath: join(home, "state.sqlite"),
 		sources: [
 			{
-				config: groupConfig.sources[0]!,
+				config: groupIssuesConfig,
 				tickets: listed.map((ticket) => heldRowOf(ticket, hold)),
 			},
-			{ config: groupConfig.sources[1]!, tickets: triageListing().map((ticket) => ticketOf(ticket)) },
+			{
+				config: groupTriageConfig,
+				tickets: triageListing().map((ticket) => ticketOf(ticket)),
+			},
 		],
 		config: groupConfig,
 		groupingAxis: axis,
@@ -307,7 +312,7 @@ async function bootGrouped(
 		/** Stand the repositories uninitialized, so the marker and the note stand. */
 		uninit?: boolean;
 	} = {},
-	): Promise<void> {
+): Promise<void> {
 	const listed = options.list ?? tickets();
 	const planeRecord =
 		options.state === undefined
@@ -316,8 +321,11 @@ async function bootGrouped(
 					existing: options.state,
 					statePath: stateFile(),
 					sources: [
-						{ config: groupConfig.sources[0]!, tickets: listed.map((ticket) => ticketOf(ticket)) },
-						{ config: groupConfig.sources[1]!, tickets: triageListing().map((ticket) => ticketOf(ticket)) },
+						{ config: groupIssuesConfig, tickets: listed.map((ticket) => ticketOf(ticket)) },
+						{
+							config: groupTriageConfig,
+							tickets: triageListing().map((ticket) => ticketOf(ticket)),
+						},
 					],
 					config: groupConfig,
 				});
@@ -1077,8 +1085,8 @@ describe("the Ticket section's Groups", () => {
 			config: groupConfig,
 			groupingAxis: "none",
 			sources: [
-				{ config: groupConfig.sources[0]!, tickets: [] },
-				{ config: groupConfig.sources[1]!, tickets: [] },
+				{ config: groupIssuesConfig, tickets: [] },
+				{ config: groupTriageConfig, tickets: [] },
 			],
 		});
 		const issues = planeRecord.sources[0] as FakeSource;
@@ -1187,11 +1195,11 @@ describe("the Ticket section's Groups", () => {
 			statePath: stateFile(),
 			sources: [
 				{
-					config: groupConfig.sources[0]!,
+					config: groupIssuesConfig,
 					tickets: [ticketOf(issue(1, "Webhook retry", FACTORY, { labels: ["ready-for-agent"] }))],
 				},
 				{
-					config: groupConfig.sources[1]!,
+					config: groupTriageConfig,
 					tickets: [
 						ticketOf(
 							issue(2, "Deploy gate", FACTORY, {
@@ -1212,14 +1220,14 @@ describe("the Ticket section's Groups", () => {
 									tabId: "tab-2",
 									workspaceId: "ws-2",
 									herdrName: null,
-							},
+								},
 								handoffCount: 1,
 							},
 						),
 					],
 				},
 			],
-			config: { ...groupConfig, sources: [groupConfig.sources[0]!] },
+			config: { ...groupConfig, sources: [groupIssuesConfig] },
 		});
 		const issues = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -1859,8 +1867,11 @@ describe("the init marker and the one-time note (ADR 0075)", () => {
 		const first = await plane({
 			statePath: stateFile(),
 			sources: [
-				{ config: groupConfig.sources[0]!, tickets: tickets().map((ticket) => ticketOf(ticket)) },
-				{ config: groupConfig.sources[1]!, tickets: triageListing().map((ticket) => ticketOf(ticket)) },
+				{ config: groupIssuesConfig, tickets: tickets().map((ticket) => ticketOf(ticket)) },
+				{
+					config: groupTriageConfig,
+					tickets: triageListing().map((ticket) => ticketOf(ticket)),
+				},
 			],
 			config: groupConfig,
 			groupingAxis: "repository",

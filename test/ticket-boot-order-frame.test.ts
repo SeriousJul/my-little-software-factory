@@ -22,8 +22,8 @@ import type { FetchOutcome } from "../src/ticket-source.ts";
 import { type AppSetup, listHalfOf, rowsOf, settle, sleep, withApp } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { callsReached } from "./state-fixture.ts";
 import { plane, ticketOf } from "./seeded-plane.ts";
+import { callsReached } from "./state-fixture.ts";
 
 /**
  * Three open Tickets whose numbers interleave across the two feeds: the Issue

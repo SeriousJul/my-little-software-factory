@@ -6,7 +6,7 @@
  * and nothing that can reach a real herdr, a real repository, or a real Agent.
  */
 import type { FactoryConfig } from "../src/config.ts";
-import { FakeRunner } from "./fake-runner.ts";
+import type { FakeRunner } from "./fake-runner.ts";
 
 /** The identity the fixtures map, and the name the launcher shows for it. */
 export const LAUNCHER_IDENTITY = "github.com/acme/repo";

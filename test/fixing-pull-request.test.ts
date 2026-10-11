@@ -21,8 +21,8 @@ import { isCoveredByFixingPullRequest } from "../src/workflow.ts";
 import { awaitFrame, HEIGHT, rowsOf, WIDTH, withApp } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { issueTicket, success } from "./state-fixture.ts";
 import { plane } from "./seeded-plane.ts";
+import { issueTicket, success } from "./state-fixture.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -365,27 +365,27 @@ describe("the section header counts", () => {
 			],
 		});
 		await withApp(
-				async (setup) => {
-					const [issuesSource, pullsSource] = setup.plane.sources as readonly FakeSource[];
-					issuesSource.settle(success([issueTicket(issueIdentity)]));
-					pullsSource.settle(success([closingPullTicket({ title: "Persist source facts" })]));
-					const frame = await awaitFrame(
-						setup,
-						// The list row truncates the title: match on its lead.
-						(f) => listRowOf(f, "Persist source fa") >= 0,
-						"the pull request row",
-					);
-					// The covered issue is not listed, and the header count does
-					// not count it: one open ticket stands, the pull request's.
-					expect(listRowOf(frame, "Add a webhook retry policy")).toBe(-1);
-					const header = rowsOf(frame).find((row) => row.includes("Tickets")) ?? "";
-					expect(header).toContain("open: 1");
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					plane: planeRecord,
-				},
-			);
+			async (setup) => {
+				const [issuesSource, pullsSource] = setup.plane.sources as readonly FakeSource[];
+				issuesSource.settle(success([issueTicket(issueIdentity)]));
+				pullsSource.settle(success([closingPullTicket({ title: "Persist source facts" })]));
+				const frame = await awaitFrame(
+					setup,
+					// The list row truncates the title: match on its lead.
+					(f) => listRowOf(f, "Persist source fa") >= 0,
+					"the pull request row",
+				);
+				// The covered issue is not listed, and the header count does
+				// not count it: one open ticket stands, the pull request's.
+				expect(listRowOf(frame, "Add a webhook retry policy")).toBe(-1);
+				const header = rowsOf(frame).find((row) => row.includes("Tickets")) ?? "";
+				expect(header).toContain("open: 1");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+			},
+		);
 	});
 });

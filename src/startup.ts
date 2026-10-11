@@ -87,13 +87,13 @@ export type StartupResult =
 			config: FactoryConfig;
 			configPath: string;
 			statePath: string;
-		state: FactoryState;
-		runner: CommandRunner;
-		sources: TicketSource[];
-		/** The home directory the plane's paths live under, resolved once here. */
-		home: string;
-		/** The plane's file logger; the no-op logger where the config carries no [logging]. */
-		logger: Logger;
+			state: FactoryState;
+			runner: CommandRunner;
+			sources: TicketSource[];
+			/** The home directory the plane's paths live under, resolved once here. */
+			home: string;
+			/** The plane's file logger; the no-op logger where the config carries no [logging]. */
+			logger: Logger;
 			/** Non-fatal operator lines: the missing-config note and model warnings. */
 			notes: string[];
 	  };

@@ -19,10 +19,19 @@ import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
-import { awaitFrame, HEIGHT, messageRowOf, press, settle, waitSourceHealthy, WIDTH, withApp } from "./app-harness.ts";
+import {
+	awaitFrame,
+	HEIGHT,
+	messageRowOf,
+	press,
+	settle,
+	WIDTH,
+	waitSourceHealthy,
+	withApp,
+} from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner, type RecordedCommand } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { plane, ticketOf } from "./seeded-plane.ts";
 import { success } from "./state-fixture.ts";
 
@@ -90,7 +99,7 @@ const parkTicket: FetchedTicket = {
 	attributes: {},
 };
 /** The read that lands the Ticket row, before the app mounts. */
-const parkFetch: FetchOutcome = {
+const _parkFetch: FetchOutcome = {
 	status: "success",
 	fetchedAt: "2026-08-31T10:01:00Z",
 	tickets: [parkTicket],
@@ -400,16 +409,18 @@ describe("the Message line's fact to the desktop", () => {
 		};
 		const planeRecord = await plane({
 			groupingAxis: "none",
-			sources: [{
-				config: {
-					name: "tickets",
-					kind: "github-issues",
-					refreshIntervalSeconds: 60,
-					repositories: [],
-					host: "github.com",
+			sources: [
+				{
+					config: {
+						name: "tickets",
+						kind: "github-issues",
+						refreshIntervalSeconds: 60,
+						repositories: [],
+						host: "github.com",
+					},
+					tickets: [],
 				},
-				tickets: [],
-			}],
+			],
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		const runner = planeRecord.fakeRunner;
@@ -566,9 +577,10 @@ describe("the Message line's fact to the desktop", () => {
 				expect(messageRowOf(frame).length).toBeLessThanOrEqual(WIDTH);
 				// ...and the error notification carries the whole fact.
 				const calls = notificationCalls(runner);
-				const sent = calls.find((call) =>
-					call.args.join(" ").includes("Factory: error") &&
-					call.args.join(" ").includes("the daemon refused"),
+				const sent = calls.find(
+					(call) =>
+						call.args.join(" ").includes("Factory: error") &&
+						call.args.join(" ").includes("the daemon refused"),
 				);
 				expect(sent?.args.join(" ")).toContain(line);
 			},
@@ -657,16 +669,18 @@ describe("the Message line's fact to the desktop", () => {
 		// to end through the real app and the real observation loop.
 		const planeRecord = await plane({
 			groupingAxis: "none",
-			sources: [{
-				config: {
-					name: "issues",
-					kind: "github-issues",
-					refreshIntervalSeconds: 60,
-					repositories: ["acme/factory"],
-					host: "github.com",
+			sources: [
+				{
+					config: {
+						name: "issues",
+						kind: "github-issues",
+						refreshIntervalSeconds: 60,
+						repositories: ["acme/factory"],
+						host: "github.com",
+					},
+					tickets: [ticketOf(parkTicket)],
 				},
-				tickets: [ticketOf(parkTicket)],
-			}],
+			],
 			config: { maxHandoffsPerTicket: 4, agentPollIntervalSeconds: 60 },
 		});
 		// Two starts that reached no Agent at a Handoff limit of 4: the park's count,
@@ -693,10 +707,10 @@ describe("the Message line's fact to the desktop", () => {
 				src.settle(parkRefresh);
 				await waitSourceHealthy(planeRecord.state);
 				await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("handoff failure park:"),
-						"the park's standing warning",
-					);
+					setup,
+					(f) => messageRowOf(f).includes("handoff failure park:"),
+					"the park's standing warning",
+				);
 				await flush();
 				const calls = notificationCalls(runner);
 				expect(calls.at(-1)?.args.join(" ")).toContain("Factory: warning");

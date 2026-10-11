@@ -46,7 +46,7 @@ import {
 } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
 import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
-import { issuesConfig, issueTicket, seedInFlightTurn, success } from "./state-fixture.ts";
+import { issuesSourceConfig, issueTicket, seedInFlightTurn, success } from "./state-fixture.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -106,7 +106,7 @@ async function rig(
 ): Promise<Rig> {
 	const planeRecord = await plane({
 		groupingAxis: "none",
-		sources: [{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(success(twoTickets())) }],
+		sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(success(twoTickets())) }],
 		repos: { [repoIdentity]: "src/factory" },
 		config: over.config ?? {},
 		autoHandoffMode: over.autoMode === true ? true : undefined,
@@ -420,7 +420,7 @@ describe("the ignore key", () => {
 		const planeRecord = await plane({
 			existing: state,
 			runner: () => runner,
-			sources: [{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(outcome) }],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
 		});
 		const bells = countBells();
@@ -689,7 +689,7 @@ describe("the obligation gate", () => {
 		const planeRecord = await plane({
 			existing: state,
 			runner: () => runner,
-			sources: [{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(outcome) }],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
 		});
 		await withApp(
@@ -729,7 +729,7 @@ describe("the obligation gate", () => {
 		const planeRecord = await plane({
 			existing: state,
 			runner: () => runner,
-			sources: [{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(outcome) }],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
 		});
 		await withApp(
@@ -773,7 +773,7 @@ describe("the ignore and the machine", () => {
 		const planeRecord = await plane({
 			existing: state,
 			runner: () => runner,
-			sources: [{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(outcome) }],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
 		});
 		const src = planeRecord.sources[0] as FakeSource;
@@ -838,7 +838,7 @@ describe("the ignore and the machine", () => {
 		const planeRecord = await plane({
 			existing: state,
 			runner: () => runner,
-			sources: [{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(outcome) }],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
 			config: { maxParallelAgents: 1 },
 		});
@@ -939,7 +939,7 @@ describe("the ignore and the machine", () => {
 		const planeRecord = await plane({
 			existing: state,
 			runner: () => runner,
-			sources: [{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(outcome) }],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
 			config: { maxParallelAgents: 1 },
 		});
@@ -1027,7 +1027,7 @@ describe("the ignore and the machine", () => {
 		const planeRecord = await plane({
 			existing: state,
 			runner: () => runner,
-			sources: [{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(outcome) }],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
 			config: { maxParallelAgents: 1 },
 		});
@@ -1080,7 +1080,7 @@ describe("the ignore and the machine", () => {
 	});
 
 	test("an ignored Ticket is no Top-up candidate, and the un-ignore makes it one", async () => {
-		const { state, src, plane, loopPolicy } = await rig({ autoMode: true });
+		const { state, src, plane } = await rig({ autoMode: true });
 		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
 		expect(state.ticketWorkCycle.setTicketIgnored(SECOND, true, null).ok).toBe(true);
 		await withApp(
@@ -1150,9 +1150,7 @@ describe("the ignore and the machine", () => {
 		const reopened = openFactoryState(path);
 		const secondPlane = await plane({
 			existing: reopened,
-			sources: [
-				{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(success(twoTickets())) },
-			],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(success(twoTickets())) }],
 			repos: { [repoIdentity]: "src/factory" },
 		});
 		expect(reopened.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
@@ -1200,7 +1198,7 @@ describe("the ignore and the machine", () => {
 		const planeRecord = await plane({
 			existing: state,
 			runner: () => runner,
-			sources: [{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(outcome) }],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
 		});
 		const src = planeRecord.sources[0] as FakeSource;
@@ -1355,9 +1353,7 @@ describe("the ignored marker's frame", () => {
 		const planeRecord = await plane({
 			existing: state,
 			runner: () => runner,
-			sources: [
-				{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(success(twoTickets())) },
-			],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(success(twoTickets())) }],
 			repos: { [repoIdentity]: "src/factory" },
 		});
 		const src = planeRecord.sources[0] as FakeSource;
@@ -1459,7 +1455,7 @@ describe("the ignored marker's frame", () => {
 		const planeRecord = await plane({
 			existing: state,
 			runner: () => runner,
-			sources: [{ config: issuesConfig.sources[0]!, tickets: twoTicketRows(outcome) }],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
 		});
 		const src = planeRecord.sources[0] as FakeSource;

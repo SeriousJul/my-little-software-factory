@@ -37,6 +37,7 @@ import { BASE_CONFIG } from "./base-config.ts";
 import type { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import { plane } from "./seeded-plane.ts";
+import { issuesSourceConfig } from "./state-fixture.ts";
 
 const SCROLL_WIDTH = 60;
 // The minimum terminal that holds the dual-list frame (ADR 0019): the scroll
@@ -140,15 +141,7 @@ const OVERFLOW_TICKETS: readonly Ticket[] = [
 
 const sourceConfig: FactoryConfig = {
 	...BASE_CONFIG,
-	sources: [
-		{
-			name: "issues",
-			kind: "github-issues",
-			refreshIntervalSeconds: 60,
-			repositories: ["acme/factory"],
-			host: "github.com",
-		},
-	],
+	sources: [issuesSourceConfig],
 };
 
 /** The source standing the overflow tickets ride: every repository the samples name. */
@@ -592,7 +585,7 @@ describe("native Ticket detail viewport", () => {
 		state.grouping.setGroupingAxis("tickets", "none");
 		const planeRecord = await plane({
 			existing: state,
-			sources: [{ config: sourceConfig.sources[0]!, tickets: [] }],
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: linear,
 			applyFetch: false,
 		});
@@ -723,7 +716,7 @@ describe("native Ticket detail viewport", () => {
 		const longDescription = `${SAMPLE_TICKETS[0].description} ${SAMPLE_TICKETS[0].description}`;
 		const planeRecord2 = await plane({
 			existing: state,
-			sources: [{ config: sourceConfig.sources[0]!, tickets: [] }],
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: sourceConfig,
 			applyFetch: false,
 		});

@@ -35,11 +35,7 @@ import {
 	useState,
 } from "react";
 import { AttentionService } from "../attention.ts";
-import {
-	type FactoryConfig,
-	type GitHubAuthentication,
-	type TransitionOutcome,
-} from "../config.ts";
+import type { FactoryConfig, GitHubAuthentication, TransitionOutcome } from "../config.ts";
 import {
 	type ConfigWriteFact,
 	type ConfigWriteReport,
@@ -68,7 +64,7 @@ import {
 } from "../domain/agent.ts";
 import { type DecisionFacts, decisionFacts } from "../domain/decision-facts.ts";
 import type { GroupingAxis, SplitGroupingAxis } from "../domain/grouping.ts";
-import { DEFAULT_GROUPING_AXIS, nextGroupingAxis } from "../domain/grouping.ts";
+import { nextGroupingAxis } from "../domain/grouping.ts";
 import { recordTicketName } from "../domain/record-name.ts";
 import { heldBellRang, sectionFacts } from "../domain/section-facts.ts";
 import {
@@ -899,13 +895,7 @@ type AppDispatchesStage = ReturnType<typeof useAppDispatches>;
 
 /** The plane's standing facts, stated once per render (ADR 0014): the run state, the source counts, the configured Consultation types, and the exit key. */
 function useAppStanding(prev: AppDispatchesStage) {
-	const {
-		config,
-		configRef,
-		coordinatorRef,
-		handoffDispatch,
-		liveSources,
-	} = prev;
+	const { config, configRef, coordinatorRef, handoffDispatch, liveSources } = prev;
 	/**
 	 * The plane's standing facts, stated once per render (ADR 0014).
 	 *
@@ -1591,11 +1581,7 @@ function useAppInitNote(props: AppProps, prev: AppInitBootStage) {
 	// for the repository axis as well as the first ticket read: it never stands
 	// on an empty list, and it never outlives the axis its marker rides on.
 	useEffect(() => {
-		if (
-			initNoteShownRef.current ||
-			machineTickets.length === 0 ||
-			groupingAxis !== "repository"
-		)
+		if (initNoteShownRef.current || machineTickets.length === 0 || groupingAxis !== "repository")
 			return;
 		// The repositories that stand uninitialized or in Init drift on this read,
 		// once per repository the list carries. The hash is hoisted out of the
@@ -1969,14 +1955,14 @@ function useAppRenderMessages(props: AppProps, prev: AppLivePanelStage) {
 	// An empty grouped list names the axis in its message, so "no tickets" says
 	// which view the operator is reading (issue #159, user story 9).
 	const emptyMessage = emptyTicketMessage({
-			sourceCount: config.sources.length,
-			healthCount: healths.length,
-			anyLoading: healths.some((health) => health.health === "loading"),
-			ignoredCount,
-			mutedCount,
-			ticketFilter,
-			groupingAxis,
-				});
+		sourceCount: config.sources.length,
+		healthCount: healths.length,
+		anyLoading: healths.some((health) => health.health === "loading"),
+		ignoredCount,
+		mutedCount,
+		ticketFilter,
+		groupingAxis,
+	});
 	return { ...prev, state, emptyMessage };
 }
 type AppRenderMessagesStage = ReturnType<typeof useAppRenderMessages>;
@@ -2421,7 +2407,6 @@ function appConsultationsList(o: AppRenderModesStage): React.ReactElement | fals
 		historyFilter,
 		mainSurfaceActive,
 		selection,
-		state,
 	} = o;
 	return (
 		consultationsExpanded &&
@@ -2443,11 +2428,11 @@ function appConsultationsList(o: AppRenderModesStage): React.ReactElement | fals
 				cursor.selectConsultation(consultationIndexRef.current + delta);
 			},
 			emptyMessage:
-					historyFilter === "closed"
-						? "no closed Consultations"
-						: historyFilter === "all"
-							? "no Consultations"
-							: "no open Consultations",
+				historyFilter === "closed"
+					? "no closed Consultations"
+					: historyFilter === "all"
+						? "no Consultations"
+						: "no open Consultations",
 		})
 	);
 }
@@ -5456,10 +5441,7 @@ async function consultationPaneRefresh(
  * timer.
  */
 function appConsultationSessionRefresh(f: AppConsultationSessionFields): (() => void) | undefined {
-	if (
-		f.selection !== "consultation" ||
-		f.selectedConsultation === undefined
-	) {
+	if (f.selection !== "consultation" || f.selectedConsultation === undefined) {
 		f.setLiveOutput(null);
 		f.setSessionEntries(null);
 		return undefined;
@@ -6260,8 +6242,7 @@ function appDecisionFor(
 			isPlaneAction:
 				outcome?.positionTaskType != null &&
 				isPlaneActionTaskType(f.configRef.current.taskTypes, outcome.positionTaskType),
-			latestAttempt:
-				f.state.planeAction.latestPlaneActionAttempt(positionIdentity),
+			latestAttempt: f.state.planeAction.latestPlaneActionAttempt(positionIdentity),
 		},
 		nextStepGate: nextStep === null ? null : nextStep.gate,
 		defaultTaskType: f.configRef.current.defaultTaskType,
@@ -6441,10 +6422,7 @@ function appRefireFireOptions(
  */
 async function appRunRefire(f: AppTicketOpsFields, ticket: Ticket): Promise<void> {
 	const state = f.state;
-	if (
-		ticket.lastCompletion === null ||
-		ticket.lastCompletion.transition === null
-	) {
+	if (ticket.lastCompletion === null || ticket.lastCompletion.transition === null) {
 		return;
 	}
 	if (f.refireInFlightRef.current !== null) return;
@@ -7037,8 +7015,7 @@ function appDiscardResponseDraft(f: AppConsultationOpsFields): void {
 	const selected = f.selectedConsultation;
 	f.responseDraftRef.current = "";
 	f.setResponseDraft("");
-	if (selected !== undefined)
-		state.consultationRecord.setConsultationDraft(selected.id, "");
+	if (selected !== undefined) state.consultationRecord.setConsultationDraft(selected.id, "");
 	f.setResponseEditor(false);
 	f.setNoticeMessage("the saved Response draft was discarded", "info");
 }
@@ -7529,8 +7506,8 @@ function useAppGroupingState(props: AppProps, prev: AppListViewsStage) {
 	 * back from the state file at boot, so a restart and a dev reload find the
 	 * list split the way they left it.
 	 */
-	const [groupingAxis, setGroupingAxis] = useState<GroupingAxis>(
-		() => state.grouping.groupingAxis(TICKET_GROUP_SECTION),
+	const [groupingAxis, setGroupingAxis] = useState<GroupingAxis>(() =>
+		state.grouping.groupingAxis(TICKET_GROUP_SECTION),
 	);
 	const groupingAxisRef = useRef(groupingAxis);
 	// The one-time init note stands once per run (ADR 0075, story 20): the flag
@@ -7627,15 +7604,15 @@ function useAppSelectionState(props: AppProps, prev: AppFoldsStage) {
 	const [workQueueDetailScroll, setWorkQueueDetailScroll] = useState(0);
 	const workQueueDetailScrollRef = useRef(0);
 	/** The Consultation section's drawn records, in the history filter's view. */
-	const [consultations, setConsultations] = useState<Consultation[]>(
-		() => state.consultationRecord.consultations("open"),
+	const [consultations, setConsultations] = useState<Consultation[]>(() =>
+		state.consultationRecord.consultations("open"),
 	);
 	/**
 	 * The machine's own Consultation read (story 14): the `open` list the
 	 * header's counts and the seat reads take, never the operator's filter.
 	 */
-	const [machineConsultations, setMachineConsultations] = useState<Consultation[]>(
-		() => state.consultationRecord.consultations("open"),
+	const [machineConsultations, setMachineConsultations] = useState<Consultation[]>(() =>
+		state.consultationRecord.consultations("open"),
 	);
 	const consultationsRef = useRef(consultations);
 	const [consultationIndex, setConsultationIndex] = useState(0);
@@ -7837,8 +7814,8 @@ function useAppWorkQueueState(props: AppProps, prev: AppSectionSyncsStage) {
 	// module's own report for an enqueue, a pickup, and a cancel it made, and the
 	// App's own re-read for the reorder and the cancel the operator asked for.
 	// The render never queries the state.
-	const [workQueue, setWorkQueue] = useState<readonly WorkQueueItem[]>(
-		() => state.workQueue.items(),
+	const [workQueue, setWorkQueue] = useState<readonly WorkQueueItem[]>(() =>
+		state.workQueue.items(),
 	);
 	const workQueueRef = useRef<readonly WorkQueueItem[]>(workQueue);
 	workQueueRef.current = workQueue;
@@ -7957,9 +7934,7 @@ function useAppFactoryRefs(props: AppProps, prev: AppDetailRefsStage) {
 	// The Auto-handoff mode is factory state (ADR 0036): the plane reads the
 	// operator's last choice back from the state file, so a restart or a dev
 	// reload finds the mode where it was left.
-	const [autoMode, setAutoMode] = useState<boolean>(
-		() => state.handoff.autoHandoffMode(),
-	);
+	const [autoMode, setAutoMode] = useState<boolean>(() => state.handoff.autoHandoffMode());
 	const autoModeRef = useRef(autoMode);
 	const [agents, setAgents] = useState<readonly HerdrAgent[] | null>(null);
 	// The key handler outlives the render that made the decision it acts on,
@@ -8030,8 +8005,8 @@ function useAppSeatFacts(props: AppProps, prev: AppFactoryRefsStage) {
 			})),
 			handoffAttemptTickets: state.handoff.openAttemptTickets(),
 			consultations: state.consultationRecord
-					.consultationsByState(CONSULTATION_SEAT_STATES)
-					.map((consultation) => ({ state: consultation.state })),
+				.consultationsByState(CONSULTATION_SEAT_STATES)
+				.map((consultation) => ({ state: consultation.state })),
 			agents: observationRef.current?.lastAgents() ?? null,
 			now: Date.now(),
 			startupGraceMs: STARTUP_GRACE_MS,
@@ -8655,16 +8630,11 @@ type AppSelectionFactsConsultationStage = ReturnType<typeof useAppSelectionFacts
  * The selected Consultation's record reads: the turns, the snapshots, the
  * replacement's ids, and the remaining resources of a closed record.
  */
-function appConsultationRecordReads(
-	state: AppAggregates,
-	consultation: Consultation | undefined,
-) {
+function appConsultationRecordReads(state: AppAggregates, consultation: Consultation | undefined) {
 	const closed = consultation !== undefined && consultation.state === "closed";
 	return {
 		turns:
-			consultation === undefined
-				? []
-				: state.consultationRecord.consultationTurns(consultation.id),
+			consultation === undefined ? [] : state.consultationRecord.consultationTurns(consultation.id),
 		snapshots:
 			consultation === undefined
 				? []
