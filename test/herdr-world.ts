@@ -22,10 +22,10 @@
  * unchanged and every shared "this run did not issue that command" claim keeps
  * its teeth.
  *
- * The answer shapes trace to the recorded real herdr answers the plane's
- * readers were verified against (herdr 0.8.2 for the CLI contract, 0.9.1 for
- * the worktree list and the worktree open by path); the shapes the record
- * could not trace stand in the verification record as unverified.
+ * No answer shape is traced to a recorded real herdr answer yet: the shapes
+ * derive from the plane's own readers, whose CLI contract the Handoff
+ * contract suite pins, and the verification record holds the trace to a
+ * recorded answer as the open acceptance target (issue #376).
  */
 import type {
 	CommandOptions,
