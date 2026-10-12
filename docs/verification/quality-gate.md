@@ -1577,12 +1577,14 @@ no jscpd setting moves (ADR 0121).
 | jscpd | 5.4.0, pinned as a devDependency, run with the settings `.jscpd.json` holds (`minTokens: 100`, `minLines: 5`) |
 | The `test` scope, at `ee89e153` | **271 clones** (34 cross-file, 237 intra-file), 5,662 duplicated lines, 3,169 `test(…)` sites |
 | The `test` scope, at `66a4c9cc` | **226 clones** (15 cross-file, 211 intra-file), 4,938 duplicated lines, 3,167 `test(…)` sites |
-| The baseline counts | `test-dup` lands at 226 in `.quality-baseline.json`, beside `measured-on` 66a4c9cc |
+| The `test` scope, at `76e08355` | **220 clones** (15 cross-file, 205 intra-file), 4,806 duplicated lines, 3,167 `test(…)` sites |
+| The baseline counts | `test-dup` lands at 220 in `.quality-baseline.json`, beside `measured-on` 76e08355 |
 
 ### What the stage changed
 
 - `test/state/harness.ts` now holds the one standing every state suite needs: `seeded()` opens the world with the tickets the test names, in memory or on a file or on a fixed clock; `claim`, `settleAttempt`, and `settle` carry the Handoff; `turn` and `decide` carry the cycle's end; `downgradeToV2/V4/V5/V7` carry the older schema shapes the migration tests re-stamp. A test that asserts a claim or a settlement's result still calls the API; a test that settles the world only to stand behind its fact uses the harness.
 - Eight state suites read their facts through the harness instead of re-opening and re-seeding the world test by test: `handoff`, `ticketWorkCycle`, `route`, `sourceFact`, `ignore`, `mute`, `consultationRecord` (its v4 downgrade now stands in the harness beside the one `state/handoff` reads), and `workQueue`.
+- The stage's residual cleanup, at `76e08355`, reads the last standing through shared helpers: the downgrade tools share one drop of the post-v10 facts, the migration tests' schema check is the harness' `schemaObjects`, the route suite's handed-off turn and its two queue items are its own `handedOffTurn` and `queueBoth`, and the trace rows a `ticketWorkCycle` test verifies are read by one `traceRows` read.
 - The fixture literals the tests verify stand as written, and each test's distinct claim stays visible beside the shared standing.
 
 ### The gate on this branch
