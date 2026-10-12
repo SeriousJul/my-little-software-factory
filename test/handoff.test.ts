@@ -168,7 +168,7 @@ function conventionCheckout(runner: FakeRunner): void {
  * open claim stand, beside the overrides the case names. The case keeps its own
  * expected commands and the runner they are read from. */
 async function handoffRun(
-	runner: FakeRunner,
+	runner: CommandRunner,
 	choice: HandoffChoice,
 	over: {
 		ticket?: Ticket;
