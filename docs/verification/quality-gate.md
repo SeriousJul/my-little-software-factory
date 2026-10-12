@@ -1562,6 +1562,66 @@ wording.
 | The lowering of the 282 | Out of scope: the campaign that drives the count down is its own issue, in the shape of #350, and it works one metric at a time |
 | The CI load flake on the frame tests, and `bun run mutate` | Open and outside the gate, as the standing records state |
 
+## Issue #363: the test duplication campaign, the state suites' stage (2026-10-12, the landing)
+
+The campaign drives the `test-dup` count down stage by stage. Each stage is a
+shippable unit: it keeps the audit green, it states the count before and after
+on the heads it measured, and it lowers the baseline only by replacement -
+no jscpd setting moves (ADR 0121).
+
+### What was measured
+
+| Piece | Value |
+| --- | --- |
+| Heads | `ee89e153`, the branch head the stage starts from, standing level with `origin/main` at `241e63bb`; `66a4c9cc`, the head the stage lands on |
+| jscpd | 5.4.0, pinned as a devDependency, run with the settings `.jscpd.json` holds (`minTokens: 100`, `minLines: 5`) |
+| The `test` scope, at `ee89e153` | **271 clones** (34 cross-file, 237 intra-file), 5,662 duplicated lines, 3,169 `test(…)` sites |
+| The `test` scope, at `66a4c9cc` | **226 clones** (15 cross-file, 211 intra-file), 4,938 duplicated lines, 3,167 `test(…)` sites |
+| The baseline counts | `test-dup` lands at 226 in `.quality-baseline.json`, beside `measured-on` 66a4c9cc |
+
+### What the stage changed
+
+- `test/state/harness.ts` now holds the one standing every state suite needs: `seeded()` opens the world with the tickets the test names, in memory or on a file or on a fixed clock; `claim`, `settleAttempt`, and `settle` carry the Handoff; `turn` and `decide` carry the cycle's end; `downgradeToV2/V4/V5/V7` carry the older schema shapes the migration tests re-stamp. A test that asserts a claim or a settlement's result still calls the API; a test that settles the world only to stand behind its fact uses the harness.
+- Eight state suites read their facts through the harness instead of re-opening and re-seeding the world test by test: `handoff`, `ticketWorkCycle`, `route`, `sourceFact`, `ignore`, `mute`, `consultationRecord` (its v4 downgrade now stands in the harness beside the one `state/handoff` reads), and `workQueue`.
+- The fixture literals the tests verify stand as written, and each test's distinct claim stays visible beside the shared standing.
+
+### The gate on this branch
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` and `bun run typecheck`, on the merged tree | Pass, no findings |
+| `bun run audit`, on the merged tree | Pass: `type` 0, `lint` 0, `duplicates` 0 / baseline 0, `test-dup` 226 / baseline 271, the 6 pre-existing CodeQL findings stand as open alerts |
+| `bun run test`, on the merged tree | Pass: 3,320 tests, 0 fail, across 151 files. No other `bun test` ran on this machine while the suite ran |
+| The state suites, alone | 229 pass, 0 fail, across the 16 files the stage touched and left untouched alike |
+
+### The backlog the next stage inherits, at `66a4c9cc`
+
+The remaining clones stand in the command-sequence suites, whose subject is the
+exact argv the world runs, and in the frame suites the campaign's later stages
+work (ADR 0132):
+
+| File | Clones | Duplicated lines |
+| --- | --- | --- |
+| `test/handoff.test.ts` | 64 | 1,608 |
+| `test/handoff-frame.test.ts` | 55 | 1,321 |
+| `test/plane-action-merge.test.ts` | 41 | 1,082 |
+| `test/auto-mode.test.ts` | 57 | 904 |
+| `test/handoff-dispatch.test.ts` | 40 | 744 |
+| `test/consultation-frame.test.ts` | 32 | 634 |
+| `test/live-view.test.ts` | 25 | 548 |
+
+The 15 cross-file pairs stand in the same suites, beside `repo-init-stub.test.ts`
+and `repo-init.test.ts` at 38 lines and `security-source.test.ts` and
+`ticket-source.test.ts` at 37.
+
+### What this stage did not measure
+
+| Item | State |
+| --- | --- |
+| The case builders for the command-sequence suites | Not built: those suites' subject is the command argv, and their dedup is the campaign's next stage |
+| The frame suites' clones | Untouched by this stage |
+| The count on another machine | Measured on this machine only, the way the page's other cost rows stand |
+
 ## What was not measured
 
 | Item | State |
