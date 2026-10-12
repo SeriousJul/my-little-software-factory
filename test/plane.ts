@@ -79,11 +79,11 @@ import {
 	fetchedTicket,
 	fetchSuccess,
 	handoffChoice,
+	SAMPLE_TICKETS,
 	ticketOf,
 } from "./fact-fixtures.ts";
 import { emptyAgentRunner, type FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 // ---------------------------------------------------------------------------
 // The standing a test asks for.
@@ -244,15 +244,10 @@ export interface PlaneStanding {
 	 */
 	home?: string;
 	/**
-	 * Map the default repository to the plane's checkout in the config the
-	 * App boots from. The checkout path stands mapped when the case names
-	 * the checkout standing or the mapping itself; the mapping of the named
-	 * table the case names stands over it.
-	 */
-	mapCheckout?: boolean;
-	/**
 	 * The state file already open on the standing's home, in place of the
-	 * one the plane opens: the boot that reopens a file the earlier run left.
+	 * one the plane opens: the boot that reopens a file the earlier run
+	 * left. The plane writes no axis on it where the standing names none:
+	 * the state's own axis stands.
 	 */
 	existing?: FactoryState;
 	/** The state file's path, in place of the one beside the plane's home. */
@@ -280,43 +275,44 @@ export interface PlaneStanding {
 	/** The Work queue brake the state file holds before the App mounts. */
 	queuePaused?: boolean;
 	/**
-	 * The grouping axis of the ticket section. A named standing writes it; a
-	 * standing that names no axis leaves the file's own answer standing -
-	 * the fresh file's seeded split (ADR 0066) where the plane opens a new
-	 * file, and the stored axis where the standing wraps one. The default
-	 * standing, the sample rows with no sources named, stands flat, the list
-	 * the no-state plane drew.
+	 * The Grouping axis the plane settles on the state file's Ticket axis.
+	 *
+	 * The plane settles the flat axis on every fresh file it opens, sources
+	 * named or not, so a frame that reads the unsplit list stands on it
+	 * without naming it; a frame that wants a split names the axis it wants.
+	 * A standing that wraps a state names the axis the plane writes on that
+	 * state; where it names none, the state's own axis stands.
 	 */
 	groupingAxis?: GroupingAxis;
 	// The time the plane stands on.
 	/** The clock the state file writes from. The default is the machine clock. */
 	now?: () => number;
 	// The egress the plane runs on.
-	/** The egress double the plane runs on. The default is the plane's own FakeRunner. */
-	runner?: (fake: FakeRunner) => CommandRunner;
 	/**
-	 * The runner the plane hands the App, named against the home the plane
-	 * stands in and the checkout it maps. A case that stands a stub herdr
-	 * world, or wraps one, names the world against the plane's own paths.
+	 * The egress double the plane runs on, named against the plane's own
+	 * FakeRunner. A case that stands a stub herdr world, or wraps one, names
+	 * it here, against the paths the case itself holds for the home and the
+	 * checkout. The default is the plane's own FakeRunner.
 	 */
-	runnerOf?: (home: string, checkout: string | null) => CommandRunner;
+	runner?: (fake: FakeRunner) => CommandRunner;
 	/** The per-case command runner answers, run over the plane's own FakeRunner. */
 	commands?: (fake: FakeRunner, home: string) => void;
 	// The Ticket source doubles.
 	/**
-	 * The state's own fetch of the standing's rows. The default stands it
-	 * through the state module, the way the suites' own fixtures did before
-	 * the plane. A suite that drives its first fetch from a loading boot -
-	 * the frame suites that watch the loading line - holds it, and the state
-	 * stands without the source rows the fetch would have written.
+	 * The settled reads of the standing's sources on the state file, before
+	 * the App boots. The default stands them through the state module, the
+	 * way the suites' own fixtures did before the plane. Hold them where the
+	 * test drives the reads through the plane's source doubles itself - the
+	 * frame suites that watch the loading line - and the state stands the
+	 * sources' health without the ticket rows the settled reads would write.
 	 */
-	applyFetch?: boolean;
+	settledReads?: boolean;
 	/**
-	 * Whether the plane's own source doubles settle their reads on the list
-	 * they hold ("auto"), or hold them in flight until a test settles them
-	 * ("manual"). Default: manual, the double the suite has always stood.
-	 * A suite whose standing is "the source reports this list" stands the
-	 * auto form, so the App's own reads settle without a pin in every test.
+	 * Whether the plane's own source doubles stamp their settled reads from
+	 * the plane's clock ("auto"), the way a source that answers on the spot
+	 * would, or settle them on the outcome they hold, as given ("manual").
+	 * Both forms hold a read in flight until the test or the App's own read
+	 * settles it. Default: manual, the double the suite has always stood.
 	 */
 	sourceSettlement?: "auto" | "manual";
 	/**
@@ -450,10 +446,10 @@ afterEach(() => {
  * Open a fresh state database the suites wrap in the plane's standing,
  * registered for cleanup by the test's own end.
  *
- * The ticket section holds the flat axis the frame tests read the list on: a
- * truly fresh file opens grouped by repository (ADR 0066), so a frame that
- * wants that split names it, and the frames that assert the unsplit list
- * keep the axis they were written against.
+ * The wrapper settles the flat axis on the file it opens, the list the
+ * frame tests read: the stored axis stands through every boot that wraps
+ * the state, and the plane's own settle settles the same list on the fresh
+ * file it opens.
  */
 export function wrappedState(axis: GroupingAxis = "none"): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-plane-state-"));
@@ -469,11 +465,10 @@ export function wrappedState(axis: GroupingAxis = "none"): FactoryState {
 }
 
 /**
- * Reopen the state file at the path the state module itself reported
- * (`state.path`), the seam a restart test drives: the same file the plane
- * opened, not a second world. The reopened state is the caller's to close.
+ * Reopen a state file through the plane's own seam, with its own clock
+ * where the case names one: the same file the plane opened, not a second
+ * world. The reopened state is the caller's to close.
  */
-/** Reopen a state file through the plane's own seam, with its own clock where the case names one. */
 export function reopenState(path: string, now?: () => number): FactoryState {
 	return openFactoryState(path, now);
 }
@@ -938,10 +933,9 @@ async function preparedStanding(
 
 /**
  * The plane's config: the base, the standing's sources and config, the
- * preparation's, and the checkout mapping where the standing maps one. The
- * default repository's checkout path stands mapped when the case names the
- * checkout standing or the mapping itself; the named table stands over the
- * mapping it does not name.
+ * preparation's, and the checkout mapping where the standing names the
+ * checkout standing. The default repository's checkout path stands mapped
+ * there; the named table stands over the mapping it does not name.
  */
 function configFor(
 	sources: readonly SeededSource[],
@@ -949,13 +943,13 @@ function configFor(
 	prepared: { config?: Partial<FactoryConfig> },
 	dirs: { home: string; checkout: string | null },
 ): FactoryConfig {
-	const mapItself = standing.mapCheckout === true || standing.checkout !== undefined;
 	const planeRepos =
-		mapItself && dirs.checkout !== null ? { [DEFAULT_REPOSITORY.identity]: dirs.checkout } : {};
+		standing.checkout !== undefined && dirs.checkout !== null
+			? { [DEFAULT_REPOSITORY.identity]: dirs.checkout }
+			: {};
 	const named = reposOfTable(standing.repos, dirs.home);
 	let repos = { ...planeRepos, ...(standing.config?.repos ?? {}) };
 	if (Object.keys(named).length > 0) repos = { ...repos, ...named };
-	if (standing.mapCheckout === true) repos = { ...repos, ...planeRepos };
 	return {
 		...BASE_CONFIG,
 		sources: sources.map((source) => source.config),
@@ -971,9 +965,15 @@ function stateOf(standing: PlaneStanding, home: string, clock: PlaneClock): Fact
 	return openFactoryState(standing.statePath ?? join(home, "state.sqlite"), clock.now);
 }
 
-/** The grouping axis the standing writes, where it names one. */
+/** The grouping axis the plane settles on the state file, where it writes one. */
 function applyGroupingAxis(state: FactoryState, standing: PlaneStanding): void {
-	const axis = standing.groupingAxis ?? (standing.sources === undefined ? "none" : undefined);
+	// The plane settles the flat axis on every fresh file it opens, sources
+	// named or not: the state module's own rule opens a fresh file grouped
+	// by repository (ADR 0066), and the flat list the frame suites assert is
+	// the list the fixture settles on the file it opens. A wrapped state
+	// stands on the axis it holds, and the standing names the axis the plane
+	// writes there.
+	const axis = standing.groupingAxis ?? (standing.existing === undefined ? "none" : undefined);
 	if (axis === undefined) return;
 	state.grouping.setGroupingAxis("tickets", axis);
 }
@@ -1008,7 +1008,7 @@ function seedStandingFacts(
 	standing: PlaneStanding,
 	rows: readonly SeededSource[],
 ): void {
-	const fresh = standing.existing === undefined && standing.applyFetch !== false;
+	const fresh = standing.existing === undefined && standing.settledReads !== false;
 	if (fresh) seedRows(state, rows, standing.sourceTickets);
 	seedOperatorState(
 		state,
@@ -1033,7 +1033,7 @@ function runnerFor(
 		pinHealthyCheckout(fake, checkout);
 	}
 	if (standing.commands !== undefined) standing.commands(fake, home);
-	return standing.runnerOf?.(home, checkout) ?? standing.runner?.(fake) ?? fake;
+	return standing.runner?.(fake) ?? fake;
 }
 
 /** The source doubles: one per listed source, then the unlisted doubles beside them. */
@@ -1198,7 +1198,7 @@ export async function plane(standing: PlaneStanding = {}): Promise<Plane> {
 
 /** The plane's own FakeRunner runs when the case names no runner of its own. */
 function tableOwnsIt(standing: PlaneStanding): boolean {
-	return standing.runner === undefined && standing.runnerOf === undefined;
+	return standing.runner === undefined;
 }
 
 /**

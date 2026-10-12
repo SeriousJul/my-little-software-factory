@@ -75,13 +75,13 @@ import {
 	fetchRateLimited,
 	fetchSuccess,
 	issueTicket,
+	SAMPLE_TICKETS,
 	ticketOf,
 } from "./fact-fixtures.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
 
 import { plane, reopenState } from "./plane.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 /**
  * The braille glyph the spinner face stands on, as a character class.
@@ -95,12 +95,11 @@ const SPINNER_GLYPH = `[${SPINNER_FRAMES.join("")}]`;
 describe("the control plane", () => {
 	test("production starts with no configured ticket sources instead of sample data", async () => {
 		const state = reopenState(":memory:");
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		// The empty source set is a stated fact of the standing, not an
 		// omitted field: the refresh loop runs over nothing and the list says so.
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config: BASE_CONFIG,
 		});
@@ -123,8 +122,6 @@ describe("the control plane", () => {
 		// stored handle still names that id, so the pane reads as missing - the
 		// row wears the failure badge, and Goto focuses nothing.
 		const state = reopenState(":memory:");
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const source = { name: "issues", kind: "github-issues" as const };
 		const sourceConfig = {
@@ -179,9 +176,10 @@ describe("the control plane", () => {
 
 			const planeRecord = await plane({
 				existing: state,
+				groupingAxis: "none",
 				sources: [{ config: sourceConfig, tickets: [] }],
 				config: { ...BASE_CONFIG, sources: [sourceConfig] },
-				applyFetch: false,
+				settledReads: false,
 				runner: () => runner,
 			});
 			await withApp(
@@ -230,8 +228,6 @@ describe("the control plane", () => {
 		// recorded-pane standing gives way to the identity: the base key
 		// refuses, and the decision's Goto row refuses the same focus.
 		const state = reopenState(":memory:");
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const source = { name: "issues", kind: "github-issues" as const };
 		const sourceConfig = {
@@ -295,9 +291,10 @@ describe("the control plane", () => {
 
 			const planeRecord = await plane({
 				existing: state,
+				groupingAxis: "none",
 				sources: [{ config: sourceConfig, tickets: [] }],
 				config: { ...BASE_CONFIG, sources: [sourceConfig] },
-				applyFetch: false,
+				settledReads: false,
 				runner: () => runner,
 			});
 			await withApp(
@@ -346,7 +343,6 @@ describe("the control plane", () => {
 		// pull request is never touched: only a draft closes, and a branch
 		// that carries no draft closes nothing and says nothing.
 		const state = reopenState(":memory:");
-		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const sourceConfig = {
 			name: "issues",
@@ -423,9 +419,10 @@ describe("the control plane", () => {
 
 			const planeRecord = await plane({
 				existing: state,
+				groupingAxis: "none",
 				sources: [{ config: sourceConfig, tickets: [ticketOf(issueTicket())] }],
 				config,
-				applyFetch: false,
+				settledReads: false,
 				runner: () => runner,
 			});
 			await withApp(
@@ -470,7 +467,6 @@ describe("the control plane", () => {
 		// lists, and the draft the ticket still wears is read off its factory
 		// branch and closed, the way the decided cycle's Close does.
 		const state = reopenState(":memory:");
-		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const sourceConfig = {
 			name: "issues",
@@ -542,9 +538,10 @@ describe("the control plane", () => {
 
 			const planeRecord = await plane({
 				existing: state,
+				groupingAxis: "none",
 				sources: [{ config: sourceConfig, tickets: [ticketOf(issueTicket())] }],
 				config,
-				applyFetch: false,
+				settledReads: false,
 				runner: () => runner,
 			});
 			await withApp(
@@ -647,7 +644,6 @@ describe("the control plane", () => {
 		const planeRecord = await plane({
 			sources: [{ config: sourceConfig, tickets: [parked] }],
 			config: parkingConfig,
-			groupingAxis: "none",
 		});
 		await withApp(
 			async (setup) => {
@@ -1202,7 +1198,6 @@ describe("the control plane", () => {
 		const planeRecord = await plane({
 			sources: [{ config: portalSourceConfig, tickets: [stale] }],
 			config: { ...BASE_CONFIG, sources: [portalSourceConfig] },
-			groupingAxis: "none",
 		});
 		await withApp(
 			async (setup) => {
@@ -1233,7 +1228,6 @@ describe("the control plane", () => {
 		const planeRecord = await plane({
 			sources: [{ config: sourceConfig, tickets: [SAMPLE_TICKETS[3]] }],
 			config: { ...BASE_CONFIG, sources: [sourceConfig] },
-			groupingAxis: "none",
 		});
 		await withApp(
 			async (setup) => {
@@ -1256,7 +1250,6 @@ describe("the control plane", () => {
 		// the source's failure the boot fetch reports; the recovery one on an
 		// attempt the start claimed and never settled.
 		const state = reopenState(":memory:");
-		state.grouping.setGroupingAxis("tickets", "none");
 		const sourceConfig = {
 			name: "issues",
 			kind: "github-issues" as const,
@@ -1296,7 +1289,7 @@ describe("the control plane", () => {
 			],
 			config: { ...BASE_CONFIG, sources: [sourceConfig] },
 			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		await withApp(
 			async (setup) => {
@@ -1436,7 +1429,6 @@ describe("the control plane", () => {
 		const planeRecord = await plane({
 			sources: [{ config: sourceConfig, tickets: [wide] }],
 			config: longConfig,
-			groupingAxis: "none",
 		});
 
 		await withApp(
@@ -1793,10 +1785,9 @@ describe("the control plane", () => {
 		// the ordering the app computes is the ordering on screen. A hint
 		// priority that moves reorders these rows.
 		const state = reopenState(":memory:");
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config: BASE_CONFIG,
 		});

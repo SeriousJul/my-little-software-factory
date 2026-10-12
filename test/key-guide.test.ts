@@ -264,7 +264,7 @@ describe("the in-app Key guide", () => {
 					existing: state,
 					sources: [{ config: issuesSourceConfig, tickets: [ticketOf(issueTicket())] }],
 					config: issuesConfig,
-					applyFetch: false,
+					settledReads: false,
 					runner: () => missingRunner,
 				});
 
@@ -342,7 +342,7 @@ describe("the in-app Key guide", () => {
 				existing: state,
 				sources: [{ config: issuesSourceConfig, tickets: [] }],
 				config: zeroSeatConfig,
-				applyFetch: false,
+				settledReads: false,
 				runner: () => runner,
 			});
 			await withApp(
@@ -993,7 +993,7 @@ describe("the in-app Key guide", () => {
 				existing: state,
 				sources: [{ config: issuesSourceConfig, tickets: [] }],
 				config: issuesConfig,
-				applyFetch: false,
+				settledReads: false,
 			});
 			await withApp(
 				async (setup) => {

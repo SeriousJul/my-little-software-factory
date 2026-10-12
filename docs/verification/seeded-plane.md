@@ -28,10 +28,10 @@ and [test/plane.ts](../../test/plane.ts) for the module.
 | Runtime | Bun 1.4.2 (Linux x64) |
 | Test layer | `bun test` on the unit layer: the real App against a real SQLite state file on a temp path, the fake command runner and the Stub herdr world at the runner seam, and no desktop control |
 | Plane module | [test/plane.ts](../../test/plane.ts), one `plane` factory, its `Plane` record, and its `withPlane` form |
-| Plane suite | [test/plane.test.ts](../../test/plane.test.ts), 35 cases on the module's own standing |
+| Plane suite | [test/plane.test.ts](../../test/plane.test.ts), 48 cases on the module's own standing |
 | Fact module | [test/fact-fixtures.ts](../../test/fact-fixtures.ts), the one default Ticket, the fetched-Ticket and fetch-outcome builders, the Handoff choices, the repository references |
 | Static check | [test/seeded-plane-check.test.ts](../../test/seeded-plane-check.test.ts), 5 cases: a frame suite that imports the frame harness must not open a state file by hand, and must not spell the default Ticket's title by hand |
-| Suite size | 152 test files; the full suite green on the merged tree: 3,344 pass, 0 fail |
+| Suite size | 152 test files; the full suite green on the merged tree: 3,357 pass, 0 fail |
 
 ## The interface, against the spec's standing
 
@@ -53,6 +53,38 @@ the cases use instead.
 | The checkout beside the default repository | `checkout` and `repos`, the `[repos]` mapping |
 | The clock | `now`, the base the plane's clock stands on; the plane hands its clock back |
 | The loop policy | `loopPolicy` on the plane's props, from `pollIntervalMs` |
+
+Beside the spec's standing, the interface admits the fields a case names on
+its own: the home and the state file the case opens or paths, the wrapped
+state and its axis, the preparation of the home, the settled reads of the
+standing's sources, the settlement the source doubles run on, the named
+source lists and their null entries, the factory-state fields, and the runner
+and command fields. The plane suite holds a case for every field the
+interface admits, beside the table above, and reads each one back through the
+state module's own interface. One field stands apart from the depth rule the
+ADR names, and the record states the reason the plane keeps it: `prepare`
+names a step of the build, the preparation of the home once it exists. Three
+suites stand facts that depend on the home's own paths before the standing can
+name them - the checkout directories the case's command answers pass through,
+the config file text the case writes verbatim, the source doubles the case
+binds over the plane's own. Naming those paths on the standing would hand the
+build's internals to every caller, and the one case-facing seam keeps them
+inside the module. The refusal the depth rule names is recorded here rather
+than made.
+
+## The flat axis the plane settles
+
+The state module's own rule opens a fresh state file grouped by repository
+(ADR 0066), and the frames in the suite assert the unsplit list. The plane
+therefore writes the flat axis on every state file it opens itself, whether
+or not the standing names sources, and takes a split axis as a named field: a
+case that wants the split names it in one word. A standing that wraps a state
+file the case opened names the axis the plane writes on that state; where it
+names none, the state keeps the axis its own file holds. The plane's own suite
+reads the rule back through the state module: the fresh files it opens answer
+the flat axis, the wrapped state keeps its own axis, and the named field stands
+on both. ADR 0131 records the rule and its override of ADR 0066's fresh-file
+split.
 
 ## The deviation the spec does not hold
 
@@ -135,17 +167,21 @@ state file keep their own creation beside it.
 ## The duplication count at each step
 
 The Quality audit ratchets `test-dup`, the jscpd count over the test files.
-The count `origin/main` carries is 271. Each committed baseline rewrite of
-this branch holds the value the tree measured at the step that cleared:
+The count `origin/main` carries is 271. This branch's committed baseline
+holds the value the tree measures:
 
 | Step on this branch | `test-dup` baseline |
 | --- | --- |
 | `origin/main` before the branch | 271 |
-| The migration steps onto the plane | 263, the value this change's tree measures |
+| The migration onto the plane | 263 |
 
-The count moves up and down inside a step: a rig lands before the fixture it
-replaces is deleted, and a builder that retires leaves its clone behind for
-one measurement. The final tree stands at 263, below the 271 of
+The migration steps squashed into the branch's commits before this record
+landed, so the per-step counts ADR 0131's plan named are not the record's
+measured values: the only count that stands is the net one, from 271 on
+`origin/main` to 263 on this branch's tree. The count moves up and down
+inside a step in general: a rig lands before the fixture it replaces is
+deleted, and a builder that retires leaves its clone behind for one
+measurement. The final tree stands at 263, below the 271 of
 `origin/main`, and the Quality audit passes it against the baseline beside
 the config.
 

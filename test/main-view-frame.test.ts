@@ -47,11 +47,10 @@ import {
 	withholdFrameEvents,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { SAMPLE_TICKETS } from "./fact-fixtures.ts";
 import { FakeRunner } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-
 import { type Plane, plane, reopenState } from "./plane.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 let home = "";
 
@@ -333,7 +332,7 @@ const booted = (
 
 describe("the merged Main view", () => {
 	test("one frame holds both sections, one shared detail pane, and the steady Ticket counts", async () => {
-		const planeRecord = await plane({ groupingAxis: "none" });
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
 				const frame = await settle(setup);
@@ -374,7 +373,7 @@ describe("the merged Main view", () => {
 		// The sample carries no held turn: ticket #4 waits on a decision, but
 		// its completion ended completed, so the held count stays off the
 		// header even though a ticket is awaiting.
-		const planeRecord = await plane({ groupingAxis: "none" });
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
@@ -405,7 +404,6 @@ describe("the merged Main view", () => {
 					tickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
 				},
 			],
-			groupingAxis: "none",
 		});
 		await withApp(
 			async (setup) => {
@@ -428,7 +426,7 @@ describe("the merged Main view", () => {
 		// sixty columns it carries the narrow form - no colons - whole, and
 		// on the minimum frame the row holds what fits beside the mode
 		// corner (user stories 11 to 14, 29).
-		const planeRecord = await plane({ groupingAxis: "none" });
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
@@ -479,7 +477,6 @@ describe("the merged Main view", () => {
 					tickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
 				},
 			],
-			groupingAxis: "none",
 		});
 		await withApp(
 			async (setup) => {
@@ -521,7 +518,6 @@ describe("the merged Main view", () => {
 		// stories 14, 25).
 		const planeRecord = await plane({
 			sources: [{ config: issuesSource, tickets: [] }],
-			groupingAxis: "none",
 		});
 		await withApp(
 			async (setup) => {
@@ -542,11 +538,10 @@ describe("the merged Main view", () => {
 
 	test("x collapses the section under the cursor, and x again restores it", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("c"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [{ config: issuesSource, tickets: [] }],
 			config,
 			runner: () => liveConsultationAgents([uid("c")]),
@@ -601,13 +596,12 @@ describe("the merged Main view", () => {
 
 	test("a step past the last visible row crosses the section boundary", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const ids = [uid("c"), uid("d")];
 		seedConsultation(state, ids[0], "2026-09-01T10:00:00.000Z");
 		seedConsultation(state, ids[1], "2026-09-01T10:01:00.000Z");
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [{ config: issuesSource, tickets: [] }],
 			config,
 			runner: () => liveConsultationAgents(ids),
@@ -651,13 +645,12 @@ describe("the merged Main view", () => {
 
 	test("a key after a cross uses the newly focused list", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const ids = [uid("c"), uid("d")];
 		seedConsultation(state, ids[0], "2026-09-01T10:00:00.000Z");
 		seedConsultation(state, ids[1], "2026-09-01T10:01:00.000Z");
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [{ config: issuesSource, tickets: [] }],
 			config,
 			runner: () => liveConsultationAgents(ids),
@@ -690,11 +683,10 @@ describe("the merged Main view", () => {
 
 	test("a click on a section header toggles that section", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("d"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config,
 		});
@@ -731,14 +723,13 @@ describe("the merged Main view", () => {
 
 	test("refresh reports a readable no-op when no Ticket source exists", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("n"));
 		// The config names no feed: the plane's live source set follows the
 		// config, so this is the case with nothing to refresh.
 		const noSource: FactoryConfig = { ...config, sources: [] };
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config: noSource,
 		});
@@ -754,11 +745,10 @@ describe("the merged Main view", () => {
 
 	test("refresh reports an in-flight Ticket source without fake progress", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("o"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [{ config: issuesSource, tickets: [] }],
 			config,
 		});
@@ -775,11 +765,10 @@ describe("the merged Main view", () => {
 
 	test("the Consultation header carries the attention facts, and adds no row", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("e"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config,
 		});
@@ -814,10 +803,10 @@ describe("the merged Main view", () => {
 		// beside its mode cell - and never wraps onto a second row, so the frame
 		// keeps its row count and the section keeps its box.
 		const state = reopenState(join(home, "state.sqlite"));
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("k"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config,
 		});
@@ -837,11 +826,10 @@ describe("the merged Main view", () => {
 
 	test("the Consultation header's counts read the machine, not the History filter", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("h"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config,
 		});
@@ -880,8 +868,6 @@ describe("the merged Main view", () => {
 
 	test("the Message line survives a cross, and m reads it in full", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("m"));
 		// A Config with no Consultation types: the launcher's refusal is longer
 		// than this frame holds, so the Message line truncates and the Message
@@ -889,6 +875,7 @@ describe("the merged Main view", () => {
 		const narrowConfig: FactoryConfig = { ...config, consultationTypes: {} };
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [{ config: issuesSource, tickets: [] }],
 			config: narrowConfig,
 		});
@@ -929,11 +916,10 @@ describe("the merged Main view", () => {
 
 	test("the frame answers its controls at the minimum size", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("1"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config,
 		});
@@ -970,12 +956,11 @@ describe("the merged Main view", () => {
 
 	test("the Consultation panes answer the mouse as the Ticket panes do", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("5"));
 		seedConsultation(state, uid("6"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config,
 		});
@@ -1012,11 +997,10 @@ describe("the merged Main view", () => {
 
 	test("a refusal names the state that is missing, in the section that owns it", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("r"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config,
 			runner: () => liveConsultationAgents([uid("r")]),
@@ -1080,11 +1064,10 @@ describe("the merged Main view", () => {
 
 	test("the mode cell, the panes and the bar keep their rows in both sections", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("2"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config,
 		});
@@ -1137,11 +1120,10 @@ describe("the merged Main view", () => {
 
 	test("the Key guide from a Consultation mode names the section controls once", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("3"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config,
 			runner: () => liveConsultationAgents([uid("3")]),
@@ -1200,11 +1182,10 @@ describe("the merged Main view", () => {
 
 	test("a collapsed section keeps its selection, and re-expanding returns to it", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("4"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [{ config: issuesSource, tickets: [] }],
 			config,
 		});
@@ -1323,12 +1304,11 @@ describe("the merged Main view", () => {
 
 	const bootedScrollRoundTrip = async (body: (setup: Setup) => Promise<void>) => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("t"));
 		const outcome = longDetailOutcome();
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [{ config: issuesSource, tickets: [] }],
 			config,
 			runner: () => liveConsultationAgents([uid("t")]),
@@ -1359,8 +1339,6 @@ describe("the merged Main view", () => {
 
 	test("the Consultation header carries the attention bell, collapsed and expanded", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const a = seedWorking(state, uid("q"));
 		const b = seedWorking(state, uid("r"));
 		const runner = new FakeRunner();
@@ -1376,6 +1354,7 @@ describe("the merged Main view", () => {
 		runner.set("herdr", paneReadArgs(b.paneId), { stdout: paneOutput("beta") });
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config,
 			runner: () => runner,
@@ -1425,12 +1404,11 @@ describe("the merged Main view", () => {
 
 	test("the new output fact shows on the Consultation header, collapsed and expanded", async () => {
 		const state = reopenState(join(home, "state.sqlite"));
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const { paneId, sessionId } = seedWorking(state, uid("u"));
 		const runner = observationRunner(paneId, sessionId, paneOutput("gamma"));
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [],
 			config,
 			runner: () => runner,

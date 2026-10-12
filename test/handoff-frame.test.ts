@@ -48,6 +48,7 @@ import {
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
+import { SAMPLE_TICKETS } from "./fact-fixtures.ts";
 import {
 	type FakeRunner,
 	tabCreateJson,
@@ -55,9 +56,7 @@ import {
 	workspaceListJson,
 	worktreeCreateJson,
 } from "./fake-runner.ts";
-
 import { plane } from "./plane.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 /**
  * The runner's commands with the desktop notification's of one standing

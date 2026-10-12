@@ -278,9 +278,6 @@ function seed(
 	const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));
 	paths.push(dir);
 	const state = reopenState(join(dir, "state.sqlite"), detail.stateNow);
-	// The frames assert the unsplit list: a fresh file opens grouped by
-	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.grouping.setGroupingAxis("tickets", "none");
 	state.sourceFact.initializeSources([source]);
 	state.sourceFact.applyFetch(source, outcome);
 	if (shape !== "open") seedStoredHandoff(state, shape, environment, detail);
@@ -413,6 +410,7 @@ async function planeOf(app: SeededApp, runner?: CommandRunner): Promise<Plane> {
 			sources: app.pullSrc === undefined ? [issuesSource] : [issuesSource, pullsSource],
 		},
 		existing: app.state,
+		groupingAxis: "none",
 		runner: () => runner ?? app.runner,
 		prepare: async () => ({
 			boundSources: app.pullSrc === undefined ? [app.src] : [app.src, app.pullSrc],
@@ -4872,9 +4870,6 @@ describe("the handoff queue", () => {
 			],
 		};
 		const state = reopenState(join(dir, "state.sqlite"));
-		// The test reads the list unsplit: a fresh file opens grouped by
-		// repository (ADR 0066), so the fixture holds the flat axis.
-		state.grouping.setGroupingAxis("tickets", "none");
 		state.sourceFact.initializeSources([source]);
 		state.sourceFact.applyFetch(source, pairMoved);
 		// The second ticket starts in flight, with the stored herdr handles.
@@ -4942,6 +4937,7 @@ describe("the handoff queue", () => {
 		const planeRecord = await plane({
 			config: { ...config, sources: [issuesSource] },
 			existing: state,
+			groupingAxis: "none",
 			runner: () => gate.runner,
 			prepare: async () => ({ boundSources: [src] }),
 		});

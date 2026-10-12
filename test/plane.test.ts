@@ -11,21 +11,25 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { loadConfigFile } from "../src/config.ts";
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
+import { openFactoryState } from "../src/state.ts";
 import {
 	DEFAULT_IDENTITY,
 	DEFAULT_REPOSITORY,
 	fetchedTicket,
 	handoffChoice,
+	SAMPLE_TICKETS,
 	STABLE_NAME,
 } from "./fact-fixtures.ts";
 
 import { FakeRunner } from "./fake-runner.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { type Plane, plane, reopenState, withPlane } from "./plane.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 const openPlanes: Plane[] = [];
 afterEach(() => {
@@ -111,6 +115,16 @@ describe("the default standing", () => {
 			expect(p.state.grouping.groupingAxis("tickets")).toBe("none");
 		});
 	});
+
+	test("the plane settles the flat axis on every fresh file it opens", async () => {
+		const bare = hold(await plane());
+		expect(bare.state.grouping.groupingAxis("tickets")).toBe("none");
+		// The rule keys on the file the plane opens, not on the sources the
+		// standing names: a standing that names no source settles the flat
+		// axis on its fresh file the same way.
+		const noSources = hold(await plane({ sources: [] }));
+		expect(noSources.state.grouping.groupingAxis("tickets")).toBe("none");
+	});
 });
 
 describe("the seeded plane's standings", () => {
@@ -186,6 +200,28 @@ describe("the seeded plane's standings", () => {
 			expect(ids).toContain(DEFAULT_IDENTITY);
 			expect(ids).toContain("github:github.com:I_6");
 		});
+	});
+
+	test("the handoff field settles the standing's claim on the facts the case names", async () => {
+		await withPlane(
+			{
+				standing: "in-flight",
+				handoff: {
+					environment: "live-worktree",
+					handles: { paneId: "pane-9", tabId: "tab-9", workspaceId: "ws-9" },
+				},
+			},
+			(p) => {
+				expect(p.state.ticketWorkCycle.ticketState(DEFAULT_IDENTITY)).toBe("handed-off");
+				const handles = p.state.handoff.handoffHandles(DEFAULT_IDENTITY);
+				expect(handles.paneIds).toEqual(["pane-9"]);
+				expect(handles.workspaceIds).toEqual(["ws-9"]);
+				// The claim stands on the case's environment, over the choice the
+				// suite shares.
+				const handoff = p.state.handoff.latestHandoff(DEFAULT_IDENTITY);
+				expect(handoff?.environment).toBe("live-worktree");
+			},
+		);
 	});
 });
 
@@ -313,6 +349,161 @@ describe("the seeded plane's facts", () => {
 			expect(p.fakeRunner).not.toBe(world);
 		});
 	});
+
+	test("the repos field maps the named repositories under the plane's home", async () => {
+		await withPlane({ repos: { "github.com/acme/billing": "src/acme/billing" } }, (p) => {
+			expect(p.config.repos["github.com/acme/billing"]).toBe(join(p.home, "src/acme/billing"));
+			expect(existsSync(join(p.home, "src/acme/billing"))).toBe(true);
+		});
+	});
+
+	test("the home field stands the plane's paths in the case's own directory", async () => {
+		const home = mkdtempSync(join(tmpdir(), "factory-plane-home-"));
+		try {
+			await withPlane({ home }, (p) => {
+				expect(p.home).toBe(home);
+				expect(existsSync(join(home, "state.sqlite"))).toBe(true);
+				expect(existsSync(join(home, "config.toml"))).toBe(true);
+			});
+			// The plane clears the directories it makes, the home the case names aside.
+			expect(existsSync(home)).toBe(true);
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("the statePath field opens the state file at the path the case names", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-plane-state-path-"));
+		const path = join(dir, "state.sqlite");
+		const p = await plane({ statePath: path });
+		try {
+			expect(p.state.path).toBe(path);
+			// The plane opens the file: its fresh-file rule settles the flat
+			// axis on it, over the split the state module's own rule seeds.
+			expect(p.state.grouping.groupingAxis("tickets")).toBe("none");
+		} finally {
+			p.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("the prepare field stands the home's own facts before the standing names itself", async () => {
+		await withPlane(
+			{
+				prepare: async (home) => {
+					writeFileSync(join(home, "marker"), "the case stood the home");
+					return { config: { maxParallelAgents: 9 } };
+				},
+			},
+			(p) => {
+				expect(existsSync(join(p.home, "marker"))).toBe(true);
+				// The prepared facts stand beside the standing's own fields, over
+				// them where they name one.
+				expect(p.config.maxParallelAgents).toBe(9);
+			},
+		);
+	});
+
+	test("the existing field stands the plane on the state file the case opened", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-plane-existing-"));
+		const state = openFactoryState(join(dir, "state.sqlite"));
+		state.grouping.setGroupingAxis("tickets", "position");
+		const p = await plane({ existing: state });
+		try {
+			expect(p.state).toBe(state);
+			// The standing names no axis: the state's own axis stands, and the
+			// plane writes nothing on a file it did not open.
+			expect(p.state.grouping.groupingAxis("tickets")).toBe("position");
+		} finally {
+			p.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("the standing names the axis the plane writes on a wrapped state", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-plane-wrapped-axis-"));
+		const state = openFactoryState(join(dir, "state.sqlite"));
+		const p = await plane({ existing: state, groupingAxis: "none" });
+		try {
+			expect(p.state.grouping.groupingAxis("tickets")).toBe("none");
+		} finally {
+			p.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("held settled reads stand the sources' facts without the standing's rows", async () => {
+		await withPlane({ settledReads: false }, (p) => {
+			// The source stands its health in the state file; the settled read
+			// the state writes is the test's to make, through the plane's own
+			// doubles.
+			expect(p.state.sourceFact.sourceHealths().map((h) => h.name)).toEqual(["issues"]);
+			expect(viewsOf(p).rows).toHaveLength(0);
+		});
+	});
+
+	test("the auto settlement stamps a settled read from the plane's clock", async () => {
+		const manual = hold(await plane({ now: () => 1_000_000 }));
+		const auto = hold(await plane({ now: () => 1_000_000, sourceSettlement: "auto" }));
+		for (const [p, stamp] of [
+			[manual, "2026-01-01T00:01:00Z"],
+			[auto, new Date(1_005_000).toISOString()],
+		] as const) {
+			const source = p.sources[0] as FakeSource;
+			const read = source.fetch();
+			p.clock.advance(5_000);
+			source.settleCurrent();
+			const settled = await read;
+			if (settled.status !== "success") throw new Error("the settled read failed");
+			// The manual double settles on the outcome it holds, as given; the
+			// auto double settles the same outcome stamped from the plane's
+			// clock at the settle.
+			expect(settled.fetchedAt).toBe(stamp);
+		}
+	});
+
+	test("a named list stands in the state in place of the standing's rows", async () => {
+		const named = fetchedTicket({
+			identity: "github:github.com:I_6",
+			sourceKind: "github-pull-request",
+			externalKey: "pull-6",
+			title: "A pull request on the default repository",
+		});
+		await withPlane(
+			{
+				tickets: [fetchedTicket()],
+				sourceTickets: { issues: [named] },
+			},
+			async (p) => {
+				// The named list stands on the settled read, in place of the
+				// standing's rows.
+				expect(viewsOf(p).rows.map((row) => row.identity)).toEqual(["github:github.com:I_6"]);
+				// The plane's own double settles the same named list.
+				const source = p.sources[0] as FakeSource;
+				const read = source.fetch();
+				source.settleCurrent();
+				const settled = await read;
+				if (settled.status !== "success") throw new Error("the settled read failed");
+				expect(settled.tickets.map((ticket) => ticket.identity)).toEqual(["github:github.com:I_6"]);
+			},
+		);
+	});
+
+	test("a null entry stands the source initialized without a settled read", async () => {
+		await withPlane({ tickets: [fetchedTicket()], sourceTickets: { issues: null } }, async (p) => {
+			// The source stands its health without the settled read: no ticket
+			// row stands on a read the state never took.
+			expect(p.state.sourceFact.sourceHealths()).toHaveLength(1);
+			expect(viewsOf(p).rows).toHaveLength(0);
+			// The plane's own double holds the empty list it is never asked for.
+			const source = p.sources[0] as FakeSource;
+			const read = source.fetch();
+			source.settleCurrent();
+			const settled = await read;
+			if (settled.status !== "success") throw new Error("the settled read failed");
+			expect(settled.tickets).toHaveLength(0);
+		});
+	});
 });
 
 describe("the named standings of the factory", () => {
@@ -357,6 +548,13 @@ describe("the named standings of the factory", () => {
 		const views = viewsOf(p);
 		expect(views.rows).toHaveLength(0);
 		expect(views.ignored).toHaveLength(1);
+	});
+
+	test("the ignoredTickets field stands the named tickets in the ignored view", async () => {
+		const p = hold(await plane({ ignoredTickets: ["github:github.com:I_1"] }));
+		const views = viewsOf(p);
+		expect(views.ignored).toHaveLength(1);
+		expect(views.active.map((ticket) => ticket.identity)).not.toContain("github:github.com:I_1");
 	});
 
 	test("a resting row with a closed cycle rests past it", async () => {

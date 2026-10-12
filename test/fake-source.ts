@@ -4,11 +4,11 @@
  * settles the fetches to drive the state forward. No test in the suite can
  * race a source clock through it.
  *
- * The auto form settles each fetch the moment the app starts it, the way a
- * source that answers on the spot would: the settled read stands on the
- * outcome the double holds, re-stamped from the clock the plane opened it
+ * The auto form stamps a settled read from the clock the plane opened it
  * with, so the state the fetch writes and the clock the state reads stay
- * one clock.
+ * one clock: the settled read stands on the outcome the double holds,
+ * re-stamped at the settle. The manual form settles on the outcome it
+ * holds, as given.
  */
 import type { FetchOutcome, TicketSource } from "../src/ticket-source.ts";
 
@@ -27,9 +27,9 @@ export class FakeSource implements TicketSource {
 		kind: string,
 		next: FetchOutcome,
 		/**
-		 * The self-settling answers, and the clock a self-settle stamps them
-		 * with: the double stamps from the clock the plane owns, so a settle
-		 * never carries a stamp older than the clock the state writes from.
+		 * The double the plane stands for each of its sources settles its reads
+		 * on this shape: the outcome the double holds, and the clock it stamps a
+		 * self-settled read with.
 		 */
 		settle: {
 			autoSettle?: boolean;

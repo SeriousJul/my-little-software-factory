@@ -51,7 +51,13 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
-import { fetchRateLimited, fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
+import {
+	fetchRateLimited,
+	fetchSuccess,
+	issueTicket,
+	SAMPLE_TICKETS,
+	ticketOf,
+} from "./fact-fixtures.ts";
 import {
 	type FakeRunner,
 	tabCreateJson,
@@ -61,7 +67,6 @@ import {
 import type { FakeSource } from "./fake-source.ts";
 
 import { callsReached, plane, wrappedState } from "./plane.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 /** The issues source the standing seeds, as its config stands in the file. */
 const issueSource: TicketSourceConfig = {

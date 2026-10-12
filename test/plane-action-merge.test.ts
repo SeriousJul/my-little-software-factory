@@ -231,7 +231,6 @@ function planeState(): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-plane-state-"));
 	paths.push(dir);
 	const state = reopenState(join(dir, "state.sqlite"));
-	state.grouping.setGroupingAxis("tickets", "none");
 	state.sourceFact.initializeSources([pullsSource]);
 	state.sourceFact.applyFetch(pullsSource, pullSuccess());
 	return state;
@@ -2134,6 +2133,7 @@ describe("the decision screen's merge", () => {
 	): Promise<Plane> {
 		return await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [{ config: pullsConfig, tickets: [] }],
 			config: { ...PLANE_CONFIG, ...extra },
 			runner: () => runner,
@@ -2591,6 +2591,7 @@ describe("the auto top-up merge", () => {
 		stub(runner);
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [{ config: pullsConfig, tickets: [] }],
 			config: { ...PLANE_CONFIG, ...extra },
 			runner: () => runner,

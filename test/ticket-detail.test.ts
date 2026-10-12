@@ -12,8 +12,7 @@ import type { Handoff, Ticket } from "../src/domain/ticket.ts";
 import { type TicketRowFacts, ticketFactsFor } from "../src/domain/ticket-facts.ts";
 import type { HandoffChoice } from "../src/handoff.ts";
 import { roleColor } from "./app-harness.ts";
-import { factInputs } from "./fact-fixtures.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import { factInputs, SAMPLE_TICKETS } from "./fact-fixtures.ts";
 
 const settings: ScrollConfig = { speed: 1, acceleration: 0.8, maximumSpeed: 6 };
 

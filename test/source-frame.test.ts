@@ -51,9 +51,6 @@ function wrappedState(): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-frame-state-"));
 	paths.push(dir);
 	const state = reopenState(join(dir, "state.sqlite"));
-	// The frames assert the unsplit list: a fresh file opens grouped by
-	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.grouping.setGroupingAxis("tickets", "none");
 	return state;
 }
 
@@ -155,8 +152,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -190,8 +186,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -217,8 +212,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -312,8 +306,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -372,8 +365,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -415,8 +407,7 @@ describe("source-driven frames", () => {
 				{ config: pullsSourceConfig, tickets: [] },
 			],
 			config: pullsConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const issuesSource = planeRecord.sources[0] as FakeSource;
 		const pullsSource = planeRecord.sources[1] as FakeSource;
@@ -584,8 +575,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -628,8 +618,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(

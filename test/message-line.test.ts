@@ -40,7 +40,13 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
-import { fetchRateLimited, fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
+import {
+	fetchRateLimited,
+	fetchSuccess,
+	issueTicket,
+	SAMPLE_TICKETS,
+	ticketOf,
+} from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -57,7 +63,6 @@ import {
 	seedAwaitingTurn,
 	wrappedState,
 } from "./plane.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 /** Stub the git answers for a checkout directory of one repository. */
 function stubCheckoutInto(runner: FakeRunner, path: string, repository: string): void {

@@ -85,10 +85,15 @@ States the projection matches against. The Seeded plane and the state aggregate 
 that module, and the three default Tickets resolve to one. The herdr Agent name is derived from that
 Ticket once, so the 14 hand-typed derivations retire with the literals they were fed.
 
-**The Grouping axis default is the flat axis.** The fixture settles the flat axis and takes the
-repository axis as a named field, because a frame that wants the split is the exception and says so
-in one word. The 100 per-file writes and the 7 repeated comments go with it. This is the rule the
-app-level fixture already holds; it becomes the suite's.
+**The plane settles the flat axis on every fresh file it opens.** The state
+module's own rule opens a fresh file grouped by repository (ADR 0066), and a
+frame that asserts the unsplit list is the suite's norm. The plane writes the
+flat axis on every file it opens itself, whether or not the standing names
+sources, and takes a split axis as a named field: a frame that wants the split
+says so in one word. A standing that wraps a state file the case opened names
+the axis the plane writes on that state; where it names none, the state keeps
+its own axis. The 100 per-file writes and the 7 repeated comments go with it.
+This is the rule the app-level fixture already holds; it becomes the suite's.
 
 **One clock serves the state file and the test.** The fixture opens the state file on a clock it
 owns and hands that clock back, so a case ages a stored Handoff past its Startup grace without a
@@ -170,8 +175,10 @@ case names no clock, the plane's clock stands on the wall clock, and the state f
 on the same clock. The suites hold the sentence themselves: the frame suites pin their clock through
 the frame harness, the plane's own suite names its clock at boot, and no case that depends on a time
 reads the wall. The wall-clock default stands for the scratch boots that name nothing. The Ticket
-source double settles beside it on the same discipline: a self-settling read is restamped on the
-clock the plane owns, so a settle never carries a stamp the state's own clock would call older. The
+source double stands beside it on the same discipline: both of its forms hold a
+read in flight until the test or the App's own read settles it, and its auto
+form stamps the settled read from the clock the plane owns, so a settle never
+carries a stamp the state's own clock would call older. The
 [verification record](../verification/seeded-plane.md) states the same deviation beside the fields
 the plane admits and refuses.
 

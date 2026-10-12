@@ -105,7 +105,6 @@ async function rig(
 	over: { autoMode?: boolean; config?: Partial<FactoryConfig>; pollIntervalMs?: number } = {},
 ): Promise<Rig> {
 	const planeRecord = await plane({
-		groupingAxis: "none",
 		sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(fetchSuccess(twoTickets())) }],
 		repos: { [repoIdentity]: "src/factory" },
 		config: over.config ?? {},
@@ -397,8 +396,6 @@ describe("the ignore key", () => {
 	 */
 	test("cycling the filter moves no count and rings no bell", async () => {
 		const state = reopenState(statePath());
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = fetchSuccess(twoTickets());
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
@@ -419,6 +416,7 @@ describe("the ignore key", () => {
 		const runner = emptyAgentRunner();
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			runner: () => runner,
 			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
@@ -670,8 +668,6 @@ describe("the ignore key", () => {
 describe("the obligation gate", () => {
 	test("the key refuses an awaiting Ticket and states its reason", async () => {
 		const state = reopenState(statePath());
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		// A settled turn rests on the operator's decision: the row is the way to
 		// the Decision modal, so the ignore cannot take it away.
@@ -688,6 +684,7 @@ describe("the obligation gate", () => {
 		const runner = emptyAgentRunner();
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			runner: () => runner,
 			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
@@ -721,13 +718,12 @@ describe("the obligation gate", () => {
 
 	test("the key refuses a missing Agent, and its row keeps the badge the choice lives on", async () => {
 		const state = reopenState(statePath());
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			runner: () => runner,
 			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
@@ -764,14 +760,13 @@ describe("the obligation gate", () => {
 describe("the ignore and the machine", () => {
 	test("a live Agent keeps its seat, its row, and its badge under the ignored marker", async () => {
 		const state = reopenState(statePath());
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			runner: () => runner,
 			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
@@ -827,8 +822,6 @@ describe("the ignore and the machine", () => {
 		// operator asked for waits in the Work queue for the seat, which is the
 		// waiting item the ignore takes away with the row.
 		const state = reopenState(statePath());
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = fetchSuccess(twoTickets());
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
@@ -837,6 +830,7 @@ describe("the ignore and the machine", () => {
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			runner: () => runner,
 			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
@@ -917,8 +911,6 @@ describe("the ignore and the machine", () => {
 		// Ticket's asked-for start stays in the queue: the row must name its
 		// ticket by title, not by the raw identity the list rule left behind.
 		const state = reopenState(statePath());
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = fetchSuccess(twoTickets());
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
@@ -938,6 +930,7 @@ describe("the ignore and the machine", () => {
 		});
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			runner: () => runner,
 			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
@@ -1005,8 +998,6 @@ describe("the ignore and the machine", () => {
 		// One seat, held by the second Ticket's own Agent: the ignored Ticket's
 		// asked-for start waits in the queue, and its row is nowhere in the list.
 		const state = reopenState(statePath());
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = fetchSuccess(twoTickets());
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
@@ -1026,6 +1017,7 @@ describe("the ignore and the machine", () => {
 		});
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			runner: () => runner,
 			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
@@ -1184,8 +1176,6 @@ describe("the ignore and the machine", () => {
 	 */
 	test("an ignored Ticket whose Agent goes missing keeps its row and its flag", async () => {
 		const state = reopenState(statePath());
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		// Auto mode from the boot: the Restart is the machine's own move, and the
@@ -1197,6 +1187,7 @@ describe("the ignore and the machine", () => {
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			runner: () => runner,
 			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
@@ -1323,8 +1314,6 @@ describe("the ignored marker's frame", () => {
 	 */
 	test("the pile reaches a Ticket the covered rule also hides", async () => {
 		const state = reopenState(statePath());
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const pull = (closes: boolean): FetchedTicket => ({
 			identity: "github:github.com:P_9",
 			sourceKind: "github-pull-request",
@@ -1355,6 +1344,7 @@ describe("the ignored marker's frame", () => {
 		const runner = emptyAgentRunner();
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			runner: () => runner,
 			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(fetchSuccess(twoTickets())) }],
 			repos: { [repoIdentity]: "src/factory" },
@@ -1435,8 +1425,6 @@ describe("the ignored marker's frame", () => {
 	 */
 	test("a narrow frame cuts the ignored cell before the held count", async () => {
 		const state = reopenState(statePath());
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = fetchSuccess(twoTickets());
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
@@ -1457,6 +1445,7 @@ describe("the ignored marker's frame", () => {
 		const runner = emptyAgentRunner();
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			runner: () => runner,
 			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
 			repos: { [repoIdentity]: "src/factory" },
