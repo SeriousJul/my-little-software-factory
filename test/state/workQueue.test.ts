@@ -13,9 +13,8 @@ import {
 	labeled,
 	queuedConsultation,
 	repository,
-	sourceA,
+	seeded,
 	statePath,
-	success,
 	uid,
 } from "./harness.ts";
 
@@ -29,19 +28,14 @@ describe("the workQueue aggregate", () => {
 		const named = (name: string) => [
 			{ name, match: { sourceKind: "github-issue" as const, labelsAny: ["ready-for-agent"] } },
 		];
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(
-			sourceA,
-			success([
-				labeled(["ready-for-agent"]),
-				{
-					...labeled(["ready-for-agent"], "github:github.com:I_9"),
-					externalUpdatedAt: "2026-08-30T10:00:00Z",
-				},
-			]),
-		);
+		const firstTickets = [
+			labeled(["ready-for-agent"]),
+			{
+				...labeled(["ready-for-agent"], "github:github.com:I_9"),
+				externalUpdatedAt: "2026-08-30T10:00:00Z",
+			},
+		];
+		const { state } = seeded({ file: true, tickets: firstTickets });
 		const first = state.ticketWorkCycle.ticketListViews(named("one-name"), "implement").rows;
 		// The queue holds the first ticket's waiting start, so its order is the
 		// operator's, and a name change cannot move it.
@@ -76,12 +70,9 @@ describe("the workQueue aggregate", () => {
 		expect(state.workQueue.hasWorkItem("t2")).toBe(true);
 	});
 	test("an automatic continuation enters ahead of the standing fresh-work item (ADR 0094)", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(
-			sourceA,
-			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
-		);
+		const { state } = seeded({
+			tickets: [fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()],
+		});
 		// The factory's fresh work stands first: the open ticket's item the
 		// top-up added, and the operator's restart behind it.
 		expect(

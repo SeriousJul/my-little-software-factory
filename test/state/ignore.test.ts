@@ -9,16 +9,26 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { FetchedTicket } from "../../src/domain/ticket.ts";
 import { withIssueReferences } from "../../src/domain/ticket.ts";
 import { openFactoryState, SCHEMA_VERSION } from "../../src/state.ts";
-import { choice, cleanup, fetched, sourceA, statePath, success, textLog } from "./harness.ts";
+import { cleanup, decide, fetched, seeded, settle, sourceA, success, turn } from "./harness.ts";
 
 afterEach(cleanup);
 
+/** The fixing pull request that covers the fetched issue. */
+function fixingPull(): FetchedTicket {
+	return {
+		...fetched("github:github.com:P_7"),
+		sourceKind: "github-pull-request",
+		externalKey: "#7",
+		title: "Pull 7",
+		attributes: withIssueReferences({}, [
+			{ identity: null, number: 5, repository: "acme/factory" },
+		]),
+	};
+}
+
 describe("the ignored Ticket (ADR 0060)", () => {
 	test("the flag and its moment are durable factory state on the ticket row", () => {
-		const path = statePath();
-		const state = openFactoryState(path, () => Date.parse("2026-09-24T10:00:00Z"));
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true, now: () => Date.parse("2026-09-24T10:00:00Z") });
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(ticket.ignored).toBe(false);
 		expect(ticket.ignoredAt).toBeNull();
@@ -53,9 +63,7 @@ describe("the ignored Ticket (ADR 0060)", () => {
 	});
 
 	test("the flag follows the Ticket across a source that drops it and brings it back", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded({ file: true });
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(state.ticketWorkCycle.setTicketIgnored(ticket.identity, true, null).ok).toBe(true);
 		// The source stops listing the item: the membership goes inactive,
@@ -76,9 +84,7 @@ describe("the ignored Ticket (ADR 0060)", () => {
 	});
 
 	test("the write refuses a Ticket that owes a decision, in the obligation's words", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded({ file: true });
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		// An open ticket owes nothing: the act runs.
 		expect(state.ticketWorkCycle.setTicketIgnored(ticket.identity, true, null)).toEqual({
@@ -88,18 +94,8 @@ describe("the ignored Ticket (ADR 0060)", () => {
 			ok: true,
 		});
 		// A settled turn rests on the operator's decision.
-		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "the turn is done",
-			turnLog: textLog("the turn is done"),
-			completedAt: "2026-08-31T11:00:00Z",
-		});
+		const attemptId = settle(state, ticket.identity);
+		turn(state, ticket.identity, attemptId, { message: "the turn is done" });
 		// The obligation the row owes is what the write refuses: the aggregate
 		// answers it through the act, not through a read the interface carries
 		// (issue #202 review).
@@ -108,13 +104,8 @@ describe("the ignored Ticket (ADR 0060)", () => {
 			reason: "the selected Ticket cannot be ignored: it awaits a decision",
 		});
 		// A held turn names its own fact.
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
+		turn(state, ticket.identity, attemptId, {
 			message: "the turn failed",
-			turnLog: textLog("the turn failed"),
 			completedAt: "2026-08-31T11:05:00Z",
 			cause: "failed",
 		});
@@ -126,16 +117,10 @@ describe("the ignored Ticket (ADR 0060)", () => {
 	});
 
 	test("a missing Agent refuses the ignore, and the flag never leaves by itself", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded({ file: true });
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
+		settle(state, ticket.identity, {
+			handles: { paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1" },
 		});
 		// The agent works: no obligation, and the key runs.
 		expect(state.ticketWorkCycle.setTicketIgnored(ticket.identity, true, null)).toEqual({
@@ -172,18 +157,12 @@ describe("the ignored Ticket (ADR 0060)", () => {
 	});
 
 	test("the ignore withholds a resting row and reveals a live or awaiting one", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
 		const rest = fetched();
 		const live = fetched("github:github.com:I_6");
-		state.sourceFact.applyFetch(sourceA, success([rest, live]));
+		const { state } = seeded({ file: true, tickets: [rest, live] });
 		expect(state.ticketWorkCycle.setTicketIgnored(rest.identity, true, null).ok).toBe(true);
-		const claim = state.handoff.claimHandoff(live.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
+		const attemptId = settle(state, live.identity, {
+			handles: { paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1" },
 		});
 		expect(state.ticketWorkCycle.setTicketIgnored(live.identity, true, null).ok).toBe(true);
 		const identities = (filter: "active" | "ignored" | "all") =>
@@ -197,15 +176,7 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		expect(identities("all")).toEqual([live.identity, rest.identity]);
 		// Settle the live turn: awaiting owes a decision, so its row stays in the
 		// active view, and the flag still stands on it.
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: live.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "the turn is done",
-			turnLog: textLog("the turn is done"),
-			completedAt: "2026-08-31T11:00:00Z",
-		});
+		turn(state, live.identity, attemptId, { message: "the turn is done" });
 		expect(identities("active")).toEqual([live.identity]);
 		// Awaiting owes a decision, so the write that would put the row away
 		// refuses it (issue #202 review).
@@ -215,12 +186,7 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		});
 		expect(state.ticketWorkCycle.ignoredTickets().has(live.identity)).toBe(true);
 		// Close its cycle: the Ticket rests, and the same flag takes the row back.
-		state.ticketWorkCycle.applyCompletionDecision({
-			ticketIdentity: live.identity,
-			handoffId: claim.claim.attemptId,
-			decision: "closed",
-			decidedAt: "2026-08-31T11:30:00Z",
-		});
+		decide(state, live.identity, attemptId);
 		expect(identities("active")).toEqual([]);
 		// Both rest, and the pile keeps the list's own order: the attention band,
 		// then the band's own second rank (ADR 0050, ADR 0065).
@@ -229,19 +195,8 @@ describe("the ignored Ticket (ADR 0060)", () => {
 	});
 
 	test("the projection's three filter states hold the covered rule beside them", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
 		const issue = fetched();
-		const pull = {
-			...fetched("github:github.com:P_7"),
-			sourceKind: "github-pull-request",
-			externalKey: "#7",
-			title: "Pull 7",
-			attributes: withIssueReferences({}, [
-				{ identity: null, number: 5, repository: "acme/factory" },
-			]),
-		};
-		state.sourceFact.applyFetch(sourceA, success([issue, pull]));
+		const { state } = seeded({ file: true, tickets: [issue, fixingPull()] });
 		const identities = (filter: "active" | "ignored" | "all") =>
 			state.ticketWorkCycle
 				.ticketListViews([], "implement", filter)
@@ -269,19 +224,8 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		// ignore is the operator's own act, recorded. A Ticket that is both
 		// must stay reachable, because the only key that clears the flag is the
 		// one on its row (user story 6).
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
 		const coveredIssue = fetched();
-		const pull = {
-			...fetched("github:github.com:P_7"),
-			sourceKind: "github-pull-request",
-			externalKey: "#7",
-			title: "Pull 7",
-			attributes: withIssueReferences({}, [
-				{ identity: null, number: 5, repository: "acme/factory" },
-			]),
-		};
-		state.sourceFact.applyFetch(sourceA, success([coveredIssue, pull]));
+		const { state } = seeded({ file: true, tickets: [coveredIssue, fixingPull()] });
 		// Rest first: the issue is covered, so it is out of the list before the
 		// operator ever touches it, and a fixing pull request appearing after an
 		// ignore reaches the same state by the ordinary refresh path.
@@ -318,8 +262,6 @@ describe("the ignored Ticket (ADR 0060)", () => {
 	});
 
 	test("the ignored view keeps the attention bands and the open bands' number order", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
 		// Three Tickets with three external update times that disagree with
 		// the numbers: the pile reads by the attention band first and the
 		// open bands' ticket number after, the order the active list holds
@@ -329,14 +271,14 @@ describe("the ignored Ticket (ADR 0060)", () => {
 			externalKey: key,
 			externalUpdatedAt: at,
 		});
-		state.sourceFact.applyFetch(
-			sourceA,
-			success([
+		const { state } = seeded({
+			file: true,
+			tickets: [
 				dated("github:github.com:I_5", "#5", "2026-08-31T09:00:00Z"),
 				dated("github:github.com:I_6", "#6", "2026-08-31T09:30:00Z"),
 				dated("github:github.com:I_7", "#7", "2026-08-31T12:00:00Z"),
-			]),
-		);
+			],
+		});
 		for (const identity of [
 			"github:github.com:I_5",
 			"github:github.com:I_6",
@@ -347,9 +289,7 @@ describe("the ignored Ticket (ADR 0060)", () => {
 		// I_5 runs an Agent, so it leads the pile; the rest read by ticket
 		// number ascending, exactly as the active list sorts them, and the
 		// newest update (I_7) does not pull its row ahead of I_6.
-		const running = state.handoff.claimHandoff("github:github.com:I_5", choice, "open");
-		if (!running.ok) throw new Error(running.reason);
-		state.handoff.settleHandoff(running.claim.attemptId, true);
+		settle(state, "github:github.com:I_5");
 		expect(
 			state.ticketWorkCycle
 				.ticketListViews([], "implement", "ignored")
@@ -363,13 +303,8 @@ describe("the ignored Ticket (ADR 0060)", () => {
 	});
 
 	test("a v21 file migrates to v22: the flag lands off, and the rows keep their state", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const claim = state.handoff.claimHandoff("github:github.com:I_5", choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
+		const { state, path } = seeded({ file: true });
+		settle(state, "github:github.com:I_5");
 		state.close();
 
 		// The older file: the stamp at 21, and no flag column at all.
