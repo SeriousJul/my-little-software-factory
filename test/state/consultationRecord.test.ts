@@ -9,7 +9,15 @@ import { dirname } from "node:path";
 import { workQueueIdentityOf } from "../../src/state/work-queue.ts";
 import type { FactoryState } from "../../src/state.ts";
 import { openFactoryState } from "../../src/state.ts";
-import { cleanup, enqueue, queuedConsultation, repository, statePath, uid } from "./harness.ts";
+import {
+	cleanup,
+	downgradeToV4,
+	enqueue,
+	queuedConsultation,
+	repository,
+	statePath,
+	uid,
+} from "./harness.ts";
 
 afterEach(cleanup);
 
@@ -708,42 +716,7 @@ describe("pending responses across restart and migration", () => {
 		});
 		state.close();
 		// Downgrade the record to the v4 shape.
-		const db = new Database(path);
-		db.exec("DROP TABLE consultation_pending_responses");
-		// The v6 and later columns go too: a v4 record has no leftover fact,
-		// no trace settings, and no context window anywhere.
-		db.exec(
-			"ALTER TABLE handoffs DROP COLUMN leftover_reason;" +
-				" ALTER TABLE handoffs DROP COLUMN leftover_at;" +
-				" ALTER TABLE handoffs DROP COLUMN leftover_cleared_at;" +
-				" ALTER TABLE handoffs DROP COLUMN herdr_name;",
-		);
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN model").run();
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN thinking").run();
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
-		db.prepare("ALTER TABLE consultations DROP COLUMN context_window").run();
-		// The v9 columns belong to the run after this record: a v4 trace never
-		// stored a cause, and neither did its consultation turns.
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN cause").run();
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN detail").run();
-		db.prepare("ALTER TABLE consultation_turns DROP COLUMN cause").run();
-		db.prepare("ALTER TABLE consultation_turns DROP COLUMN detail").run();
-		// The v10 facts belong to the run after this record: a v4 database
-		// never stored a checkout's confirmed conflict set, and its
-		// Consultation never held the one-shot override column.
-		db.prepare(
-			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
-		).run();
-		db.exec("DROP TABLE checkout_conflict_confirmations;");
-		// The v13 mode, the v14 queue, and the v19 queue pause belong to the run
-		// after this record: a v4 file stored no Auto-handoff mode, no Work
-		// queue, and no queue pause.
-		db.exec("DROP TABLE queue_pause; DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
-		// The v13 fact belongs to the run after this record: a v4 trace never
-		// stored the transition outcome.
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
-		db.prepare("UPDATE schema_version SET version = 4").run();
-		db.close();
+		downgradeToV4(path);
 		const reopened = openFactoryState(path);
 		expect(reopened.consultationRecord.consultation(consultation.id)?.state).toBe(
 			"awaiting-response",

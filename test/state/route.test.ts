@@ -9,32 +9,21 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { TransitionOutcome } from "../../src/config.ts";
 import { workQueueIdentityOf } from "../../src/state/work-queue.ts";
-import { openFactoryState } from "../../src/state.ts";
-import { choice, cleanup, fetched, sourceA, statePath, success, textLog } from "./harness.ts";
+import type { FactoryState } from "../../src/state.ts";
+import { choice, cleanup, fetched, seeded, settle, turn } from "./harness.ts";
 
 afterEach(cleanup);
 
 describe("the routed Ticket's wait (ADR 0072)", () => {
-	type State = ReturnType<typeof openFactoryState>;
+	type State = FactoryState;
 
 	/** One Ticket with its turn settled, and the attempt the turn ran on. */
 	function settledTurn(state: State, transition?: TransitionOutcome) {
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (ticket === undefined) throw new Error("the fixture holds no ticket");
-		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "Done.",
-			turnLog: textLog("Done."),
-			completedAt: "2026-08-31T11:00:00Z",
-			transition,
-		});
-		return { identity: ticket.identity, attemptId: claim.claim.attemptId };
+		const attemptId = settle(state, ticket.identity);
+		turn(state, ticket.identity, attemptId, { transition });
+		return { identity: ticket.identity, attemptId };
 	}
 
 	/** The settled turn's transition, routing to the named position. */
@@ -62,9 +51,7 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 			.rows.find((t) => t.identity === identity);
 
 	test("the route ask ends the cycle at the ask, and the re-confirm stands a no-op", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded({ file: true });
 		const { identity, attemptId } = settledTurn(state);
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
@@ -96,9 +83,10 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 	});
 
 	test("the cross-position start runs in the started ticket's own cycle", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+		const { state } = seeded({
+			file: true,
+			tickets: [fetched("github:github.com:I_6"), fetched()],
+		});
 		const { identity, attemptId } = settledTurn(state);
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
@@ -121,10 +109,9 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 				previousMessage: "settled the turn",
 			}),
 		).toEqual({ ok: true });
-		const claim = state.handoff.claimHandoff("github:github.com:I_6", choice, "workflow");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			routeFromIdentity: identity,
+		settle(state, "github:github.com:I_6", {
+			origin: "workflow",
+			handles: { routeFromIdentity: identity },
 		});
 		expect(state.ticketWorkCycle.ticketState("github:github.com:I_6")).toBe("handed-off");
 		const settled = listed(state, identity);
@@ -136,9 +123,7 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 	});
 
 	test("the same-position start hands the open ticket off in its next cycle", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded({ file: true });
 		const { identity, attemptId } = settledTurn(state);
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
@@ -165,10 +150,9 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 		const waiting = state.workQueue.items()[0];
 		if (waiting?.kind !== "handoff") throw new Error("the waiting item is not a handoff");
 		expect(waiting.routeFromIdentity).toBe(null);
-		const claim = state.handoff.claimHandoff(identity, choice, "workflow");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			routeFromIdentity: null,
+		settle(state, identity, {
+			origin: "workflow",
+			handles: { routeFromIdentity: null },
 		});
 		const moved = listed(state, identity);
 		if (moved === undefined) throw new Error("the ticket left the list");
@@ -178,9 +162,10 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 	});
 
 	test("the close of a routed ticket's position takes the route's item", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+		const { state } = seeded({
+			file: true,
+			tickets: [fetched("github:github.com:I_6"), fetched()],
+		});
 		const { identity, attemptId } = settledTurn(state);
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
@@ -205,23 +190,15 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 		// rests awaiting with no decision, and the close ends its cycle and
 		// takes the item that waited on it. A closed cycle never leaves a
 		// live start in the queue.
-		const positionClaim = state.handoff.claimHandoff("github:github.com:I_6", choice, "open");
-		if (!positionClaim.ok) throw new Error(positionClaim.reason);
-		state.handoff.settleHandoff(positionClaim.claim.attemptId, true);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: "github:github.com:I_6",
-			handoffId: positionClaim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "Done.",
-			turnLog: textLog("Done."),
+		const positionAttempt = settle(state, "github:github.com:I_6");
+		turn(state, "github:github.com:I_6", positionAttempt, {
 			completedAt: "2026-08-31T11:20:00Z",
 		});
 		expect(state.ticketWorkCycle.ticketState("github:github.com:I_6")).toBe("awaiting");
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: "github:github.com:I_6",
-				handoffId: positionClaim.claim.attemptId,
+				handoffId: positionAttempt,
 				decision: "closed",
 				decidedAt: "2026-08-31T11:30:00Z",
 			}),
@@ -234,9 +211,10 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 	});
 
 	test("removeWorkflowRouteItem takes the route's item and leaves the open wait", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+		const { state } = seeded({
+			file: true,
+			tickets: [fetched("github:github.com:I_6"), fetched()],
+		});
 		const { identity, attemptId } = settledTurn(state);
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
@@ -275,9 +253,10 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 	});
 
 	test("the cancel of the route's item takes the mark on the turn (ADR 0072)", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+		const { state } = seeded({
+			file: true,
+			tickets: [fetched("github:github.com:I_6"), fetched()],
+		});
 		const { identity, attemptId } = settledTurn(state, routeOutcome("github:github.com:I_6"));
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
@@ -324,10 +303,10 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 	});
 
 	test("the cancel marks the trace the item's decision answers, not a newer turn (ADR 0072)", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+		const { state, path } = seeded({
+			file: true,
+			tickets: [fetched("github:github.com:I_6"), fetched()],
+		});
 		const { identity, attemptId } = settledTurn(state, routeOutcome("github:github.com:I_6"));
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
@@ -350,16 +329,9 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 		// The source settles a new turn while the route's item waits: a
 		// manual start on the source can do it, and the queue holds only the
 		// automatic adds.
-		const claim = state.handoff.claimHandoff(identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
+		const secondAttempt = settle(state, identity);
+		turn(state, identity, secondAttempt, {
 			message: "The new turn is done.",
-			turnLog: textLog("The new turn is done."),
 			completedAt: "2026-08-31T12:00:00Z",
 			transition: routeOutcome("github:github.com:I_6"),
 		});
@@ -394,9 +366,10 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 	});
 
 	test("a cancel takes the item alone when the row names no route (ADR 0072)", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+		const { state } = seeded({
+			file: true,
+			tickets: [fetched("github:github.com:I_6"), fetched()],
+		});
 		const { identity, attemptId } = settledTurn(state);
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
@@ -442,9 +415,10 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 	});
 
 	test("a cancel of a route whose turn already decided moves no cycle (ADR 0072)", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+		const { state } = seeded({
+			file: true,
+			tickets: [fetched("github:github.com:I_6"), fetched()],
+		});
 		const { identity, attemptId } = settledTurn(state, routeOutcome("github:github.com:I_6"));
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({
@@ -486,9 +460,7 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 	});
 
 	test("the cancel of the merge's item takes the item alone (ADR 0068, ADR 0072)", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded({ file: true });
 		const identity = "github:github.com:I_5";
 		// The merge's wait stands in the Work queue under the ticket's own
 		// name, and the ticket keeps its open state behind it.
@@ -510,9 +482,10 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 	});
 
 	test("the cancel of the merge's item marks the route and leaves the source (ADR 0069, ADR 0072)", () => {
-		const state = openFactoryState(statePath());
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+		const { state } = seeded({
+			file: true,
+			tickets: [fetched("github:github.com:I_6"), fetched()],
+		});
 		const { identity, attemptId } = settledTurn(state, routeOutcome("github:github.com:I_6"));
 		expect(
 			state.ticketWorkCycle.applyCompletionDecision({

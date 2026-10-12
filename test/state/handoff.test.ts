@@ -10,16 +10,23 @@ import type { FactoryState } from "../../src/state.ts";
 import { openFactoryState, SCHEMA_VERSION } from "../../src/state.ts";
 import {
 	choice,
+	claim,
 	cleanup,
 	closedCycle,
+	decide,
+	downgradeToV2,
+	downgradeToV5,
+	downgradeToV7,
 	fetched,
 	HARNESS_AGENT_NAME,
 	labeled,
 	POSITION_STATES,
+	seeded,
+	settle,
+	settleAttempt,
 	sourceA,
 	statePath,
-	success,
-	textLog,
+	turn,
 } from "./harness.ts";
 
 afterEach(cleanup);
@@ -39,10 +46,11 @@ describe("the handoff aggregate", () => {
 		// The Handoff records the task it started with, and the position is
 		// still what the labels say: the two facts stand apart, and the
 		// grouping reads the State the machine matched now.
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([labeled(["needs-review"])]));
-		const [open] = state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows;
+		const { state, rows } = seeded({
+			tickets: [labeled(["needs-review"])],
+			states: POSITION_STATES,
+		});
+		const [open] = rows;
 		expect(open.matchedStateName).toBe("needs-review");
 		const claim = state.handoff.claimHandoff(
 			open.identity,
@@ -67,23 +75,20 @@ describe("the handoff aggregate", () => {
 		// place across a re-read. The no-number ticket stands last in its band,
 		// a tie breaks by identity, and the live bands keep the newest-update
 		// rank they always held (ADR 0050).
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
 		const ticket = (identity: string, key: string, at: string): FetchedTicket => ({
 			...fetched(identity),
 			externalKey: key,
 			externalUpdatedAt: at,
 		});
-		state.sourceFact.applyFetch(
-			sourceA,
-			success([
+		const { state } = seeded({
+			tickets: [
 				ticket("github:github.com:I_5", "#5", "2026-08-31T09:00:00Z"),
 				ticket("github:github.com:I_6a", "#6", "2026-08-31T12:00:00Z"),
 				ticket("github:github.com:I_6b", "#6", "2026-08-31T08:00:00Z"),
 				ticket("github:github.com:I_7", "#7", "2026-08-31T11:00:00Z"),
 				ticket("github:github.com:G_1", "ghsa-abc-123", "2026-08-31T13:00:00Z"),
-			]),
-		);
+			],
+		});
 		const identities = () =>
 			state.ticketWorkCycle
 				.ticketListViews([], "implement", "active")
@@ -112,45 +117,23 @@ describe("the handoff aggregate", () => {
 		state.close();
 	});
 	test("settles a normal failed handoff so an operator can retry", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		const first = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!first.ok) throw new Error(first.reason);
-		state.handoff.settleHandoff(first.claim.attemptId, false, "herdr is unavailable");
+		const { state, rows } = seeded();
+		const [ticket] = rows;
+		settle(state, ticket.identity, { ok: false, reason: "herdr is unavailable" });
 		expect(state.handoff.claimHandoff(ticket.identity, choice, "open")).toEqual(
 			expect.objectContaining({ ok: true }),
 		);
 		state.close();
 	});
 	test("a closed decision ends the work cycle: back to open with the cycle incremented", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "Done.",
-			turnLog: textLog("Done."),
-			completedAt: "2026-08-31T11:00:00Z",
-		});
+		const { state, path, rows } = seeded({ file: true });
+		const [ticket] = rows;
+		const attemptId = settle(state, ticket.identity);
+		turn(state, ticket.identity, attemptId);
 		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows[0].state).toBe("awaiting");
 
 		// The decision records on the trace and ends the cycle.
-		state.ticketWorkCycle.applyCompletionDecision({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			decision: "closed",
-			decidedAt: "2026-08-31T11:30:00Z",
-		});
+		decide(state, ticket.identity, attemptId);
 		const [returned] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(returned.state).toBe("open");
 		expect(returned.lastCompletion?.decision).toBe("closed");
@@ -179,28 +162,11 @@ describe("the handoff aggregate", () => {
 		state.close();
 	});
 	test("an open claim waits for the source re-read after a cycle end", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		const identity = "github:github.com:I_5";
-		const claim = state.handoff.claimHandoff(identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "Done.",
-			turnLog: textLog("Done."),
-			completedAt: "2026-08-31T11:00:00Z",
-		});
-		state.ticketWorkCycle.applyCompletionDecision({
-			ticketIdentity: identity,
-			handoffId: claim.claim.attemptId,
-			decision: "closed",
-			decidedAt: "2026-08-31T11:30:00Z",
-		});
+		const attemptId = settle(state, identity);
+		turn(state, identity, attemptId);
+		decide(state, identity, attemptId);
 		const gated = state.handoff.claimHandoff(identity, choice, "open");
 		expect(gated.ok).toBe(false);
 		if (gated.ok) return;
@@ -217,22 +183,10 @@ describe("the handoff aggregate", () => {
 		state.close();
 	});
 	test("a workflow claim needs awaiting, a restart claim needs in-flight", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "Done.",
-			turnLog: textLog("Done."),
-			completedAt: "2026-08-31T11:00:00Z",
-		});
+		const { state, rows } = seeded();
+		const [ticket] = rows;
+		const attemptId = settle(state, ticket.identity);
+		turn(state, ticket.identity, attemptId);
 
 		// Awaiting: a workflow handoff is allowed, an open claim is not.
 		expect(state.handoff.claimHandoff(ticket.identity, choice, "workflow").ok).toBe(true);
@@ -256,63 +210,15 @@ describe("the handoff aggregate", () => {
 		state.close();
 	});
 	test("a v2 database migrates to v3: the trace degrades its log from the last message", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "line one\nline two",
-			turnLog: textLog("line one\nline two"),
-			completedAt: "2026-08-31T11:00:00Z",
-		});
+		const { state, path, rows } = seeded({ file: true });
+		const [ticket] = rows;
+		const attemptId = settle(state, ticket.identity);
+		turn(state, ticket.identity, attemptId, { message: "line one\nline two" });
 		state.close();
 
 		// Downgrade the database to v2: a trace without the turn log column,
 		// and none of the tables the later versions create.
-		const db = new Database(path);
-		db.exec(`
-			DROP TABLE consultation_pending_responses;
-			DROP TABLE consultation_remaining_resources;
-			DROP TABLE consultation_resources;
-			DROP TABLE consultation_snapshots;
-			DROP TABLE consultation_turns;
-			DROP TABLE consultations;
-			DROP TABLE checkout_conflict_confirmations;
-			DROP TABLE queue_pause;
-			DROP TABLE auto_handoff_mode;
-			DROP TABLE work_queue;
-		`);
-		// The v9 columns belong to the run after this record: a v2 trace never
-		// stored a cause, so the v9 step re-adds it.
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN cause").run();
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN detail").run();
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN turn_log_json").run();
-		// A v2 trace carries no model, thinking, or context window: the v7 and
-		// v8 columns go with the v6 ones. The consultations table does not
-		// exist at this version.
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN model").run();
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN thinking").run();
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
-		// The leftover columns belong to v6: a v2 record never heard of them.
-		db.exec(
-			"ALTER TABLE handoffs DROP COLUMN leftover_reason;" +
-				" ALTER TABLE handoffs DROP COLUMN leftover_at;" +
-				" ALTER TABLE handoffs DROP COLUMN leftover_cleared_at;" +
-				" ALTER TABLE handoffs DROP COLUMN herdr_name;",
-		);
-		// The v13 fact belongs to the run after this record: a v2 trace never
-		// stored the transition outcome.
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
-		db.prepare("UPDATE schema_version SET version = 2").run();
-		db.close();
+		downgradeToV2(path);
 
 		const reopened = openFactoryState(path);
 		const [restored] = reopened.ticketWorkCycle.ticketListViews([], "implement").rows;
@@ -331,65 +237,16 @@ describe("the handoff aggregate", () => {
 		reopened.close();
 	});
 	test("a v5 database migrates to v8: the handoff gains the leftover columns, the trace the settings", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "Done.",
-			turnLog: textLog("Done."),
-			completedAt: "2026-08-31T11:00:00Z",
-		});
+		const { state, path, rows } = seeded({ file: true });
+		const [ticket] = rows;
+		const attemptId = settle(state, ticket.identity);
+		turn(state, ticket.identity, attemptId);
 		state.close();
 
-		// Downgrade the record to the v5 shape: drop the columns the v6, v7,
-		// and v8 migrations add, and rewrite the stored choice without the key
-		// the v8 step gives it. A v5 handoff row knows nothing of a leftover or
-		// a herdr name, and a v5 trace carries no settings.
-		const db = new Database(path);
-		db.exec(
-			"ALTER TABLE handoffs DROP COLUMN leftover_reason;" +
-				" ALTER TABLE handoffs DROP COLUMN leftover_at;" +
-				" ALTER TABLE handoffs DROP COLUMN leftover_cleared_at;" +
-				" ALTER TABLE handoffs DROP COLUMN herdr_name;",
-		);
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN model").run();
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN thinking").run();
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
-		db.prepare("ALTER TABLE consultations DROP COLUMN context_window").run();
-		// The v9 columns belong to the run after this record: a v5 trace never
-		// stored a cause, and neither did its consultation turns.
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN cause").run();
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN detail").run();
-		db.prepare("ALTER TABLE consultation_turns DROP COLUMN cause").run();
-		db.prepare("ALTER TABLE consultation_turns DROP COLUMN detail").run();
-		// The v10 facts belong to the run after this record: a v5 database
-		// never stored a checkout's confirmed conflict set, and its
-		// Consultation never held the one-shot override column.
-		db.prepare(
-			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
-		).run();
-		db.exec("DROP TABLE checkout_conflict_confirmations;");
-		// The v13 mode, the v14 queue, and the v19 queue pause belong to the run
-		// after this record: a v5 file stored no Auto-handoff mode, no Work
-		// queue, and no queue pause.
-		db.exec("DROP TABLE queue_pause; DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
-		// The v13 fact belongs to the run after this record: a v5 trace never
-		// stored the transition outcome.
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
-		db.prepare("UPDATE schema_version SET version = 5").run();
-		db.prepare(
-			"UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')",
-		).run();
-		db.close();
+		// Downgrade the record to the v5 shape: the stored choice is rewritten
+		// without the key the v8 step gives it, and a v5 handoff row knows
+		// nothing of a leftover or a herdr name.
+		downgradeToV5(path);
 
 		const reopened = openFactoryState(path);
 		// The trace survives the two settings steps with their empty defaults:
@@ -412,56 +269,16 @@ describe("the handoff aggregate", () => {
 		reopened.close();
 	});
 	test("a v7 database migrates to v8: the trace and a stored choice gain no context window", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "Done.",
-			turnLog: textLog("Done."),
-			completedAt: "2026-08-31T11:00:00Z",
-		});
+		const { state, path, rows } = seeded({ file: true });
+		const [ticket] = rows;
+		const attemptId = settle(state, ticket.identity);
+		turn(state, ticket.identity, attemptId);
 		state.close();
 
-		// Downgrade the record to the v7 shape: drop the column the v8
-		// migration adds, and rewrite a stored choice without the key, which
-		// is exactly what a v7 handoff row holds.
-		const db = new Database(path);
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
-		db.prepare("ALTER TABLE consultations DROP COLUMN context_window").run();
-		// The v9 columns belong to the run after this record: a v7 trace never
-		// stored a cause, and neither did its consultation turns.
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN cause").run();
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN detail").run();
-		db.prepare("ALTER TABLE consultation_turns DROP COLUMN cause").run();
-		db.prepare("ALTER TABLE consultation_turns DROP COLUMN detail").run();
-		// The v10 facts belong to the run after this record: a v7 database
-		// never stored a checkout's confirmed conflict set, and its
-		// Consultation never held the one-shot override column.
-		db.prepare(
-			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
-		).run();
-		db.exec("DROP TABLE checkout_conflict_confirmations;");
-		// The v13 mode, the v14 queue, and the v19 queue pause belong to the run
-		// after this record: a v7 file stored no Auto-handoff mode, no Work
-		// queue, and no queue pause.
-		db.exec("DROP TABLE queue_pause; DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
-		// The v13 fact belongs to the run after this record: a v7 trace never
-		// stored the transition outcome.
-		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
-		db.prepare("UPDATE schema_version SET version = 7").run();
-		db.prepare(
-			"UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')",
-		).run();
-		db.close();
+		// Downgrade the record to the v7 shape: the v8 column goes, and the
+		// stored choice rewrites without the key, which is exactly what a v7
+		// handoff row holds.
+		downgradeToV7(path);
 
 		const reopened = openFactoryState(path);
 		// The trace survives, and its context window reads as the empty one
@@ -506,9 +323,9 @@ describe("the handoff aggregate", () => {
 		);
 	});
 	test("a reclaim records no command and refuses a ticket that is not open", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+		const { state } = seeded({
+			tickets: [fetched("github:github.com:I_6"), fetched()],
+		});
 		// A ticket with no handoff at all cannot be reclaimed.
 		expect(
 			state.handoff.reclaimHandoff("github:github.com:I_6", {
@@ -522,9 +339,7 @@ describe("the handoff aggregate", () => {
 		// The close's re-read keeps every listed ticket, and clears the gate
 		// before the ticket's next cycle claims.
 		closedCycle(state, identity, undefined, [fetched("github:github.com:I_6"), fetched()]);
-		const claim = state.handoff.claimHandoff("github:github.com:I_6", choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-6" });
+		settle(state, "github:github.com:I_6", { handles: { paneId: "pane-6" } });
 		// A running ticket is already tracked: a late poll must not stack handoffs.
 		expect(
 			state.handoff.reclaimHandoff("github:github.com:I_6", {
@@ -562,9 +377,7 @@ describe("the handoff aggregate", () => {
 		state.close();
 	});
 	test("records a failed Close cleanup as a leftover environment of the handoff", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		const identity = "github:github.com:I_5";
 		const handoffId = closedCycle(state, identity);
 
@@ -603,9 +416,7 @@ describe("the handoff aggregate", () => {
 		state.close();
 	});
 	test("a leftover named by a herdr collision lands on the handoff that holds the name", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		const identity = "github:github.com:I_5";
 		// The close's re-read keeps the ticket listed, and clears the gate
 		// before the next cycle claims.
@@ -642,9 +453,7 @@ describe("the handoff aggregate", () => {
 		state.close();
 	});
 	test("a clearing names only the environment it ended", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		const identity = "github:github.com:I_5";
 		// The close's re-read keeps the ticket listed, and clears the gate
 		// before the next cycle claims.
@@ -698,18 +507,16 @@ describe("the handoff aggregate", () => {
 		state.close();
 	});
 	test("a handoff records the herdr name its agent started under", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		const identity = "github:github.com:I_5";
-		const claim = state.handoff.claimHandoff(identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-			// The stable name was still held by the ticket's own leftover agent.
-			agentName: "persist-source-facts-c2",
+		settle(state, identity, {
+			handles: {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				// The stable name was still held by the ticket's own leftover agent.
+				agentName: "persist-source-facts-c2",
+			},
 		});
 		// The completion trace of this handoff's turn names the agent herdr
 		// actually runs, not the name the ticket would have wanted.
@@ -717,22 +524,16 @@ describe("the handoff aggregate", () => {
 		state.close();
 	});
 	test("a handoff that stored no herdr name reads the ticket's stable one", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		const identity = "github:github.com:I_5";
-		const claim = state.handoff.claimHandoff(identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-1" });
+		settle(state, identity, { handles: { paneId: "pane-1" } });
 		// A legacy row, and every clean handoff of a free name: the naming
 		// rule gives the same answer herdr took.
 		expect(state.ticketWorkCycle.agentNameForTicket(identity)).toBe(HARNESS_AGENT_NAME);
 		state.close();
 	});
 	test("a reclaim refuses an agent that is not the ticket's own", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		const identity = "github:github.com:I_5";
 		closedCycle(state, identity);
 		// Herdr handed the closed pane's id out again: a different agent works
@@ -764,18 +565,11 @@ describe("the handoff aggregate", () => {
 		state.close();
 	});
 	test("a failed clear leaves the leftover standing with its new reason", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		const identity = "github:github.com:I_5";
-		const claim = state.handoff.claimHandoff(identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
+		const handoffId = settle(state, identity, {
+			handles: { paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1" },
 		});
-		const handoffId = claim.claim.attemptId;
 		state.handoff.recordLeftoverEnvironment({
 			ticketIdentity: identity,
 			handoffId,
@@ -813,22 +607,24 @@ describe("the handoff aggregate", () => {
 const ATTEMPT_NOW = () => Date.parse("2026-08-31T11:00:00Z");
 const TICKET = "github:github.com:I_5";
 
+/**
+ * One refused start on the open Ticket: the claim settles failed with the
+ * fixture's clock behind it, and no Agent ever ran.
+ */
+function failStart(state: FactoryState, reason: string): void {
+	settle(state, TICKET, { ok: false, reason });
+}
+
 /** One open Ticket, and the automatic start that never reached its Agent. */
-function failedStartState() {
-	const state = openFactoryState(":memory:", ATTEMPT_NOW);
-	state.sourceFact.initializeSources([sourceA]);
-	state.sourceFact.applyFetch(sourceA, success([fetched()]));
-	const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-	if (!claim.ok) throw new Error(claim.reason);
-	state.handoff.settleHandoff(claim.claim.attemptId, false, "the worktree path already exists");
+function failedStartState(): FactoryState {
+	const { state } = seeded({ now: ATTEMPT_NOW });
+	failStart(state, "the worktree path already exists");
 	return state;
 }
 
-/** The Ticket's newest Handoff attempt settled `failed`. */
-function failAnotherStart(state: FactoryState, reason: string): void {
-	const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-	if (!claim.ok) throw new Error(claim.reason);
-	state.handoff.settleHandoff(claim.claim.attemptId, false, reason);
+/** One start on the Ticket that reached its Agent, in the cycle's own pane. */
+function startOne(state: FactoryState): void {
+	settle(state, TICKET, { handles: { paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1" } });
 }
 
 describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
@@ -856,29 +652,15 @@ describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
 			fetchedAt: "2026-08-31T11:30:00Z",
 			tickets: [fetched()],
 		});
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-		});
+		startOne(state);
 		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
 		state.close();
 	});
 
 	test("a started handoff, and a Ticket with no attempt, never read as unrefreshed", () => {
-		const state = openFactoryState(":memory:", ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded({ now: ATTEMPT_NOW });
 		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-		});
+		startOne(state);
 		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
 		state.close();
 	});
@@ -894,21 +676,15 @@ describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
 			tickets: [fetched()],
 		});
 		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
-		const pending = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!pending.ok) throw new Error(pending.reason);
+		const pending = claim(state, TICKET);
 		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
 		expect(state.handoff.handoffInFlight(TICKET)).toBe(true);
 		state.close();
 	});
 
 	test("the hold survives the state file being closed and reopened", () => {
-		const path = statePath();
-		const state = openFactoryState(path, ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, false, "the worktree path already exists");
+		const { state, path } = seeded({ file: true, now: ATTEMPT_NOW });
+		settle(state, TICKET, { ok: false, reason: "the worktree path already exists" });
 		state.close();
 		const reopened = openFactoryState(path, ATTEMPT_NOW);
 		expect(reopened.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(true);
@@ -921,13 +697,10 @@ describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
 		// then than they were before the start, and the failure was not yet a fact
 		// (ADR 0101).
 		let nowMs = Date.parse("2026-08-31T11:00:00Z");
-		const state = openFactoryState(":memory:", () => nowMs);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
+		const { state } = seeded({ now: () => nowMs });
+		const attemptId = claim(state, TICKET);
 		nowMs = Date.parse("2026-08-31T11:10:00Z");
-		state.handoff.settleHandoff(claim.claim.attemptId, false, "the worktree path already exists");
+		settleAttempt(state, attemptId, { ok: false, reason: "the worktree path already exists" });
 		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(true);
 		state.sourceFact.applyFetch(sourceA, {
 			status: "success",
@@ -950,13 +723,7 @@ describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
 		// attempt that actually ran last: the start that reached its Agent.
 		const state = failedStartState();
 		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(true);
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-		});
+		startOne(state);
 		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
 		state.close();
 	});
@@ -966,13 +733,8 @@ describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
 		// reaches. On a Ticket carrying thousands of attempts that read needs an
 		// index behind it, so the v27 file gains `attempts_ticket_latest` on the
 		// next open and the hold keeps its answer across the migration.
-		const path = statePath();
-		const state = openFactoryState(path, ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, false, "the worktree path already exists");
+		const { state, path } = seeded({ file: true, now: ATTEMPT_NOW });
+		failStart(state, "the worktree path already exists");
 		state.close();
 
 		const db = new Database(path);
@@ -1006,22 +768,11 @@ describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
  * attempt's own time is the fixture's.
  */
 describe("the run of failed Handoff starts (issue #298)", () => {
-	/** One start that reached its Agent, on a Ticket with no attempts yet. */
-	function startOne(state: FactoryState): void {
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-		});
-	}
-
 	test("the run is the failed settles claimed after the last start that reached an Agent", () => {
 		const state = failedStartState();
 		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(1);
-		failAnotherStart(state, "herdr refused the start");
-		failAnotherStart(state, "herdr refused the start");
+		failStart(state, "herdr refused the start");
+		failStart(state, "herdr refused the start");
 		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(3);
 		state.close();
 	});
@@ -1030,7 +781,7 @@ describe("the run of failed Handoff starts (issue #298)", () => {
 		// The operator's own Handoff that works, or the automatic re-ask that finally
 		// lands, is the end of the run: the park the run stands on leaves with it.
 		const state = failedStartState();
-		failAnotherStart(state, "herdr refused the start");
+		failStart(state, "herdr refused the start");
 		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(2);
 		startOne(state);
 		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(0);
@@ -1041,23 +792,20 @@ describe("the run of failed Handoff starts (issue #298)", () => {
 		// An attempt with no outcome yet is not a failed start, and the next claim
 		// cannot run behind it (ADR 0041): the run stops at it.
 		const state = failedStartState();
-		failAnotherStart(state, "herdr refused the start");
-		const pending = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!pending.ok) throw new Error(pending.reason);
+		failStart(state, "herdr refused the start");
+		const attemptId = claim(state, TICKET);
 		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(0);
-		state.handoff.settleHandoff(pending.claim.attemptId, false, "herdr refused the start");
+		settleAttempt(state, attemptId, { ok: false, reason: "herdr refused the start" });
 		expect(state.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(3);
 		state.close();
 	});
 
 	test("a Ticket whose whole ledger failed is one run, and a Ticket with no attempt has none", () => {
-		const state = openFactoryState(":memory:", ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(
-			sourceA,
-			success([fetched(), { ...fetched(), externalKey: "I_9" }]),
-		);
-		for (let i = 0; i < 4; i += 1) failAnotherStart(state, "herdr refused the start");
+		const { state } = seeded({
+			now: ATTEMPT_NOW,
+			tickets: [fetched(), { ...fetched(), externalKey: "I_9" }],
+		});
+		for (let i = 0; i < 4; i += 1) failStart(state, "herdr refused the start");
 		const streaks = state.handoff.failedStartStreaksFor([TICKET, "github:github.com:I_9"]);
 		expect(streaks.get(TICKET)).toBe(4);
 		// A Ticket the read holds no row for answers zero, not absent: the caller
@@ -1082,12 +830,9 @@ describe("the run of failed Handoff starts (issue #298)", () => {
 		// On a file carrying thousands of attempts that statement needs the two
 		// partial indexes behind it, so a v28 file gains them on the next open and
 		// the run keeps its answer across the migration.
-		const path = statePath();
-		const state = openFactoryState(path, ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		failAnotherStart(state, "herdr refused the start");
-		failAnotherStart(state, "herdr refused the start");
+		const { state, path } = seeded({ file: true, now: ATTEMPT_NOW });
+		failStart(state, "herdr refused the start");
+		failStart(state, "herdr refused the start");
 		state.close();
 
 		const db = new Database(path);
@@ -1119,12 +864,9 @@ describe("the run of failed Handoff starts (issue #298)", () => {
 		// half - a hand edit, or a run that ended between the two creates - still gains
 		// the boundary half, so the read keeps the index it needs for the newest attempt
 		// that is not a failed settle.
-		const path = statePath();
-		const state = openFactoryState(path, ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		failAnotherStart(state, "herdr refused the start");
-		failAnotherStart(state, "herdr refused the start");
+		const { state, path } = seeded({ file: true, now: ATTEMPT_NOW });
+		failStart(state, "herdr refused the start");
+		failStart(state, "herdr refused the start");
 		state.close();
 
 		const db = new Database(path);
@@ -1152,15 +894,9 @@ describe("the Handoff limit counts every attempt (ADR 0005, ADR 0101)", () => {
 		// The failed start wrote an attempt row and no handoff row: the count the
 		// limit reads sees it (issue #217).
 		expect(state.handoff.handoffCount(TICKET)).toBe(1);
-		failAnotherStart(state, "herdr refused the name");
+		failStart(state, "herdr refused the name");
 		expect(state.handoff.handoffCount(TICKET)).toBe(2);
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-		});
+		startOne(state);
 		// A start that reached its Agent keeps its one row in the ledger, so the
 		// count a Ticket that never failed carries is the number it carried
 		// before: one per start, not two.
@@ -1175,10 +911,11 @@ describe("the Handoff limit counts every attempt (ADR 0005, ADR 0101)", () => {
 	});
 
 	test("a Ticket with no start carries zero, and every Ticket carries its own", () => {
-		const state = openFactoryState(":memory:", ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
-		failAnotherStart(state, "the worktree path already exists");
+		const { state } = seeded({
+			now: ATTEMPT_NOW,
+			tickets: [fetched("github:github.com:I_6"), fetched()],
+		});
+		failStart(state, "the worktree path already exists");
 		const counts = state.handoff.handoffCountsFor(["github:github.com:I_6", TICKET]);
 		expect([...counts]).toEqual([
 			["github:github.com:I_6", 0],
@@ -1196,13 +933,10 @@ describe("the Handoff limit counts every attempt (ADR 0005, ADR 0101)", () => {
  */
 describe("the settle answers with the attempt's own record (issue #295)", () => {
 	test("a failed settle answers with the reason its row stores, and a repeat answers nothing", () => {
-		const state = openFactoryState(":memory:", ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
+		const { state } = seeded({ now: ATTEMPT_NOW });
+		const attemptId = claim(state, TICKET);
 		expect(
-			state.handoff.settleHandoff(claim.claim.attemptId, false, "the worktree path already exists"),
+			state.handoff.settleHandoff(attemptId, false, "the worktree path already exists"),
 		).toEqual({
 			ticketIdentity: TICKET,
 			failureReason: "the worktree path already exists",
@@ -1210,7 +944,7 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 		// The attempt settled once. A settle that reaches it again - a recovery
 		// that got there first, a run that outlived its own settle - answers no
 		// record, so its caller writes no second line for one attempt.
-		expect(state.handoff.settleHandoff(claim.claim.attemptId, false, "a later reason")).toBeNull();
+		expect(state.handoff.settleHandoff(attemptId, false, "a later reason")).toBeNull();
 		state.close();
 	});
 
@@ -1221,12 +955,9 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 		// reason, and the attempt's reason column is nullable in every schema
 		// version, so the answer carries the empty cell rather than making an
 		// ending up (issue #295 review).
-		const state = openFactoryState(":memory:", ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		expect(state.handoff.settleHandoff(claim.claim.attemptId, false)).toEqual({
+		const { state } = seeded({ now: ATTEMPT_NOW });
+		const attemptId = claim(state, TICKET);
+		expect(state.handoff.settleHandoff(attemptId, false)).toEqual({
 			ticketIdentity: TICKET,
 			failureReason: null,
 		});
@@ -1238,16 +969,11 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 		// writes its ending over those stages, and the answer reads the row the
 		// write left: the reason the line states is the one this settle stored, not
 		// anything the stages before it hold (issue #295 review).
-		const state = openFactoryState(":memory:", ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.advanceHandoffAttempt(claim.claim.attemptId, "creating-environment");
-		state.handoff.advanceHandoffAttempt(claim.claim.attemptId, "starting-agent");
-		expect(
-			state.handoff.settleHandoff(claim.claim.attemptId, false, "herdr is unavailable"),
-		).toEqual({
+		const { state } = seeded({ now: ATTEMPT_NOW });
+		const attemptId = claim(state, TICKET);
+		state.handoff.advanceHandoffAttempt(attemptId, "creating-environment");
+		state.handoff.advanceHandoffAttempt(attemptId, "starting-agent");
+		expect(state.handoff.settleHandoff(attemptId, false, "herdr is unavailable")).toEqual({
 			ticketIdentity: TICKET,
 			failureReason: "herdr is unavailable",
 		});
@@ -1255,14 +981,9 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 	});
 
 	test("a settle that reached its Agent stores no reason", () => {
-		const state = openFactoryState(":memory:", ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		expect(
-			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-1" }),
-		).toEqual({
+		const { state } = seeded({ now: ATTEMPT_NOW });
+		const attemptId = claim(state, TICKET);
+		expect(state.handoff.settleHandoff(attemptId, true, undefined, { paneId: "pane-1" })).toEqual({
 			ticketIdentity: TICKET,
 			failureReason: null,
 		});
@@ -1270,11 +991,8 @@ describe("the settle answers with the attempt's own record (issue #295)", () => 
 	});
 
 	test("the boot's recovery answers each unsettled attempt with the reason it wrote", () => {
-		const state = openFactoryState(":memory:", ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
+		const { state } = seeded({ now: ATTEMPT_NOW });
+		claim(state, TICKET);
 		// The run ends with the claim unresolved. The next boot settles it, and
 		// answers with the record it settled, the way the dispatch's own settle
 		// answers for a start that reached no Agent.
@@ -1375,15 +1093,12 @@ describe("the Agent name collision a refused start leaves (issue #299)", () => {
 
 		// A Leftover environment stands on a handoff that reached its Agent, so the
 		// Ticket gets one: the fact the close cleanup could not clear.
-		const claim = state.handoff.claimHandoff(TICKET, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-1",
-			workspaceId: "ws-1",
+		const handoffId = settle(state, TICKET, {
+			handles: { paneId: "pane-1", workspaceId: "ws-1" },
 		});
 		state.handoff.recordLeftoverEnvironment({
 			ticketIdentity: TICKET,
-			handoffId: claim.claim.attemptId,
+			handoffId,
 			reason: "the worktree checkout would not close",
 		});
 		expect(state.handoff.nameCollision(TICKET)).not.toBe(null);
@@ -1396,12 +1111,10 @@ describe("the Agent name collision a refused start leaves (issue #299)", () => {
 	});
 
 	test("the batched read answers every Ticket the list holds, and none it does not", () => {
-		const state = openFactoryState(":memory:", ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(
-			sourceA,
-			success([fetched(), { ...fetched(), externalKey: "I_9" }]),
-		);
+		const { state } = seeded({
+			now: ATTEMPT_NOW,
+			tickets: [fetched(), { ...fetched(), externalKey: "I_9" }],
+		});
 		recordCollision(state);
 		const found = state.handoff.nameCollisionsFor([TICKET, "github:github.com:I_9"]);
 		expect(found.size).toBe(1);
@@ -1415,10 +1128,7 @@ describe("the Agent name collision a refused start leaves (issue #299)", () => {
 	test("the fact survives the state file being closed and reopened", () => {
 		// The refusal stands until the operator acts, and the operator may act in a
 		// later run: the fact is on the file, not in the process.
-		const path = statePath();
-		const state = openFactoryState(path, ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true, now: ATTEMPT_NOW });
 		recordCollision(state);
 		state.close();
 
@@ -1432,10 +1142,7 @@ describe("the Agent name collision a refused start leaves (issue #299)", () => {
 	test("the collision table reaches a file written before it (issue #299)", () => {
 		// A v29 file has never heard of the fact. It gains the table on the next
 		// open, and a fact recorded there reads back the same way.
-		const path = statePath();
-		const state = openFactoryState(path, ATTEMPT_NOW);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true, now: ATTEMPT_NOW });
 		recordCollision(state);
 		state.close();
 

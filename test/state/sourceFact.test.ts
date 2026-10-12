@@ -10,26 +10,28 @@ import { StateError } from "../../src/state/store.ts";
 import { openFactoryState } from "../../src/state.ts";
 import {
 	choice,
+	claim,
 	cleanup,
 	downgradeQueueToTheAbandonedShape,
 	fetched,
 	HARNESS_AGENT_NAME,
 	labeled,
 	POSITION_STATES,
+	seeded,
+	settle,
+	settleAttempt,
 	sourceA,
 	sourceB,
 	statePath,
 	success,
-	textLog,
+	turn,
 } from "./harness.ts";
 
 afterEach(cleanup);
 
 describe("the sourceFact aggregate", () => {
 	test("the read names the State it matched, beside the task it suggests", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([labeled(["ready-for-agent"])]));
+		const { state } = seeded({ tickets: [labeled(["ready-for-agent"])] });
 		expect(state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows[0]).toEqual(
 			expect.objectContaining({
 				suggestedTaskType: "implement",
@@ -39,18 +41,14 @@ describe("the sourceFact aggregate", () => {
 		state.close();
 	});
 	test("a ticket no State matches names no State, and keeps the fallback task", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([labeled(["something-else"])]));
+		const { state } = seeded({ tickets: [labeled(["something-else"])] });
 		expect(state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows[0]).toEqual(
 			expect.objectContaining({ suggestedTaskType: "implement", matchedStateName: null }),
 		);
 		state.close();
 	});
 	test("a parking State names itself and suggests no task", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([labeled(["hold"])]));
+		const { state } = seeded({ tickets: [labeled(["hold"])] });
 		expect(state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows[0]).toEqual(
 			expect.objectContaining({ suggestedTaskType: null, matchedStateName: "on-hold" }),
 		);
@@ -59,10 +57,7 @@ describe("the sourceFact aggregate", () => {
 	test("the name is derived on every read, never stored", () => {
 		// The same file, two configs: the State's name follows the machine the
 		// operator configured, so no stored row can drift from it.
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([labeled(["hold"])]));
+		const { state, path } = seeded({ file: true, tickets: [labeled(["hold"])] });
 		expect(
 			state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows[0].matchedStateName,
 		).toBe("on-hold");
@@ -78,9 +73,7 @@ describe("the sourceFact aggregate", () => {
 		reopened.close();
 	});
 	test("keeps the prior complete snapshot after a source fails and blocks its handoff", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([
 			expect.objectContaining({ identity: "github:github.com:I_5", actionable: true }),
 		]);
@@ -103,9 +96,7 @@ describe("the sourceFact aggregate", () => {
 		// returned. That is the run's fetch schedule, not a fact about the Ticket:
 		// the row keeps its place in the list's pile, and the machine's own gate
 		// still waits for the read.
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([labeled(["ready-for-agent"])]));
+		const { state } = seeded({ tickets: [labeled(["ready-for-agent"])] });
 		state.sourceFact.initializeSources([sourceA]);
 		const [row] = state.ticketWorkCycle.ticketListViews(POSITION_STATES, "implement").rows;
 		expect(row.memberships?.[0]).toEqual(expect.objectContaining({ health: "loading" }));
@@ -158,7 +149,7 @@ describe("the sourceFact aggregate", () => {
 		expect(state.handoff.claimHandoff(ticket.identity, choice, "open")).toEqual(
 			expect.objectContaining({ ok: false, reason: expect.stringContaining("recovery") }),
 		);
-		state.handoff.settleHandoff(claimed.claim.attemptId, true);
+		settleAttempt(state, claimed.claim.attemptId);
 		state.close();
 
 		const reopened = openFactoryState(path);
@@ -176,10 +167,7 @@ describe("the sourceFact aggregate", () => {
 		reopened.close();
 	});
 	test("settles a claim a dead run left unsettled and frees the ticket to hand off again", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true });
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
@@ -198,9 +186,7 @@ describe("the sourceFact aggregate", () => {
 		reopened.close();
 	});
 	test("keeps identity and state when a configured source is renamed", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		state.sourceFact.initializeSources([sourceB]);
 		state.sourceFact.applyFetch(sourceB, success([fetched()]));
 		const tickets = state.ticketWorkCycle.ticketListViews([], "implement").rows;
@@ -211,14 +197,9 @@ describe("the sourceFact aggregate", () => {
 		state.close();
 	});
 	test("retains handed-off work after a source is removed and blocks pending handoff recovery", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true });
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		const started = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!started.ok) throw new Error(started.reason);
-		state.handoff.settleHandoff(started.claim.attemptId, true);
+		settle(state, ticket.identity);
 		state.sourceFact.initializeSources([]);
 		expect(state.ticketWorkCycle.ticketListViews([], "implement").rows).toEqual([
 			expect.objectContaining({
@@ -235,10 +216,7 @@ describe("the sourceFact aggregate", () => {
 		reopened.close();
 	});
 	test("stops on a damaged database without deleting the data", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true });
 		state.close();
 
 		// Damage a b-tree page's cell count: the file still opens, but the
@@ -271,34 +249,19 @@ describe("the sourceFact aggregate", () => {
 		expect(statSync(path).size).toBeGreaterThan(0);
 	});
 	test("a settled turn keeps the agent name after the ticket loses its active membership", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
+		const attemptId = settle(state, ticket.identity);
 		// The agent closes its own source item before the turn settles: the
 		// membership goes stale, but the title still names the agent.
 		state.sourceFact.applyFetch(sourceA, success([]));
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "Done.",
-			turnLog: textLog("Done."),
-			completedAt: "2026-08-31T11:00:00Z",
-		});
+		turn(state, ticket.identity, attemptId);
 		const [rested] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(rested.lastCompletion?.agentName).toBe(HARNESS_AGENT_NAME);
 		state.close();
 	});
 	test("a v12 database migrates to v13: the mode lands off on the existing file", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true });
 		state.close();
 
 		// Downgrade the record to the v12 shape: the mode table and the Work
@@ -324,10 +287,7 @@ describe("the sourceFact aggregate", () => {
 		reread.close();
 	});
 	test("a v14 file with the abandoned Work queue shape migrates to v15: the queue reads again", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true });
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (!ticket) throw new Error("the fixture holds no ticket");
 		state.close();
@@ -358,10 +318,7 @@ describe("the sourceFact aggregate", () => {
 		db.close();
 	});
 	test("a v14 file with a stale queue row opens to an empty queue", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true });
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (!ticket) throw new Error("the fixture holds no ticket");
 		state.close();
@@ -382,10 +339,7 @@ describe("the sourceFact aggregate", () => {
 		reopened.close();
 	});
 	test("a v14 file with a sound queue keeps its waiting item", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true });
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (!ticket) throw new Error("the fixture holds no ticket");
 		expect(
@@ -414,10 +368,7 @@ describe("the sourceFact aggregate", () => {
 		// no priority or referenced-issues facts of its own, so the file a
 		// re-labeled v19 build left behind still carries the retired column and
 		// table. The open asks the file, not the stamp.
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true });
 		state.close();
 
 		const db = new Database(path);
@@ -450,10 +401,7 @@ describe("the sourceFact aggregate", () => {
 		reopened.close();
 	});
 	test("a v17 file migrates to v18: the queue row gains the route's settled ticket", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true });
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		if (!ticket) throw new Error("the fixture holds no ticket");
 		expect(
@@ -516,10 +464,7 @@ describe("the sourceFact aggregate", () => {
 		// step ran left a queue the new code cannot read. The stamp alone does
 		// not describe the file, so the open asks the file and adds the column
 		// instead of trusting the stamp.
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true });
 		state.close();
 
 		const db = new Database(path);
@@ -554,10 +499,10 @@ describe("the sourceFact aggregate", () => {
 		// the cycle counted once - in one state write, the way the legacy
 		// `done` heal ran. The state is unreachable now, so the step is a no-op
 		// on a file the new rule wrote.
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched(), fetched("github:github.com:I_6")]));
+		const { state, path } = seeded({
+			file: true,
+			tickets: [fetched(), fetched("github:github.com:I_6")],
+		});
 		state.close();
 
 		// The file the old rule wrote: the routed ticket stands in the retired
@@ -585,22 +530,10 @@ describe("the sourceFact aggregate", () => {
 		reopened.close();
 	});
 	test("keeps an awaiting ticket visible while every source is gone", () => {
-		const state = openFactoryState(":memory:");
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state } = seeded();
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "Done.",
-			turnLog: textLog("Done."),
-			completedAt: "2026-08-31T11:00:00Z",
-		});
+		const attemptId = settle(state, ticket.identity);
+		turn(state, ticket.identity, attemptId);
 
 		// The agent closes the external item while working: the ticket leaves
 		// the source, but a pending decision keeps it visible.
@@ -613,13 +546,9 @@ describe("the sourceFact aggregate", () => {
 		state.close();
 	});
 	test("keeps an unresolved handoff attempt blocked after restart", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.sourceFact.initializeSources([sourceA]);
-		state.sourceFact.applyFetch(sourceA, success([fetched()]));
+		const { state, path } = seeded({ file: true });
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
-		const claim = state.handoff.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
+		claim(state, ticket.identity);
 		state.close();
 		const reopened = openFactoryState(path);
 		const [persisted] = reopened.ticketWorkCycle.ticketListViews([], "implement").rows;
