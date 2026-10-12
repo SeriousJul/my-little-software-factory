@@ -601,13 +601,20 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 					stdout: JSON.stringify({
 						result: {
 							agents: [...agents.values()].map((agent) => {
+								const pane = panes.get(agent.paneId);
+								const workspace = pane !== undefined ? workspaces.get(pane.workspaceId) : undefined;
 								const item: Record<string, unknown> = {
 									pane_id: agent.paneId,
-									tab_id: panes.get(agent.paneId)?.tabId ?? "",
-									workspace_id: panes.get(agent.paneId)?.workspaceId ?? "",
+									tab_id: pane?.tabId ?? "",
+									workspace_id: pane?.workspaceId ?? "",
 									agent: agent.kind,
 									agent_status: agent.status,
 									name: agent.name,
+									// The pane's workspace is the Agent's working directory: the
+									// checkout the conflict check matches a launch against. herdr
+									// reports it when the workspace names a checkout, and the
+									// plane skips an Agent whose checkout it cannot read.
+									...(workspace !== undefined && { checkout_path: workspace.checkoutPath }),
 								};
 								if (agent.sessionId !== undefined)
 									item.agent_session = {
