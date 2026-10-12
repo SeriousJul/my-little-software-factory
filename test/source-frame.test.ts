@@ -20,11 +20,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
-import type { FetchOutcome, TicketSource } from "../src/ticket-source.ts";
+import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	awaitFrame,
 	detailPaneText,
@@ -39,6 +39,9 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import type { FakeSource } from "./fake-source.ts";
+import { plane } from "./seeded-plane.ts";
+import { issuesSourceConfig } from "./state-fixture.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -53,35 +56,6 @@ function freshState(): FactoryState {
 	// repository (ADR 0066), so the fixture holds the flat axis.
 	state.grouping.setGroupingAxis("tickets", "none");
 	return state;
-}
-
-/** A source whose fetches stay in flight until the test settles them. */
-class FakeSource implements TicketSource {
-	readonly name: string;
-	readonly kind: string;
-	readonly refreshIntervalMs = 60_000;
-	calls = 0;
-	private resolvers: Array<() => void> = [];
-	private next: FetchOutcome;
-
-	constructor(name: string, kind: string, next: FetchOutcome) {
-		this.name = name;
-		this.kind = kind;
-		this.next = next;
-	}
-
-	fetch(): Promise<FetchOutcome> {
-		this.calls += 1;
-		return new Promise<FetchOutcome>((resolve) => {
-			this.resolvers.push(() => resolve(this.next));
-		});
-	}
-
-	/** Settle every in-flight fetch with the next outcome. */
-	settle(outcome: FetchOutcome): void {
-		this.next = outcome;
-		for (const resolve of this.resolvers.splice(0)) resolve();
-	}
 }
 
 function ticket(
@@ -129,18 +103,18 @@ const issuesConfig: FactoryConfig = {
 	],
 };
 
+/** The pulls source beside the shared issues source, on the same repository. */
+const pullsSourceConfig: TicketSourceConfig = {
+	name: "pulls",
+	kind: "github-pull-requests",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
+};
+
 const pullsConfig: FactoryConfig = {
 	...issuesConfig,
-	sources: [
-		...issuesConfig.sources,
-		{
-			name: "pulls",
-			kind: "github-pull-requests",
-			refreshIntervalSeconds: 60,
-			repositories: ["acme/factory"],
-			host: "github.com",
-		},
-	],
+	sources: [...issuesConfig.sources, pullsSourceConfig],
 };
 
 const HANDOFF_CHOICE = {
@@ -177,90 +151,110 @@ const listRowOf = (frame: string, title: string): number => {
 
 describe("source-driven frames", () => {
 	test("shows loading tickets while the first refresh runs, then the fetched work", async () => {
-		const state = freshState();
-		const source = new FakeSource("issues", "github-issues", success([ticket()]));
-		try {
-			await withApp(
-				async (setup) => {
-					const loading = await awaitFrame(
-						setup,
-						(f) => f.includes("loading tickets..."),
-						"the loading state",
-					);
-					expect(loading).not.toContain("Add a webhook retry policy");
+		// The plane holds its first fetch: the state stands without the source
+		// rows, and the app's own fetch is the one the test settles.
+		const planeRecord = await plane({
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
+			config: issuesConfig,
+			groupingAxis: "none",
+			applyFetch: false,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				const loading = await awaitFrame(
+					setup,
+					(f) => f.includes("loading tickets..."),
+					"the loading state",
+				);
+				expect(loading).not.toContain("Add a webhook retry policy");
 
-					source.settle(success([ticket()]));
-					const settled = await awaitFrame(
-						setup,
-						(f) => f.includes("Add a webhook retry policy"),
-						"the fetched ticket",
-					);
-					expect(settled).toContain("[open]");
-					expect(settled).not.toContain("loading tickets...");
-				},
-				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
-			);
-		} finally {
-			state.close();
-		}
+				source.settle(success([ticket()]));
+				const settled = await awaitFrame(
+					setup,
+					(f) => f.includes("Add a webhook retry policy"),
+					"the fetched ticket",
+				);
+				expect(settled).toContain("[open]");
+				expect(settled).not.toContain("loading tickets...");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
+		);
 	});
 
 	test("shows no tickets match the configured sources after a successful empty refresh", async () => {
-		const state = freshState();
-		const source = new FakeSource("issues", "github-issues", success([]));
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(success([]));
-					const frame = await awaitFrame(
-						setup,
-						(f) => f.includes("no tickets match the configured sources"),
-						"the empty state",
-					);
-					expect(frame).not.toContain("loading tickets...");
-				},
-				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
+			config: issuesConfig,
+			groupingAxis: "none",
+			applyFetch: false,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(success([]));
+				const frame = await awaitFrame(
+					setup,
+					(f) => f.includes("no tickets match the configured sources"),
+					"the empty state",
+				);
+				expect(frame).not.toContain("loading tickets...");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
+		);
 	});
 
 	test("a failed refresh makes the source stale, keeps its tickets, and refuses a new handoff", async () => {
-		const state = freshState();
-		const source = new FakeSource("issues", "github-issues", success([ticket()]));
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(success([ticket()]));
-					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+		const planeRecord = await plane({
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
+			config: issuesConfig,
+			groupingAxis: "none",
+			applyFetch: false,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(success([ticket()]));
+				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
 
-					setup.mockInput.pressKey("r");
-					await callsReached(source, 2);
-					source.settle(RATE_LIMITED);
-					const stale = await awaitFrame(
-						setup,
-						(f) => f.includes("issues: stale - GitHub rate limit exceeded"),
-						"the stale health line",
-					);
-					// The prior snapshot stays visible.
-					expect(stale).toContain("Add a webhook retry policy");
+				setup.mockInput.pressKey("r");
+				await callsReached(source, 2);
+				source.settle(RATE_LIMITED);
+				const stale = await awaitFrame(
+					setup,
+					(f) => f.includes("issues: stale - GitHub rate limit exceeded"),
+					"the stale health line",
+				);
+				// The prior snapshot stays visible.
+				expect(stale).toContain("Add a webhook retry policy");
 
-					setup.mockInput.pressEnter();
-					const refused = await awaitFrame(
-						setup,
-						(f) => f.includes("Ticket is not actionable because source data is stale"),
-						"the refused handoff",
-					);
-					expect(messageRowOf(refused)).toContain(
-						"Ticket is not actionable because source data is stale",
-					);
-				},
-				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
-			);
-		} finally {
-			state.close();
-		}
+				setup.mockInput.pressEnter();
+				const refused = await awaitFrame(
+					setup,
+					(f) => f.includes("Ticket is not actionable because source data is stale"),
+					"the refused handoff",
+				);
+				expect(messageRowOf(refused)).toContain(
+					"Ticket is not actionable because source data is stale",
+				);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
+		);
 	});
 
 	test("a removed source keeps its handed-off ticket, drops its open ticket, and pins no warning", async () => {
@@ -284,6 +278,12 @@ describe("source-driven frames", () => {
 		// The config no longer lists the source: a restart marks it removed.
 		state.sourceFact.initializeSources([]);
 
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config: BASE_CONFIG,
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				const frame = await awaitFrame(
@@ -300,47 +300,55 @@ describe("source-driven frames", () => {
 				// ...and the operator's config decision pins no warning line.
 				expect(frame).not.toContain("source removed from config");
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, state, sources: [] } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
 		);
-		state.close();
 	});
 
 	test("the detail pane carries the source facts of the selected ticket", async () => {
-		const state = freshState();
-		const source = new FakeSource("issues", "github-issues", success([ticket()]));
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(success([ticket()]));
-					const frame = await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes("Source issues: healthy"),
-						"the source detail",
-					);
-					const detail = detailPaneText(frame);
-					// The source kind wraps in its Source column, so the fact's
-					// two parts stand on the column's own rows.
-					expect(detail).toContain("Source kind:");
-					expect(detail).toContain("github-issue");
-					expect(detail).toContain("External key: #5");
-					expect(detail).toContain("Source state: open");
-					// No task rule matches an issue, so the open ticket's task
-					// type line carries the configured default.
-					expect(detail).toContain("Suggested task type: implement");
-					// The link to the ticket's GitHub page, in the blue role.
-					expect(detail).toContain("GitHub: https://github.com/acme/factory/issues/5");
-					expect(detail).toContain("Labels: ready-for-agent");
-				},
-				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
+			config: issuesConfig,
+			groupingAxis: "none",
+			applyFetch: false,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(success([ticket()]));
+				const frame = await awaitFrame(
+					setup,
+					(f) => detailPaneText(f).includes("Source issues: healthy"),
+					"the source detail",
+				);
+				const detail = detailPaneText(frame);
+				// The source kind wraps in its Source column, so the fact's
+				// two parts stand on the column's own rows.
+				expect(detail).toContain("Source kind:");
+				expect(detail).toContain("github-issue");
+				expect(detail).toContain("External key: #5");
+				expect(detail).toContain("Source state: open");
+				// No task rule matches an issue, so the open ticket's task
+				// type line carries the configured default.
+				expect(detail).toContain("Suggested task type: implement");
+				// The link to the ticket's GitHub page, in the blue role.
+				expect(detail).toContain("GitHub: https://github.com/acme/factory/issues/5");
+				expect(detail).toContain("Labels: ready-for-agent");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
+		);
 	});
 
 	test("the detail follows a label-driven suggested task profile", async () => {
-		const state = freshState();
-		const source = new FakeSource("issues", "github-issues", success([ticket()]));
 		const config: FactoryConfig = {
 			...issuesConfig,
 			defaultModel: "factory-model",
@@ -362,59 +370,71 @@ describe("source-driven frames", () => {
 				},
 			],
 		};
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(success([ticket()]));
-					await awaitFrame(
-						setup,
-						(frame) => detailPaneText(frame).includes("Agent: codex"),
-						"the implement profile",
-					);
-					setup.mockInput.pressKey("r");
-					await callsReached(source, 2);
-					source.settle(success([{ ...ticket(), labels: ["ready-for-review"] }]));
-					const changed = await awaitFrame(
-						setup,
-						(frame) => detailPaneText(frame).includes("Suggested task type: review"),
-						"the review profile",
-					);
-					const detail = detailPaneText(changed);
-					expect(detail).toContain("Agent: claude");
-					expect(detail).toContain("Model: factory-model");
-					expect(detail).toContain("Thinking: left to agent");
-				},
-				{ width: WIDTH, height: HEIGHT, props: { config, state, sources: [source] } },
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
+			config,
+			groupingAxis: "none",
+			applyFetch: false,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(success([ticket()]));
+				await awaitFrame(
+					setup,
+					(frame) => detailPaneText(frame).includes("Agent: codex"),
+					"the implement profile",
+				);
+				setup.mockInput.pressKey("r");
+				await callsReached(source, 2);
+				source.settle(success([{ ...ticket(), labels: ["ready-for-review"] }]));
+				const changed = await awaitFrame(
+					setup,
+					(frame) => detailPaneText(frame).includes("Suggested task type: review"),
+					"the review profile",
+				);
+				const detail = detailPaneText(changed);
+				expect(detail).toContain("Agent: claude");
+				expect(detail).toContain("Model: factory-model");
+				expect(detail).toContain("Thinking: left to agent");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
+		);
 	});
 
 	test("a task rule match and the default fallback drive the badge through the real source path", async () => {
-		const state = freshState();
-		const issues = { name: "issues", kind: "github-issues" };
-		const pulls = { name: "pulls", kind: "github-pull-requests" };
 		// The pull request's label matches the review rule; the issue
 		// matches no rule and falls back to the configured default.
-		const reviewTicket = ticket("github:github.com:PR_7", {
-			externalKey: "#7",
-			title: "Review ticket",
-			sourceKind: "github-pull-request",
-			labels: ["ready-for-review"],
-			url: "https://github.com/acme/factory/pull/7",
+		const planeRecord = await plane({
+			sources: [
+				{ config: issuesSourceConfig, tickets: [] },
+				{ config: pullsSourceConfig, tickets: [] },
+			],
+			config: pullsConfig,
+			groupingAxis: "none",
+			applyFetch: false,
 		});
-		const fallbackTicket = ticket("github:github.com:I_8", {
-			externalKey: "#8",
-			title: "Fallback ticket",
-		});
-		state.sourceFact.initializeSources([issues, pulls]);
-
-		const issuesSource = new FakeSource("issues", "github-issues", success([fallbackTicket]));
-		const pullsSource = new FakeSource("pulls", "github-pull-requests", success([reviewTicket]));
+		const issuesSource = planeRecord.sources[0] as FakeSource;
+		const pullsSource = planeRecord.sources[1] as FakeSource;
 
 		await withApp(
 			async (setup) => {
+				const reviewTicket = ticket("github:github.com:PR_7", {
+					externalKey: "#7",
+					title: "Review ticket",
+					sourceKind: "github-pull-request",
+					labels: ["ready-for-review"],
+					url: "https://github.com/acme/factory/pull/7",
+				});
+				const fallbackTicket = ticket("github:github.com:I_8", {
+					externalKey: "#8",
+					title: "Fallback ticket",
+				});
 				issuesSource.settle(success([fallbackTicket]));
 				pullsSource.settle(success([reviewTicket]));
 				const frame = await awaitFrame(
@@ -443,10 +463,10 @@ describe("source-driven frames", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: pullsConfig, state, sources: [issuesSource, pullsSource] },
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
-		state.close();
 	});
 
 	test("orders the list by attention: awaiting, running, handed-off, actionable open, non-actionable open", async () => {
@@ -498,8 +518,17 @@ describe("source-driven frames", () => {
 		).run();
 		db.close();
 
-		const issuesSource = new FakeSource("issues", "github-issues", success([]));
-		const pullsSource = new FakeSource("pulls", "github-pull-requests", success([]));
+		const planeRecord = await plane({
+			existing: state,
+			sources: [
+				{ config: issuesSourceConfig, tickets: [] },
+				{ config: pullsSourceConfig, tickets: [] },
+			],
+			config: pullsConfig,
+			groupingAxis: "none",
+		});
+		const issuesSource = planeRecord.sources[0] as FakeSource;
+		const _pullsSource = planeRecord.sources[1] as FakeSource;
 		await withApp(
 			async (setup) => {
 				// While both sources still load, both open tickets are not
@@ -541,83 +570,95 @@ describe("source-driven frames", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: pullsConfig, state, sources: [issuesSource, pullsSource] },
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
-		state.close();
 	});
 
 	test("preserves the selection by identity when a state change reorders the list", async () => {
-		const state = freshState();
 		const first = ticket("github:github.com:I_5", { title: "First ticket" });
 		const second = ticket("github:github.com:I_6", {
 			externalKey: "#6",
 			title: "Second ticket",
 		});
-		const source = new FakeSource("issues", "github-issues", success([first, second]));
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(success([first, second]));
-					await awaitFrame(setup, (f) => listRowOf(f, "First ticket") >= 0, "the first ticket");
+		const planeRecord = await plane({
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
+			config: issuesConfig,
+			groupingAxis: "none",
+			applyFetch: false,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(success([first, second]));
+				await awaitFrame(setup, (f) => listRowOf(f, "First ticket") >= 0, "the first ticket");
 
-					// A refresh alone no longer reorders the open band: the tickets
-					// read by ticket number (ADR 0065), and a number never changes.
-					// A state change still reorders the list, and the selection must
-					// ride the ticket, not the row.
-					const db = new Database(state.path);
-					db.prepare(
-						"UPDATE tickets SET state = 'running' WHERE identity = 'github:github.com:I_6'",
-					).run();
-					db.close();
-					setup.mockInput.pressKey("r");
-					await callsReached(source, 2);
-					source.settle(success([first, second]));
-					await awaitFrame(
-						setup,
-						(f) => listRowOf(f, "Second ticket") < listRowOf(f, "First ticket"),
-						"the list to reorder",
-					);
-					// The selection stayed on the first ticket, not the first row.
-					const frame = await settle(setup);
-					const markerRow = rowsOf(frame)[markerRowOf(frame)];
-					expect(markerRow).toContain("First ticket");
-				},
-				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
-			);
-		} finally {
-			state.close();
-		}
+				// A refresh alone no longer reorders the open band: the tickets
+				// read by ticket number (ADR 0065), and a number never changes.
+				// A state change still reorders the list, and the selection must
+				// ride the ticket, not the row.
+				const db = new Database(planeRecord.state.path);
+				db.prepare(
+					"UPDATE tickets SET state = 'running' WHERE identity = 'github:github.com:I_6'",
+				).run();
+				db.close();
+				setup.mockInput.pressKey("r");
+				await callsReached(source, 2);
+				source.settle(success([first, second]));
+				await awaitFrame(
+					setup,
+					(f) => listRowOf(f, "Second ticket") < listRowOf(f, "First ticket"),
+					"the list to reorder",
+				);
+				// The selection stayed on the first ticket, not the first row.
+				const frame = await settle(setup);
+				const markerRow = rowsOf(frame)[markerRowOf(frame)];
+				expect(markerRow).toContain("First ticket");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
+		);
 	});
 
 	test("r refreshes the sources and skips a source that is already fetching", async () => {
-		const state = freshState();
-		const source = new FakeSource("issues", "github-issues", success([ticket()]));
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(success([ticket()]));
-					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
-					expect(source.calls).toBe(1);
+		const planeRecord = await plane({
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
+			config: issuesConfig,
+			groupingAxis: "none",
+			applyFetch: false,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(success([ticket()]));
+				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+				expect(source.calls).toBe(1);
 
-					// Two rapid manual refreshes start one fetch, not two.
-					setup.mockInput.pressKey("r");
-					setup.mockInput.pressKey("r");
-					await callsReached(source, 2);
-					const fresh = ticket("github:github.com:I_6", {
-						externalKey: "#6",
-						title: "Second ticket",
-						externalUpdatedAt: "2026-08-31T11:00:00Z",
-					});
-					source.settle(success([fresh, ticket()]));
-					await awaitFrame(setup, (f) => f.includes("Second ticket"), "the new ticket");
-					expect(source.calls).toBe(2);
-				},
-				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
-			);
-		} finally {
-			state.close();
-		}
+				// Two rapid manual refreshes start one fetch, not two.
+				setup.mockInput.pressKey("r");
+				setup.mockInput.pressKey("r");
+				await callsReached(source, 2);
+				const fresh = ticket("github:github.com:I_6", {
+					externalKey: "#6",
+					title: "Second ticket",
+					externalUpdatedAt: "2026-08-31T11:00:00Z",
+				});
+				source.settle(success([fresh, ticket()]));
+				await awaitFrame(setup, (f) => f.includes("Second ticket"), "the new ticket");
+				expect(source.calls).toBe(2);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
+		);
 	});
 
 	test("a ticket with an unresolved handoff attempt refuses a new handoff and asks for recovery", async () => {
@@ -633,7 +674,13 @@ describe("source-driven frames", () => {
 		if (!claim.ok) throw new Error(claim.reason);
 		// The attempt stays unresolved: the process died before settling it.
 
-		const source = new FakeSource("issues", "github-issues", success([ticket()]));
+		const planeRecord = await plane({
+			existing: state,
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
+			config: issuesConfig,
+			groupingAxis: "none",
+		});
+		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
 				source.settle(success([ticket()]));
@@ -661,8 +708,12 @@ describe("source-driven frames", () => {
 					"Handoff recovery is required before another handoff",
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
 		);
-		state.close();
 	});
 });

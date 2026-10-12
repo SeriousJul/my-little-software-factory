@@ -3,7 +3,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { CliRenderEvents } from "@opentui/core";
 
-import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
@@ -28,15 +28,16 @@ import {
 	rowsOf,
 	type Setup,
 	settle,
-	startingFaceOf,
 	stillFrame,
 	withApp,
 	withholdEveryRenderAsk,
 	withholdRenderAsksButThePlanesOwn,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { FakeSource } from "./fake-source.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import { plane } from "./seeded-plane.ts";
+import { issuesSourceConfig } from "./state-fixture.ts";
 
 const SCROLL_WIDTH = 60;
 // The minimum terminal that holds the dual-list frame (ADR 0019): the scroll
@@ -57,7 +58,7 @@ const LONG_SCROLL_CONFIG: FactoryConfig = {
 };
 
 function lastDescriptionRow(frame: string): number {
-	return rowsOf(frame).findIndex((row) => row.includes("their retries."));
+	return rowsOf(frame).findIndex((row) => row.includes("its feature flag."));
 }
 
 function thumbRows(frame: string): number[] {
@@ -140,19 +141,21 @@ const OVERFLOW_TICKETS: readonly Ticket[] = [
 
 const sourceConfig: FactoryConfig = {
 	...BASE_CONFIG,
-	sources: [
-		{
-			name: "issues",
-			kind: "github-issues",
-			refreshIntervalSeconds: 60,
-			repositories: ["acme/factory"],
-			host: "github.com",
-		},
-	],
+	sources: [issuesSourceConfig],
+};
+
+/** The source standing the overflow tickets ride: every repository the samples name. */
+const overflowSource: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/billing", "acme/portal", "acme/ingest"],
+	host: "github.com",
 };
 
 describe("native Ticket detail viewport", () => {
 	test("renders a proportional, dim scrollbar track and a focused-color thumb", async () => {
+		const planeRecord = await plane();
 		await withApp(
 			async (setup) => {
 				const initial = setup.captureCharFrame();
@@ -176,17 +179,23 @@ describe("native Ticket detail viewport", () => {
 				await mouseClick(setup, GUTTER_X, detailRow(11));
 				const end = await awaitFrame(
 					setup,
-					(frame) => frame !== initial && !frame.includes("Retry policy for webhooks"),
+					(frame) => frame !== initial && !frame.includes("Drop the legacy auth shim"),
 					"the scrollbar thumb to move to its lower proportional position",
 				);
 				const endThumb = thumbRows(end);
 				expect(endThumb.at(-1)).toBeGreaterThan(thumb[0]);
 			},
-			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
 		);
 	});
 
 	test("handles track clicks at both edges and the middle, then thumb drags in both directions", async () => {
+		const planeRecord = await plane();
 		await withApp(
 			async (setup) => {
 				const initial = setup.captureCharFrame();
@@ -196,15 +205,15 @@ describe("native Ticket detail viewport", () => {
 					(frame) => detailFocused(frame) && frame !== initial,
 					"the end track click",
 				);
-				expect(end).not.toContain("Retry policy for webhooks");
+				expect(end).not.toContain("Drop the legacy auth shim");
 
 				await mouseClick(setup, GUTTER_X, detailRow(1));
 				const start = await awaitFrame(
 					setup,
-					(frame) => frame.includes("Retry policy for webhooks"),
+					(frame) => frame.includes("Drop the legacy auth shim"),
 					"the start track click",
 				);
-				expect(start).not.toContain("their retries.");
+				expect(start).not.toContain("its feature flag.");
 
 				await mouseClick(setup, GUTTER_X, detailRow(6));
 				const middle = await awaitFrame(
@@ -218,18 +227,23 @@ describe("native Ticket detail viewport", () => {
 				await mouseDrag(setup, [GUTTER_X, detailRow(1)], [GUTTER_X, detailRow(11)]);
 				const draggedDown = await awaitFrame(
 					setup,
-					(frame) => frame !== start && !frame.includes("Retry policy for webhooks"),
+					(frame) => frame !== start && !frame.includes("Drop the legacy auth shim"),
 					"a thumb drag toward the end",
 				);
 				expect(thumbRows(draggedDown).at(-1)).toBeGreaterThan(detailRow(1));
 				await mouseDrag(setup, [GUTTER_X, detailRow(11)], [GUTTER_X, detailRow(1)]);
 				await awaitFrame(
 					setup,
-					(frame) => frame.includes("Retry policy for webhooks"),
+					(frame) => frame.includes("Drop the legacy auth shim"),
 					"a thumb drag toward the start",
 				);
 			},
-			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
 		);
 	});
 
@@ -240,6 +254,7 @@ describe("native Ticket detail viewport", () => {
 			["track", GUTTER_X, detailRow(6)],
 			["thumb", GUTTER_X, detailRow(0)],
 		] as const) {
+			const planeRecord = await plane();
 			await withApp(
 				async (setup) => {
 					const before = setup.captureCharFrame();
@@ -251,28 +266,40 @@ describe("native Ticket detail viewport", () => {
 					);
 					expect(markerRowOf(moved)).toBe(3);
 				},
-				{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
+				{
+					width: SCROLL_WIDTH,
+					height: SCROLL_HEIGHT,
+					plane: planeRecord,
+					loopPolicy: { kind: "held" },
+				},
 			);
 		}
 	});
 
 	test("keeps an immediate page key with the pane that the prior focus key selected", async () => {
+		const planeRecord = await plane();
 		await withApp(
 			async (setup) => {
 				setup.mockInput.pressKey("l");
 				setup.mockInput.pressKey("\u001b[6~");
 				const page = await awaitFrame(
 					setup,
-					(frame) => detailFocused(frame) && !frame.includes("Retry policy for webhooks"),
+					(frame) => detailFocused(frame) && !frame.includes("Drop the legacy auth shim"),
 					"a PageDown immediately after detail focus to move the detail",
 				);
 				expect(markerRowOf(page)).toBe(3);
 			},
-			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
 		);
 	});
 
 	test("uses fixed detail keys and all page and edge controls", async () => {
+		const planeRecord = await plane();
 		await withApp(
 			async (setup) => {
 				await focusDetail(setup);
@@ -293,39 +320,42 @@ describe("native Ticket detail viewport", () => {
 					setup,
 					"pagedown",
 					"PageDown to move the detail viewport",
-					(frame) => !frame.includes("Retry policy for webhooks"),
+					(frame) => !frame.includes("Drop the legacy auth shim"),
 				);
 				await press(setup, "pageup", "PageUp to return through the detail viewport", (frame) =>
-					frame.includes("Retry policy for webhooks"),
+					frame.includes("Drop the legacy auth shim"),
 				);
 				await press(setup, "end", "End to move the detail to its edge", (frame) =>
-					frame.includes("their retries."),
+					frame.includes("its feature flag."),
 				);
 				const home = await press(setup, "home", "Home to return to the detail start", (frame) =>
-					frame.includes("Retry policy for webhooks"),
+					frame.includes("Drop the legacy auth shim"),
 				);
 				setup.mockInput.pressKey("HOME");
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(home));
 			},
-			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
 		);
 	});
 
 	test("uses list arrows, pages, edges, row clicks, and wheel boundary no-ops", async () => {
+		const planeRecord = await plane();
 		await withApp(
 			async (setup) => {
 				const top = setup.captureCharFrame();
 				await mouseWheel(setup, { x: 4, y: paneRow(2), direction: "up" });
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(top));
 
-				await pressArrow(
-					setup,
-					"down",
-					"Down to select the second Ticket",
-					(frame) => startingFaceOf(selectedRow(frame)) !== null,
+				await pressArrow(setup, "down", "Down to select the second Ticket", (frame) =>
+					selectedRow(frame).includes("[running]"),
 				);
 				await pressArrow(setup, "up", "Up to select the first Ticket", (frame) =>
-					selectedRow(frame).includes("[open]"),
+					selectedRow(frame).includes("[awaiting]"),
 				);
 				// The list window holds six rows at this size, so a page from
 				// the first ticket lands on the seventh.
@@ -333,7 +363,7 @@ describe("native Ticket detail viewport", () => {
 					selectedRow(frame).includes("Run the con"),
 				);
 				await press(setup, "pageup", "PageUp to return one list page", (frame) =>
-					selectedRow(frame).includes("Retry polic"),
+					selectedRow(frame).includes("[awaiting]"),
 				);
 				await press(setup, "end", "End to select the final Ticket", (frame) =>
 					selectedRow(frame).includes("Ticket id"),
@@ -342,27 +372,41 @@ describe("native Ticket detail viewport", () => {
 				await mouseWheel(setup, { x: 4, y: paneRow(3), direction: "down" });
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(bottom));
 				await press(setup, "home", "Home to select the first Ticket", (frame) =>
-					selectedRow(frame).includes("Retry polic"),
+					selectedRow(frame).includes("[awaiting]"),
 				);
 
-				for (const [index, ticket] of SAMPLE_TICKETS.slice(0, 2).entries()) {
+				// The list's first two rows on the Seeded plane's boot: the
+				// awaiting run leads, the running one stands under it. The rows
+				// truncate the title at this width, so the pick reads the row's
+				// state cell, and the frame the detail pane's whole title.
+				const picks: Array<{ row: string; title: string }> = [
+					{ row: "[awaiting]", title: "Drop the legacy auth shim" },
+					{ row: "[running]", title: "Migrate scheduler" },
+				];
+				for (const [index, pick] of picks.entries()) {
 					await mouseClick(setup, 4, paneRow(index + 2));
 					const selected = await awaitFrame(
 						setup,
 						(frame) =>
 							listFocused(frame) &&
-							selectedRow(frame).includes(ticket.title.slice(0, 8)) &&
-							frame.includes(ticket.title.slice(0, 12)),
+							selectedRow(frame).includes(pick.row) &&
+							frame.includes(pick.title),
 						`visible Ticket row ${index + 1} to select its Ticket`,
 					);
-					expect(selectedRow(selected)).toContain(ticket.title.slice(0, 8));
+					expect(selectedRow(selected)).toContain(pick.row);
 				}
 			},
-			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
 		);
 	});
 
 	test("applies slow speed, caps a rapid burst, resets after a pause, and resets on reversal", async () => {
+		const planeRecord = await plane({ config: LONG_SCROLL_CONFIG });
 		await withApp(
 			async (setup) => {
 				const start = agentRowOf(setup.captureCharFrame());
@@ -379,13 +423,19 @@ describe("native Ticket detail viewport", () => {
 					"a slow base wheel step",
 				);
 			},
-			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT, props: { config: LONG_SCROLL_CONFIG } },
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
 		);
 
 		const capped = {
 			...BASE_CONFIG,
 			scroll: { speed: 1, acceleration: 5, maximumSpeed: 3 },
 		};
+		const planeRecord2 = await plane({ config: capped });
 		await withApp(
 			async (setup) => {
 				const start = agentRowOf(setup.captureCharFrame());
@@ -402,13 +452,19 @@ describe("native Ticket detail viewport", () => {
 					"the maximum-speed cap",
 				);
 			},
-			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT, props: { config: capped } },
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord2,
+				loopPolicy: { kind: "held" },
+			},
 		);
 
 		const reset = {
 			...BASE_CONFIG,
 			scroll: { speed: 1, acceleration: 5, maximumSpeed: 2 },
 		};
+		const planeRecord3 = await plane({ config: reset });
 		await withApp(
 			async (setup) => {
 				const start = agentRowOf(setup.captureCharFrame());
@@ -431,8 +487,14 @@ describe("native Ticket detail viewport", () => {
 					"the 150 ms reset step",
 				);
 			},
-			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT, props: { config: reset } },
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord3,
+				loopPolicy: { kind: "held" },
+			},
 		);
+		const planeRecord4 = await plane({ config: reset });
 		await withApp(
 			async (setup) => {
 				const start = agentRowOf(setup.captureCharFrame());
@@ -455,7 +517,12 @@ describe("native Ticket detail viewport", () => {
 					"the reversed base step",
 				);
 			},
-			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT, props: { config: reset } },
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord4,
+				loopPolicy: { kind: "held" },
+			},
 		);
 	});
 
@@ -464,6 +531,7 @@ describe("native Ticket detail viewport", () => {
 			...BASE_CONFIG,
 			scroll: { speed: 1, acceleration: 5, maximumSpeed: 3 },
 		};
+		const planeRecord = await plane({ config });
 		await withApp(
 			async (setup) => {
 				await focusDetail(setup);
@@ -479,7 +547,7 @@ describe("native Ticket detail viewport", () => {
 				);
 
 				await press(setup, "end", "the detail to reach the lower edge", (frame) =>
-					frame.includes("their retries."),
+					frame.includes("its feature flag."),
 				);
 				const bottom = setup.captureCharFrame();
 				const bottomDescription = lastDescriptionRow(bottom);
@@ -492,7 +560,12 @@ describe("native Ticket detail viewport", () => {
 					"the precise first step away from the lower edge",
 				);
 			},
-			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT, props: { config } },
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
 		);
 	});
 
@@ -510,194 +583,204 @@ describe("native Ticket detail viewport", () => {
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		const source = new FakeSource("issues", "github-issues", sourceSuccess([longTicket]));
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(sourceSuccess([longTicket]));
-					await awaitFrame(setup, (f) => f.includes("Keep detail offset"), "the source Ticket");
-					await focusDetail(setup);
-					reference.push(setup.captureCharFrame());
-					for (let step = 1; step <= 10; step += 1) {
-						const before = reference.at(-1) ?? "";
-						setup.mockInput.pressKey("j");
-						reference.push(
-							await awaitFrame(setup, (frame) => frame !== before, `reference detail step ${step}`),
-						);
-					}
-				},
-				{
-					width: SCROLL_WIDTH,
-					height: SCROLL_HEIGHT,
-					props: { config: linear, state, sources: [source] },
-				},
-			);
+		const planeRecord = await plane({
+			existing: state,
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
+			config: linear,
+			applyFetch: false,
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(sourceSuccess([longTicket]));
+				await awaitFrame(setup, (f) => f.includes("Keep detail offset"), "the source Ticket");
+				await focusDetail(setup);
+				reference.push(setup.captureCharFrame());
+				for (let step = 1; step <= 10; step += 1) {
+					const before = reference.at(-1) ?? "";
+					setup.mockInput.pressKey("j");
+					reference.push(
+						await awaitFrame(setup, (frame) => frame !== before, `reference detail step ${step}`),
+					);
+				}
+			},
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
+		);
 
-			await withApp(
-				async (setup) => {
-					// The remounted app starts its own fetch of the same ticket;
-					// settle it so the burst scrolls the settled detail.
-					source.settle(sourceSuccess([longTicket]));
-					await awaitFrame(setup, (f) => f.includes("Keep detail offset"), "the source Ticket");
-					const frames: string[] = [];
-					const record = () => frames.push(setup.captureCharFrame());
-					setup.renderer.on(CliRenderEvents.FRAME, record);
-					try {
-						for (let event = 0; event < 10; event += 1) {
-							await mouseWheel(setup, { x: 45, y: detailRow(3), direction: "down" });
-						}
-						const final = await awaitFrame(
-							setup,
-							(frame) => frame === reference[10],
-							"the rapid burst to apply all accepted events",
-						);
-						frames.push(final);
-					} finally {
-						setup.renderer.off(CliRenderEvents.FRAME, record);
+		await withApp(
+			async (setup) => {
+				// The remounted app starts its own fetch of the same ticket;
+				// settle it so the burst scrolls the settled detail.
+				source.settle(sourceSuccess([longTicket]));
+				await awaitFrame(setup, (f) => f.includes("Keep detail offset"), "the source Ticket");
+				const frames: string[] = [];
+				const record = () => frames.push(setup.captureCharFrame());
+				setup.renderer.on(CliRenderEvents.FRAME, record);
+				try {
+					for (let event = 0; event < 10; event += 1) {
+						await mouseWheel(setup, { x: 45, y: detailRow(3), direction: "down" });
 					}
-					expect(frames.length).toBeGreaterThan(0);
-					const positions = frames.map((frame) => reference.indexOf(frame));
-					expect(positions.every((position) => position >= 0)).toBe(true);
-					expect(positions).toEqual([...positions].sort((left, right) => left - right));
-					expect(positions.at(-1)).toBe(10);
-					for (const frame of frames) {
-						expectGrid(frame, SCROLL_WIDTH, SCROLL_HEIGHT);
-						expect(frame).toContain("┌");
-						expect(frame).toContain("└");
-						expect(frame.slice(GUTTER_X, GUTTER_X + 1)).toBeDefined();
-					}
-				},
-				{
-					width: SCROLL_WIDTH,
-					height: SCROLL_HEIGHT,
-					props: { config: linear, state, sources: [source] },
-				},
-			);
-		} finally {
-			state.close();
-		}
+					const final = await awaitFrame(
+						setup,
+						(frame) => frame === reference[10],
+						"the rapid burst to apply all accepted events",
+					);
+					frames.push(final);
+				} finally {
+					setup.renderer.off(CliRenderEvents.FRAME, record);
+				}
+				expect(frames.length).toBeGreaterThan(0);
+				const positions = frames.map((frame) => reference.indexOf(frame));
+				expect(positions.every((position) => position >= 0)).toBe(true);
+				expect(positions).toEqual([...positions].sort((left, right) => left - right));
+				expect(positions.at(-1)).toBe(10);
+				for (const frame of frames) {
+					expectGrid(frame, SCROLL_WIDTH, SCROLL_HEIGHT);
+					expect(frame).toContain("┌");
+					expect(frame).toContain("└");
+					expect(frame.slice(GUTTER_X, GUTTER_X + 1)).toBeDefined();
+				}
+			},
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
+		);
 	});
 
 	test("spends no terminal row on the mode cell through a resize", async () => {
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		try {
-			await withApp(
-				async (setup) => {
-					setup.resize(73, 27);
-					const frame = await awaitFrame(
-						setup,
-						(candidate) => {
-							const rows = rowsOf(candidate);
-							// One frame: the body with its three sections, then the
-							// reserved Message line and the Action bar. The Ticket
-							// header's mode cell rides the body's first row.
-							return (
-								rows.length === 27 &&
-								rows.every((row) => row.length === 73) &&
-								rows[0]?.includes("● manual 0/2") === true &&
-								rows.at(-3)?.includes("└") === true
-							);
-						},
-						"the panes to stay above the live mode cell after a resize",
-					);
-					expect(rowsOf(frame).at(-2)).not.toContain("manual");
-				},
-				{ width: 73, height: 27, props: { state, sources: [] } },
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({ existing: state, sources: [] });
+		await withApp(
+			async (setup) => {
+				setup.resize(73, 27);
+				const frame = await awaitFrame(
+					setup,
+					(candidate) => {
+						const rows = rowsOf(candidate);
+						// One frame: the body with its three sections, then the
+						// reserved Message line and the Action bar. The Ticket
+						// header's mode cell rides the body's first row.
+						return (
+							rows.length === 27 &&
+							rows.every((row) => row.length === 73) &&
+							rows[0]?.includes("● manual 0/2") === true &&
+							rows.at(-3)?.includes("└") === true
+						);
+					},
+					"the panes to stay above the live mode cell after a resize",
+				);
+				expect(rowsOf(frame).at(-2)).not.toContain("manual");
+			},
+			{ width: 73, height: 27, plane: planeRecord, loopPolicy: { kind: "held" } },
+		);
 	});
 
 	test("resets a new Ticket, preserves same-Ticket refresh offsets, clamps, and survives resize", async () => {
+		const planeRecord = await plane();
 		await withApp(
 			async (setup) => {
 				await focusDetail(setup);
 				await press(setup, "end", "the first detail to reach its end", (frame) =>
-					frame.includes("their retries."),
+					frame.includes("its feature flag."),
 				);
 				await press(setup, "h", "the list to take focus", listFocused);
 				await mouseClick(setup, 4, paneRow(3));
 				const nextTicket = await awaitFrame(
 					setup,
-					(frame) => frame.includes("Fix pan drift in split"),
+					(frame) => frame.includes("Migrate scheduler"),
 					"a different Ticket to start at its detail top",
 				);
-				expect(nextTicket).toContain("Fix pan drift in split");
+				expect(nextTicket).toContain("Migrate scheduler");
 			},
-			{ width: SCROLL_WIDTH, height: SCROLL_HEIGHT },
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
 		);
 
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const longDescription = `${SAMPLE_TICKETS[0].description} ${SAMPLE_TICKETS[0].description}`;
-		const source = new FakeSource(
-			"issues",
-			"github-issues",
-			sourceSuccess([sourceTicket(longDescription)]),
+		const planeRecord2 = await plane({
+			existing: state,
+			sources: [{ config: issuesSourceConfig, tickets: [] }],
+			config: sourceConfig,
+			applyFetch: false,
+		});
+		const source = planeRecord2.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(sourceSuccess([sourceTicket(longDescription)]));
+				await awaitFrame(
+					setup,
+					(frame) => frame.includes("Keep detail offset"),
+					"the source Ticket",
+				);
+				await focusDetail(setup);
+				for (let step = 0; step < 4; step += 1) {
+					setup.mockInput.pressKey("j");
+					await settle(setup);
+				}
+				const beforeRefresh = agentRowOf(setup.captureCharFrame());
+				setup.mockInput.pressKey("r");
+				await awaitFrame(setup, () => source.calls >= 2, "the second source refresh to start");
+				source.settle(sourceSuccess([sourceTicket(longDescription, "closed", "#11-refresh")]));
+				// The source field is below this small viewport at the preserved
+				// offset. Grow the terminal only to observe that refresh, then
+				// return to the original viewport to verify the native offset.
+				setup.resize(SCROLL_WIDTH, SCROLL_HEIGHT + 3);
+				await awaitFrame(
+					setup,
+					(frame) => frame.includes("External key: #11-refresh"),
+					"the same Ticket refresh",
+				);
+				setup.resize(SCROLL_WIDTH, SCROLL_HEIGHT);
+				await awaitFrame(
+					setup,
+					(frame) => agentRowOf(frame) === beforeRefresh,
+					"the restored viewport to keep its Ticket offset",
+				);
+
+				await press(setup, "end", "the refreshed detail to reach its end", (frame) =>
+					frame.includes("their retries."),
+				);
+				setup.mockInput.pressKey("r");
+				await awaitFrame(setup, () => source.calls >= 3, "the clamping refresh to start");
+				source.settle(
+					sourceSuccess([sourceTicket("Short refreshed detail.", "closed", "#11-short")]),
+				);
+				const clamped = await awaitFrame(
+					setup,
+					(frame) => frame.includes("Short refreshed detail."),
+					"the shortened same Ticket detail to clamp",
+				);
+				expect(clamped).toContain("Detail");
+			},
+			{
+				width: SCROLL_WIDTH,
+				height: SCROLL_HEIGHT,
+				plane: planeRecord2,
+				loopPolicy: { kind: "held" },
+			},
 		);
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(sourceSuccess([sourceTicket(longDescription)]));
-					await awaitFrame(
-						setup,
-						(frame) => frame.includes("Keep detail offset"),
-						"the source Ticket",
-					);
-					await focusDetail(setup);
-					for (let step = 0; step < 4; step += 1) {
-						setup.mockInput.pressKey("j");
-						await settle(setup);
-					}
-					const beforeRefresh = agentRowOf(setup.captureCharFrame());
-					setup.mockInput.pressKey("r");
-					await awaitFrame(setup, () => source.calls >= 2, "the second source refresh to start");
-					source.settle(sourceSuccess([sourceTicket(longDescription, "closed", "#11-refresh")]));
-					// The source field is below this small viewport at the preserved
-					// offset. Grow the terminal only to observe that refresh, then
-					// return to the original viewport to verify the native offset.
-					setup.resize(SCROLL_WIDTH, SCROLL_HEIGHT + 3);
-					await awaitFrame(
-						setup,
-						(frame) => frame.includes("External key: #11-refresh"),
-						"the same Ticket refresh",
-					);
-					setup.resize(SCROLL_WIDTH, SCROLL_HEIGHT);
-					await awaitFrame(
-						setup,
-						(frame) => agentRowOf(frame) === beforeRefresh,
-						"the restored viewport to keep its Ticket offset",
-					);
 
-					await press(setup, "end", "the refreshed detail to reach its end", (frame) =>
-						frame.includes("their retries."),
-					);
-					setup.mockInput.pressKey("r");
-					await awaitFrame(setup, () => source.calls >= 3, "the clamping refresh to start");
-					source.settle(
-						sourceSuccess([sourceTicket("Short refreshed detail.", "closed", "#11-short")]),
-					);
-					const clamped = await awaitFrame(
-						setup,
-						(frame) => frame.includes("Short refreshed detail."),
-						"the shortened same Ticket detail to clamp",
-					);
-					expect(clamped).toContain("Detail");
-				},
-				{
-					width: SCROLL_WIDTH,
-					height: SCROLL_HEIGHT,
-					props: { config: sourceConfig, state, sources: [source] },
-				},
-			);
-		} finally {
-			state.close();
-		}
-
+		const planeRecord3 = await plane({
+			sources: [{ config: overflowSource, tickets: OVERFLOW_TICKETS }],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				const initial = setup.captureCharFrame();
@@ -708,13 +791,13 @@ describe("native Ticket detail viewport", () => {
 					(frame) => rowsOf(frame).every((row) => row.length === 75) && frame.includes("Detail"),
 					"an odd-width resize at the detail start",
 				);
-				expect(oddStart).toContain("Retry policy for webhooks");
+				expect(oddStart).toContain("Drop the legacy auth shim");
 
 				await focusDetail(setup);
 				for (let step = 0; step < 8; step += 1) setup.mockInput.pressKey("j");
 				const middle = await awaitFrame(
 					setup,
-					(frame) => !frame.includes("Retry policy for webhooks"),
+					(frame) => !frame.includes("Drop the legacy auth shim"),
 					"a middle detail offset",
 				);
 				setup.resize(40, SCROLL_HEIGHT);
@@ -725,8 +808,10 @@ describe("native Ticket detail viewport", () => {
 				);
 				expect(narrowMiddle).not.toBe(middle);
 
+				// The phrase wraps at this width, so the end is read on the
+				// tail that one line still holds whole.
 				await press(setup, "end", "the narrow detail to reach its end", (frame) =>
-					frame.includes("waited."),
+					frame.includes("feature flag."),
 				);
 				setup.resize(8, 8);
 				const tinyEnd = await awaitFrame(
@@ -741,18 +826,19 @@ describe("native Ticket detail viewport", () => {
 
 				// The compact frame unmounted the panes. The remounted detail
 				// resumes from the offset the unmount saved, clamped to the
-				// wider viewport, instead of restarting at the top.
+				// wider viewport, instead of restarting at the top. The tail
+				// wraps here, so the end is read on its last word.
 				setup.resize(80, SCROLL_HEIGHT);
 				await awaitFrame(
 					setup,
 					(frame) =>
 						rowsOf(frame).every((row) => row.length === 80) &&
-						frame.includes("waited.") &&
+						frame.includes("flag.") &&
 						frame.match(/[▀▄█]/) !== null,
 					"the normal width with the restored detail offset",
 				);
 			},
-			{ width: 80, height: SCROLL_HEIGHT, props: { initialTickets: OVERFLOW_TICKETS } },
+			{ width: 80, height: SCROLL_HEIGHT, plane: planeRecord3, loopPolicy: { kind: "held" } },
 		);
 	});
 
@@ -767,13 +853,13 @@ describe("native Ticket detail viewport", () => {
 		await focusDetail(setup);
 		// Scroll to a middle offset: the detail title leaves the viewport.
 		let frame = setup.captureCharFrame();
-		for (let step = 0; step < 20 && frame.includes("Retry policy for webhooks"); step += 1) {
+		for (let step = 0; step < 20 && frame.includes("Drop the legacy auth shim"); step += 1) {
 			setup.mockInput.pressKey("j");
 			frame = await settle(setup);
 		}
 		const middle = await awaitFrame(
 			setup,
-			(f) => f.includes("Detail") && !f.includes("Retry policy for webhooks"),
+			(f) => f.includes("Detail") && !f.includes("Drop the legacy auth shim"),
 			"a middle detail offset with the title out of view",
 		);
 		expect(middle).toMatch(/[▀▄█]/);
@@ -855,7 +941,7 @@ describe("native Ticket detail viewport", () => {
 					rowsOf(f).every((row) => row.length === 80) &&
 					f.includes("Detail") &&
 					f.match(/[▀▄█]/) !== null &&
-					!f.includes("Retry policy for webhooks"),
+					!f.includes("Drop the legacy auth shim"),
 				"the detail offset to resume below the title",
 			);
 		} finally {
@@ -870,24 +956,36 @@ describe("native Ticket detail viewport", () => {
 	}
 
 	test("restores the detail offset across a round-trip resize below the minimum size", async () => {
+		const planeRecord = await plane({
+			sources: [{ config: overflowSource, tickets: OVERFLOW_TICKETS }],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				await resizeBelowTheMinimumAndBack(setup, false);
 			},
-			{ width: 80, height: SCROLL_HEIGHT, props: { initialTickets: OVERFLOW_TICKETS } },
+			{ width: 80, height: SCROLL_HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("restores the detail offset across a below-minimum resize on its own render ask alone", async () => {
+		const planeRecord = await plane({
+			sources: [{ config: overflowSource, tickets: OVERFLOW_TICKETS }],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				await resizeBelowTheMinimumAndBack(setup, true);
 			},
-			{ width: 80, height: SCROLL_HEIGHT, props: { initialTickets: OVERFLOW_TICKETS } },
+			{ width: 80, height: SCROLL_HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("the Ticket detail asks for one pass and stops when its box never lays out", async () => {
+		const planeRecord = await plane({
+			sources: [{ config: overflowSource, tickets: OVERFLOW_TICKETS }],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				await scrollOffTheTitleAndDropBelowTheMinimum(setup);
@@ -914,7 +1012,7 @@ describe("native Ticket detail viewport", () => {
 				expect(painted).not.toContain("Detail");
 				expect(painted).not.toMatch(/[▀▄█]/);
 			},
-			{ width: 80, height: SCROLL_HEIGHT, props: { initialTickets: OVERFLOW_TICKETS } },
+			{ width: 80, height: SCROLL_HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 });

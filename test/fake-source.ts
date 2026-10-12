@@ -32,4 +32,9 @@ export class FakeSource implements TicketSource {
 		this.next = outcome;
 		for (const resolve of this.resolvers.splice(0)) resolve();
 	}
+
+	/** Settle every in-flight fetch with the outcome the double stands on. */
+	settleCurrent(): void {
+		this.settle(this.next);
+	}
 }

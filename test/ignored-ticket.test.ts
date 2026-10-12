@@ -11,17 +11,18 @@
  */
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AppProps } from "../src/components/app.ts";
+import type { AppLoopPolicy } from "../src/components/app.ts";
 import type { FactoryConfig } from "../src/config.ts";
-import type { FetchedTicket } from "../src/domain/ticket.ts";
+import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { withIssueReferences } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
+import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -43,8 +44,9 @@ import {
 	workspaceCreateJson,
 	workspaceListJson,
 } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
-import { issuesConfig, issueTicket, seedInFlightTurn, success } from "./state-fixture.ts";
+import type { FakeSource } from "./fake-source.ts";
+import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
+import { issuesSourceConfig, issueTicket, seedInFlightTurn, success } from "./state-fixture.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -75,61 +77,48 @@ function twoTickets(): FetchedTicket[] {
 	];
 }
 
-function checkout(): string {
-	const dir = mkdtempSync(join(tmpdir(), "factory-ignore-checkout-"));
-	paths.push(dir);
-	return dir;
-}
-
-/** The config with the one issue source and a checkout the handoff can use. */
-function fixtureConfig(over: Partial<FactoryConfig> = {}): FactoryConfig {
-	return { ...issuesConfig, repos: { [repoIdentity]: checkout() }, ...over };
-}
-
 interface Rig {
 	state: FactoryState;
 	src: FakeSource;
 	runner: FakeRunner;
-	props: Partial<AppProps>;
 	config: FactoryConfig;
+	home: string;
+	plane: SeededPlane;
+	loopPolicy: AppLoopPolicy;
+}
+
+/** The rows the standing lists the source with, from a fetch outcome. */
+function twoTicketRows(outcome: FetchOutcome): Ticket[] {
+	if (outcome.status !== "success") return [];
+	return outcome.tickets.map((ticket) => ticketOf(ticket));
 }
 
 /**
- * A state that lists two open Tickets, with the app props that match it.
+ * The plane the tests stand on: two open Tickets on the issues source, the
+ * flat list, and a checkout the handoff can use.
  *
- * The poll interval is pinned long so the loop runs its first cycle and waits;
- * a test that wants the loop to keep turning passes a `pollIntervalMs` of its own.
+ * The poll interval is pinned long so the loop runs its first cycle and
+ * waits; a test that wants the loop to keep turning passes an interval of its
+ * own.
  */
-function rig(
+async function rig(
 	over: { autoMode?: boolean; config?: Partial<FactoryConfig>; pollIntervalMs?: number } = {},
-): Rig {
-	const state = openFactoryState(statePath());
-	// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-	state.grouping.setGroupingAxis("tickets", "none");
-	state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-	state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
-	if (over.autoMode === true) state.handoff.setAutoHandoffMode(true);
-	const runner = emptyAgentRunner();
-	const home = mkdtempSync(join(tmpdir(), "factory-ignore-home-"));
-	paths.push(home);
-	const configPath = join(home, "config.toml");
-	writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
-	const config = fixtureConfig(over.config ?? {});
-	const src = new FakeSource("issues", "github-issues", success(twoTickets()));
+): Promise<Rig> {
+	const planeRecord = await plane({
+		groupingAxis: "none",
+		sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(success(twoTickets())) }],
+		repos: { [repoIdentity]: "src/factory" },
+		config: over.config ?? {},
+		autoHandoffMode: over.autoMode === true ? true : undefined,
+	});
 	return {
-		state,
-		src,
-		runner,
-		config,
-		props: {
-			config,
-			state,
-			runner,
-			home,
-			configPath,
-			sources: [src],
-			pollIntervalMs: over.pollIntervalMs ?? 60_000,
-		},
+		state: planeRecord.state,
+		src: planeRecord.sources[0] as FakeSource,
+		runner: planeRecord.fakeRunner,
+		config: planeRecord.config,
+		home: planeRecord.home,
+		plane: planeRecord,
+		loopPolicy: { kind: "polled", intervalMs: over.pollIntervalMs ?? 60_000 },
 	};
 }
 
@@ -236,180 +225,168 @@ async function refreshed(
 
 describe("the ignore key", () => {
 	test("i takes one Ticket out of the list, its counts, and the pile", async () => {
-		const { state, src, props, runner } = rig();
-		try {
-			await withApp(
-				async (setup) => {
-					const before = await listed(setup, src);
-					expect(headerRow(before)).toContain("open: 2");
-					expect(headerRow(before)).not.toContain("ignored");
-					// One key press, on the row the cursor holds. The commands the
-					// runner had already recorded are the startup's repository read
-					// and the observation's own polls: the key adds none of its own,
-					// because the plane writes nothing to the source for an ignore.
-					const commandsBefore = runner.commands().length;
-					const frame = await press(
-						setup,
-						"i",
-						"the row to leave the list",
-						(f) => listRowOf(f, FIRST_LEAD) < 0 && headerRow(f).includes("ignored: 1"),
-					);
-					// The row is gone, and the section's counts dropped it with it.
-					expect(headerRow(frame)).toContain("open: 1");
-					// The header names the pile the filter hides, so a missing row
-					// reads as a filter, not as an idle factory.
-					expect(headerRow(frame)).toContain("ignored: 1");
-					// The Message line states the act in the plane's own words.
-					expect(messageRowOf(frame)).toContain(
-						`"${firstTitle}" is ignored: no row, no counts, no automatic start`,
-					);
-					// The ignore is the operator's own judgment, and the plane wrote
-					// nothing to the source for it: no label, no close, no comment.
-					// The only external command this frame ran is the observation's
-					// own read-only agent list.
-					// The only command the frame runs after the key is the
-					// observation's own read-only agent list.
-					expect(
-						runner
-							.commands()
-							.slice(commandsBefore)
-							.every((c) => c === "herdr agent list"),
-					).toBe(true);
-					// The flag is factory state on the state file, read back through
-					// the file's own API, and the row's projection carries it.
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
-					expect(state.ticketWorkCycle.projectedTickets([], "implement")).toEqual([
-						expect.objectContaining({
-							identity: FIRST,
-							ignored: true,
-							ignoredAt: expect.any(String),
-						}),
-						expect.objectContaining({ identity: SECOND, ignored: false }),
-					]);
-				},
-				{ width: WIDTH, height: HEIGHT, props: props },
-			);
-		} finally {
-			state.close();
-		}
+		const { state, src, runner, plane, loopPolicy } = await rig();
+		await withApp(
+			async (setup) => {
+				const before = await listed(setup, src);
+				expect(headerRow(before)).toContain("open: 2");
+				expect(headerRow(before)).not.toContain("ignored");
+				// One key press, on the row the cursor holds. The commands the
+				// runner had already recorded are the startup's repository read
+				// and the observation's own polls: the key adds none of its own,
+				// because the plane writes nothing to the source for an ignore.
+				const commandsBefore = runner.commands().length;
+				const frame = await press(
+					setup,
+					"i",
+					"the row to leave the list",
+					(f) => listRowOf(f, FIRST_LEAD) < 0 && headerRow(f).includes("ignored: 1"),
+				);
+				// The row is gone, and the section's counts dropped it with it.
+				expect(headerRow(frame)).toContain("open: 1");
+				// The header names the pile the filter hides, so a missing row
+				// reads as a filter, not as an idle factory.
+				expect(headerRow(frame)).toContain("ignored: 1");
+				// The Message line states the act in the plane's own words.
+				expect(messageRowOf(frame)).toContain(
+					`"${firstTitle}" is ignored: no row, no counts, no automatic start`,
+				);
+				// The ignore is the operator's own judgment, and the plane wrote
+				// nothing to the source for it: no label, no close, no comment.
+				// The only external command this frame ran is the observation's
+				// own read-only agent list.
+				// The only command the frame runs after the key is the
+				// observation's own read-only agent list.
+				expect(
+					runner
+						.commands()
+						.slice(commandsBefore)
+						.every((c) => c === "herdr agent list"),
+				).toBe(true);
+				// The flag is factory state on the state file, read back through
+				// the file's own API, and the row's projection carries it.
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
+				expect(state.ticketWorkCycle.projectedTickets([], "implement")).toEqual([
+					expect.objectContaining({
+						identity: FIRST,
+						ignored: true,
+						ignoredAt: expect.any(String),
+					}),
+					expect.objectContaining({ identity: SECOND, ignored: false }),
+				]);
+			},
+			{ width: WIDTH, height: HEIGHT, plane, loopPolicy },
+		);
 	});
 
 	test("the same key on an ignored row takes the Ticket back", async () => {
-		const { state, src, props } = rig();
+		const { state, src, plane, loopPolicy } = await rig();
 		// A frame wide enough for the row keys beside the Message hint: the
 		// ignore's outcome is a recorded fact (ADR 0119), so the bar carries
 		// `m Message` with it, and the hint's width is part of what this test
 		// reads.
 		const wide = 170;
-		try {
-			await withApp(
-				async (setup) => {
-					await listed(setup, src);
-					await press(setup, "i", "the ignore", (f) => headerRow(f).includes("ignored: 1"));
-					// One keypress reveals the pile, and the row keeps its state badge
-					// beside the marker of its own.
-					const pile = await press(
-						setup,
-						"f",
-						"the ignored view",
-						(f) => listRowOf(f, FIRST_LEAD) >= 0,
-					);
-					const row = rowsOf(pile)[listRowOf(pile, FIRST_LEAD)] ?? "";
-					expect(row).toContain("[open]");
-					expect(row).toContain("ignored");
-					// The Action bar names the same key as the clear, the way the
-					// queue pause flips between Pause and Resume.
-					expect(actionBarRowOf(pile)).toContain("i Un-ignore");
-					// The clear runs from the pile: the row leaves the ignored view,
-					// and the header's cell drops with the last flag.
-					const cleared = await press(
-						setup,
-						"i",
-						"the clear",
-						(f) => !headerRow(f).includes("ignored") && listRowOf(f, FIRST_LEAD) < 0,
-					);
-					expect(messageRowOf(cleared)).toContain(`"${firstTitle}" is not ignored`);
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
-					// The cycle walks the ledger it passes: the empty muted view, then the
-					// every-row view where the Ticket is listed again.
-					await press(setup, "f", "the muted view", (f) => !headerRow(f).includes("muted: "));
-					const active = await press(
-						setup,
-						"f",
-						"the all view",
-						(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) >= 0,
-					);
-					expect(listRowOf(active, SECOND_LEAD)).toBeGreaterThanOrEqual(0);
-				},
-				{ width: wide, height: HEIGHT, props: props },
-			);
-		} finally {
-			state.close();
-		}
+		await withApp(
+			async (setup) => {
+				await listed(setup, src);
+				await press(setup, "i", "the ignore", (f) => headerRow(f).includes("ignored: 1"));
+				// One keypress reveals the pile, and the row keeps its state badge
+				// beside the marker of its own.
+				const pile = await press(
+					setup,
+					"f",
+					"the ignored view",
+					(f) => listRowOf(f, FIRST_LEAD) >= 0,
+				);
+				const row = rowsOf(pile)[listRowOf(pile, FIRST_LEAD)] ?? "";
+				expect(row).toContain("[open]");
+				expect(row).toContain("ignored");
+				// The Action bar names the same key as the clear, the way the
+				// queue pause flips between Pause and Resume.
+				expect(actionBarRowOf(pile)).toContain("i Un-ignore");
+				// The clear runs from the pile: the row leaves the ignored view,
+				// and the header's cell drops with the last flag.
+				const cleared = await press(
+					setup,
+					"i",
+					"the clear",
+					(f) => !headerRow(f).includes("ignored") && listRowOf(f, FIRST_LEAD) < 0,
+				);
+				expect(messageRowOf(cleared)).toContain(`"${firstTitle}" is not ignored`);
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
+				// The cycle walks the ledger it passes: the empty muted view, then the
+				// every-row view where the Ticket is listed again.
+				await press(setup, "f", "the muted view", (f) => !headerRow(f).includes("muted: "));
+				const active = await press(
+					setup,
+					"f",
+					"the all view",
+					(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) >= 0,
+				);
+				expect(listRowOf(active, SECOND_LEAD)).toBeGreaterThanOrEqual(0);
+			},
+			{ width: wide, height: HEIGHT, plane, loopPolicy },
+		);
 	});
 
 	test("f cycles the filter through active, ignored, muted, and all, and opens on active", async () => {
-		const { state, src, props } = rig();
-		try {
-			await withApp(
-				async (setup) => {
-					await listed(setup, src);
-					await press(setup, "i", "the ignore", (f) => headerRow(f).includes("ignored: 1"));
-					// active: the ignored row is not listed, and the rest are.
-					const active = await settle(setup);
-					expect(listRowOf(active, FIRST_LEAD)).toBe(-1);
-					expect(listRowOf(active, SECOND_LEAD)).toBeGreaterThanOrEqual(0);
-					// ignored: only the pile.
-					const pile = await press(
-						setup,
-						"f",
-						"the ignored view",
-						(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) < 0,
-					);
-					// The pile holds the one row, and the header still names it.
-					expect(
-						rowsOf(pile).filter((r) => r.startsWith("│") && r.includes("ignored")),
-					).toHaveLength(1);
-					// muted: the ledger of the source acts, empty here, and it names its
-					// own emptiness once the last act never stood.
-					await press(
-						setup,
-						"f",
-						"the muted view",
-						(f) =>
-							listRowOf(f, FIRST_LEAD) < 0 &&
-							listRowOf(f, SECOND_LEAD) < 0 &&
-							rowsOf(f).some((r) => r.startsWith("│") && r.includes("no muted Tickets")),
-					);
-					// all: the pile and the rest, in the list's own order.
-					const every = await press(
-						setup,
-						"f",
-						"the all view",
-						(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) >= 0,
-					);
-					expect(headerRow(every)).toContain("ignored: 1");
-					// And back to the active rows, with the header still naming the pile.
-					await press(
-						setup,
-						"f",
-						"the active view again",
-						(f) => listRowOf(f, FIRST_LEAD) < 0 && headerRow(f).includes("ignored: 1"),
-					);
-					// A restart opens on the active rows and never on the pile: the
-					// filter is a session view fact, and the file's own default read
-					// is the active view.
-					expect(
-						state.ticketWorkCycle
-							.ticketListViews([], "implement")
-							.rows.map((ticket) => ticket.identity),
-					).toEqual([SECOND]);
-				},
-				{ width: WIDTH, height: HEIGHT, props: props },
-			);
-		} finally {
-			state.close();
-		}
+		const { state, src, plane, loopPolicy } = await rig();
+		await withApp(
+			async (setup) => {
+				await listed(setup, src);
+				await press(setup, "i", "the ignore", (f) => headerRow(f).includes("ignored: 1"));
+				// active: the ignored row is not listed, and the rest are.
+				const active = await settle(setup);
+				expect(listRowOf(active, FIRST_LEAD)).toBe(-1);
+				expect(listRowOf(active, SECOND_LEAD)).toBeGreaterThanOrEqual(0);
+				// ignored: only the pile.
+				const pile = await press(
+					setup,
+					"f",
+					"the ignored view",
+					(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) < 0,
+				);
+				// The pile holds the one row, and the header still names it.
+				expect(rowsOf(pile).filter((r) => r.startsWith("│") && r.includes("ignored"))).toHaveLength(
+					1,
+				);
+				// muted: the ledger of the source acts, empty here, and it names its
+				// own emptiness once the last act never stood.
+				await press(
+					setup,
+					"f",
+					"the muted view",
+					(f) =>
+						listRowOf(f, FIRST_LEAD) < 0 &&
+						listRowOf(f, SECOND_LEAD) < 0 &&
+						rowsOf(f).some((r) => r.startsWith("│") && r.includes("no muted Tickets")),
+				);
+				// all: the pile and the rest, in the list's own order.
+				const every = await press(
+					setup,
+					"f",
+					"the all view",
+					(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) >= 0,
+				);
+				expect(headerRow(every)).toContain("ignored: 1");
+				// And back to the active rows, with the header still naming the pile.
+				await press(
+					setup,
+					"f",
+					"the active view again",
+					(f) => listRowOf(f, FIRST_LEAD) < 0 && headerRow(f).includes("ignored: 1"),
+				);
+				// A restart opens on the active rows and never on the pile: the
+				// filter is a session view fact, and the file's own default read
+				// is the active view.
+				expect(
+					state.ticketWorkCycle
+						.ticketListViews([], "implement")
+						.rows.map((ticket) => ticket.identity),
+				).toEqual([SECOND]);
+			},
+			{ width: WIDTH, height: HEIGHT, plane, loopPolicy },
+		);
 	});
 
 	/**
@@ -440,7 +417,12 @@ describe("the ignore key", () => {
 		});
 		expect(state.ticketWorkCycle.setTicketIgnored(SECOND, true, null).ok).toBe(true);
 		const runner = emptyAgentRunner();
-		const src = new FakeSource("issues", "github-issues", outcome);
+		const planeRecord = await plane({
+			existing: state,
+			runner: () => runner,
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+			repos: { [repoIdentity]: "src/factory" },
+		});
 		const bells = countBells();
 		try {
 			await withApp(
@@ -473,144 +455,125 @@ describe("the ignore key", () => {
 				{
 					width: WIDTH,
 					height: HEIGHT,
-					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 60_000 },
 				},
 			);
 		} finally {
 			bells.restore();
-			state.close();
 		}
 	});
 
 	test("the hint names the state the filter moves to, in both Ticket panes", async () => {
-		const { state, src, props } = rig();
+		const { src, plane, loopPolicy } = await rig();
 		// A frame wide enough to hold the section's whole ladder beside the
 		// Message hint the ignore's recorded outcome puts on the bar (ADR 0119).
 		const wide = 170;
-		try {
-			await withApp(
-				async (setup) => {
-					await listed(setup, src);
-					await press(setup, "i", "the ignore", (f) => headerRow(f).includes("ignored: 1"));
-					expect(actionBarRowOf(await settle(setup))).toContain("f Show ignored");
-					await press(setup, "f", "the pile", (f) => listRowOf(f, FIRST_LEAD) >= 0);
-					expect(actionBarRowOf(await settle(setup))).toContain("f Show muted");
-					await press(setup, "f", "the muted view", (f) => listRowOf(f, FIRST_LEAD) < 0);
-					expect(actionBarRowOf(await settle(setup))).toContain("f Show all");
-					await press(setup, "f", "every row", (f) => listRowOf(f, SECOND_LEAD) >= 0);
-					expect(actionBarRowOf(await settle(setup))).toContain("f Show active");
-					// The detail pane's bar names the same key.
-					setup.mockInput.pressKey("l");
-					const detailed = await awaitFrame(
-						setup,
-						(f) => actionBarRowOf(f).includes("f Show"),
-						"the detail bar to name the filter",
-					);
-					expect(actionBarRowOf(detailed)).toContain("f Show");
-					// The cursor holds the ignored Ticket, so the same key's hint
-					// reads the clear there.
-					expect(actionBarRowOf(detailed)).toContain("i Un-ignore");
-				},
-				{ width: wide, height: HEIGHT, props: props },
-			);
-		} finally {
-			state.close();
-		}
+		await withApp(
+			async (setup) => {
+				await listed(setup, src);
+				await press(setup, "i", "the ignore", (f) => headerRow(f).includes("ignored: 1"));
+				expect(actionBarRowOf(await settle(setup))).toContain("f Show ignored");
+				await press(setup, "f", "the pile", (f) => listRowOf(f, FIRST_LEAD) >= 0);
+				expect(actionBarRowOf(await settle(setup))).toContain("f Show muted");
+				await press(setup, "f", "the muted view", (f) => listRowOf(f, FIRST_LEAD) < 0);
+				expect(actionBarRowOf(await settle(setup))).toContain("f Show all");
+				await press(setup, "f", "every row", (f) => listRowOf(f, SECOND_LEAD) >= 0);
+				expect(actionBarRowOf(await settle(setup))).toContain("f Show active");
+				// The detail pane's bar names the same key.
+				setup.mockInput.pressKey("l");
+				const detailed = await awaitFrame(
+					setup,
+					(f) => actionBarRowOf(f).includes("f Show"),
+					"the detail bar to name the filter",
+				);
+				expect(actionBarRowOf(detailed)).toContain("f Show");
+				// The cursor holds the ignored Ticket, so the same key's hint
+				// reads the clear there.
+				expect(actionBarRowOf(detailed)).toContain("i Un-ignore");
+			},
+			{ width: wide, height: HEIGHT, plane, loopPolicy },
+		);
 	});
 
 	test("the cursor keeps its Ticket across the filter cycle", async () => {
-		const { state, src, props } = rig();
-		try {
-			await withApp(
-				async (setup) => {
-					await listed(setup, src);
-					// The ignore moves the cursor onto the row that took the place.
-					await press(setup, "i", "the ignore", (f) => detailPaneText(f).includes(secondTitle));
-					// active to ignored: the second Ticket leaves the view, so the
-					// cursor moves onto the row that stands.
-					const pile = await press(
-						setup,
-						"f",
-						"the pile",
-						(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) < 0,
-					);
-					expect(detailPaneText(pile)).toContain(firstTitle);
-					// ignored to muted: the empty ledger holds no row, so the cursor has
-					// no place there and the detail pane stands empty.
-					await press(
-						setup,
-						"f",
-						"the muted view",
-						(f) => listRowOf(f, FIRST_LEAD) < 0 && listRowOf(f, SECOND_LEAD) < 0,
-					);
-					// muted to all: the pile's Ticket is still shown, so the cursor keeps
-					// it - reading the pile does not lose the place.
-					const every = await press(
-						setup,
-						"f",
-						"the all view",
-						(f) => listRowOf(f, SECOND_LEAD) >= 0 && detailPaneText(f).includes(firstTitle),
-					);
-					// The all view shows both rows, and the cursor kept the pile's one.
-					expect(listRowOf(every, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
-					// all to active: the pile's Ticket is gone, and the cursor takes a
-					// row that stands.
-					const back = await press(
-						setup,
-						"f",
-						"the active view",
-						(f) => listRowOf(f, FIRST_LEAD) < 0,
-					);
-					expect(detailPaneText(back)).toContain(secondTitle);
-				},
-				{ width: WIDTH, height: HEIGHT, props: props },
-			);
-		} finally {
-			state.close();
-		}
+		const { src, plane, loopPolicy } = await rig();
+		await withApp(
+			async (setup) => {
+				await listed(setup, src);
+				// The ignore moves the cursor onto the row that took the place.
+				await press(setup, "i", "the ignore", (f) => detailPaneText(f).includes(secondTitle));
+				// active to ignored: the second Ticket leaves the view, so the
+				// cursor moves onto the row that stands.
+				const pile = await press(
+					setup,
+					"f",
+					"the pile",
+					(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) < 0,
+				);
+				expect(detailPaneText(pile)).toContain(firstTitle);
+				// ignored to muted: the empty ledger holds no row, so the cursor has
+				// no place there and the detail pane stands empty.
+				await press(
+					setup,
+					"f",
+					"the muted view",
+					(f) => listRowOf(f, FIRST_LEAD) < 0 && listRowOf(f, SECOND_LEAD) < 0,
+				);
+				// muted to all: the pile's Ticket is still shown, so the cursor keeps
+				// it - reading the pile does not lose the place.
+				const every = await press(
+					setup,
+					"f",
+					"the all view",
+					(f) => listRowOf(f, SECOND_LEAD) >= 0 && detailPaneText(f).includes(firstTitle),
+				);
+				// The all view shows both rows, and the cursor kept the pile's one.
+				expect(listRowOf(every, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
+				// all to active: the pile's Ticket is gone, and the cursor takes a
+				// row that stands.
+				const back = await press(
+					setup,
+					"f",
+					"the active view",
+					(f) => listRowOf(f, FIRST_LEAD) < 0,
+				);
+				expect(detailPaneText(back)).toContain(secondTitle);
+			},
+			{ width: WIDTH, height: HEIGHT, plane, loopPolicy },
+		);
 	});
 
 	test("the empty active list points at the filter, not at an idle factory", async () => {
-		const { state, src, props } = rig();
-		try {
-			await withApp(
-				async (setup) => {
-					await listed(setup, src);
-					await press(setup, "i", "the first ignore", (f) => headerRow(f).includes("ignored: 1"));
-					// The cursor took the row that stayed; one more press hides it too.
-					const empty = await press(setup, "i", "the last row to hide", (f) =>
-						rowsOf(f).some((r) => r.startsWith("│") && r.includes("no active Tickets")),
-					);
-					// A hidden pile is not an idle factory: the empty list names the
-					// count it hides and the key that shows them.
-					expect(empty).toContain("no active Tickets; 2 ignored - press f");
-					expect(headerRow(empty)).toContain("ignored: 2");
-					// The rows come back from the view that shows them, and the pile
-					// names its own emptiness once the last flag clears.
-					await press(setup, "f", "the pile", (f) => listRowOf(f, FIRST_LEAD) >= 0);
-					await press(setup, "i", "the first un-ignore", (f) =>
-						headerRow(f).includes("ignored: 1"),
-					);
-					const cleared = await press(setup, "i", "the second un-ignore", (f) =>
-						rowsOf(f).some((r) => r.startsWith("│") && r.includes("no ignored Tickets")),
-					);
-					expect(cleared).toContain("no ignored Tickets - press f");
-					// The cycle walks the empty muted ledger past, and the every-row view
-					// holds both rows again.
-					await press(setup, "f", "the muted view", (f) => listRowOf(f, FIRST_LEAD) < 0);
-					const back = await press(
-						setup,
-						"f",
-						"the all view",
-						(f) => listRowOf(f, SECOND_LEAD) >= 0,
-					);
-					expect(listRowOf(back, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
-				},
-				{ width: WIDTH, height: HEIGHT, props: props },
-			);
-		} finally {
-			state.close();
-		}
+		const { src, plane, loopPolicy } = await rig();
+		await withApp(
+			async (setup) => {
+				await listed(setup, src);
+				await press(setup, "i", "the first ignore", (f) => headerRow(f).includes("ignored: 1"));
+				// The cursor took the row that stayed; one more press hides it too.
+				const empty = await press(setup, "i", "the last row to hide", (f) =>
+					rowsOf(f).some((r) => r.startsWith("│") && r.includes("no active Tickets")),
+				);
+				// A hidden pile is not an idle factory: the empty list names the
+				// count it hides and the key that shows them.
+				expect(empty).toContain("no active Tickets; 2 ignored - press f");
+				expect(headerRow(empty)).toContain("ignored: 2");
+				// The rows come back from the view that shows them, and the pile
+				// names its own emptiness once the last flag clears.
+				await press(setup, "f", "the pile", (f) => listRowOf(f, FIRST_LEAD) >= 0);
+				await press(setup, "i", "the first un-ignore", (f) => headerRow(f).includes("ignored: 1"));
+				const cleared = await press(setup, "i", "the second un-ignore", (f) =>
+					rowsOf(f).some((r) => r.startsWith("│") && r.includes("no ignored Tickets")),
+				);
+				expect(cleared).toContain("no ignored Tickets - press f");
+				// The cycle walks the empty muted ledger past, and the every-row view
+				// holds both rows again.
+				await press(setup, "f", "the muted view", (f) => listRowOf(f, FIRST_LEAD) < 0);
+				const back = await press(setup, "f", "the all view", (f) => listRowOf(f, SECOND_LEAD) >= 0);
+				expect(listRowOf(back, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
+			},
+			{ width: WIDTH, height: HEIGHT, plane, loopPolicy },
+		);
 	});
 
 	/**
@@ -621,140 +584,87 @@ describe("the ignore key", () => {
 	 * features land on one list (issue #163).
 	 */
 	test("the axis counts the rows the ignore leaves, and the pile its own", async () => {
-		const { state, src, props } = rig();
+		const { state, src, plane, loopPolicy } = await rig();
 		state.grouping.setGroupingAxis("tickets", "repository");
 		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
-		try {
-			await withApp(
-				async (setup) => {
-					await listed(setup, src, SECOND_LEAD);
-					const grouped = await awaitFrame(
-						setup,
-						(f) => groupWithOneRow(f, "acme/factory"),
-						"the Group header of the one row the list left",
-					);
-					// One repository, one row: the ignored Ticket holds no Group place and
-					// no header count, and its own row is nowhere in the pane.
-					expect(groupWithOneRow(grouped, "acme/factory")).toBe(true);
-					expect(listRowOf(grouped, FIRST_LEAD)).toBe(-1);
-					// The pile reads under the same axis, with its own count.
-					const pile = await press(
-						setup,
-						"f",
-						"the grouped pile",
-						(f) => groupWithOneRow(f, "acme/factory") && listRowOf(f, FIRST_LEAD) >= 0,
-					);
-					expect(pile).toContain("ignored");
-				},
-				{ width: WIDTH, height: HEIGHT, props: props },
-			);
-		} finally {
-			state.close();
-		}
+		await withApp(
+			async (setup) => {
+				await listed(setup, src, SECOND_LEAD);
+				const grouped = await awaitFrame(
+					setup,
+					(f) => groupWithOneRow(f, "acme/factory"),
+					"the Group header of the one row the list left",
+				);
+				// One repository, one row: the ignored Ticket holds no Group place and
+				// no header count, and its own row is nowhere in the pane.
+				expect(groupWithOneRow(grouped, "acme/factory")).toBe(true);
+				expect(listRowOf(grouped, FIRST_LEAD)).toBe(-1);
+				// The pile reads under the same axis, with its own count.
+				const pile = await press(
+					setup,
+					"f",
+					"the grouped pile",
+					(f) => groupWithOneRow(f, "acme/factory") && listRowOf(f, FIRST_LEAD) >= 0,
+				);
+				expect(pile).toContain("ignored");
+			},
+			{ width: WIDTH, height: HEIGHT, plane, loopPolicy },
+		);
 	});
 
 	test("the detail pane names the ignore, its moment, and the key that clears it", async () => {
-		const { state, src, props } = rig();
-		try {
-			await withApp(
-				async (setup) => {
-					await listed(setup, src);
-					await press(setup, "i", "the ignore", (f) => headerRow(f).includes("ignored: 1"));
-					const pile = await press(
-						setup,
-						"f",
-						"the ignored view",
-						(f) => listRowOf(f, FIRST_LEAD) >= 0,
-					);
-					const detail = detailPaneText(pile);
-					expect(detail).toContain("Ignored");
-					expect(detail).toContain("no automatic start, and no row while the Ticket rests");
-					expect(detail).toContain("press i to take this Ticket back");
-				},
-				{ width: WIDTH, height: HEIGHT, props: props },
-			);
-		} finally {
-			state.close();
-		}
+		const { src, plane, loopPolicy } = await rig();
+		await withApp(
+			async (setup) => {
+				await listed(setup, src);
+				await press(setup, "i", "the ignore", (f) => headerRow(f).includes("ignored: 1"));
+				const pile = await press(
+					setup,
+					"f",
+					"the ignored view",
+					(f) => listRowOf(f, FIRST_LEAD) >= 0,
+				);
+				const detail = detailPaneText(pile);
+				expect(detail).toContain("Ignored");
+				expect(detail).toContain("no automatic start, and no row while the Ticket rests");
+				expect(detail).toContain("press i to take this Ticket back");
+			},
+			{ width: WIDTH, height: HEIGHT, plane, loopPolicy },
+		);
 	});
 
 	test("the bar and the guide name the ignore in both Ticket panes", async () => {
-		const { state, src, props } = rig();
-		try {
-			await withApp(
-				async (setup) => {
-					const frame = await listed(setup, src);
-					expect(actionBarRowOf(frame)).toContain("i Ignore");
-					// The mute names the source the act reaches (ADR 0070): the bar's
-					// measured ladder keeps the Launch rung at 120, so the mute stands
-					// where the row holds one more hint.
-					setup.resize(150, HEIGHT);
-					await awaitFrame(
-						setup,
-						(f) => actionBarRowOf(f).includes("u Mute issues"),
-						"the bar to name the mute",
-					);
-					// The detail pane's bar names it too.
-					setup.mockInput.pressKey("l");
-					await awaitFrame(
-						setup,
-						(f) => actionBarRowOf(f).includes("i Ignore"),
-						"the detail bar to name the ignore",
-					);
-					// And the Key guide opened from the Ticket list holds both rows.
-					setup.mockInput.pressKey("?");
-					const guide = await awaitFrame(setup, (f) => f.includes("Key guide"), "the Key guide");
-					expect(guide).toContain("hides a resting row and stops every automatic start");
-					expect(guide).toContain("mutes the source the Ticket came in on, and the key un-mutes");
-					expect(guide).toContain("cycles the Ticket list: active, ignored, muted, all");
-				},
-				{ width: WIDTH, height: HEIGHT, props: props },
-			);
-		} finally {
-			state.close();
-		}
-	});
-});
-
-/**
- * ADR 0060: the two keys that need the state file say so in the same words.
- * The in-memory shell holds no list rule, so it has no pile for `f` to lift and
- * nowhere to keep the flag `i` writes: each states the missing fact on the
- * Message line and leaves the list standing, so neither press reads as a view
- * change the frame cannot show.
- */
-test("the no-state shell refuses i and f with the same missing fact", async () => {
-	const seeded = openFactoryState(statePath());
-	seeded.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-	seeded.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
-	const projection = seeded.ticketWorkCycle.ticketListViews([], "implement").rows;
-	seeded.close();
-	await withApp(
-		async (setup) => {
-			await awaitFrame(setup, (f) => ticketRowHolds(f, FIRST_LEAD), "the shell's Ticket row");
-			const refusedIgnore = await press(setup, "i", "the ignore refusal", (f) =>
-				messageRowOf(f).includes("needs SQLite state"),
-			);
-			expect(messageRowOf(refusedIgnore)).toContain("ignoring a Ticket needs SQLite state");
-			const refusedFilter = await press(setup, "f", "the filter refusal", (f) =>
-				messageRowOf(f).includes("list filter needs SQLite state"),
-			);
-			// Neither press moved the list: every view of the shell is the rows it
-			// was handed, and no pile exists to reveal or hide.
-			expect(ticketRowHolds(refusedFilter, FIRST_LEAD)).toBe(true);
-			expect(refusedFilter).not.toContain("ignored:");
-		},
-		{
-			width: WIDTH,
-			height: HEIGHT,
-			props: {
-				config: fixtureConfig(),
-				runner: emptyAgentRunner(),
-				initialTickets: projection,
-				pollIntervalMs: 60_000,
+		const { src, plane, loopPolicy } = await rig();
+		await withApp(
+			async (setup) => {
+				const frame = await listed(setup, src);
+				expect(actionBarRowOf(frame)).toContain("i Ignore");
+				// The mute names the source the act reaches (ADR 0070): the bar's
+				// measured ladder keeps the Launch rung at 120, so the mute stands
+				// where the row holds one more hint.
+				setup.resize(150, HEIGHT);
+				await awaitFrame(
+					setup,
+					(f) => actionBarRowOf(f).includes("u Mute issues"),
+					"the bar to name the mute",
+				);
+				// The detail pane's bar names it too.
+				setup.mockInput.pressKey("l");
+				await awaitFrame(
+					setup,
+					(f) => actionBarRowOf(f).includes("i Ignore"),
+					"the detail bar to name the ignore",
+				);
+				// And the Key guide opened from the Ticket list holds both rows.
+				setup.mockInput.pressKey("?");
+				const guide = await awaitFrame(setup, (f) => f.includes("Key guide"), "the Key guide");
+				expect(guide).toContain("hides a resting row and stops every automatic start");
+				expect(guide).toContain("mutes the source the Ticket came in on, and the key un-mutes");
+				expect(guide).toContain("cycles the Ticket list: active, ignored, muted, all");
 			},
-		},
-	);
+			{ width: WIDTH, height: HEIGHT, plane, loopPolicy },
+		);
+	});
 });
 
 describe("the obligation gate", () => {
@@ -775,41 +685,38 @@ describe("the obligation gate", () => {
 			turnLog: [{ kind: "text", text: "The turn is done." }],
 			completedAt: "2026-08-31T11:00:00Z",
 		});
-		const src = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					const frame = await awaitFrame(
-						setup,
-						(f) => listRowOf(f, FIRST_LEAD) >= 0,
-						"the awaiting row",
-					);
-					expect(frame).toContain("[awaiting]");
-					const refused = await press(setup, "i", "the refusal", (f) =>
-						messageRowOf(f).includes("cannot be ignored"),
-					);
-					expect(messageRowOf(refused)).toContain(
-						"the selected Ticket cannot be ignored: it awaits a decision",
-					);
-					// The refusal is a refusal: the flag never lands, and the row stays.
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
-					expect(listRowOf(refused, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: {
-						config: fixtureConfig(),
-						state,
-						sources: [src],
-						runner: emptyAgentRunner(),
-						pollIntervalMs: 60_000,
-					},
-				},
-			);
-		} finally {
-			state.close();
-		}
+		const runner = emptyAgentRunner();
+		const planeRecord = await plane({
+			existing: state,
+			runner: () => runner,
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+			repos: { [repoIdentity]: "src/factory" },
+		});
+		await withApp(
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(f) => listRowOf(f, FIRST_LEAD) >= 0,
+					"the awaiting row",
+				);
+				expect(frame).toContain("[awaiting]");
+				const refused = await press(setup, "i", "the refusal", (f) =>
+					messageRowOf(f).includes("cannot be ignored"),
+				);
+				expect(messageRowOf(refused)).toContain(
+					"the selected Ticket cannot be ignored: it awaits a decision",
+				);
+				// The refusal is a refusal: the flag never lands, and the row stays.
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
+				expect(listRowOf(refused, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
 	});
 
 	test("the key refuses a missing Agent, and its row keeps the badge the choice lives on", async () => {
@@ -819,36 +726,38 @@ describe("the obligation gate", () => {
 		const outcome = success([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
-		const src = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					// The poll lists no Agent in the recorded pane: the row wears
-					// `missing`, and the restart-or-abandon is the operator's choice.
-					const frame = await awaitFrame(
-						setup,
-						(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("missing")),
-						"the missing badge",
-					);
-					expect(listRowOf(frame, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
-					const refused = await press(setup, "i", "the refusal", (f) =>
-						messageRowOf(f).includes("its Agent is missing"),
-					);
-					expect(messageRowOf(refused)).toContain(
-						"the selected Ticket cannot be ignored: its Agent is missing",
-					);
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
-					expect(refused).toContain("missing");
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
-				},
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			runner: () => runner,
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+			repos: { [repoIdentity]: "src/factory" },
+		});
+		await withApp(
+			async (setup) => {
+				// The poll lists no Agent in the recorded pane: the row wears
+				// `missing`, and the restart-or-abandon is the operator's choice.
+				const frame = await awaitFrame(
+					setup,
+					(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("missing")),
+					"the missing badge",
+				);
+				expect(listRowOf(frame, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
+				const refused = await press(setup, "i", "the refusal", (f) =>
+					messageRowOf(f).includes("its Agent is missing"),
+				);
+				expect(messageRowOf(refused)).toContain(
+					"the selected Ticket cannot be ignored: its Agent is missing",
+				);
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
+				expect(refused).toContain("missing");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
 	});
 });
 
@@ -861,53 +770,56 @@ describe("the ignore and the machine", () => {
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
-		const src = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					src.settle(outcome);
-					const frame = await awaitFrame(
-						setup,
-						(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("[running]")),
-						"the running badge",
-					);
-					// The live Agent holds a Parallel limit seat the row can be ignored over.
-					expect(frame).toContain("● manual 1/2");
-					// The ignore ends where live work begins: the row stays in the active
-					// view wearing its own badge beside the `ignored` marker, because the row
-					// is how the operator reaches the Live view, the Goto, and the Close.
-					const ignored = await press(setup, "i", "the ignore", (f) => {
-						const row = rowsOf(f).find((r) => r.startsWith("│") && r.includes("[running]"));
-						return row?.includes("ignored") === true;
-					});
-					expect(ignored).toContain("● manual 1/2");
-					expect(listRowOf(ignored, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
-					// The header names the pile the flag made, and the active view still
-					// holds the row: the count is the ledger, not a claim that the row is gone.
-					expect(headerRow(ignored)).toContain("ignored: 1");
-					expect(messageRowOf(ignored)).toContain(
-						`"${firstTitle}" is ignored: no automatic start, and its row stays while its work is live`,
-					);
-					// The flag stands underneath the row, and the same key takes it back.
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
-					const taken = await press(setup, "i", "the un-ignore", (f) => {
-						const row = rowsOf(f).find((r) => r.startsWith("│") && r.includes("[running]"));
-						return row !== undefined && !row.includes("ignored");
-					});
-					expect(messageRowOf(taken)).toContain(
-						`"${firstTitle}" is not ignored: the machine may start it again`,
-					);
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
-				},
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			runner: () => runner,
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+			repos: { [repoIdentity]: "src/factory" },
+		});
+		const src = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				src.settle(outcome);
+				const frame = await awaitFrame(
+					setup,
+					(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("[running]")),
+					"the running badge",
+				);
+				// The live Agent holds a Parallel limit seat the row can be ignored over.
+				expect(frame).toContain("● manual 1/2");
+				// The ignore ends where live work begins: the row stays in the active
+				// view wearing its own badge beside the `ignored` marker, because the row
+				// is how the operator reaches the Live view, the Goto, and the Close.
+				const ignored = await press(setup, "i", "the ignore", (f) => {
+					const row = rowsOf(f).find((r) => r.startsWith("│") && r.includes("[running]"));
+					return row?.includes("ignored") === true;
+				});
+				expect(ignored).toContain("● manual 1/2");
+				expect(listRowOf(ignored, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
+				// The header names the pile the flag made, and the active view still
+				// holds the row: the count is the ledger, not a claim that the row is gone.
+				expect(headerRow(ignored)).toContain("ignored: 1");
+				expect(messageRowOf(ignored)).toContain(
+					`"${firstTitle}" is ignored: no automatic start, and its row stays while its work is live`,
+				);
+				// The flag stands underneath the row, and the same key takes it back.
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
+				const taken = await press(setup, "i", "the un-ignore", (f) => {
+					const row = rowsOf(f).find((r) => r.startsWith("│") && r.includes("[running]"));
+					return row !== undefined && !row.includes("ignored");
+				});
+				expect(messageRowOf(taken)).toContain(
+					`"${firstTitle}" is not ignored: the machine may start it again`,
+				);
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
 	});
 
 	test("the ignore removes a start that waits in the Work queue", async () => {
@@ -923,87 +835,81 @@ describe("the ignore and the machine", () => {
 		seedInFlightTurn(state, outcome, FIRST);
 		const runner = emptyAgentRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
-		const src = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					const frame = await listed(setup, src, SECOND_LEAD);
-					// The running Ticket holds the one seat, so the second ticket's
-					// start waits in the queue.
-					expect(frame).toContain("● manual 1/1");
-					await press(setup, "j", "the open row", (f) => detailPaneText(f).includes(secondTitle));
-					await press(setup, "return", "the start to wait", (f) => f.includes("waiting: 1"));
-					const ignored = await press(setup, "i", "the start to leave the queue", (f) =>
-						messageRowOf(f).includes("its waiting start left the Work queue"),
-					);
-					expect(messageRowOf(ignored)).toContain(
-						`"${secondTitle}" is ignored; its waiting start left the Work queue`,
-					);
-					// The row is gone, the queue is empty, and the Ticket keeps its
-					// open state: the cancel's stated semantics.
-					expect(ignored).toContain("waiting: 0");
-					expect(state.ticketWorkCycle.ticketState(SECOND)).toBe("open");
-					expect(state.workQueue.items()).toEqual([]);
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: {
-						config: fixtureConfig({ maxParallelAgents: 1 }),
-						state,
-						sources: [src],
-						runner,
-						pollIntervalMs: 60_000,
-					},
-				},
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			runner: () => runner,
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+			repos: { [repoIdentity]: "src/factory" },
+			config: { maxParallelAgents: 1 },
+		});
+		const src = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				const frame = await listed(setup, src, SECOND_LEAD);
+				// The running Ticket holds the one seat, so the second ticket's
+				// start waits in the queue.
+				expect(frame).toContain("● manual 1/1");
+				await press(setup, "j", "the open row", (f) => detailPaneText(f).includes(secondTitle));
+				await press(setup, "return", "the start to wait", (f) => f.includes("waiting: 1"));
+				const ignored = await press(setup, "i", "the start to leave the queue", (f) =>
+					messageRowOf(f).includes("its waiting start left the Work queue"),
+				);
+				expect(messageRowOf(ignored)).toContain(
+					`"${secondTitle}" is ignored; its waiting start left the Work queue`,
+				);
+				// The row is gone, the queue is empty, and the Ticket keeps its
+				// open state: the cancel's stated semantics.
+				expect(ignored).toContain("waiting: 0");
+				expect(state.ticketWorkCycle.ticketState(SECOND)).toBe("open");
+				expect(state.workQueue.items()).toEqual([]);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
 	});
 
 	test("a start the operator asks for after the ignore still runs", async () => {
-		const { state, src, runner, props, config } = rig();
-		const path = Object.values(config.repos)[0];
+		const { state, src, runner, home, plane, loopPolicy } = await rig();
+		const path = join(home, "src", "factory");
 		stubHandoff(runner, path);
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
-		try {
-			await withApp(
-				async (setup) => {
-					await listed(setup, src);
-					await press(setup, "i", "the pile", (f) => headerRow(f).includes("ignored: 1"));
-					const pile = await press(
-						setup,
-						"f",
-						"the ignored view",
-						(f) => listRowOf(f, FIRST_LEAD) >= 0,
-					);
-					expect(detailPaneText(pile)).toContain(firstTitle);
-					// The manual ask passes the ignore the way it passes the cap and
-					// the Same-type hold: the ignore gates the machine, never the ask.
-					await press(setup, "return", "the handoff to start", (f) => f.includes("handing off"));
-					await awaitFrame(
-						setup,
-						(f) =>
-							rowsOf(f).some((r) => r.startsWith("│") && r.includes("[handed-off]")) ||
-							runner.commands().some((c) => c.startsWith("herdr agent start")),
-						"the Agent start command",
-					);
-					expect(runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(true);
-					expect(state.ticketWorkCycle.ticketState(FIRST)).toBe("handed-off");
-					const frame = await settle(setup);
-					// The Ticket the operator judged out is now live work, and the flag
-					// stands under it: the pile still names it, and its row is back in the
-					// active view because there is live work to reach (ADR 0060).
-					expect(headerRow(frame)).toContain("ignored: 1");
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
-					expect(listRowOf(frame, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
-				},
-				{ width: WIDTH, height: HEIGHT, props: props },
-			);
-		} finally {
-			state.close();
-		}
+		await withApp(
+			async (setup) => {
+				await listed(setup, src);
+				await press(setup, "i", "the pile", (f) => headerRow(f).includes("ignored: 1"));
+				const pile = await press(
+					setup,
+					"f",
+					"the ignored view",
+					(f) => listRowOf(f, FIRST_LEAD) >= 0,
+				);
+				expect(detailPaneText(pile)).toContain(firstTitle);
+				// The manual ask passes the ignore the way it passes the cap and
+				// the Same-type hold: the ignore gates the machine, never the ask.
+				await press(setup, "return", "the handoff to start", (f) => f.includes("handing off"));
+				await awaitFrame(
+					setup,
+					(f) =>
+						rowsOf(f).some((r) => r.startsWith("│") && r.includes("[handed-off]")) ||
+						runner.commands().some((c) => c.startsWith("herdr agent start")),
+					"the Agent start command",
+				);
+				expect(runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(true);
+				expect(state.ticketWorkCycle.ticketState(FIRST)).toBe("handed-off");
+				const frame = await settle(setup);
+				// The Ticket the operator judged out is now live work, and the flag
+				// stands under it: the pile still names it, and its row is back in the
+				// active view because there is live work to reach (ADR 0060).
+				expect(headerRow(frame)).toContain("ignored: 1");
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
+				expect(listRowOf(frame, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
+			},
+			{ width: WIDTH, height: HEIGHT, plane, loopPolicy },
+		);
 	});
 
 	test("the Work queue's row names the ticket an ignore took from the list", async () => {
@@ -1030,65 +936,63 @@ describe("the ignore and the machine", () => {
 				},
 			]),
 		});
-		const src = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					await listed(setup, src, SECOND_LEAD);
-					// The in-flight row leads the attention order, so the cursor crosses
-					// to the open row first: that is the one the ignore can withhold.
-					await press(setup, "j", "the open row", (f) => detailPaneText(f).includes(firstTitle));
-					await press(setup, "i", "the pile", (f) => headerRow(f).includes("ignored: 1"));
-					// The row left the active view, so the ask comes from the pile the
-					// filter reveals: the ignore gates the machine, never the operator.
-					await press(
-						setup,
-						"f",
-						"the pile view",
-						(f) => ticketRowHolds(f, FIRST_LEAD) && detailPaneText(f).includes(firstTitle),
-					);
-					await press(setup, "return", "the start to wait", (f) => f.includes("waiting: 1"));
-					// Back to the active rows: the Ticket is nowhere in the list the
-					// operator sees, and its waiting start is the queue's own row. The
-					// cycle walks the empty muted ledger past on the way.
-					await press(
-						setup,
-						"f",
-						"the muted view",
-						(f) => !ticketRowHolds(f, FIRST_LEAD) && !ticketRowHolds(f, SECOND_LEAD),
-					);
-					await press(
-						setup,
-						"f",
-						"every row",
-						(f) => ticketRowHolds(f, FIRST_LEAD) && ticketRowHolds(f, SECOND_LEAD),
-					);
-					const frame = await press(
-						setup,
-						"f",
-						"the active rows",
-						(f) => !ticketRowHolds(f, FIRST_LEAD),
-					);
-					// A waiting start of an ignored Ticket names its ticket, and the
-					// raw identity never shows as a fallback.
-					expect(frame).toContain(firstTitle.slice(0, 9));
-					expect(frame).not.toContain(FIRST);
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: {
-						config: fixtureConfig({ maxParallelAgents: 1 }),
-						state,
-						sources: [src],
-						runner,
-						pollIntervalMs: 60_000,
-					},
-				},
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			runner: () => runner,
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+			repos: { [repoIdentity]: "src/factory" },
+			config: { maxParallelAgents: 1 },
+		});
+		const src = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				await listed(setup, src, SECOND_LEAD);
+				// The in-flight row leads the attention order, so the cursor crosses
+				// to the open row first: that is the one the ignore can withhold.
+				await press(setup, "j", "the open row", (f) => detailPaneText(f).includes(firstTitle));
+				await press(setup, "i", "the pile", (f) => headerRow(f).includes("ignored: 1"));
+				// The row left the active view, so the ask comes from the pile the
+				// filter reveals: the ignore gates the machine, never the operator.
+				await press(
+					setup,
+					"f",
+					"the pile view",
+					(f) => ticketRowHolds(f, FIRST_LEAD) && detailPaneText(f).includes(firstTitle),
+				);
+				await press(setup, "return", "the start to wait", (f) => f.includes("waiting: 1"));
+				// Back to the active rows: the Ticket is nowhere in the list the
+				// operator sees, and its waiting start is the queue's own row. The
+				// cycle walks the empty muted ledger past on the way.
+				await press(
+					setup,
+					"f",
+					"the muted view",
+					(f) => !ticketRowHolds(f, FIRST_LEAD) && !ticketRowHolds(f, SECOND_LEAD),
+				);
+				await press(
+					setup,
+					"f",
+					"every row",
+					(f) => ticketRowHolds(f, FIRST_LEAD) && ticketRowHolds(f, SECOND_LEAD),
+				);
+				const frame = await press(
+					setup,
+					"f",
+					"the active rows",
+					(f) => !ticketRowHolds(f, FIRST_LEAD),
+				);
+				// A waiting start of an ignored Ticket names its ticket, and the
+				// raw identity never shows as a fallback.
+				expect(frame).toContain(firstTitle.slice(0, 9));
+				expect(frame).not.toContain(FIRST);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
 	});
 
 	/**
@@ -1120,170 +1024,155 @@ describe("the ignore and the machine", () => {
 				},
 			]),
 		});
-		const src = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					await listed(setup, src, SECOND_LEAD);
-					// The in-flight row leads the attention order, so the cursor crosses
-					// to the open row the ignore can take out of the list.
-					await press(setup, "j", "the open row", (f) => detailPaneText(f).includes(firstTitle));
-					// The row and its ask, from the pile the ignore made.
-					await press(setup, "i", "the pile", (f) => headerRow(f).includes("ignored: 1"));
-					await press(
-						setup,
-						"f",
-						"the pile view",
-						(f) => ticketRowHolds(f, FIRST_LEAD) && detailPaneText(f).includes(firstTitle),
-					);
-					await press(setup, "return", "the start to wait", (f) => f.includes("waiting: 1"));
-					// Back to the active rows before the removal: the list rule withholds the
-					// Ticket's own row there, so the line has to name the Ticket from the
-					// projection before the rule, not from the rows the section draws
-					// (ADR 0042, ADR 0060). The cycle walks the empty muted ledger past.
-					await press(
-						setup,
-						"f",
-						"the muted view",
-						(f) => !ticketRowHolds(f, FIRST_LEAD) && !ticketRowHolds(f, SECOND_LEAD),
-					);
-					await press(setup, "f", "every row", (f) => ticketRowHolds(f, FIRST_LEAD));
-					await press(setup, "f", "the active rows", (f) => !ticketRowHolds(f, FIRST_LEAD));
-					// The cursor walks out of the Ticket list and down the visible flow: the
-					// empty Consultation section is a row, and down from it crosses into the
-					// Work queue, where Delete removes the item (ADR 0034).
-					await press(setup, "j", "the Consultation row", (f) => f.includes("❯ Consultations"));
-					await press(setup, "j", "the queue cursor", (f) => f.includes("┌─❯ Work queue"));
-					const line = await press(setup, "delete", "the item removed", (f) =>
-						messageRowOf(f).includes("was removed"),
-					);
-					expect(messageRowOf(line)).toContain(`the waiting start for "${firstTitle}" was removed`);
-					expect(messageRowOf(line)).not.toContain(FIRST);
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: {
-						config: fixtureConfig({ maxParallelAgents: 1 }),
-						state,
-						sources: [src],
-						runner,
-						pollIntervalMs: 60_000,
-					},
-				},
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			runner: () => runner,
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+			repos: { [repoIdentity]: "src/factory" },
+			config: { maxParallelAgents: 1 },
+		});
+		const src = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				await listed(setup, src, SECOND_LEAD);
+				// The in-flight row leads the attention order, so the cursor crosses
+				// to the open row the ignore can take out of the list.
+				await press(setup, "j", "the open row", (f) => detailPaneText(f).includes(firstTitle));
+				// The row and its ask, from the pile the ignore made.
+				await press(setup, "i", "the pile", (f) => headerRow(f).includes("ignored: 1"));
+				await press(
+					setup,
+					"f",
+					"the pile view",
+					(f) => ticketRowHolds(f, FIRST_LEAD) && detailPaneText(f).includes(firstTitle),
+				);
+				await press(setup, "return", "the start to wait", (f) => f.includes("waiting: 1"));
+				// Back to the active rows before the removal: the list rule withholds the
+				// Ticket's own row there, so the line has to name the Ticket from the
+				// projection before the rule, not from the rows the section draws
+				// (ADR 0042, ADR 0060). The cycle walks the empty muted ledger past.
+				await press(
+					setup,
+					"f",
+					"the muted view",
+					(f) => !ticketRowHolds(f, FIRST_LEAD) && !ticketRowHolds(f, SECOND_LEAD),
+				);
+				await press(setup, "f", "every row", (f) => ticketRowHolds(f, FIRST_LEAD));
+				await press(setup, "f", "the active rows", (f) => !ticketRowHolds(f, FIRST_LEAD));
+				// The cursor walks out of the Ticket list and down the visible flow: the
+				// empty Consultation section is a row, and down from it crosses into the
+				// Work queue, where Delete removes the item (ADR 0034).
+				await press(setup, "j", "the Consultation row", (f) => f.includes("❯ Consultations"));
+				await press(setup, "j", "the queue cursor", (f) => f.includes("┌─❯ Work queue"));
+				const line = await press(setup, "delete", "the item removed", (f) =>
+					messageRowOf(f).includes("was removed"),
+				);
+				expect(messageRowOf(line)).toContain(`the waiting start for "${firstTitle}" was removed`);
+				expect(messageRowOf(line)).not.toContain(FIRST);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
 	});
 
 	test("an ignored Ticket is no Top-up candidate, and the un-ignore makes it one", async () => {
-		const { state, src, props } = rig({ autoMode: true });
+		const { state, src, plane } = await rig({ autoMode: true });
 		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
 		expect(state.ticketWorkCycle.setTicketIgnored(SECOND, true, null).ok).toBe(true);
-		try {
-			await withApp(
-				async (setup) => {
-					src.settle(success(twoTickets()));
-					const frame = await awaitFrame(
-						setup,
-						(f) => headerRow(f).includes("ignored: 2"),
-						"the pile",
-					);
-					// Auto-handoff is on, the queue is empty, and two open Tickets
-					// stand: the cycle asks for nothing, because both are judged out.
-					await settle(setup, 500);
-					expect(state.workQueue.items()).toEqual([]);
-					expect(state.ticketWorkCycle.ticketState(FIRST)).toBe("open");
-					// Take one back: its row returns to the active view the walks read.
-					expect(state.ticketWorkCycle.setTicketIgnored(FIRST, false, null).ok).toBe(true);
-					expect(listRowOf(frame, SECOND_LEAD)).toBe(-1);
-					expect(
-						state.ticketWorkCycle
-							.ticketListViews([], "implement")
-							.rows.map((ticket) => ticket.identity),
-					).toEqual([FIRST]);
-				},
-				{ width: WIDTH, height: HEIGHT, props: { ...props, pollIntervalMs: 25 } },
-			);
-		} finally {
-			state.close();
-		}
+		await withApp(
+			async (setup) => {
+				src.settle(success(twoTickets()));
+				const frame = await awaitFrame(
+					setup,
+					(f) => headerRow(f).includes("ignored: 2"),
+					"the pile",
+				);
+				// Auto-handoff is on, the queue is empty, and two open Tickets
+				// stand: the cycle asks for nothing, because both are judged out.
+				await settle(setup, 500);
+				expect(state.workQueue.items()).toEqual([]);
+				expect(state.ticketWorkCycle.ticketState(FIRST)).toBe("open");
+				// Take one back: its row returns to the active view the walks read.
+				expect(state.ticketWorkCycle.setTicketIgnored(FIRST, false, null).ok).toBe(true);
+				expect(listRowOf(frame, SECOND_LEAD)).toBe(-1);
+				expect(
+					state.ticketWorkCycle
+						.ticketListViews([], "implement")
+						.rows.map((ticket) => ticket.identity),
+				).toEqual([FIRST]);
+			},
+			{ width: WIDTH, height: HEIGHT, plane, loopPolicy: { kind: "polled", intervalMs: 25 } },
+		);
 	});
 
 	test("the flag survives a source that drops the item, and a second plane on the file", async () => {
-		const { state, src, props } = rig();
+		const { state, src, plane: firstPlane, loopPolicy } = await rig();
 		const path = state.path;
-		try {
-			await withApp(
-				async (setup) => {
-					await listed(setup, src);
-					await press(setup, "i", "the ignore", (f) => headerRow(f).includes("ignored: 1"));
-					// The source drops the item: with no membership left to project,
-					// the Ticket holds no row and no count - and the flag stays on
-					// the identity in the file, because the ignore is never a
-					// membership fact.
-					await refreshed(
-						setup,
-						src,
-						success([issueTicket(SECOND, { title: secondTitle, externalKey: "#6" })]),
-					);
-					const dropped = await awaitFrame(
-						setup,
-						(f) => headerRow(f).includes("open: 1") && !headerRow(f).includes("ignored"),
-						"the source's drop",
-					);
-					expect(listRowOf(dropped, SECOND_LEAD)).toBeGreaterThanOrEqual(0);
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
-					// The item comes back: the flag follows the Ticket, not the
-					// membership, and the row stays out of the active view.
-					await refreshed(setup, src);
-					const back = await awaitFrame(
-						setup,
-						(f) => headerRow(f).includes("ignored: 1"),
-						"the item to return to the source",
-					);
-					expect(listRowOf(back, FIRST_LEAD)).toBe(-1);
-					expect(headerRow(back)).toContain("open: 1");
-				},
-				{ width: WIDTH, height: HEIGHT, props: props },
-			);
-			// A second plane on the same state file reads the same flag: two planes
-			// never disagree about one Ticket.
-			const reopened = openFactoryState(path);
-			const secondSrc = new FakeSource("issues", "github-issues", success(twoTickets()));
-			try {
-				expect(reopened.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
-				expect(
-					reopened.ticketWorkCycle
-						.ticketListViews([], "implement")
-						.rows.map((ticket) => ticket.identity),
-				).toEqual([SECOND]);
-				await withApp(
-					async (setup) => {
-						await listed(setup, secondSrc, SECOND_LEAD);
-						const frame = await settle(setup);
-						expect(headerRow(frame)).toContain("ignored: 1");
-						expect(listRowOf(frame, FIRST_LEAD)).toBe(-1);
-					},
-					{
-						width: WIDTH,
-						height: HEIGHT,
-						props: {
-							config: fixtureConfig(),
-							state: reopened,
-							sources: [secondSrc],
-							runner: emptyAgentRunner(),
-							pollIntervalMs: 60_000,
-						},
-					},
+		await withApp(
+			async (setup) => {
+				await listed(setup, src);
+				await press(setup, "i", "the ignore", (f) => headerRow(f).includes("ignored: 1"));
+				// The source drops the item: with no membership left to project,
+				// the Ticket holds no row and no count - and the flag stays on
+				// the identity in the file, because the ignore is never a
+				// membership fact.
+				await refreshed(
+					setup,
+					src,
+					success([issueTicket(SECOND, { title: secondTitle, externalKey: "#6" })]),
 				);
-			} finally {
-				reopened.close();
-			}
-		} finally {
-			state.close();
-		}
+				const dropped = await awaitFrame(
+					setup,
+					(f) => headerRow(f).includes("open: 1") && !headerRow(f).includes("ignored"),
+					"the source's drop",
+				);
+				expect(listRowOf(dropped, SECOND_LEAD)).toBeGreaterThanOrEqual(0);
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
+				// The item comes back: the flag follows the Ticket, not the
+				// membership, and the row stays out of the active view.
+				await refreshed(setup, src);
+				const back = await awaitFrame(
+					setup,
+					(f) => headerRow(f).includes("ignored: 1"),
+					"the item to return to the source",
+				);
+				expect(listRowOf(back, FIRST_LEAD)).toBe(-1);
+				expect(headerRow(back)).toContain("open: 1");
+			},
+			{ width: WIDTH, height: HEIGHT, plane: firstPlane, loopPolicy },
+		);
+		// A second plane on the same state file reads the same flag: two planes
+		// never disagree about one Ticket.
+		const reopened = openFactoryState(path);
+		const secondPlane = await plane({
+			existing: reopened,
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(success(twoTickets())) }],
+			repos: { [repoIdentity]: "src/factory" },
+		});
+		expect(reopened.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
+		expect(
+			reopened.ticketWorkCycle
+				.ticketListViews([], "implement")
+				.rows.map((ticket) => ticket.identity),
+		).toEqual([SECOND]);
+		await withApp(
+			async (setup) => {
+				await listed(setup, secondPlane.sources[0] as FakeSource, SECOND_LEAD);
+				const frame = await settle(setup);
+				expect(headerRow(frame)).toContain("ignored: 1");
+				expect(listRowOf(frame, FIRST_LEAD)).toBe(-1);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: secondPlane,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
 	});
 
 	/**
@@ -1306,68 +1195,71 @@ describe("the ignore and the machine", () => {
 		// The Agent lives while the operator puts the running Ticket away, and
 		// herdr stops listing it after.
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
-		const src = new FakeSource("issues", "github-issues", outcome);
+		const planeRecord = await plane({
+			existing: state,
+			runner: () => runner,
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+			repos: { [repoIdentity]: "src/factory" },
+		});
+		const src = planeRecord.sources[0] as FakeSource;
 		// A frame wide enough for the row keys beside the Message hint: the
 		// ignore's outcome is a recorded fact (ADR 0119), so the bar carries
 		// `m Message` with it.
 		const wide = 170;
-		try {
-			await withApp(
-				async (setup) => {
-					src.settle(outcome);
-					await awaitFrame(
-						setup,
-						(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("[running]")),
-						"the running badge",
-					);
-					await press(setup, "i", "the ignore", (f) => messageRowOf(f).includes("is ignored"));
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
-					runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-					// The row keeps its badge and its marker, and no line says the flag
-					// moved: the row never left, because its work was live.
-					const gone = await awaitFrame(
-						setup,
-						(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("missing")),
-						"the missing badge",
-					);
-					expect(gone).toContain("ignored");
-					expect(messageRowOf(gone)).not.toContain("no longer ignored");
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
-					// A missing Agent is the obligation the row's own face wears, and
-					// it is what the ignore's write refuses (issue #202 review).
-					expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, "missing")).toEqual({
-						ok: false,
-						reason: "the selected Ticket cannot be ignored: its Agent is missing",
-					});
-					// The machine starts nothing on it by itself: auto mode is on, the
-					// seat is free, and after a hundred cycles of the walk that would
-					// otherwise have asked for the restart, the queue is still empty and
-					// the flag still stands.
-					await settle(setup, 500);
-					expect(state.workQueue.items()).toEqual([]);
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
-					// The key that put the Ticket away is the key that puts it back: the
-					// row offers Un-ignore beside its own badge, and the restart the flag
-					// held out is the operator's own ask from here.
-					expect(actionBarRowOf(gone)).toContain("i Un-ignore");
-					expect(headerRow(gone)).toContain("running: 1");
-				},
-				{
-					width: wide,
-					height: HEIGHT,
-					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 25 },
-				},
-			);
-		} finally {
-			state.close();
-		}
+		await withApp(
+			async (setup) => {
+				src.settle(outcome);
+				await awaitFrame(
+					setup,
+					(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("[running]")),
+					"the running badge",
+				);
+				await press(setup, "i", "the ignore", (f) => messageRowOf(f).includes("is ignored"));
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
+				runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+				// The row keeps its badge and its marker, and no line says the flag
+				// moved: the row never left, because its work was live.
+				const gone = await awaitFrame(
+					setup,
+					(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("missing")),
+					"the missing badge",
+				);
+				expect(gone).toContain("ignored");
+				expect(messageRowOf(gone)).not.toContain("no longer ignored");
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
+				// A missing Agent is the obligation the row's own face wears, and
+				// it is what the ignore's write refuses (issue #202 review).
+				expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, "missing")).toEqual({
+					ok: false,
+					reason: "the selected Ticket cannot be ignored: its Agent is missing",
+				});
+				// The machine starts nothing on it by itself: auto mode is on, the
+				// seat is free, and after a hundred cycles of the walk that would
+				// otherwise have asked for the restart, the queue is still empty and
+				// the flag still stands.
+				await settle(setup, 500);
+				expect(state.workQueue.items()).toEqual([]);
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
+				// The key that put the Ticket away is the key that puts it back: the
+				// row offers Un-ignore beside its own badge, and the restart the flag
+				// held out is the operator's own ask from here.
+				expect(actionBarRowOf(gone)).toContain("i Un-ignore");
+				expect(headerRow(gone)).toContain("running: 1");
+			},
+			{
+				width: wide,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 25 },
+			},
+		);
 	});
 });
 
 describe("the ignored marker's frame", () => {
 	test("the no-color presentation keeps the ignored marker as a written word", async () => {
 		process.env.NO_COLOR = "1";
-		const { state, src, props } = rig();
+		const { state, src, plane, loopPolicy } = await rig();
 		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
 		try {
 			await withApp(
@@ -1385,46 +1277,41 @@ describe("the ignored marker's frame", () => {
 					expect(row).toContain("[open]");
 					expect(headerRow(pile)).toContain("ignored: 1");
 				},
-				{ width: WIDTH, height: HEIGHT, props: props },
+				{ width: WIDTH, height: HEIGHT, plane, loopPolicy },
 			);
 		} finally {
 			// The worker's environment is shared with the files that run beside
 			// this one: a NO_COLOR left behind paints their frames white.
 			delete process.env.NO_COLOR;
-			state.close();
 		}
 	});
 
 	test("a narrow frame never hides the section's own name behind the ignored cell", async () => {
-		const { state, src, props } = rig();
+		const { state, src, plane, loopPolicy } = await rig();
 		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
-		try {
-			await withApp(
-				async (setup) => {
-					// 74 columns is the narrowest row that still holds the pile cell
-					// beside the bare corner: 55 columns of counts and 19 of brake lamp
-					// and mode lamp (issue #319, ADR 0111). One column less and the pile
-					// gives way whole.
-					setup.resize(74, HEIGHT);
-					src.settle(success(twoTickets()));
-					const frame = await awaitFrame(
-						setup,
-						(f) => f.includes("ignored"),
-						"the header's ignored cell",
-					);
-					const header = rowsOf(frame).find((r) => r.includes("Tickets")) ?? "";
-					// The name leads, so a truncation never hides it.
-					expect(header.indexOf("Tickets")).toBeLessThan(header.indexOf("ignored"));
-					setup.resize(44, HEIGHT);
-					const tiny = await awaitFrame(setup, (f) => f.includes("Tickets"), "the tiny frame");
-					const tinyHeader = rowsOf(tiny).find((r) => r.includes("Tickets")) ?? "";
-					expect(tinyHeader).toContain("Tickets");
-				},
-				{ width: WIDTH, height: HEIGHT, props: props },
-			);
-		} finally {
-			state.close();
-		}
+		await withApp(
+			async (setup) => {
+				// 74 columns is the narrowest row that still holds the pile cell
+				// beside the bare corner: 55 columns of counts and 19 of brake lamp
+				// and mode lamp (issue #319, ADR 0111). One column less and the pile
+				// gives way whole.
+				setup.resize(74, HEIGHT);
+				src.settle(success(twoTickets()));
+				const frame = await awaitFrame(
+					setup,
+					(f) => f.includes("ignored"),
+					"the header's ignored cell",
+				);
+				const header = rowsOf(frame).find((r) => r.includes("Tickets")) ?? "";
+				// The name leads, so a truncation never hides it.
+				expect(header.indexOf("Tickets")).toBeLessThan(header.indexOf("ignored"));
+				setup.resize(44, HEIGHT);
+				const tiny = await awaitFrame(setup, (f) => f.includes("Tickets"), "the tiny frame");
+				const tinyHeader = rowsOf(tiny).find((r) => r.includes("Tickets")) ?? "";
+				expect(tinyHeader).toContain("Tickets");
+			},
+			{ width: WIDTH, height: HEIGHT, plane, loopPolicy },
+		);
 	});
 
 	/**
@@ -1463,73 +1350,76 @@ describe("the ignored marker's frame", () => {
 		// The ignore lands first, while the Ticket is only ignored.
 		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
 		const runner = emptyAgentRunner();
-		const src = new FakeSource("issues", "github-issues", success(twoTickets()));
-		try {
-			await withApp(
-				async (setup) => {
-					// The ignore stands before the boot, so the first frame shows the
-					// row that stayed.
-					await listed(setup, src, SECOND_LEAD);
-					// The fixing pull request appears on the next refresh: the covered rule
-					// now hides the same row the ignore hides.
-					await settle(setup, 1_000);
-					await refreshed(setup, src, withPull);
-					const active = await awaitFrame(
-						setup,
-						(f) => ticketRowHolds(f, SECOND_LEAD) && !ticketRowHolds(f, FIRST_LEAD),
-						"the covered row to leave the active view",
-					);
-					// Neither the drawn rows nor the count shows it, and the header still
-					// names the pile the flag made.
-					expect(headerRow(active)).toContain("ignored: 1");
-					// `f` reaches the row: the pile holds what no other view shows.
-					const pile = await press(setup, "f", "the pile", (f) => ticketRowHolds(f, FIRST_LEAD));
-					expect(pile).toContain("ignored");
-					expect(detailPaneText(pile)).toContain(firstTitle);
-					expect(actionBarRowOf(pile)).toContain("i Un-ignore");
-					// The cycle walks the empty muted ledger past, and `all` does not show
-					// it: the covered rule still holds the list.
-					await press(
-						setup,
-						"f",
-						"the muted view",
-						(f) => !ticketRowHolds(f, FIRST_LEAD) && !ticketRowHolds(f, SECOND_LEAD),
-					);
-					await press(setup, "f", "every row", (f) => ticketRowHolds(f, SECOND_LEAD));
-					const every = await settle(setup);
-					expect(ticketRowHolds(every, FIRST_LEAD)).toBe(false);
-					expect(headerRow(every)).toContain("ignored: 1");
-					// The same key on that piled row takes the Ticket back, and the row
-					// returns to standing under the covered rule alone. The cycle runs
-					// active, ignored, muted, all, so two presses walk from `all` back to
-					// the pile: the active view holds no covered row, and the next press
-					// is the pile itself, past the empty muted ledger.
-					await press(setup, "f", "the active rows", (f) => !ticketRowHolds(f, FIRST_LEAD));
-					await press(setup, "f", "the pile again, past the muted ledger", (f) =>
-						ticketRowHolds(f, FIRST_LEAD),
-					);
-					const cleared = await press(setup, "i", "the clear", (f) =>
-						messageRowOf(f).includes("is not ignored"),
-					);
-					// The whole line, because the flag is gone and the row is still
-					// nowhere: the covered rule holds it out on its own, and ADR 0060
-					// states the clear returns the row to no list at all. A line that
-					// promised a returned row would contradict this same frame.
-					expect(messageRowOf(cleared)).toContain(
-						`"${firstTitle}" is not ignored: an open fixing pull request still holds its row out of the list`,
-					);
-					expect(headerRow(cleared)).not.toContain("ignored:");
-					expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: { config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
-				},
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			existing: state,
+			runner: () => runner,
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(success(twoTickets())) }],
+			repos: { [repoIdentity]: "src/factory" },
+		});
+		const src = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				// The ignore stands before the boot, so the first frame shows the
+				// row that stayed.
+				await listed(setup, src, SECOND_LEAD);
+				// The fixing pull request appears on the next refresh: the covered rule
+				// now hides the same row the ignore hides.
+				await settle(setup, 1_000);
+				await refreshed(setup, src, withPull);
+				const active = await awaitFrame(
+					setup,
+					(f) => ticketRowHolds(f, SECOND_LEAD) && !ticketRowHolds(f, FIRST_LEAD),
+					"the covered row to leave the active view",
+				);
+				// Neither the drawn rows nor the count shows it, and the header still
+				// names the pile the flag made.
+				expect(headerRow(active)).toContain("ignored: 1");
+				// `f` reaches the row: the pile holds what no other view shows.
+				const pile = await press(setup, "f", "the pile", (f) => ticketRowHolds(f, FIRST_LEAD));
+				expect(pile).toContain("ignored");
+				expect(detailPaneText(pile)).toContain(firstTitle);
+				expect(actionBarRowOf(pile)).toContain("i Un-ignore");
+				// The cycle walks the empty muted ledger past, and `all` does not show
+				// it: the covered rule still holds the list.
+				await press(
+					setup,
+					"f",
+					"the muted view",
+					(f) => !ticketRowHolds(f, FIRST_LEAD) && !ticketRowHolds(f, SECOND_LEAD),
+				);
+				await press(setup, "f", "every row", (f) => ticketRowHolds(f, SECOND_LEAD));
+				const every = await settle(setup);
+				expect(ticketRowHolds(every, FIRST_LEAD)).toBe(false);
+				expect(headerRow(every)).toContain("ignored: 1");
+				// The same key on that piled row takes the Ticket back, and the row
+				// returns to standing under the covered rule alone. The cycle runs
+				// active, ignored, muted, all, so two presses walk from `all` back to
+				// the pile: the active view holds no covered row, and the next press
+				// is the pile itself, past the empty muted ledger.
+				await press(setup, "f", "the active rows", (f) => !ticketRowHolds(f, FIRST_LEAD));
+				await press(setup, "f", "the pile again, past the muted ledger", (f) =>
+					ticketRowHolds(f, FIRST_LEAD),
+				);
+				const cleared = await press(setup, "i", "the clear", (f) =>
+					messageRowOf(f).includes("is not ignored"),
+				);
+				// The whole line, because the flag is gone and the row is still
+				// nowhere: the covered rule holds it out on its own, and ADR 0060
+				// states the clear returns the row to no list at all. A line that
+				// promised a returned row would contradict this same frame.
+				expect(messageRowOf(cleared)).toContain(
+					`"${firstTitle}" is not ignored: an open fixing pull request still holds its row out of the list`,
+				);
+				expect(headerRow(cleared)).not.toContain("ignored:");
+				expect(state.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(false);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
 	});
 
 	/**
@@ -1561,52 +1451,50 @@ describe("the ignored marker's frame", () => {
 			cause: "failed",
 		});
 		expect(state.ticketWorkCycle.setTicketIgnored(SECOND, true, null).ok).toBe(true);
-		const src = new FakeSource("issues", "github-issues", outcome);
-		try {
-			await withApp(
-				async (setup) => {
-					// 87 columns is the narrowest row that names the held turn and the
-					// pile beside the whole corner: 64 columns of counts and 23 of the
-					// brake lamp, the mode lamp, and the seat reading (issue #319, ADR 0111).
-					setup.resize(87, HEIGHT);
-					src.settle(outcome);
-					const wide = await awaitFrame(
-						setup,
-						(f) => headerRow(f).includes("held") && headerRow(f).includes("ignored"),
-						"the header's two conditional cells",
-					);
-					expect(headerRow(wide)).toContain("held: 1");
-					expect(headerRow(wide)).toContain("ignored: 1");
-					// A row that cannot hold both spends its last cells on the machine's
-					// fact: the held count stands and the ignored cell is dropped whole.
-					// 71 columns is the narrowest row that keeps it - 52 columns of wide
-					// counts beside the 19 of the bare corner, the brake lamp and the mode
-					// lamp - and there the seat reading gives way before the held count
-					// does.
-					setup.resize(71, HEIGHT);
-					const narrow = await awaitFrame(
-						setup,
-						(f) => headerRow(f).includes("held") && !headerRow(f).includes("ignored"),
-						"the drop that takes the ignored cell",
-					);
-					expect(headerRow(narrow)).toContain("Tickets");
-					expect(headerRow(narrow)).toContain("held");
-					expect(headerRow(narrow)).not.toContain("ignored");
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: {
-						config: fixtureConfig(),
-						state,
-						sources: [src],
-						runner: emptyAgentRunner(),
-						pollIntervalMs: 60_000,
-					},
-				},
-			);
-		} finally {
-			state.close();
-		}
+		const runner = emptyAgentRunner();
+		const planeRecord = await plane({
+			existing: state,
+			runner: () => runner,
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+			repos: { [repoIdentity]: "src/factory" },
+		});
+		const src = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				// 87 columns is the narrowest row that names the held turn and the
+				// pile beside the whole corner: 64 columns of counts and 23 of the
+				// brake lamp, the mode lamp, and the seat reading (issue #319, ADR 0111).
+				setup.resize(87, HEIGHT);
+				src.settle(outcome);
+				const wide = await awaitFrame(
+					setup,
+					(f) => headerRow(f).includes("held") && headerRow(f).includes("ignored"),
+					"the header's two conditional cells",
+				);
+				expect(headerRow(wide)).toContain("held: 1");
+				expect(headerRow(wide)).toContain("ignored: 1");
+				// A row that cannot hold both spends its last cells on the machine's
+				// fact: the held count stands and the ignored cell is dropped whole.
+				// 71 columns is the narrowest row that keeps it - 52 columns of wide
+				// counts beside the 19 of the bare corner, the brake lamp and the mode
+				// lamp - and there the seat reading gives way before the held count
+				// does.
+				setup.resize(71, HEIGHT);
+				const narrow = await awaitFrame(
+					setup,
+					(f) => headerRow(f).includes("held") && !headerRow(f).includes("ignored"),
+					"the drop that takes the ignored cell",
+				);
+				expect(headerRow(narrow)).toContain("Tickets");
+				expect(headerRow(narrow)).toContain("held");
+				expect(headerRow(narrow)).not.toContain("ignored");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
 	});
 });

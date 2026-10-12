@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
+import type { FactoryConfig, TicketSourceConfig, TransitionOutcome } from "../src/config.ts";
 import type { GroupingAxis } from "../src/domain/grouping.ts";
 import type { EnvironmentKind, FetchedTicket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
@@ -43,18 +43,19 @@ export function cleanupStateFixtures(): void {
 	for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true });
 }
 
+/** The shared sample issues source the frame suites name in their standings. */
+export const issuesSourceConfig: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
+};
+
 /** The config with one issue source named `issues`. */
 export const issuesConfig: FactoryConfig = {
 	...BASE_CONFIG,
-	sources: [
-		{
-			name: "issues",
-			kind: "github-issues",
-			refreshIntervalSeconds: 60,
-			repositories: ["acme/factory"],
-			host: "github.com",
-		},
-	],
+	sources: [issuesSourceConfig],
 };
 
 /** One fetched issue on the shared sample repository. */

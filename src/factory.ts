@@ -74,7 +74,12 @@ const renderer = await createCliRenderer({
 // here, once the renderer exists, so the renderer puts the terminal back
 // before the run ends. A run that dies before this line leaves a row whose pid
 // is gone, which the next boot takes over.
-installStateShutdown(startup.state, process, startup.logger);
+// The app's teardown handle lands on the App's onReady once the mount runs,
+// and the shutdown installer stops the app's background loops on every
+// ending that closes the state. The holder keeps the handle where the
+// installer reads it from, because the mount runs after the install.
+const appStop: { current: (() => void) | undefined } = { current: undefined };
+installStateShutdown(startup.state, process, startup.logger, () => appStop.current?.());
 // The native renderer diffs each frame against its model of the screen and
 // marks a model cell as written while it emits the cell's bytes. If the host
 // terminal loses bytes of a frame, the model and the screen diverge and the
@@ -89,9 +94,14 @@ createRoot(renderer).render(
 	createElement(App, {
 		config: startup.config,
 		runner: startup.runner,
+		home: startup.home,
 		configPath: startup.configPath,
 		state: startup.state,
 		sources: startup.sources,
 		logger: startup.logger,
+		loopPolicy: { kind: "production" },
+		onReady: (ready) => {
+			appStop.current = ready.stop;
+		},
 	}),
 );

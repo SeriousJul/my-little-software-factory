@@ -149,19 +149,6 @@ function ticketProjectionOf(rows: readonly Ticket[]): TicketProjection {
 		rowFor: (identity: string) => rows.find((candidate) => candidate.identity === identity),
 	};
 }
-export function inMemoryTicketViews(projection: readonly Ticket[]): TicketListViews {
-	// Each view is its own array, so an in-place reorder of one can never reach
-	// another: the shell's whole point is that its three views agree, and that
-	// agreement is a fact of the rule, not of an alias.
-	const rows = [...projection];
-	return {
-		rows,
-		active: [...rows],
-		ignored: [],
-		muted: [],
-		projection: ticketProjectionOf([...rows]),
-	};
-}
 export function listTicketViews(
 	projection: readonly Ticket[],
 	filter: TicketListFilter,

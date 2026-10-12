@@ -23,13 +23,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AppProps } from "../src/components/app.ts";
-import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
-import type { FetchedTicket } from "../src/domain/ticket.ts";
+import type { FactoryConfig, TicketSourceConfig, TransitionOutcome } from "../src/config.ts";
+import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
-import type { CommandRunner } from "../src/runner.ts";
-import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	awaitFrame,
@@ -45,14 +41,19 @@ import {
 	spanColorAt,
 	startingFaceOf,
 	WIDTH,
+	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
-import { BASE_CONFIG } from "./base-config.ts";
-import { agentListJson, tabCreateJson, workspaceListJson } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
+import {
+	agentListJson,
+	type FakeRunner,
+	tabCreateJson,
+	workspaceCreateJson,
+	workspaceListJson,
+} from "./fake-runner.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner } from "./gated-runner.ts";
-import { type HerdrWorldDescription, type StubHerdrWorld, stubHerdrWorld } from "./herdr-world.ts";
-
+import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
 import "./theme-isolation.ts";
 
 const paths: string[] = [];
@@ -60,7 +61,6 @@ afterEach(() => {
 	for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-const source = { name: "issues", kind: "github-issues" };
 const identity = "github:github.com:I_5";
 const repoIdentity = "github.com/acme/factory";
 /** The herdr name the naming rule gives this Ticket (ADR 0098). */
@@ -92,26 +92,12 @@ const success: FetchOutcome = {
 	tickets: [fetched()],
 };
 
-/** The checkout the config maps to, stated as a world. */
-function worldCheckout(checkout: string): HerdrWorldDescription {
-	return {
-		checkouts: [
-			{
-				path: checkout,
-				cloneUrl: `https://${repoIdentity}.git`,
-				defaultBranch: "main",
-			},
-		],
-	};
-}
-
-/** The standing the pinned auto restart leaves behind, stated as a world. */
-function restartWorld(checkout: string): HerdrWorldDescription {
-	const world = worldCheckout(checkout);
-	world.workspaces = [{ id: "ws-1", checkoutPath: checkout }];
-	world.tabs = [{ id: "tab-2", workspaceId: "ws-1", cwd: checkout }];
-	world.panes = [{ id: "pane-2", tabId: "tab-2", workspaceId: "ws-1" }];
-	return world;
+/** Stub the git answers for the checkout the config maps to. */
+function stubCheckout(runner: FakeRunner, checkout: string): void {
+	runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+	runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
+		stdout: `https://${repoIdentity}.git\n`,
+	});
 }
 
 /** The checkout directory the seeded config maps the ticket's repository to. */
@@ -137,92 +123,93 @@ interface SeedDetail {
 	transition?: TransitionOutcome;
 }
 
+/** The one issues source the timeline's tests stand the plane on. */
+const issuesSourceConfig: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
+};
+
 /**
- * A state with the ticket in the given shape: open, in flight with the
- * stored herdr handles, or awaiting with a settled completion.
+ * The ticket in the given shape: open, in flight with the stored herdr
+ * handles, or awaiting with a settled completion, the way the plane's
+ * seeding names it.
  */
-function seed(shape: "open" | "in-flight" | "awaiting", detail: SeedDetail = {}): FactoryState {
-	const dir = mkdtempSync(join(tmpdir(), "factory-face-state-"));
-	paths.push(dir);
-	const state = openFactoryState(join(dir, "state.sqlite"), detail.stateNow);
-	// The frames assert the unsplit list: a fresh file opens grouped by
-	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.grouping.setGroupingAxis("tickets", "none");
-	state.sourceFact.initializeSources([source]);
-	state.sourceFact.applyFetch(source, success);
-	if (shape !== "open") {
-		const claim = state.handoff.claimHandoff(
-			identity,
-			{
-				agentType: "pi",
-				environment: "live-worktree",
-				taskType: "implement",
-				model: "",
-				thinking: "",
-				contextWindow: "",
-			},
-			"open",
-		);
-		if (!claim.ok) throw new Error(claim.reason);
-		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+function rowOf(shape: "open" | "in-flight" | "awaiting", detail: SeedDetail = {}): Ticket {
+	if (shape === "open") return ticketOf(fetched());
+	return ticketOf(fetched(), {
+		state: shape === "in-flight" ? "handed-off" : "awaiting",
+		handoff: {
+			agentType: "pi",
+			environment: "live-worktree",
+			taskType: "implement",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			attemptId: "seeded-1",
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
-		});
-		if (shape === "awaiting") {
-			state.ticketWorkCycle.settleTurn({
-				ticketIdentity: identity,
-				handoffId: claim.claim.attemptId,
-				taskType: "implement",
-				agentType: "pi",
-				message: "The turn is done.",
-				turnLog: [{ kind: "text", text: "The turn is done." }],
-				completedAt: "2026-08-31T11:00:00Z",
-				cause: detail.cause,
-				...(detail.transition === undefined ? {} : { transition: detail.transition }),
-			});
-		}
-	}
-	return state;
+			herdrName: AGENT_NAME,
+		},
+		handoffCount: 1,
+		...(shape === "awaiting"
+			? {
+					lastCompletion: {
+						taskType: "implement",
+						agentType: "pi",
+						agentName: AGENT_NAME,
+						model: "",
+						thinking: "",
+						contextWindow: "",
+						message: "The turn is done.",
+						turnLog: [{ kind: "text", text: "The turn is done." }],
+						completedAt: "2026-08-31T11:00:00Z",
+						cause: detail.cause ?? "unknown",
+						detail: "",
+						decision: null,
+						transition: detail.transition ?? null,
+					},
+				}
+			: {}),
+	});
 }
 
-interface SeededApp {
-	state: FactoryState;
-	config: FactoryConfig;
-	runner: StubHerdrWorld;
-	configPath: string;
-	src: FakeSource;
+interface SeededFace {
+	plane: SeededPlane;
+	/** The gate over the plane's own runner. */
+	gate: GatedRunner;
 }
 
-/** The world standing the seeded app's world holds. */
-type WorldStanding = "checkout" | "restart";
-
-/** A seeded state plus the app props that match it. */
-function seededApp(
+/**
+ * The plane the timeline's tests run on, in the ticket's given shape, and the
+ * gate over the plane's own runner. The gate is built over the plane's
+ * FakeRunner as the plane stands, so the App runs on the gated runner from
+ * boot; a test that holds no command passes a predicate that matches none.
+ */
+async function seededFace(
 	shape: "open" | "in-flight" | "awaiting",
 	extra: Partial<FactoryConfig> = {},
 	detail: SeedDetail = {},
-	standing: WorldStanding = "checkout",
-): SeededApp {
-	const state = seed(shape, detail);
-	// The operator's choice of the Auto-handoff mode is a fact of the state
-	// file, not of the config (ADR 0036), so the seed writes it before the app
-	// mounts.
-	if (detail.autoMode === true) state.handoff.setAutoHandoffMode(true);
-	const home = mkdtempSync(join(tmpdir(), "factory-face-home-"));
-	paths.push(home);
-	const repo = mkdtempSync(join(tmpdir(), "factory-face-repo-"));
-	paths.push(repo);
-	const configPath = join(home, "config.toml");
-	writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
-	const config: FactoryConfig = {
-		...BASE_CONFIG,
-		repos: { [repoIdentity]: repo },
-		...extra,
-	};
-	const runner = stubHerdrWorld(standing === "restart" ? restartWorld(repo) : worldCheckout(repo));
-	const src = new FakeSource("issues", "github-issues", success);
-	return { state, config, runner, configPath, src };
+	hold: (command: string) => boolean,
+): Promise<SeededFace> {
+	let gate: GatedRunner | undefined;
+	const planeRecord = await plane({
+		groupingAxis: "none",
+		sources: [{ config: issuesSourceConfig, tickets: [rowOf(shape, detail)] }],
+		repos: { [repoIdentity]: "checkout" },
+		config: extra,
+		autoHandoffMode: detail.autoMode === true,
+		now: detail.stateNow,
+		runner: (fake) => {
+			gate = gatedRunner(fake, hold);
+			return gate.runner;
+		},
+	});
+	if (gate === undefined) throw new Error("the gate did not stand");
+	return { plane: planeRecord, gate };
 }
 
 /**
@@ -231,17 +218,6 @@ function seededApp(
  * timeline moves on.
  */
 const POLL_MS = 40;
-
-function propsOf(app: SeededApp): AppProps {
-	return {
-		config: app.config,
-		state: app.state,
-		runner: app.runner,
-		configPath: app.configPath,
-		sources: [app.src],
-		pollIntervalMs: POLL_MS,
-	};
-}
 
 /** The list pane's selected row, or an empty string before the first marker. */
 const selectedRow = (frame: string): string => {
@@ -258,9 +234,16 @@ const badgeRow = (frame: string): string => listHalfOf(selectedRow(frame));
 /** How many faces stand in the frame: the list row's, and the detail header's. */
 const faceCount = (frame: string): number => (frame.match(/ starting/g) ?? []).length;
 
-/** Hold the agent's start itself, so the claim stands in flight on screen. */
-const gateStart = (runner: CommandRunner): GatedRunner =>
-	gatedRunner(runner, (command) => command.includes("agent start"));
+/** Stub a successful live-worktree handoff at the convention checkout. */
+function stubLiveHandoff(runner: FakeRunner, checkout: string): void {
+	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+	runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
+		stdout: workspaceCreateJson("ws-1"),
+	});
+	runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", checkout, "--no-focus"], {
+		stdout: tabCreateJson("pane-1"),
+	});
+}
 
 /**
  * Let the held command reach the gate, then let it go.
@@ -276,15 +259,10 @@ const releaseHeld = async (gate: GatedRunner): Promise<void> => {
 	gate.release();
 };
 
-/**
- * The herdr agent list where the handoff's Agent works.
- *
- * The live-worktree handoff makes a fresh tab in the workspace it finds or
- * creates, so the Agent sits in that tab's pane, the world's second pane.
- */
+/** The herdr agent list where pane-1 works. */
 const workingList = () =>
 	agentListJson([
-		{ paneId: "pane-2", tabId: "tab-2", workspaceId: "ws-1", agent: "pi", status: "working" },
+		{ paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1", agent: "pi", status: "working" },
 	]);
 
 /**
@@ -325,21 +303,19 @@ const settledList = () =>
 		},
 	]);
 
-/**
- * Hold the observation loop's one herdr read, so the frame the test reads
- * stands still until the test lets the next poll land.
- */
-const gatePoll = (runner: CommandRunner): GatedRunner =>
-	gatedRunner(runner, (command) => command === "herdr agent list");
-
 describe("the Starting window's timeline", () => {
 	test("the manual hand-off wears the face from the keypress to the first observation", async () => {
-		const app = seededApp("open");
-		app.runner.set("herdr", ["agent", "list"], { stdout: workingList() });
-		const gate = gateStart(app.runner);
+		const { plane: app, gate } = await seededFace("open", {}, {}, (command) =>
+			command.includes("agent start"),
+		);
+		const src = app.sources[0] as FakeSource;
+		stubCheckout(app.fakeRunner, checkoutOf(app.config));
+		stubLiveHandoff(app.fakeRunner, checkoutOf(app.config));
+		app.fakeRunner.set("herdr", ["agent", "list"], { stdout: workingList() });
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				src.settle(success);
+				await waitSourceHealthy(app.state);
 				// Enter: the face lands on the keypress, before the agent
 				// starts, and the badge is nowhere in the frame.
 				const inFlight = await press(
@@ -364,16 +340,25 @@ describe("the Starting window's timeline", () => {
 				expect(face(running)).toBeNull();
 				expect(running).toContain("open: 0  running: 1  awaiting: 0");
 			},
-			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
-		app.state.close();
 	});
 
 	test("a failed start drops the face and returns the row to its state", async () => {
-		const app = seededApp("open");
+		const { plane: app, gate } = await seededFace("open", {}, {}, (command) =>
+			command.startsWith("herdr workspace create"),
+		);
+		const src = app.sources[0] as FakeSource;
+		stubCheckout(app.fakeRunner, checkoutOf(app.config));
+		stubLiveHandoff(app.fakeRunner, checkoutOf(app.config));
 		// The workspace create is the failing step: the gate holds it while
 		// the claim stands in flight, and the failure lands on the release.
-		app.runner.set(
+		app.fakeRunner.set(
 			"herdr",
 			["workspace", "create", "--cwd", checkoutOf(app.config), "--no-focus"],
 			{
@@ -381,11 +366,11 @@ describe("the Starting window's timeline", () => {
 				stderr: "error: the workspace is not creatable\n",
 			},
 		);
-		app.runner.set("herdr", ["agent", "list"], { stdout: workingList() });
-		const gate = gatedRunner(app.runner, (command) => command.startsWith("herdr workspace create"));
+		app.fakeRunner.set("herdr", ["agent", "list"], { stdout: workingList() });
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				src.settle(success);
+				await waitSourceHealthy(app.state);
 				const inFlight = await press(
 					setup,
 					"return",
@@ -406,18 +391,26 @@ describe("the Starting window's timeline", () => {
 					'Warning: queued handoff for "Persist source facts" was not run: error: the workspace is not creatable',
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
-		app.state.close();
 	});
 
 	test("the auto hand-off wears the face while its start stands", async () => {
-		const app = seededApp("open", {}, { autoMode: true });
-		app.runner.set("herdr", ["agent", "list"], { stdout: workingList() });
-		const gate = gateStart(app.runner);
+		const { plane: app, gate } = await seededFace("open", {}, { autoMode: true }, (command) =>
+			command.includes("agent start"),
+		);
+		const src = app.sources[0] as FakeSource;
+		stubCheckout(app.fakeRunner, checkoutOf(app.config));
+		stubLiveHandoff(app.fakeRunner, checkoutOf(app.config));
+		app.fakeRunner.set("herdr", ["agent", "list"], { stdout: workingList() });
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				src.settle(success);
 				// No key: the observation dispatches, and the face wears from
 				// the claim the dispatch makes.
 				const inFlight = await awaitFrame(
@@ -429,9 +422,13 @@ describe("the Starting window's timeline", () => {
 				await releaseHeld(gate);
 				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
 			},
-			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
-		app.state.close();
 	});
 
 	test("a workflow route over a held turn wears the face, and a failed start ends the held face (ADR 0064)", async () => {
@@ -454,7 +451,7 @@ describe("the Starting window's timeline", () => {
 		// The machine names the state the settled position stands on: the
 		// ticket's own label offers review, so the route the modal confirms
 		// matches the ticket's current suggestion and places nothing.
-		const app = seededApp(
+		const { plane: app, gate } = await seededFace(
 			"awaiting",
 			{
 				workflowStates: [
@@ -466,25 +463,31 @@ describe("the Starting window's timeline", () => {
 				],
 			},
 			{ cause: "failed", transition: outcome },
+			(command) => command.includes("agent start"),
 		);
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const src = app.sources[0] as FakeSource;
+		stubCheckout(app.fakeRunner, checkoutOf(app.config));
+		app.fakeRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		// The stored workspace still holds: the route reuses it in a new tab,
 		// and the start itself fails on the release.
 		const path = checkoutOf(app.config);
-		app.runner.set("herdr", ["workspace", "list"], {
+		app.fakeRunner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: path }]),
 		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+		app.fakeRunner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
 			stdout: tabCreateJson("pane-9", "tab-9"),
 		});
-		app.runner.set("herdr", ["agent", "start", AGENT_NAME, "--kind", "pi", "--pane", "pane-9"], {
-			code: 1,
-			stderr: "error: the pane is gone\n",
-		});
-		const gate = gateStart(app.runner);
+		app.fakeRunner.set(
+			"herdr",
+			["agent", "start", AGENT_NAME, "--kind", "pi", "--pane", "pane-9"],
+			{
+				code: 1,
+				stderr: "error: the pane is gone\n",
+			},
+		);
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				src.settle(success);
 				const held = await awaitFrame(
 					setup,
 					(f) => badgeRow(f).includes("held"),
@@ -524,24 +527,30 @@ describe("the Starting window's timeline", () => {
 				// And the decision stands where the ask put it.
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
-		app.state.close();
 	});
 
 	test("a crash remnant wears its recovery fact, never the spinner, and its restart wears the face", async () => {
 		// The handoff stored a minute ago: past its startup grace, so the
 		// missing agent is a death, not a slow boot, and the automatic restart
 		// stands behind it.
-		const app = seededApp(
+		const { plane: app, gate } = await seededFace(
 			"in-flight",
 			{},
 			{
 				stateNow: () => Date.now() - 60_000,
 				autoMode: true,
 			},
-			"restart",
+			(command) => command.includes("agent start"),
 		);
+		const src = app.sources[0] as FakeSource;
+		stubCheckout(app.fakeRunner, checkoutOf(app.config));
 		// The new pane the restart lands in stands in the list: unknown while
 		// the start stands, working once it answers, so the markers and the
 		// step to running both come from the list.
@@ -555,18 +564,17 @@ describe("the Starting window's timeline", () => {
 					status,
 				},
 			]);
-		app.runner.set("herdr", ["agent", "list"], { stdout: list("unknown") });
+		app.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("unknown") });
 		const path = checkoutOf(app.config);
-		app.runner.set("herdr", ["workspace", "list"], {
+		app.fakeRunner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: path }]),
 		});
-		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+		app.fakeRunner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
 			stdout: tabCreateJson("pane-2", "tab-2"),
 		});
-		const gate = gateStart(app.runner);
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				src.settle(success);
 				// The remnant boots wearing the missing marker: its stored pane
 				// is not in the list, and the recovery fact outranks the face,
 				// so the spinner is not drawn.
@@ -587,24 +595,34 @@ describe("the Starting window's timeline", () => {
 				expect(badgeRow(restarted)).not.toContain("missing");
 				expect(restarted).not.toContain("[handed-off]");
 				// The agent answers working, and the row steps to running.
-				app.runner.set("herdr", ["agent", "list"], { stdout: list("working") });
+				app.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working") });
 				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
 			},
-			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
-		app.state.close();
 	});
 
 	test("a turn that settles under a handed-off ticket ends the face and takes its resting badge", async () => {
-		const app = seededApp("in-flight");
+		const { plane: app, gate } = await seededFace(
+			"in-flight",
+			{},
+			{},
+			(command) => command === "herdr agent list",
+		);
+		const src = app.sources[0] as FakeSource;
+		stubCheckout(app.fakeRunner, checkoutOf(app.config));
 		// The turn's end sits in the agent's session record, so the settle
 		// needs no startup grace (ADR 0017), and the agent is alive in the
 		// poll, so no recovery fact closes the window.
-		app.runner.set("herdr", ["agent", "list"], { stdout: settledList() });
-		const gate = gatePoll(app.runner);
+		app.fakeRunner.set("herdr", ["agent", "list"], { stdout: settledList() });
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				src.settle(success);
 				// The boot frame wears the face: the ticket rests in
 				// `handed-off`, the state the claim settled into, and no
 				// observation has read its work yet.
@@ -623,16 +641,27 @@ describe("the Starting window's timeline", () => {
 				expect(resting).not.toContain("[handed-off]");
 				expect(faceCount(resting)).toBe(0);
 			},
-			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
-		app.state.close();
 	});
 
 	test("a blocked agent's marker outranks the face on the first observation", async () => {
-		const app = seededApp("in-flight");
+		const { plane: app, gate } = await seededFace(
+			"in-flight",
+			{},
+			{},
+			(command) => command === "herdr agent list",
+		);
+		const src = app.sources[0] as FakeSource;
+		stubCheckout(app.fakeRunner, checkoutOf(app.config));
 		// A blocked agent works no turn, so the settle path never runs: the
 		// ticket stays `handed-off` under the marker the operator must act on.
-		app.runner.set("herdr", ["agent", "list"], {
+		app.fakeRunner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
 					paneId: "pane-1",
@@ -643,10 +672,9 @@ describe("the Starting window's timeline", () => {
 				},
 			]),
 		});
-		const gate = gatePoll(app.runner);
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				src.settle(success);
 				await awaitFrame(setup, (f) => face(f) !== null, "the face before the poll");
 				// The poll lands with the agent blocked: the marker takes the
 				// badge's slot, and the motion never hides it, in the row and in
@@ -660,17 +688,23 @@ describe("the Starting window's timeline", () => {
 				expect(blocked).not.toContain("[handed-off]");
 				expect(faceCount(blocked)).toBe(0);
 			},
-			{ width: WIDTH, height: HEIGHT, props: { ...propsOf(app), runner: gate.runner } },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
-		app.state.close();
 	});
 
 	test("an awaiting ticket rests on its own face: the window closed", async () => {
-		const app = seededApp("awaiting");
-		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const { plane: app } = await seededFace("awaiting", {}, {}, () => false);
+		const src = app.sources[0] as FakeSource;
+		stubCheckout(app.fakeRunner, checkoutOf(app.config));
+		app.fakeRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				src.settle(success);
 				const resting = await awaitFrame(
 					setup,
 					(f) => badgeRow(f).includes("[awaiting]"),
@@ -679,9 +713,13 @@ describe("the Starting window's timeline", () => {
 				expect(face(resting)).toBeNull();
 				expect(resting).not.toContain(" starting");
 			},
-			{ width: WIDTH, height: HEIGHT, props: propsOf(app) },
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
 		);
-		app.state.close();
 	});
 });
 
@@ -696,6 +734,9 @@ describe("the no-color presentation", () => {
 				const booted = await settle(setup);
 				const faceRow = rowsOf(booted).findIndex((row) => startingFaceOf(row) !== null);
 				expect(faceRow).toBeGreaterThanOrEqual(0);
+				// The standing opens on the awaiting lead; the running ticket
+				// rests on its badge, and the face is one step further down.
+				await press(setup, "j", "the running ticket", (f) => f.includes("[running]"));
 				await press(setup, "j", "the handed-off ticket", (f) => faceCount(f) === 2);
 				const frame = await settle(setup);
 				// The row and the detail face both wear the written word. The

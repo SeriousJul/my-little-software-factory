@@ -9,17 +9,15 @@
  * the real keys the bar shows, including the F keys and Ctrl+C in every
  * interaction mode.
  *
- * The frame tests boot the real app through the shared harness; no mock
- * sees a key.
+ * The frame tests boot the real app on the Seeded plane through the shared
+ * harness; no mock sees a key.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
-import type { FactoryConfig } from "../src/config.ts";
-import type { Ticket } from "../src/domain/ticket.ts";
+import type { TicketSourceConfig } from "../src/config.ts";
+import type { EnvironmentKind, FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
 import type { AppSetup } from "./app-harness.ts";
 import {
@@ -43,58 +41,114 @@ import {
 	pressF2,
 	rgb,
 	roleColor,
-	rowSpans,
 	rowsOf,
 	settle,
 	sleep,
 	spanColorAt,
 	startingFaceOf,
 	WIDTH,
+	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
-import { BASE_CONFIG } from "./base-config.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
-import { agentListJson, FakeRunner } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
-import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
+import {
+	type FakeRunner,
+	tabCreateJson,
+	workspaceCreateJson,
+	workspaceListJson,
+} from "./fake-runner.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import { plane, ticketOf } from "./seeded-plane.ts";
 import {
 	callsReached,
 	cleanupStateFixtures,
 	freshState,
-	issuesConfig,
 	issueTicket,
 	RATE_LIMITED,
-	seedInFlightTurn,
 	success,
 } from "./state-fixture.ts";
 
-let home = "";
-let configPath = "";
-
-beforeEach(() => {
-	home = join(tmpdir(), `factory-bar-${Math.random().toString(36).slice(2)}`);
-	configPath = join(home, "factory", "config.toml");
-	mkdirSync(join(home, "src", "billing"), { recursive: true });
-});
-
 afterEach(() => {
-	rmSync(home, { recursive: true, force: true });
 	cleanupStateFixtures();
 });
 
-const checkout = () => join(home, "src", "billing");
+/** The issues source the standing seeds, as its config stands in the file. */
+const issueSource: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/factory"],
+	host: "github.com",
+};
 
-/** The healthy convention checkout, stated as a world. */
-function worldCheckout(): HerdrWorldDescription {
-	return { checkouts: [{ path: checkout(), cloneUrl: "https://github.com/acme/billing.git" }] };
+/** The billing source the single-ticket fault planes stand on. */
+const billingSource: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/billing"],
+	host: "github.com",
+};
+
+/** Stub the git answers for a checkout directory of one repository. */
+function stubCheckoutInto(runner: FakeRunner, path: string, repository: string): void {
+	runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+	runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
+		stdout: `https://${repository}.git\n`,
+	});
+}
+
+/** Stub a successful live-worktree handoff at one checkout. */
+function stubLiveHandoffInto(runner: FakeRunner, path: string): void {
+	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+	runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
+		stdout: workspaceCreateJson("ws-1"),
+	});
+	runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
+		stdout: tabCreateJson("pane-1"),
+	});
+}
+
+/** The resting row of an in-flight handoff: settled with its herdr handles. */
+function inFlightRow(fetched: FetchedTicket, environment: EnvironmentKind): Ticket {
+	return ticketOf(fetched, {
+		state: "handed-off",
+		handoff: {
+			agentType: "pi",
+			environment,
+			taskType: "implement",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			attemptId: "seeded",
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			herdrName: null,
+		},
+		handoffCount: 1,
+	});
+}
+
+/**
+ * Walk the selection from the awaiting Ticket that boots down to the first
+ * open Ticket, where Hand off and Override stand available.
+ */
+async function walkToOpenTicket(setup: AppSetup): Promise<void> {
+	await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+	await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
+	await press(setup, "j", "the open ticket", (f) => markerRowOf(f) === 6);
 }
 
 describe("the contextual Action bar", () => {
 	test("shows the base hints with Help right-aligned, and colors availability", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToOpenTicket(setup);
 				const frame = await settle(setup);
 				const bar = actionBarRowOf(frame);
 				for (const hint of [
@@ -123,24 +177,27 @@ describe("the contextual Action bar", () => {
 				expect(spanColorAt(setup, barRow, "Detail")).toEqual(rgb(roleColor("text")));
 				expect(spanColorAt(setup, barRow, "x ")).toEqual(rgb(roleColor("accent")));
 				expect(spanColorAt(setup, barRow, "Section")).toEqual(rgb(roleColor("text")));
+				// The plane's source stands configured: Refresh runs.
+				expect(spanColorAt(setup, barRow, "r ")).toEqual(rgb(roleColor("accent")));
+				expect(spanColorAt(setup, barRow, "Refresh")).toEqual(rgb(roleColor("text")));
 				// Unavailable: the whole hint is dim. The Delete key's Close stands
 				// dimmed beside the open Ticket: no work is in flight to close.
-				expect(spanColorAt(setup, barRow, "r Refresh")).toEqual(rgb(roleColor("subtext0")));
 				expect(spanColorAt(setup, barRow, "Delete ")).toEqual(rgb(roleColor("subtext0")));
 				expect(spanColorAt(setup, barRow, "Close")).toEqual(rgb(roleColor("subtext0")));
 			},
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
 			},
 		);
 	});
 
 	test("the detail pane swaps navigation for Scroll and Tickets", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
+				await walkToOpenTicket(setup);
 				await press(setup, "l", "the detail to take focus", detailFocused);
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
@@ -155,15 +212,18 @@ describe("the contextual Action bar", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
 			},
 		);
 	});
 
 	test("the override bars show F1 Help, and the text row shows Type and Backspace", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToOpenTicket(setup);
 				await openPanel(setup);
 				const listBar = actionBarRowOf(await settle(setup));
 				expect(listBar).toContain("↑↓/jk Move");
@@ -187,15 +247,18 @@ describe("the contextual Action bar", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
 			},
 		);
 	});
 
 	test("the override panel reports refused controls", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToOpenTicket(setup);
 				await openPanel(setup);
 				pressF2(setup);
 				// The panel owns the screen, and its own Message line states the
@@ -216,18 +279,17 @@ describe("the contextual Action bar", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
 			},
 		);
 	});
 
 	test("the decision modal states a refusal on its own Message line", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 6);
+				// The selection stands on the awaiting Ticket that boots: Enter
+				// decides it, and the modal opens without a walk.
 				await openSurface(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 				// Enter on a modal action that is not the selected row is not a
 				// control the modal will run: F2 refuses for the same reason the
@@ -250,20 +312,18 @@ describe("the contextual Action bar", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
 			},
 		);
 	});
 
 	test("the decision panel uses the shared Action bar and reports refused controls", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
-				// The awaiting Ticket's Enter action opens a decision. It is not a
-				// dimmed Hand off control with an unrelated effect.
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 6);
+				// The selection stands on the awaiting Ticket that boots: the bar
+				// names Decide, and Enter decides. It is not a dimmed Hand off
+				// control with an unrelated effect.
 				const awaitingBar = actionBarRowOf(await settle(setup));
 				expect(awaitingBar).toContain("Enter Decide");
 				expect(awaitingBar).not.toContain("Hand off");
@@ -300,50 +360,48 @@ describe("the contextual Action bar", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
 			},
 		);
 	});
 
 	test("the missing modal states a refusal on its own Message line", async () => {
-		const state = freshState();
 		// herdr answers with an empty list: the in-flight Ticket's Agent is gone.
-		const runner = new FakeRunner();
-		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
-		seedInFlightTurn(state, success([issueTicket()]));
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(success([issueTicket()]));
-					await awaitFrame(
-						setup,
-						(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
-						"the missing badge",
-					);
-					await openSurface(setup, "return", "the missing modal", (f) => f.includes("Missing:"));
-					pressF2(setup);
-					const open = await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("no message has been recorded yet"),
-						"the refusal on the modal's Message line",
-					);
-					expect(open).toContain("Missing:");
-					expect(messageRowOf(open).trim()).toBe("Warning: no message has been recorded yet");
-					await press(setup, "escape", "the modal to close", (f) => !f.includes("Missing:"));
-					expect(messageRowOf(await settle(setup))).toContain(
-						"Warning: no message has been recorded yet",
-					);
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: { config: issuesConfig, state, sources: [source], runner, pollIntervalMs: 60_000 },
-				},
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{ config: issueSource, tickets: [inFlightRow(issueTicket(), "live-worktree")] }],
+			repos: { "github.com/acme/factory": "src/factory" },
+		});
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				source.settle(success([issueTicket()]));
+				await awaitFrame(
+					setup,
+					(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
+					"the missing badge",
+				);
+				await openSurface(setup, "return", "the missing modal", (f) => f.includes("Missing:"));
+				pressF2(setup);
+				const open = await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).includes("no message has been recorded yet"),
+					"the refusal on the modal's Message line",
+				);
+				expect(open).toContain("Missing:");
+				expect(messageRowOf(open).trim()).toBe("Warning: no message has been recorded yet");
+				await press(setup, "escape", "the modal to close", (f) => !f.includes("Missing:"));
+				expect(messageRowOf(await settle(setup))).toContain(
+					"Warning: no message has been recorded yet",
+				);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
+			},
+		);
 	});
 
 	/** The bar one ladder width holds: the hints kept, and the ones removed. */
@@ -380,9 +438,12 @@ describe("the contextual Action bar", () => {
 	}
 
 	test("narrow widths remove complete low-priority hints, and Help is the last kept", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
+				// The open Ticket stands the bar the ladder measures: every hint
+				// the base mode names, none of them refused by the selection.
+				await walkToOpenTicket(setup);
 				// Every step of the packing ladder, with the hints that must
 				// survive it. The removal order is the catalogue priority:
 				// the Ticket section's reveals, the Launch, the ignore, the
@@ -461,13 +522,13 @@ describe("the contextual Action bar", () => {
 			{
 				width: 120,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
 			},
 		);
 	});
 
 	test("a utility bar keeps naming its Close down to one column", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
 				// The Key guide's own bar holds the row's end cells for Close, so
@@ -492,63 +553,75 @@ describe("the contextual Action bar", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
 			},
 		);
 	});
 
 	test("the cursor crosses to the Consultations view, and c opens the launcher or names the missing types", async () => {
-		const runner = new FakeRunner();
 		// No Consultation types: c refuses on the Message line, and the
 		// launcher never opens.
-		await withApp(
-			async (setup) => {
-				await crossToConsultations(setup);
-				await crossToTickets(setup);
-				await press(setup, "c", "the refusal", (f) =>
-					messageRowOf(f).includes(
-						"no Consultation types configured; add [consultation-types.<name>] to the config file",
-					),
-				);
-				expect(await settle(setup)).not.toContain("Consultation launcher");
-			},
-			{
-				width: 120,
-				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
-			},
-		);
-		// With a type configured: c opens the launcher from the Ticket view.
-		await withApp(
-			async (setup) => {
-				await openLauncher(setup);
-			},
-			{
-				width: 120,
-				height: HEIGHT,
-				props: {
-					config: {
-						...BASE_CONFIG,
-						consultationTypes: {
-							grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
-						},
-					},
-					runner,
-					initialTickets: SAMPLE_TICKETS,
+		{
+			const planeRecord = await plane({});
+			await withApp(
+				async (setup) => {
+					await crossToConsultations(setup);
+					await crossToTickets(setup);
+					await press(setup, "c", "the refusal", (f) =>
+						messageRowOf(f).includes(
+							"no Consultation types configured; add [consultation-types.<name>] to the config file",
+						),
+					);
+					expect(await settle(setup)).not.toContain("Consultation launcher");
 				},
-			},
-		);
+				{
+					width: 120,
+					height: HEIGHT,
+					plane: planeRecord,
+				},
+			);
+		}
+		// With a type configured: c opens the launcher from the Ticket view.
+		{
+			const planeRecord = await plane({
+				config: {
+					consultationTypes: {
+						grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
+					},
+				},
+			});
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+				},
+				{
+					width: 120,
+					height: HEIGHT,
+					plane: planeRecord,
+				},
+			);
+		}
 	});
 
 	test("wide Unicode never breaks a row width", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		runner.set("herdr", ["workspace", "list"], {
-			code: 1,
-			stderr: `error: 无法连接 herdr 守护进程，请检查会话状态。${"重".repeat(80)}\n`,
-		});
 		const cjk: Ticket = { ...SAMPLE_TICKETS[0], title: "仓库重试策略 🔥 webhook" };
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [{ config: billingSource, tickets: [cjk] }],
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home) => {
+				const path = join(home, "src", "billing");
+				stubCheckoutInto(fake, path, "github.com/acme/billing");
+				fake.set("herdr", ["workspace", "list"], {
+					code: 1,
+					stderr: `error: 无法连接 herdr 守护进程，请检查会话状态。${"重".repeat(80)}\n`,
+				});
+			},
+		});
+		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
+				source.settleCurrent();
 				await press(setup, "return", "the failure reason to appear", (f) => f.includes("无法连接"));
 				// The wide reason wraps the Message line, and the title the panes:
 				// every row still ends exactly at the terminal edge.
@@ -557,27 +630,35 @@ describe("the contextual Action bar", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: [cjk], home, configPath },
+				plane: planeRecord,
 			},
 		);
 	});
 
 	test("every displayed base alias runs its stated control", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const props = {
-			config: BASE_CONFIG,
-			runner,
-			initialTickets: SAMPLE_TICKETS,
-			home,
-			configPath,
-		};
+		const planeRecord = await plane({
+			// A third seat stands free: the start the alias runs picks up its
+			// seat at once, the way the dispatch answers it.
+			config: { maxParallelAgents: 3 },
+			repos: { "github.com/acme/billing": "src/billing" },
+			commands: (fake, home) => {
+				const path = join(home, "src", "billing");
+				stubCheckoutInto(fake, path, "github.com/acme/billing");
+				stubLiveHandoffInto(fake, path);
+			},
+		});
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
 				// Move: j, k, and both arrows.
 				await press(setup, "j", "the selection to move on", (f) => markerRowOf(f) === 4);
 				await press(setup, "k", "the selection to move back", (f) => markerRowOf(f) === 3);
 				await pressArrow(setup, "down", "the selection to move down", (f) => markerRowOf(f) === 4);
 				await pressArrow(setup, "up", "the selection to move up", (f) => markerRowOf(f) === 3);
+				// The walk lands on the open Ticket, where the panel and the
+				// handoff the aliases name stand available.
+				await walkToOpenTicket(setup);
 				// Detail: l and right focus it, h and left leave it.
 				await press(setup, "l", "the detail to take focus", detailFocused);
 				await press(setup, "h", "the list to take focus", listFocused);
@@ -594,6 +675,7 @@ describe("the contextual Action bar", () => {
 				// takes the Starting window's spinner face on the keypress
 				// (ADR 0030), and the face stays with the settled `handed-off`
 				// state: the settle is the Working line clearing.
+				const commandsBefore = planeRecord.fakeRunner.commands().length;
 				await press(
 					setup,
 					"return",
@@ -602,216 +684,263 @@ describe("the contextual Action bar", () => {
 						startingFaceOf(rowsOf(f)[markerRowOf(f)] ?? "") !== null &&
 						!messageRowOf(f).includes("Working:"),
 				);
-				expect(runner.commands()).toHaveLength(7);
+				const commands = planeRecord.fakeRunner.commands();
+				// The start's own seven: the checkout's two git questions, the
+				// workspace list and create, the tab create, and the agent's
+				// start and prompt.
+				expect(commands.length - commandsBefore).toBe(7);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("the control-plane aliases a and r run their controls", async () => {
-		const state = freshState();
-		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(success([issueTicket()]));
-					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
-					// a toggles auto-handoff on the mode cell.
-					await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
-					await press(setup, "a", "auto off", (f) => f.includes("● manual 0/2"));
-					// r refreshes the configured source, and the progress clears.
-					setup.mockInput.pressKey("r");
-					await callsReached(source, 2);
-					await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("Working: refreshing"),
-						"the refresh progress",
-					);
-					source.settle(success([issueTicket()]));
-					await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the refresh to clear");
-				},
-				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
-			);
-		} finally {
-			state.close();
-		}
+		const planeRecord = await plane({});
+		const source = planeRecord.sources[0] as FakeSource;
+		await withApp(
+			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await awaitFrame(setup, (f) => f.includes("Retry policy for"), "the ticket");
+				// The standing holds two seats in flight: the mode cell counts
+				// them beside the limit it stands on.
+				await press(setup, "a", "auto on", (f) => f.includes("○ auto 2/2"));
+				await press(setup, "a", "auto off", (f) => f.includes("● manual 2/2"));
+				// r refreshes the configured source, and the progress clears.
+				setup.mockInput.pressKey("r");
+				await callsReached(source, 2);
+				await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).includes("Working: refreshing"),
+					"the refresh progress",
+				);
+				source.settleCurrent();
+				await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the refresh to clear");
+			},
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+		);
 	});
 
 	test("q quits from both base panes, and refuses while a Handoff is active", async () => {
-		const props = {
-			config: BASE_CONFIG,
-			runner: new FakeRunner(),
-			initialTickets: SAMPLE_TICKETS,
-			home,
-			configPath,
-		};
 		const destroyed = (setup: AppSetup) =>
 			awaitFrame(setup, (f) => f.trim() === "", "the renderer to destroy");
 
 		// Ticket list.
-		await withApp(
-			async (setup) => {
-				await settle(setup);
-				setup.mockInput.pressKey("q");
-				await destroyed(setup);
-			},
-			{ width: WIDTH, height: HEIGHT, props: props },
-		);
+		{
+			const planeRecord = await plane({});
+			await withApp(
+				async (setup) => {
+					await settle(setup);
+					setup.mockInput.pressKey("q");
+					await destroyed(setup);
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 
 		// Ticket detail.
-		await withApp(
-			async (setup) => {
-				await press(setup, "l", "the detail to focus", detailFocused);
-				setup.mockInput.pressKey("q");
-				await destroyed(setup);
-			},
-			{ width: WIDTH, height: HEIGHT, props: props },
-		);
+		{
+			const planeRecord = await plane({});
+			await withApp(
+				async (setup) => {
+					await press(setup, "l", "the detail to focus", detailFocused);
+					setup.mockInput.pressKey("q");
+					await destroyed(setup);
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 
 		// During an active Handoff: q explains itself instead of quitting.
-		const inner = stubHerdrWorld(worldCheckout());
-		inner.set("herdr", ["workspace", "list"], {
-			code: 1,
-			stderr: "error: the daemon is down\n",
-		});
-		const runner = new DelayedRunner(inner, 1500);
-		await withApp(
-			async (setup) => {
-				await press(setup, "return", "the handoff working", (f) =>
-					messageRowOf(f).startsWith("Working: handing off"),
-				);
-				// The refusal is recorded, but it does not erase the active
-				// progress: the spec ranks Working above an operation
-				// Warning, so the line keeps the Handoff's own progress.
-				setup.mockInput.pressKey("q");
-				await sleep(400);
-				expect(messageRowOf(setup.captureCharFrame()).trim()).toContain("Working: handing off");
-				// The app is still up behind the refusal.
-				expect(actionBarRowOf(setup.captureCharFrame())).toContain("? Help");
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).startsWith("Error: "),
-					"the handoff error",
-					8000,
-				);
-			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS, home, configPath },
-			},
-		);
+		{
+			const planeRecord = await plane({
+				config: { maxParallelAgents: 3 },
+				repos: { "github.com/acme/billing": "src/billing" },
+				runner: (fake) => new DelayedRunner(fake, 500, Number.POSITIVE_INFINITY),
+				commands: (fake, home) => {
+					const path = join(home, "src", "billing");
+					stubCheckoutInto(fake, path, "github.com/acme/billing");
+					fake.set("herdr", ["workspace", "list"], {
+						code: 1,
+						stderr: "error: the daemon is down\n",
+					});
+				},
+			});
+			await withApp(
+				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToOpenTicket(setup);
+					await press(setup, "return", "the handoff working", (f) =>
+						messageRowOf(f).startsWith("Working: handing off"),
+					);
+					// The refusal is recorded, but it does not erase the active
+					// progress: the spec ranks Working above an operation
+					// Warning, so the line keeps the Handoff's own progress.
+					setup.mockInput.pressKey("q");
+					await sleep(400);
+					expect(messageRowOf(setup.captureCharFrame()).trim()).toContain("Working: handing off");
+					// The app is still up behind the refusal.
+					expect(actionBarRowOf(setup.captureCharFrame())).toContain("? Help");
+					// The start's fault stands on the queued start's warning the
+					// drop left the line (ADR 0118's split).
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).startsWith("Warning: queued handoff"),
+						"the handoff's drop",
+						8000,
+					);
+				},
+				{
+					width: WIDTH,
+					height: HEIGHT,
+					plane: planeRecord,
+				},
+			);
+		}
 
 		// On the override list row: q is inert - no panel, no quit.
-		await withApp(
-			async (setup) => {
-				await openPanel(setup);
-				setup.mockInput.pressKey("q");
-				const frame = await settle(setup);
-				expect(frame).toContain("┌─Override");
-			},
-			{ width: WIDTH, height: HEIGHT, props: props },
-		);
+		{
+			const planeRecord = await plane({});
+			await withApp(
+				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToOpenTicket(setup);
+					await openPanel(setup);
+					setup.mockInput.pressKey("q");
+					const frame = await settle(setup);
+					expect(frame).toContain("┌─Override");
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 	});
 
 	test("Ctrl+C destroys the renderer from every interaction mode", async () => {
-		const props = {
-			config: BASE_CONFIG,
-			runner: new FakeRunner(),
-			initialTickets: SAMPLE_TICKETS,
-			home,
-			configPath,
-		};
 		const destroyed = (setup: AppSetup) =>
 			awaitFrame(setup, (f) => f.trim() === "", "the renderer to destroy");
 
 		// Ticket list.
-		await withApp(
-			async (setup) => {
-				await settle(setup);
-				pressCtrlC(setup);
-				await destroyed(setup);
-			},
-			{ width: WIDTH, height: HEIGHT, props: props },
-		);
+		{
+			const planeRecord = await plane({});
+			await withApp(
+				async (setup) => {
+					await settle(setup);
+					pressCtrlC(setup);
+					await destroyed(setup);
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 		// Ticket detail.
-		await withApp(
-			async (setup) => {
-				await press(setup, "l", "the detail to focus", detailFocused);
-				pressCtrlC(setup);
-				await destroyed(setup);
-			},
-			{ width: WIDTH, height: HEIGHT, props: props },
-		);
+		{
+			const planeRecord = await plane({});
+			await withApp(
+				async (setup) => {
+					await press(setup, "l", "the detail to focus", detailFocused);
+					pressCtrlC(setup);
+					await destroyed(setup);
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 		// Override list row.
-		await withApp(
-			async (setup) => {
-				await openPanel(setup);
-				pressCtrlC(setup);
-				await destroyed(setup);
-			},
-			{ width: WIDTH, height: HEIGHT, props: props },
-		);
+		{
+			const planeRecord = await plane({});
+			await withApp(
+				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToOpenTicket(setup);
+					await openPanel(setup);
+					pressCtrlC(setup);
+					await destroyed(setup);
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 		// Override text row.
-		await withApp(
-			async (setup) => {
-				await openPanel(setup);
-				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
-				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
-				await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
-				pressCtrlC(setup);
-				await destroyed(setup);
-			},
-			{ width: WIDTH, height: HEIGHT, props: props },
-		);
+		{
+			const planeRecord = await plane({});
+			await withApp(
+				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToOpenTicket(setup);
+					await openPanel(setup);
+					await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
+					await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
+					await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
+					pressCtrlC(setup);
+					await destroyed(setup);
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 		// Key guide.
-		await withApp(
-			async (setup) => {
-				await press(setup, "?", "the guide to open", (f) => f.includes("Key guide"));
-				pressCtrlC(setup);
-				await destroyed(setup);
-			},
-			{ width: WIDTH, height: HEIGHT, props: props },
-		);
+		{
+			const planeRecord = await plane({});
+			await withApp(
+				async (setup) => {
+					await press(setup, "?", "the guide to open", (f) => f.includes("Key guide"));
+					pressCtrlC(setup);
+					await destroyed(setup);
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 		// Message view, over a truncated failure.
-		const failing = stubHerdrWorld(worldCheckout());
-		failing.set("herdr", ["workspace", "list"], {
-			code: 1,
-			stderr: `error: the daemon refused the request: ${"x".repeat(150)}\n`,
-		});
-		await withApp(
-			async (setup) => {
-				await press(setup, "return", "the error to appear", (f) =>
-					messageRowOf(f).includes("Error:"),
-				);
-				await press(setup, "m", "the message view to open", (f) => f.includes("Message view"));
-				pressCtrlC(setup);
-				await destroyed(setup);
-			},
-			{ width: WIDTH, height: HEIGHT, props: { ...props, runner: failing } },
-		);
+		{
+			const planeRecord = await plane({
+				config: { maxParallelAgents: 3 },
+				repos: { "github.com/acme/billing": "src/billing" },
+				commands: (fake, home) => {
+					const path = join(home, "src", "billing");
+					stubCheckoutInto(fake, path, "github.com/acme/billing");
+					fake.set("herdr", ["workspace", "list"], {
+						code: 1,
+						stderr: `error: the daemon refused the request: ${"x".repeat(150)}\n`,
+					});
+				},
+			});
+			await withApp(
+				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitSourceHealthy(planeRecord.state);
+					await walkToOpenTicket(setup);
+					await press(setup, "return", "the failure to appear", (f) =>
+						messageRowOf(f).includes("the daemon refused"),
+					);
+					await press(setup, "m", "the message view to open", (f) => f.includes("Message view"));
+					pressCtrlC(setup);
+					await destroyed(setup);
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 	});
 
+	// Six boots in one test: the budget is the test's own, not the frame's.
 	test("Ctrl+C is the emergency exit from the legacy Consultations input paths", async () => {
-		const repository = {
+		const consultationTypes = {
+			grill: {
+				agent: "pi",
+				environment: "worktree" as EnvironmentKind,
+				template: "/grill {input}",
+			},
+		};
+		const repositoryAt = (home: string) => ({
 			identity: "github.com/acme/factory",
 			displayName: "acme/factory",
 			cloneUrl: "https://github.com/acme/factory.git",
 			path: join(home, "src", "factory"),
-		};
-		mkdirSync(repository.path, { recursive: true });
-		const config: FactoryConfig = {
-			...BASE_CONFIG,
-			repos: { [repository.identity]: repository.path },
-			consultationTypes: {
-				grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
-			},
-		};
+		});
 		const destroyed = (setup: AppSetup) =>
 			awaitFrame(setup, (f) => f.trim() === "", "the renderer to destroy");
 		// Seed a Consultation with a deterministic id so its recorded Agent
 		// handles match the pinned `agent list` entries.
-		const seed = (state: FactoryState, id: string, withAgent: boolean): void => {
+		const seed = (state: FactoryState, id: string, withAgent: boolean, home: string): void => {
 			state.consultationRecord.createConsultation({
 				id,
 				typeName: "grill",
@@ -820,7 +949,7 @@ describe("the contextual Action bar", () => {
 				template: "/grill {input}",
 				initialInput: "review auth",
 				renderedOpeningPrompt: "/grill review auth",
-				repository,
+				repository: repositoryAt(home),
 				agentName: `consultation-${id.slice(0, 8)}`,
 			});
 			if (withAgent)
@@ -846,87 +975,116 @@ describe("the contextual Action bar", () => {
 					],
 				},
 			});
-		const bootProps = (state: FactoryState, runner: FakeRunner) => ({
-			state,
-			runner,
-			config,
-			home,
-			pollIntervalMs: 50,
-		});
-
 		// The Consultations view, with types configured so a plain `c` would
 		// open the launcher: Ctrl+C is the emergency exit, not the launcher.
-		await withApp(
-			async (setup) => {
-				await crossToConsultations(setup);
-				await awaitFrame(
-					setup,
-					(f) => f.includes("Consultations require SQLite state"),
-					"the consultations view",
-				);
-				pressCtrlC(setup);
-				await destroyed(setup);
-			},
-			{ width: WIDTH, height: HEIGHT, props: { config, runner: new FakeRunner(), home } },
-		);
+		{
+			const planeRecord = await plane({
+				sources: [],
+				groupingAxis: "none",
+				config: { consultationTypes },
+				repos: { "github.com/acme/factory": "src/factory" },
+			});
+			await withApp(
+				async (setup) => {
+					await crossToConsultations(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("no open Consultations"),
+						"the consultations view",
+					);
+					pressCtrlC(setup);
+					await destroyed(setup);
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 
 		// The Consultation launcher open: Ctrl+C destroys, Esc would cancel.
-		await withApp(
-			async (setup) => {
-				await crossToConsultations(setup);
-				await awaitFrame(
-					setup,
-					(f) => f.includes("Consultations require SQLite state"),
-					"the consultations view",
-				);
-				await press(setup, "c", "the launcher to open", (f) => f.includes("Consultation launcher"));
-				pressCtrlC(setup);
-				await destroyed(setup);
-			},
-			{ width: WIDTH, height: HEIGHT, props: { config, runner: new FakeRunner(), home } },
-		);
+		{
+			const planeRecord = await plane({
+				sources: [],
+				groupingAxis: "none",
+				config: { consultationTypes },
+				repos: { "github.com/acme/factory": "src/factory" },
+			});
+			await withApp(
+				async (setup) => {
+					await crossToConsultations(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("no open Consultations"),
+						"the consultations view",
+					);
+					await press(setup, "c", "the launcher to open", (f) =>
+						f.includes("Consultation launcher"),
+					);
+					pressCtrlC(setup);
+					await destroyed(setup);
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 
 		// The legacy Key guide open over the Consultations view.
-		await withApp(
-			async (setup) => {
-				await crossToConsultations(setup);
-				await awaitFrame(
-					setup,
-					(f) => f.includes("Consultations require SQLite state"),
-					"the consultations view",
-				);
-				await press(setup, "?", "the legacy guide to open", (f) => f.includes("Key guide"));
-				pressCtrlC(setup);
-				await destroyed(setup);
-			},
-			{ width: WIDTH, height: HEIGHT, props: { config, runner: new FakeRunner(), home } },
-		);
+		{
+			const planeRecord = await plane({
+				sources: [],
+				groupingAxis: "none",
+				config: { consultationTypes },
+				repos: { "github.com/acme/factory": "src/factory" },
+			});
+			await withApp(
+				async (setup) => {
+					await crossToConsultations(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("no open Consultations"),
+						"the consultations view",
+					);
+					await press(setup, "?", "the legacy guide to open", (f) => f.includes("Key guide"));
+					pressCtrlC(setup);
+					await destroyed(setup);
+				},
+				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			);
+		}
 
 		// The response editor open on an awaiting-response Consultation.
 		{
 			const state = freshState();
+			const planeRecord = await plane({
+				existing: state,
+				sources: [],
+				groupingAxis: "none",
+				config: { consultationTypes },
+				repos: { "github.com/acme/factory": "src/factory" },
+				runner: (fake) => {
+					fake.set("herdr", ["agent", "list"], {
+						stdout: listJson("bbbbbbbb-1111-4111-8111-111111111111", "idle"),
+					});
+					fake.set(
+						"herdr",
+						[
+							"agent",
+							"read",
+							"pane-bbbbbbbb",
+							"--lines",
+							"200",
+							"--source",
+							"recent-unwrapped",
+							"--format",
+							"text",
+						],
+						{ stdout: "Agent: waiting" },
+					);
+					return fake;
+				},
+			});
 			const id = "bbbbbbbb-1111-4111-8111-111111111111";
-			seed(state, id, true);
+			seed(state, id, true, planeRecord.home);
 			state.consultationRecord.settleConsultationTurn(id, null, "first answer", {
 				settledStatus: "idle",
 			});
-			const runner = new FakeRunner();
-			runner.set("herdr", ["agent", "list"], { stdout: listJson(id, "idle") });
-			runner.set(
-				"herdr",
-				[
-					"agent",
-					"read",
-					`pane-${id.slice(0, 8)}`,
-					"--lines",
-					"200",
-					"--source",
-					"recent-unwrapped",
-					"--format",
-					"text",
-				],
-				{ stdout: "Agent: waiting" },
-			);
 			try {
 				await withApp(
 					async (setup) => {
@@ -942,7 +1100,12 @@ describe("the contextual Action bar", () => {
 						pressCtrlC(setup);
 						await destroyed(setup);
 					},
-					{ width: WIDTH, height: 30, props: bootProps(state, runner) },
+					{
+						width: WIDTH,
+						height: 30,
+						plane: planeRecord,
+						loopPolicy: { kind: "polled", intervalMs: 50 },
+					},
 				);
 			} finally {
 				state.close();
@@ -953,33 +1116,51 @@ describe("the contextual Action bar", () => {
 		{
 			const state = freshState();
 			const id = "55555555-1111-4111-8111-111111111111";
-			seed(state, id, true);
+			const planeRecord = await plane({
+				existing: state,
+				sources: [],
+				groupingAxis: "none",
+				config: { consultationTypes },
+				repos: { "github.com/acme/factory": "src/factory" },
+				runner: (fake) => {
+					fake.set("herdr", ["agent", "list"], { stdout: listJson(id, "blocked") });
+					fake.set(
+						"herdr",
+						[
+							"agent",
+							"read",
+							`pane-${id.slice(0, 8)}`,
+							"--lines",
+							"200",
+							"--source",
+							"recent-unwrapped",
+							"--format",
+							"text",
+						],
+						{ stdout: "Agent: blocked on approval" },
+					);
+					fake.set(
+						"herdr",
+						[
+							"agent",
+							"read",
+							`pane-${id.slice(0, 8)}`,
+							"--lines",
+							"200",
+							"--source",
+							"visible",
+							"--format",
+							"ansi",
+						],
+						{ stdout: JSON.stringify({ result: { output: "agent: waiting for input" } }) },
+					);
+					return fake;
+				},
+			});
+			seed(state, id, true, planeRecord.home);
 			state.consultationRecord.settleConsultationTurn(id, null, "first answer", {
 				settledStatus: "blocked",
 			});
-			const paneId = `pane-${id.slice(0, 8)}`;
-			const runner = new FakeRunner();
-			runner.set("herdr", ["agent", "list"], { stdout: listJson(id, "blocked") });
-			runner.set(
-				"herdr",
-				[
-					"agent",
-					"read",
-					paneId,
-					"--lines",
-					"200",
-					"--source",
-					"recent-unwrapped",
-					"--format",
-					"text",
-				],
-				{ stdout: "Agent: blocked on approval" },
-			);
-			runner.set(
-				"herdr",
-				["agent", "read", paneId, "--lines", "200", "--source", "visible", "--format", "ansi"],
-				{ stdout: JSON.stringify({ result: { output: "agent: waiting for input" } }) },
-			);
 			try {
 				await withApp(
 					async (setup) => {
@@ -995,7 +1176,12 @@ describe("the contextual Action bar", () => {
 						pressCtrlC(setup);
 						await destroyed(setup);
 					},
-					{ width: WIDTH, height: 30, props: bootProps(state, runner) },
+					{
+						width: WIDTH,
+						height: 30,
+						plane: planeRecord,
+						loopPolicy: { kind: "polled", intervalMs: 50 },
+					},
 				);
 			} finally {
 				state.close();
@@ -1006,9 +1192,18 @@ describe("the contextual Action bar", () => {
 		{
 			const state = freshState();
 			const id = "66666666-1111-4111-8111-111111111111";
-			seed(state, id, false);
-			const runner = new FakeRunner();
-			runner.set("herdr", ["agent", "list"], { stdout: "{}" });
+			const planeRecord = await plane({
+				existing: state,
+				sources: [],
+				groupingAxis: "none",
+				config: { consultationTypes },
+				repos: { "github.com/acme/factory": "src/factory" },
+				runner: (fake) => {
+					fake.set("herdr", ["agent", "list"], { stdout: "{}" });
+					return fake;
+				},
+			});
+			seed(state, id, false, planeRecord.home);
 			try {
 				await withApp(
 					async (setup) => {
@@ -1020,22 +1215,31 @@ describe("the contextual Action bar", () => {
 						pressCtrlC(setup);
 						await destroyed(setup);
 					},
-					{ width: WIDTH, height: 30, props: bootProps(state, runner) },
+					{
+						width: WIDTH,
+						height: 30,
+						plane: planeRecord,
+						loopPolicy: { kind: "polled", intervalMs: 50 },
+					},
 				);
 			} finally {
 				state.close();
 			}
 		}
-	});
+	}, 20000);
 
 	test("unavailable controls are dimmed, and pressing one explains why", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({
+			sources: [],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				// The cursor walks the expanded sections' rows, so the list
 				// only stops when every visible row is the cursor's own.
 				// Cross to the Consultation list, collapse its section, and
-				// come back to the only Ticket: nothing is left to move into.
+				// come back to the empty Ticket list: nothing is left to move
+				// into.
 				await press(setup, "j", "the Consultation list", (f) => f.includes("┌─❯ Consultations"));
 				await press(setup, "x", "the Consultation section to collapse", (f) =>
 					f.includes("▸ Consultations"),
@@ -1043,7 +1247,7 @@ describe("the contextual Action bar", () => {
 				await press(setup, "k", "the Ticket list", (f) => f.includes("┌─❯ Tickets"));
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
-				// One ticket, other section collapsed: Move cannot move.
+				// No ticket rows, other section collapsed: Move cannot move.
 				expect(spanColorAt(setup, barRow, "↑↓/jk Move")).toEqual(rgb(roleColor("subtext0")));
 				await press(setup, "j", "the move refusal", (f) =>
 					messageRowOf(f).includes("the Ticket list has nowhere to move"),
@@ -1058,13 +1262,16 @@ describe("the contextual Action bar", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: [SAMPLE_TICKETS[0]] },
+				plane: planeRecord,
 			},
 		);
 	});
 
 	test("an empty list dims Hand off and explains that no Ticket is selected", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({
+			sources: [],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				const frame = await settle(setup);
@@ -1074,15 +1281,16 @@ describe("the contextual Action bar", () => {
 					messageRowOf(f).includes("no Ticket is selected"),
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, props: { config: BASE_CONFIG, runner, initialTickets: [] } },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("a handed-off ticket swaps Hand off for the Live view and dims Override", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 5);
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
 				// The bar names the one meaning Enter runs on this ticket. Hand
@@ -1105,97 +1313,105 @@ describe("the contextual Action bar", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
 			},
 		);
 	});
 
 	test("a stale source dims Hand off with the actionable reason", async () => {
-		const state = freshState();
-		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
-		try {
-			await withApp(
-				async (setup) => {
-					source.settle(success([issueTicket()]));
-					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
-					// A failed refresh makes the stored source stale: the ticket
-					// stays visible, but it is no longer actionable.
-					setup.mockInput.pressKey("r");
-					await callsReached(source, 2);
-					source.settle(RATE_LIMITED);
-					const frame = await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
-						"the stale health warning",
-					);
-					const barRow = rowsOf(frame).length - 1;
-					expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(roleColor("subtext0")));
-					await press(setup, "return", "the refusal", (f) =>
-						messageRowOf(f).includes(
-							"Ticket is not actionable because source data is stale, removed, or absent",
-						),
-					);
-				},
-				{ width: WIDTH, height: HEIGHT, props: { config: issuesConfig, state, sources: [source] } },
-			);
-		} finally {
-			state.close();
-		}
-	});
-
-	test("an in-flight handoff keeps its hints, and the second ask refuses once (ADR 0064)", async () => {
-		const runner = stubHerdrWorld(worldCheckout());
-		const slow = new DelayedRunner(runner, 2000);
-		const props = {
-			config: BASE_CONFIG,
-			runner: slow,
-			initialTickets: SAMPLE_TICKETS,
-			home,
-			configPath,
-		};
+		const planeRecord = await plane({});
+		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await awaitFrame(setup, (f) => f.includes("Drop the legacy auth"), "the ticket");
+				// A failed refresh makes the stored source stale: the ticket
+				// stays visible, but it is no longer actionable.
+				setup.mockInput.pressKey("r");
+				await callsReached(source, 2);
+				source.settle(RATE_LIMITED);
+				const frame = await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
+					"the stale health warning",
+				);
+				// The open Ticket stands the bar the test measures, stale beside it.
+				await walkToOpenTicket(setup);
+				const barRow = rowsOf(frame).length - 1;
+				expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(roleColor("subtext0")));
+				await press(setup, "return", "the refusal", (f) =>
+					messageRowOf(f).includes(
+						"Ticket is not actionable because source data is stale, removed, or absent",
+					),
+				);
+			},
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+		);
+	});
+
+	test("an in-flight handoff keeps its hints lit, and the second ask jumps to its queue item", async () => {
+		const planeRecord = await plane({
+			// A third seat stands free: the first ask picks up its seat at once
+			// and the flight the test measures stays active under the second.
+			config: { maxParallelAgents: 3 },
+			repos: { "github.com/acme/billing": "src/billing" },
+			// Seven calls at 300 ms: the flight outlives the test's reads, and
+			// the whole test keeps its own five-second budget whole.
+			runner: (fake) => new DelayedRunner(fake, 300, Number.POSITIVE_INFINITY),
+			commands: (fake, home) => {
+				const path = join(home, "src", "billing");
+				stubCheckoutInto(fake, path, "github.com/acme/billing");
+				stubLiveHandoffInto(fake, path);
+			},
+		});
+		await withApp(
+			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await walkToOpenTicket(setup);
 				await press(setup, "return", "the handoff to start", (f) =>
 					messageRowOf(f).includes("handing off"),
 				);
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
 				// The ask never waits on a run (ADR 0064): the hints stay lit
-				// while a Handoff runs, and a second ask answers with the
-				// shell's own words. The key paints the accent and the label the
-				// text: the hint the operator sees is the hint that runs.
+				// while a Handoff runs. The start the operator made stands in the
+				// Work queue while it runs, so the row under the cursor resolves
+				// to its item: the key paints the accent and the label the text,
+				// the hint the operator sees is the hint that runs.
 				expect(spanColorAt(setup, barRow, "Enter ")).toEqual(rgb(roleColor("accent")));
-				expect(spanColorAt(setup, barRow, "Hand off")).toEqual(rgb(roleColor("text")));
-				// The Override key's own spans: the Delete key's wider span
-				// stands beside it now, so the pair is read by span, not by
-				// a needle the Delete key's span could answer for (ADR 0122).
-				const spans = rowSpans(setup, barRow);
-				const overrideLabel = spans.findIndex((span) => span.text === "Override");
-				expect(spans[overrideLabel - 1].text).toBe("e ");
-				expect(spans[overrideLabel - 1].fg).toEqual(rgb(roleColor("accent")));
-				expect(spans[overrideLabel].fg).toEqual(rgb(roleColor("text")));
-				// The second Enter is refused. The refusal is an operation
-				// Warning, and active progress outranks it (user story 51), so
-				// the Handoff's own Working keeps the line: an answer never
-				// erases the work in flight.
+				expect(spanColorAt(setup, barRow, "Queue item")).toEqual(rgb(roleColor("text")));
+				// Override dims under the flight: the start the operator made
+				// already holds its choice, so the key answers with its own dim
+				// span, read by span, not by a needle a wider span could answer
+				// for (ADR 0122).
+				expect(spanColorAt(setup, barRow, "e Override")).toEqual(rgb(roleColor("subtext0")));
+				// The second Enter jumps to the start's queue item (ADR 0049):
+				// the cursor lands in the Work queue, the bar turns to the queue's
+				// keys, and the jump writes no line - active progress outranks
+				// an answer (user story 51), so the Handoff's Working keeps the
+				// line.
 				setup.mockInput.pressEnter();
 				await sleep(400);
-				expect(messageRowOf(setup.captureCharFrame())).toContain("handing off");
-				// The clean settle clears the Working line, and the refusal the
-				// operator drew during the flight then takes the line.
+				const jumped = setup.captureCharFrame();
+				expect(actionBarRowOf(jumped)).toContain("Force-dispatch");
+				expect(messageRowOf(jumped)).toContain("handing off");
+				// The clean settle clears the Working line, and the start's own
+				// answer then takes the line; the queue item leaves with it.
 				await awaitFrame(
 					setup,
-					(f) => messageRowOf(f).includes("handoff in flight"),
+					(f) => messageRowOf(f).includes("started from the Work queue"),
 					"the handoff to settle",
 					8000,
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, props: props },
+			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("the bar does not change on a boundary move", async () => {
-		const runner = new FakeRunner();
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
 				const before = actionBarRowOf(await settle(setup));
@@ -1207,7 +1423,7 @@ describe("the contextual Action bar", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				plane: planeRecord,
 			},
 		);
 	});

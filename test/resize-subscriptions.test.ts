@@ -20,9 +20,6 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
-import { BASE_CONFIG } from "./base-config.ts";
-import { FakeRunner } from "./fake-runner.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 /** The `resize` listeners one live renderer holds. */
 function resizeListeners(setup: AppSetup): number {
@@ -48,20 +45,27 @@ async function settledListeners(setup: AppSetup): Promise<number> {
 	return previous;
 }
 
-/** Move to the awaiting sample Ticket (#4) and open its decision modal. */
-async function openDecision(setup: AppSetup): Promise<void> {
-	// The list holds the four sample Tickets; each press moves one row.
-	await press(setup, "j", "the handed-off Ticket", (f) => markerRowOf(f) === 4);
-	await press(setup, "j", "the running Ticket", (f) => markerRowOf(f) === 5);
-	await press(setup, "j", "the awaiting Ticket", (f) => markerRowOf(f) === 6);
-	await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
+/**
+ * Move down to the first open Ticket.
+ *
+ * The live rows stand ahead of the open band: the running Ticket on the second
+ * list row, the handed-off one on the third, and the first open Ticket, #1, on
+ * the fourth, the frame row six. The cursor boots on the first row, the
+ * awaiting Ticket, and each press moves one row.
+ */
+async function toFirstOpenTicket(setup: AppSetup): Promise<void> {
+	await press(setup, "j", "the running Ticket", (f) => markerRowOf(f) === 4);
+	await press(setup, "j", "the handed-off Ticket", (f) => markerRowOf(f) === 5);
+	await press(setup, "j", "the first open Ticket", (f) => markerRowOf(f) === 6);
 }
 
 describe("the renderer's resize listeners", () => {
 	test("one surface costs one listener, and a nested stack stays under the limit", async () => {
-		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
+				// The boot read settles on the seeded snapshot: the open rows
+				// stand healthy, and the panel's handoff gate can pass them.
+				setup.plane.settleFirstFetch();
 				await settle(setup);
 				const base = await settledListeners(setup);
 				expect(base).toBeGreaterThan(0);
@@ -73,7 +77,10 @@ describe("the renderer's resize listeners", () => {
 				await settle(setup);
 				expect(await settledListeners(setup)).toBe(base);
 
-				// The override panel borrows the same chrome and bar.
+				// The override panel borrows the same chrome and bar. The panel
+				// hands off an open Ticket, so the walk moves off the live rows
+				// to the open band first.
+				await toFirstOpenTicket(setup);
 				await press(setup, "e", "the override panel", (f) => f.includes("❯ Agent"));
 				expect(await settledListeners(setup)).toBe(base + 1);
 				await press(setup, "escape", "the panel to close", (f) => !f.includes("❯ Agent"));
@@ -81,8 +88,13 @@ describe("the renderer's resize listeners", () => {
 				expect(await settledListeners(setup)).toBe(base);
 
 				// The deepest stack of ordinary work: the Key guide above an
-				// open decision, over the base frame.
-				await openDecision(setup);
+				// open decision, over the base frame. The decision modal opens
+				// on the awaiting Ticket, so the walk climbs back up the live
+				// rows it moved down, and Decide opens the modal.
+				await press(setup, "k", "the handed-off Ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "k", "the running Ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "k", "the awaiting Ticket", (f) => markerRowOf(f) === 3);
+				await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 				expect(await settledListeners(setup)).toBe(base + 1);
 				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
 				const deepest = await settledListeners(setup);
@@ -99,7 +111,6 @@ describe("the renderer's resize listeners", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 			},
 		);
 	});

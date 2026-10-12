@@ -13,14 +13,15 @@ import { CliRenderEvents } from "@opentui/core";
 import { type MouseButton, MouseButtons } from "@opentui/core/testing";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import { App, type AppProps } from "../src/components/app.ts";
+import { App, type AppLoopPolicy } from "../src/components/app.ts";
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import { resolveTheme, type ThemeRole } from "../src/components/shared/theme.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
-import { BASE_CONFIG } from "./base-config.ts";
-import { emptyAgentRunner } from "./fake-runner.ts";
+import type { Logger } from "../src/logging.ts";
+import { NOOP_LOGGER } from "../src/logging.ts";
+import type { FactoryState } from "../src/state.ts";
 import { flushPassiveNow } from "./passive-flush-hold.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import { plane, type SeededPlane } from "./seeded-plane.ts";
 import "./theme-isolation.ts";
 
 export type Setup = Awaited<ReturnType<typeof testRender>>;
@@ -369,8 +370,10 @@ afterEach(() => {
 	errorSpy.mockRestore();
 });
 
-/** A booted app: the test renderer plus the app's teardown handle. */
+/** A booted app: the test renderer, the plane it stands on, and the app's teardown handle. */
 export interface AppSetup extends Setup {
+	/** The Seeded plane the app boots from. */
+	plane: SeededPlane;
 	/**
 	 * Stops the app's background loops. The test renderer's unmount does not
 	 * run effect cleanups reliably, so tests stop the app explicitly before
@@ -379,37 +382,55 @@ export interface AppSetup extends Setup {
 	stopApp: () => void;
 }
 
-export async function bootApp(
-	props: Partial<AppProps> = {},
-	width = WIDTH,
-	height = HEIGHT,
-	rendererOptions: { kittyKeyboard?: boolean } = {},
-): Promise<AppSetup> {
-	// Existing frame tests keep deterministic data at the App seam. A source
-	// or state passed explicitly opts into the real empty/loading behavior.
-	// A state without an explicit runner gets the empty-agent fake runner, so
-	// the observation loop stays hermetic: no test can reach a real herdr.
-	// A suite that names no config runs on the base config fixture: the app
-	// itself carries no in-code default config.
-	const runner = "runner" in props ? props : { runner: emptyAgentRunner() };
-	const appProps: AppProps =
-		"state" in props || "sources" in props
-			? { config: BASE_CONFIG, ...runner, ...props }
-			: { initialTickets: SAMPLE_TICKETS, config: BASE_CONFIG, ...runner, ...props };
+/** The boot fields the harness takes: the plane, the loop policy, and the frame's own. */
+export interface AppBootFields {
+	/**
+	 * The Seeded plane the app boots from. The default is the module's default
+	 * standing: the sample tickets under one issues source.
+	 */
+	plane?: SeededPlane;
+	/**
+	 * The loop policy the app runs under. The default is `held`: the
+	 * deterministic frame, where nothing moves until a key press or a settle
+	 * does. A suite that wants the poll names `polled` with its interval, or
+	 * `production` for the plane's own schedule.
+	 */
+	loopPolicy?: AppLoopPolicy;
+	/** The logger the loops write to. The default is the no-op logger. */
+	logger?: Logger;
+	width?: number;
+	height?: number;
+	rendererOptions?: { kittyKeyboard?: boolean };
+}
+
+export async function bootApp(fields: AppBootFields = {}): Promise<AppSetup> {
+	const { loopPolicy, logger, width = WIDTH, height = HEIGHT, rendererOptions = {} } = fields;
+	const planeRecord = fields.plane ?? (await plane({}));
 	let stopApp: (() => void) | null = null;
-	const wired: AppProps =
-		"onReady" in appProps ? appProps : { ...appProps, onReady: (ready) => (stopApp = ready.stop) };
 	// Match src/factory.ts: the renderer does not own Ctrl+C. The app's
 	// emergency-exit dispatch is what destroys the renderer under test, so
 	// the frame tests verify the catalogue's control, not OpenTUI's built-in.
-	const setup = await testRender(createElement(App, wired), {
-		width,
-		height,
-		exitOnCtrlC: false,
-		...rendererOptions,
-	});
+	const setup = await testRender(
+		createElement(App, {
+			config: planeRecord.config,
+			runner: planeRecord.runner,
+			home: planeRecord.home,
+			configPath: planeRecord.configPath,
+			state: planeRecord.state,
+			sources: planeRecord.sources,
+			logger: logger ?? NOOP_LOGGER,
+			loopPolicy: loopPolicy ?? { kind: "held" },
+			onReady: (ready) => (stopApp = ready.stop),
+		}),
+		{
+			width,
+			height,
+			exitOnCtrlC: false,
+			...rendererOptions,
+		},
+	);
 	await setup.flush();
-	return { ...setup, stopApp: () => stopApp?.() };
+	return { ...setup, plane: planeRecord, stopApp: () => stopApp?.() };
 }
 
 /**
@@ -418,22 +439,17 @@ export async function bootApp(
  */
 export async function withApp(
 	body: (setup: AppSetup) => Promise<void>,
-	fields: {
-		width?: number;
-		height?: number;
-		props?: Partial<AppProps>;
-		rendererOptions?: { kittyKeyboard?: boolean };
-	} = {},
+	fields: AppBootFields = {},
 ): Promise<void> {
-	const { width = WIDTH, height = HEIGHT, props = {}, rendererOptions = {} } = fields;
-	const setup = await bootApp(props, width, height, rendererOptions);
+	const setup = await bootApp(fields);
 	try {
 		await body(setup);
 	} finally {
 		await setup.renderer.destroy();
 		// Stop the app's loops before the test closes the state: the test
 		// renderer's unmount does not run effect cleanups, and a loop that
-		// outlives the state reads a closed database.
+		// outlives the state reads a closed database. The plane's own close
+		// runs after, in its module's cleanup, whatever this body did.
 		setup.stopApp();
 	}
 }
@@ -1418,6 +1434,26 @@ export async function settle(setup: Setup, maxMs = 300): Promise<string> {
 		if (Date.now() >= deadline) {
 			return current;
 		}
+	}
+}
+
+/**
+ * Wait for every source to stand healthy after its settle.
+ *
+ * The boot read's settle lands on a later frame: a key that asks for an
+ * actionable row before it lands reads the loading the settle left behind, and
+ * the handoff's actionability gate refuses it. A suite that presses such a key
+ * right after settling its source waits here first.
+ */
+export async function waitSourceHealthy(state: FactoryState): Promise<void> {
+	const deadline = Date.now() + 2000;
+	for (;;) {
+		if (state.sourceFact.sourceHealths().every((health) => health.health === "healthy")) return;
+		if (Date.now() >= deadline)
+			throw new Error(
+				`the sources did not stand healthy: ${JSON.stringify(state.sourceFact.sourceHealths())}`,
+			);
+		await sleep(10);
 	}
 }
 

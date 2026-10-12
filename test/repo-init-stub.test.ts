@@ -25,8 +25,6 @@ import {
 	runRepositoryInit,
 } from "../src/repo-init.ts";
 import { type CommandRunner, createChildProcessRunner } from "../src/runner.ts";
-import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
 import { createStubRunner } from "../src/stub/runner.ts";
 import type { StubWorld } from "../src/stub/world.ts";
 import { StubWorldStore } from "../src/stub/world.ts";
@@ -43,6 +41,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { agentListJson } from "./fake-runner.ts";
+import { plane } from "./seeded-plane.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -399,14 +398,27 @@ host = "github.com"
 			listModels: (kind) => stubRunner.listModels(kind),
 		};
 
-		const configPath = join(dir, "config.toml");
-		writeFileSync(configPath, walkConfig(checkout));
-		const { config } = await loadConfigFile(configPath);
+		// The config the App writes back to: the plane's own file, written
+		// byte for byte the operator's, so the write-back's survival check
+		// reads the file the App itself holds.
+		const scratchConfig = join(dir, "config.toml");
+		writeFileSync(scratchConfig, walkConfig(checkout));
+		const { config } = await loadConfigFile(scratchConfig);
 		// The startup wiring's own build: the operator's feed over the stub's
 		// world, the way the entry module composes the plane.
 		const sources = config.sources.map((source) => createTicketSource(source, runner));
-		const state: FactoryState = openFactoryState(join(dir, "factory.sqlite"));
-		state.grouping.setGroupingAxis("tickets", "repository");
+		const planeRecord = await plane({
+			groupingAxis: "repository",
+			sources: [],
+			runner: () => runner,
+			prepare: async () => ({
+				config,
+				configFileText: walkConfig(checkout),
+				boundSources: sources,
+			}),
+		});
+		const state = planeRecord.state;
+		const configPath = planeRecord.configPath;
 
 		const headBefore = (await real.run("git", ["-C", checkout, "rev-parse", "HEAD"])).stdout.trim();
 
@@ -594,10 +606,10 @@ host = "github.com"
 			{
 				width: undefined,
 				height: undefined,
-				props: { config, state, runner, sources, home: dir, configPath },
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
-		state.close();
 	});
 });
 
@@ -757,11 +769,21 @@ pull-request-facts = []
 			listModels: (kind) => stubRunner.listModels(kind),
 		};
 
-		const configPath = join(dir, "config.toml");
-		writeFileSync(configPath, bootstrapConfig(checkout));
-		const { config } = await loadConfigFile(configPath);
-		const state: FactoryState = openFactoryState(join(dir, "factory.sqlite"));
-		state.grouping.setGroupingAxis("tickets", "repository");
+		const scratchConfig = join(dir, "config.toml");
+		writeFileSync(scratchConfig, bootstrapConfig(checkout));
+		const { config } = await loadConfigFile(scratchConfig);
+		const planeRecord = await plane({
+			groupingAxis: "repository",
+			sources: [],
+			runner: () => runner,
+			prepare: async () => ({
+				config,
+				configFileText: bootstrapConfig(checkout),
+				boundSources: [],
+			}),
+		});
+		const _state = planeRecord.state;
+		const configPath = planeRecord.configPath;
 
 		await withApp(
 			async (setup) => {
@@ -805,10 +827,10 @@ pull-request-facts = []
 			{
 				width: undefined,
 				height: undefined,
-				props: { config, state, runner, sources: [], home: dir, configPath },
+				plane: planeRecord,
+				loopPolicy: { kind: "production" },
 			},
 		);
-		state.close();
 	});
 });
 

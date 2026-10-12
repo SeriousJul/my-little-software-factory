@@ -20,7 +20,8 @@ import { openFactoryState } from "../src/state.ts";
 import { isCoveredByFixingPullRequest } from "../src/workflow.ts";
 import { awaitFrame, HEIGHT, rowsOf, WIDTH, withApp } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { FakeSource } from "./fake-source.ts";
+import type { FakeSource } from "./fake-source.ts";
+import { plane } from "./seeded-plane.ts";
 import { issueTicket, success } from "./state-fixture.ts";
 
 const paths: string[] = [];
@@ -356,42 +357,35 @@ describe("the section header counts", () => {
 	};
 
 	test("exclude a covered ticket, and the list shows the pull request for it", async () => {
-		const state = openFactoryState(statePath());
-		const issuesSource = new FakeSource(
-			"issues",
-			"github-issues",
-			success([issueTicket(issueIdentity)]),
+		const planeRecord = await plane({
+			config: sourcesConfig,
+			sources: [
+				{ config: sourcesConfig.sources[0], tickets: [] },
+				{ config: sourcesConfig.sources[1], tickets: [] },
+			],
+		});
+		await withApp(
+			async (setup) => {
+				const [issuesSource, pullsSource] = setup.plane.sources as readonly FakeSource[];
+				issuesSource.settle(success([issueTicket(issueIdentity)]));
+				pullsSource.settle(success([closingPullTicket({ title: "Persist source facts" })]));
+				const frame = await awaitFrame(
+					setup,
+					// The list row truncates the title: match on its lead.
+					(f) => listRowOf(f, "Persist source fa") >= 0,
+					"the pull request row",
+				);
+				// The covered issue is not listed, and the header count does
+				// not count it: one open ticket stands, the pull request's.
+				expect(listRowOf(frame, "Add a webhook retry policy")).toBe(-1);
+				const header = rowsOf(frame).find((row) => row.includes("Tickets")) ?? "";
+				expect(header).toContain("open: 1");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+			},
 		);
-		const pullsSource = new FakeSource(
-			"pulls",
-			"github-pull-requests",
-			success([closingPullTicket({ title: "Persist source facts" })]),
-		);
-		try {
-			await withApp(
-				async (setup) => {
-					issuesSource.settle(success([issueTicket(issueIdentity)]));
-					pullsSource.settle(success([closingPullTicket({ title: "Persist source facts" })]));
-					const frame = await awaitFrame(
-						setup,
-						// The list row truncates the title: match on its lead.
-						(f) => listRowOf(f, "Persist source fa") >= 0,
-						"the pull request row",
-					);
-					// The covered issue is not listed, and the header count does
-					// not count it: one open ticket stands, the pull request's.
-					expect(listRowOf(frame, "Add a webhook retry policy")).toBe(-1);
-					const header = rowsOf(frame).find((row) => row.includes("Tickets")) ?? "";
-					expect(header).toContain("open: 1");
-				},
-				{
-					width: WIDTH,
-					height: HEIGHT,
-					props: { config: sourcesConfig, state, sources: [issuesSource, pullsSource] },
-				},
-			);
-		} finally {
-			state.close();
-		}
 	});
 });

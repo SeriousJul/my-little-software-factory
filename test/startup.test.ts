@@ -12,7 +12,7 @@
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
@@ -365,6 +365,38 @@ describe("the state shutdown", () => {
 		expect(() => target.fire("exit")).not.toThrow();
 		expect(target.exits).toEqual([0]);
 	});
+
+	/**
+	 * A state and an app stop that record the order the shutdown asks for
+	 * them, so a test reads which one the installer runs first.
+	 */
+	function orderedShutdown() {
+		const events: string[] = [];
+		const target = recordingProcess();
+		installStateShutdown({ close: () => events.push("state close") }, target, undefined, () =>
+			events.push("app stop"),
+		);
+		return { events, target };
+	}
+
+	test.each(["SIGTERM", "SIGHUP"])(
+		"a run that ends on %s stops the app before it closes the state",
+		(signal: string) => {
+			const { events, target } = orderedShutdown();
+			target.fire(signal);
+			// A Handoff settlement that lands after the close reads a closed
+			// database, so the stop runs first: the loops must not outlive the
+			// state they read.
+			expect(events).toEqual(["app stop", "state close"]);
+			expect(target.exits).toEqual([0]);
+		},
+	);
+
+	test("the exit hook stops the app before it closes the state", () => {
+		const { events, target } = orderedShutdown();
+		target.fire("exit");
+		expect(events).toEqual(["app stop", "state close"]);
+	});
 });
 
 describe("the whole startup", () => {
@@ -436,6 +468,9 @@ describe("the whole startup", () => {
 		expect(withoutModelWarnings(result.notes)).toEqual([]);
 		expect(result.sources.map((source) => source.name)).toEqual(["issues"]);
 		expect(typeof result.runner.run).toBe("function");
+		// The entry hands the home directory to the plane beside the paths it
+		// resolves itself: the field reads the process's own home.
+		expect(result.home).toBe(homedir());
 		expect(existsSync(statePath)).toBe(true);
 		result.state.close();
 	});

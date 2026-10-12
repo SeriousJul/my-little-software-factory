@@ -90,6 +90,11 @@ export class FakeRunner implements CommandRunner {
 		this.responses.set(this.key(command, args), { code: 0, stdout: "", stderr: "", ...result });
 	}
 
+	/** Whether `command args` has an answer named for it. */
+	hasStub(command: string, args: readonly string[]): boolean {
+		return this.responses.has(this.key(command, args));
+	}
+
 	/** Answers one command with a sequence of results, in call order. */
 	setSequence(
 		command: string,

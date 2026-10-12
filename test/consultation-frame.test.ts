@@ -13,8 +13,7 @@
  * real repository. Random launch identities are canonicalized by
  * ConsultationRunner so the command sequence stays pinnable.
  */
-
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +29,6 @@ import type {
 } from "../src/runner.ts";
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
 import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
 import type { AppSetup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
@@ -61,24 +59,22 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
-import { FakeRunner, herdrFocusCommands, workspaceGetJson } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
-import { type HerdrWorldDescription, type StubHerdrWorld, stubHerdrWorld } from "./herdr-world.ts";
-import { issueTicket, success } from "./state-fixture.ts";
-
-/**
- * The egress double the Consultation suites inject: the fake command runner
- * and the Stub herdr world both stand it.
- */
-interface CommandDouble extends CommandRunner {
-	commands(): string[];
-	set(command: string, args: readonly string[], result: Partial<CommandResult>): void;
-}
+import {
+	type FakeRunner,
+	herdrFocusCommands,
+	tabCreateJson,
+	workspaceCreateJson,
+	workspaceGetJson,
+	workspaceListJson,
+	worktreeCreateJson,
+} from "./fake-runner.ts";
+import type { FakeSource } from "./fake-source.ts";
+import { plane, ticketOf } from "./seeded-plane.ts";
+import { cleanupStateFixtures, freshState, issueTicket, success } from "./state-fixture.ts";
 
 /** The canonical ids ConsultationRunner rewrites random launch ids to. */
 const AGENT = "consultation-00000000";
 const BRANCH = "factory/consultation-00000000-grill";
-
 /** The canonical ids of the Consultations the tests seed by hand. */
 const uid = (lead: string) => `${lead.repeat(8)}-1111-4111-8111-111111111111`;
 const WORKING_ID = uid("1");
@@ -98,7 +94,6 @@ const FAILED_DIRECT_ID = uid("d");
 const CLOSED_DIRECT_ID = uid("e");
 const CONFIRM_GONE_ID = uid("f");
 const LIVE_CLOSE_ID = uid("g");
-
 /** The settled frames walk: the waits line never stands over an empty Work queue. */
 async function pickupFrameWalk(setup: AppSetup, state: FactoryState): Promise<void> {
 	let sawWorking = false;
@@ -112,7 +107,6 @@ async function pickupFrameWalk(setup: AppSetup, state: FactoryState): Promise<vo
 		if (sawWorking && step > 10) break;
 	}
 }
-
 /** One Consultation's close, from the selected Agent to the settled status line. */
 async function closeConsultationStep(
 	setup: AppSetup,
@@ -155,26 +149,14 @@ async function closeConsultationStep(
 	await confirmPanel(setup, `the close status for ${id8}`, (f) => f.includes(`${id8} closed`));
 	return id8;
 }
-
-let home = "";
-let checkout = "";
-
-beforeEach(() => {
-	home = join(tmpdir(), `factory-consultation-frame-${Math.random().toString(36).slice(2)}`);
-	checkout = join(home, "src", "factory");
-	mkdirSync(checkout, { recursive: true });
-});
-
 afterEach(() => {
-	rmSync(home, { recursive: true, force: true });
+	cleanupStateFixtures();
 });
-
 const repository = {
 	identity: "github.com/acme/factory",
 	displayName: "acme/factory",
 	cloneUrl: "https://github.com/acme/factory.git",
 };
-
 const selectedTicket: Ticket = {
 	identity: "github:github.com:I_1",
 	title: "Review factory authentication",
@@ -206,21 +188,15 @@ const selectedTicket: Ticket = {
 	leftover: null,
 	nameCollision: null,
 };
-
-function configFor(): FactoryConfig {
-	return {
-		...BASE_CONFIG,
-		repos: { "github.com/acme/factory": checkout },
-		consultationTypes: {
-			grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
-		},
-	};
-}
-
+/** The worktree Consultation type the suite stands on, as the config carries it. */
+const grillTypes: FactoryConfig["consultationTypes"] = {
+	grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
+};
 /** Seed a Consultation with a deterministic id, and optionally its Agent. */
 function seed(
 	state: FactoryState,
 	id: string,
+	checkout: string,
 	fields: {
 		agent?: boolean;
 		createdAt?: string;
@@ -257,7 +233,6 @@ function seed(
 			sessionId: `sess-${id.slice(0, 8)}`,
 		});
 }
-
 /** The herdr handles a worktree launch records for its Consultation. */
 function seedResources(state: FactoryState, id: string): void {
 	const short = id.slice(0, 8);
@@ -292,81 +267,61 @@ function seedResources(state: FactoryState, id: string): void {
 		details: `Agent hosted by pane pane-${short}`,
 	});
 }
-
-/** The healthy, verified convention checkout, stated as a world. */
-function worldCheckout(dirty = false): HerdrWorldDescription {
-	return {
-		checkouts: [
-			{
-				path: checkout,
-				cloneUrl: "https://github.com/acme/factory.git",
-				defaultBranch: "main",
-				dirty,
-			},
+/** Stub the git answers for a healthy, verified convention checkout. */
+function stubCheckout(runner: FakeRunner, checkout: string): void {
+	runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+	runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
+		stdout: "https://github.com/acme/factory.git\n",
+	});
+}
+/** Stub the full worktree launch sequence at the verified checkout. */
+function stubWorktreeLaunch(runner: FakeRunner, checkout: string, branch = BRANCH): void {
+	runner.set("git", ["-C", checkout, "branch", "--list", branch], { stdout: "" });
+	// The worktree base rule: the origin/HEAD symref names the default
+	// branch and the fetch of its single ref succeeds, so the base is the
+	// fetched remote ref.
+	runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+		stdout: "refs/remotes/origin/main\n",
+	});
+	runner.set(
+		"herdr",
+		[
+			"worktree",
+			"create",
+			"--cwd",
+			checkout,
+			"--branch",
+			branch,
+			"--base",
+			"origin/main",
+			"--no-focus",
 		],
-	};
+		{ stdout: worktreeCreateJson("ws-new", "pane-c1") },
+	);
+	runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-c1"], {
+		stdout: JSON.stringify({ result: { agent: { session_id: "sess-c1" } } }),
+	});
+	runner.set("herdr", ["agent", "prompt", AGENT, "/grill review auth"], { code: 0 });
 }
-
-/**
- * The standing a world-run worktree launch starts from: the checkout and its
- * worktrees root, no workspace. The world's own `worktree create` builds the
- * workspace, the tab, and the Agent's pane.
- */
-function worktreeLaunchStanding(): HerdrWorldDescription {
-	const world = worldCheckout();
-	world.checkouts[0].worktreesRoot = join(home, "worktrees", "factory");
-	return world;
-}
-
-/**
- * The standing a world-run live launch starts from: the operator's workspace,
- * no tab of its own. The world's own `tab create` makes the Agent's tab and
- * pane, so the Agent sits in the world's first pane.
- */
-function liveLaunchStanding(existing: boolean, dirty = false): HerdrWorldDescription {
-	const world = worldCheckout(dirty);
-	world.workspaces = [{ id: existing ? "ws-live" : "ws-new", checkoutPath: checkout }];
-	return world;
-}
-
-/**
- * The standing the interaction test writes into: the workspace, the tab, and
- * the pane the seeded Consultation's Agent holds. The pane's standing content
- * answers a read the test did not pin; the pinned reads answer from the
- * world's own `set` surface.
- */
-function interactionStanding(paneId: string): HerdrWorldDescription {
-	const short = INTERACTION_ID.slice(0, 8);
-	const world = worldCheckout();
-	world.workspaces = [{ id: `ws-${short}`, checkoutPath: checkout }];
-	world.tabs = [{ id: `tab-${short}`, workspaceId: `ws-${short}` }];
-	world.panes = [
-		{ id: paneId, tabId: `tab-${short}`, workspaceId: `ws-${short}`, content: "Agent: working" },
-	];
-	return world;
-}
-
 /** Stub the plain-text pane read the output refresh timer issues. */
-function stubPaneReadText(runner: CommandDouble, paneId: string, output: string): void {
+function stubPaneReadText(runner: FakeRunner, paneId: string, output: string): void {
 	runner.set(
 		"herdr",
 		["agent", "read", paneId, "--lines", "200", "--source", "recent-unwrapped", "--format", "text"],
 		{ stdout: output },
 	);
 }
-
 /** Stub the visible ANSI pane read Agent interaction mode issues. */
-function stubPaneReadAnsi(runner: CommandDouble, paneId: string, output: string): void {
+function stubPaneReadAnsi(runner: FakeRunner, paneId: string, output: string): void {
 	runner.set(
 		"herdr",
 		["agent", "read", paneId, "--lines", "200", "--source", "visible", "--format", "ansi"],
 		{ stdout: JSON.stringify({ result: { output } }) },
 	);
 }
-
 /** Stub the workspace topology: which tabs and panes herdr reports. */
 function stubTopology(
-	runner: CommandDouble,
+	runner: FakeRunner,
 	workspaceId: string,
 	tabs: string[],
 	panes: Array<{ pane_id: string; tab_id: string }>,
@@ -378,7 +333,6 @@ function stubTopology(
 		stdout: JSON.stringify({ result: { panes } }),
 	});
 }
-
 /**
  * The egress double for Consultation launches: it canonicalizes the random
  * Agent name and branch a fresh launch picks, answers `agent list` with a
@@ -391,39 +345,31 @@ function stubTopology(
 class GatedRunner implements CommandRunner {
 	private readonly inner: CommandRunner;
 	private readonly gate: (command: string, args: readonly string[]) => boolean;
-
 	constructor(inner: CommandRunner, gate: (command: string, args: readonly string[]) => boolean) {
 		this.inner = inner;
 		this.gate = gate;
 	}
-
 	listModels(kind: string): Promise<ModelListResult> {
 		return this.inner.listModels(kind);
 	}
-
 	run(command: string, args: readonly string[], options?: CommandOptions): Promise<CommandResult> {
 		if (!this.gate(command, args)) return this.inner.run(command, args, options);
 		return new Promise<CommandResult>(() => {});
 	}
 }
-
 class ConsultationRunner implements CommandRunner {
-	private readonly inner: CommandDouble;
+	private readonly inner: FakeRunner;
 	agentListJson: string;
-
-	constructor(inner: CommandDouble, agentListJson: string) {
+	constructor(inner: FakeRunner, agentListJson: string) {
 		this.inner = inner;
 		this.agentListJson = agentListJson;
 	}
-
 	commands(): string[] {
 		return this.inner.commands();
 	}
-
 	listModels(kind: string): Promise<ModelListResult> {
 		return this.inner.listModels(kind);
 	}
-
 	async run(
 		command: string,
 		args: readonly string[],
@@ -455,7 +401,6 @@ class ConsultationRunner implements CommandRunner {
 		);
 	}
 }
-
 /**
  * A herdr `agent list` answer keyed by pane id, status, and sequence. The
  * tab, workspace, and session handles derive from the pane unless given, so
@@ -489,19 +434,95 @@ const agentListJson = (
 			})),
 		},
 	});
-
 /** The full-flow launch's agent list entry, matched to its recorded handles. */
-const launchedAgent = { pane: "pane-1", tab: "tab-1", ws: "ws-1", sess: "sess-c1" };
+const launchedAgent = { pane: "pane-c1", tab: "tab-ws-new", ws: "ws-new", sess: "sess-c1" };
+/** The live-worktree Consultation type the live suite stands on. */
+const liveGrillTypes: FactoryConfig["consultationTypes"] = {
+	"grill-live": { agent: "pi", environment: "live-worktree", template: "/grill {input}" },
+};
+/** Stub the git answers for a verified live checkout, optionally dirty. */
+function stubLiveCheckout(runner: FakeRunner, checkout: string, dirty: boolean): void {
+	stubCheckout(runner, checkout);
+	runner.set("git", ["-C", checkout, "status", "--porcelain", "--untracked-files=all"], {
+		stdout: dirty ? " M src/app.ts\n" : "",
+	});
+}
+/** Stub the live launch into a workspace herdr already holds at the checkout. */
+function stubLiveLaunchExisting(runner: FakeRunner, checkout: string): void {
+	runner.set("herdr", ["workspace", "list"], {
+		stdout: workspaceListJson([{ id: "ws-live", checkoutPath: checkout }]),
+	});
+	runner.set(
+		"herdr",
+		["tab", "create", "--workspace", "ws-live", "--cwd", checkout, "--no-focus"],
+		{ stdout: tabCreateJson("pane-c1", "tab-c1") },
+	);
+	runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-c1"], {
+		stdout: JSON.stringify({ result: { agent: { session_id: "sess-c1" } } }),
+	});
+	runner.set("herdr", ["agent", "prompt", AGENT, "/grill review auth"], { code: 0 });
+}
+/** Stub the live launch that creates a workspace at the checkout. */
+function stubLiveLaunchNew(runner: FakeRunner, checkout: string): void {
+	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+	runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
+		stdout: workspaceCreateJson("ws-new", "pane-c1"),
+	});
+	runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-c1"], {
+		stdout: JSON.stringify({ result: { agent: { session_id: "sess-c1" } } }),
+	});
+	runner.set("herdr", ["agent", "prompt", AGENT, "/grill review auth"], { code: 0 });
+}
+/**
+ * The recovery tests' standard worktree launch: the factory's checkout, its
+ * worktree launch, and the Agent's pane reporting the review.
+ */
+function stubReviewingCheckout(fake: FakeRunner, home: string): void {
+	const checkout = join(home, "src", "factory");
+	stubCheckout(fake, checkout);
+	stubWorktreeLaunch(fake, checkout);
+	stubPaneReadText(fake, "pane-c1", "Agent: reviewing");
+}
 
-/** A configuration with a live-worktree Consultation type. */
-function liveConfigFor(): FactoryConfig {
-	return {
-		...BASE_CONFIG,
-		repos: { "github.com/acme/factory": checkout },
-		consultationTypes: {
-			"grill-live": { agent: "pi", environment: "live-worktree", template: "/grill {input}" },
-		},
-	};
+/** The pickup tests' worktree launch: the checkout, the launch, the open pane. */
+function stubOpenedCheckout(fake: FakeRunner, home: string): void {
+	const checkout = join(home, "src", "factory");
+	stubCheckout(fake, checkout);
+	stubWorktreeLaunch(fake, checkout);
+	stubPaneReadText(fake, "pane-c1", "Agent: opened");
+}
+
+/** The live tests' existing-checkout launch: the clean live checkout and its tab. */
+function stubLiveExistingCheckout(fake: FakeRunner, home: string): void {
+	const checkout = join(home, "src", "factory");
+	stubLiveCheckout(fake, checkout, false);
+	stubLiveLaunchExisting(fake, checkout);
+	stubPaneReadText(fake, "pane-c1", "Agent: live answer");
+}
+
+/**
+ * The Consultation plane's boot: a fresh state where the test names none, the
+ * grill types, and the factory checkout standing, with the test naming the
+ * checkout's command stubs and the agent list runner it captures.
+ */
+async function consultationBoot(
+	options: {
+		state?: FactoryState;
+		config?: Partial<FactoryConfig>;
+		commands?: (fake: FakeRunner, home: string) => void;
+		runner?: (fake: FakeRunner) => ConsultationRunner;
+	} = {},
+): Promise<{ state: FactoryState; planeRecord: Awaited<ReturnType<typeof plane>> }> {
+	const { state = freshState(), config = {}, commands, runner } = options;
+	const planeRecord = await plane({
+		existing: state,
+		sources: [],
+		config: { consultationTypes: grillTypes, ...config },
+		repos: { "github.com/acme/factory": "src/factory" },
+		commands,
+		runner,
+	});
+	return { state, planeRecord };
 }
 
 /** Count the attention-bell bytes the app writes to the terminal. */
@@ -513,7 +534,6 @@ function countBells(): { count: () => number; restore: () => void } {
 	}) as typeof process.stdout.write);
 	return { count: () => bells, restore: () => spy.mockRestore() };
 }
-
 /** Poll a condition until it holds or the deadline passes. */
 async function waitFor(condition: () => boolean, what: string, deadlineMs = 4000): Promise<void> {
 	const deadline = Date.now() + deadlineMs;
@@ -523,16 +543,6 @@ async function waitFor(condition: () => boolean, what: string, deadlineMs = 4000
 		await sleep(5);
 	}
 }
-
-/** The deterministic boot props: state, the fake runner, no observation. */
-const bootProps = (state: FactoryState, runner: CommandRunner) => ({
-	state,
-	runner,
-	config: configFor(),
-	home,
-	initialTickets: [],
-});
-
 /** Cross into the Consultation list, then wait for the detail the test names. */
 async function toConsultations(
 	setup: Setup,
@@ -553,18 +563,6 @@ async function waitForCommands(runner: ConsultationRunner, needles: string[], wh
 		await sleep(25);
 	}
 }
-
-/** Wait until the world's send records hold a text send and a key send for the pane. */
-async function waitForSends(world: StubHerdrWorld, paneId: string, what: string): Promise<void> {
-	const deadline = Date.now() + 4000;
-	for (;;) {
-		if (world.sentTextFor(paneId).length > 0 && world.sentKeysFor(paneId).length > 0) return;
-		if (Date.now() >= deadline)
-			throw new Error(`timed out waiting for ${what}:\n${world.commands().join("\n")}`);
-		await sleep(25);
-	}
-}
-
 /** The harness press() only types AppKeys; these cover the rest. */
 async function pressEnter(
 	setup: Setup,
@@ -582,39 +580,41 @@ async function pressF12(
 	setup.mockInput.pressKey("F12");
 	return awaitFrame(setup, predicate, what);
 }
-
 describe("Consultation launch and monitoring through the UI", () => {
 	test("the launcher resolves an unmapped selected Ticket Repository before the pinned launch sequence", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const ticketSource = { name: "tickets", kind: "test" };
-		const ticketOutcome = {
-			status: "success" as const,
-			fetchedAt: "2026-09-01T10:00:00.000Z",
-			tickets: [
+		let runner: ConsultationRunner;
+		const state = freshState();
+		const planeRecord = await plane({
+			existing: state,
+			sources: [
 				{
-					identity: selectedTicket.identity,
-					sourceKind: selectedTicket.sourceKind,
-					externalKey: selectedTicket.externalKey,
-					sourceState: selectedTicket.sourceState,
-					url: selectedTicket.url,
-					title: selectedTicket.title,
-					description: selectedTicket.description,
-					labels: selectedTicket.labels,
-					externalUpdatedAt: selectedTicket.externalUpdatedAt,
-					repository: selectedTicket.repositoryRef,
-					attributes: {},
+					config: {
+						name: "tickets",
+						kind: "github-issues",
+						refreshIntervalSeconds: 60,
+						repositories: ["acme/factory"],
+						host: "github.com",
+					},
+					tickets: [selectedTicket],
 				},
 			],
-		};
-		state.sourceFact.initializeSources([ticketSource]);
-		state.sourceFact.applyFetch(ticketSource, ticketOutcome);
-		const source = new FakeSource(ticketSource.name, ticketSource.kind, ticketOutcome);
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: auth review");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+			config: { consultationTypes: grillTypes },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				// The conventional checkout exists without a config entry: the
+				// launcher's resolution, not the settings, stands it up.
+				mkdirSync(checkout, { recursive: true });
+				stubCheckout(fake, checkout);
+				stubWorktreeLaunch(fake, checkout);
+				stubPaneReadText(fake, "pane-c1", "Agent: auth review");
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
 		try {
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
 					await openLauncher(setup);
 					await awaitFrame(
 						setup,
@@ -628,7 +628,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the launch command sequence",
@@ -637,31 +637,30 @@ describe("Consultation launch and monitoring through the UI", () => {
 					const started = state.consultationRecord.consultations("open");
 					expect(started).toHaveLength(1);
 					expect(started[0].state).toBe("working");
-					expect(started[0].paneId).toBe("pane-1");
+					expect(started[0].paneId).toBe("pane-c1");
 					expect(state.consultationRecord.consultation(started[0].id)?.pendingResponse).toBeNull();
 				},
-				{
-					width: WIDTH,
-					height: 32,
-					props: {
-						...bootProps(state, runner),
-						config: { ...configFor(), repos: {} },
-						sources: [source],
-					},
-				},
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the observation loop settles a restarted working Consultation", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, WORKING_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		const runner = new ConsultationRunner(inner, agentListJson([{ pane: paneId, status: "idle" }]));
-		stubPaneReadText(inner, paneId, "Agent: auth review looks sound");
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, paneId, "Agent: auth review looks sound");
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(fake, agentListJson([{ pane: paneId, status: "idle" }]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, WORKING_ID, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -689,13 +688,8 @@ describe("Consultation launch and monitoring through the UI", () => {
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: configFor(),
-						home,
-						pollIntervalMs: 100,
-					},
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
 				},
 			);
 		} finally {
@@ -703,7 +697,6 @@ describe("Consultation launch and monitoring through the UI", () => {
 		}
 	});
 });
-
 test("the mode cell counts the ticket seat and the Consultation seat against one cap", async () => {
 	// Issue #87: the Parallel limit counts a Consultation alike with a
 	// ticket. The running ticket and the working Consultation each hold
@@ -711,8 +704,9 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 	// cap, from the same shared seat count the gates read. When the
 	// Consultation settles to awaiting-response it drops its seat, and the
 	// line holds the ticket's seat alone.
-	const state = openFactoryState(join(home, "state.sqlite"));
-	const ticketSource = { name: "tickets", kind: "test" };
+	let runner: ConsultationRunner;
+	const state = freshState();
+	const ticketSource = { name: "tickets", kind: "github-issues" as const };
 	const ticketOutcome = {
 		status: "success" as const,
 		fetchedAt: "2026-09-01T10:00:00.000Z",
@@ -752,20 +746,41 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 		tabId: "tab-ticket",
 		workspaceId: "ws-ticket",
 	});
-	seed(state, WORKING_ID);
 	const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
-	const inner = new FakeRunner();
-	stubPaneReadText(inner, paneId, "Agent: the review is underway");
-	const runner = new ConsultationRunner(
-		inner,
-		agentListJson([
-			{ pane: "pane-ticket", status: "working" },
-			{ pane: paneId, status: "working" },
-		]),
-	);
+	const planeRecord = await plane({
+		existing: state,
+		sources: [
+			{
+				config: {
+					name: "tickets",
+					kind: "github-issues",
+					refreshIntervalSeconds: 60,
+					repositories: ["acme/factory"],
+					host: "github.com",
+				},
+				tickets: [selectedTicket],
+			},
+		],
+		config: { consultationTypes: grillTypes },
+		commands: (fake, home) => {
+			const _checkout = join(home, "src", "factory");
+			stubPaneReadText(fake, paneId, "Agent: the review is underway");
+		},
+		runner: (fake) =>
+			(runner = new ConsultationRunner(
+				fake,
+				agentListJson([
+					{ pane: "pane-ticket", status: "working" },
+					{ pane: paneId, status: "working" },
+				]),
+			)),
+	});
+	const checkout = join(planeRecord.home, "src", "factory");
+	seed(state, WORKING_ID, checkout);
 	try {
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes("● manual 2/2"), "the combined seat count");
 				// The Consultation settles to awaiting-response on the idle
 				// poll: that state holds no seat, and the line drops to the
@@ -782,10 +797,11 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 			{
 				width: WIDTH,
 				height: 32,
-				props: // No initialTickets: the observation loop must poll herdr for the
-					// seat count's agent list, and it stands down on a test
-					// projection.
-					{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+				// The observation loop must poll herdr for the seat count's
+				// agent list, so the boot names the poll: the held policy would
+				// hold the poll, and the frame would stand on no agent list.
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 100 },
 			},
 		);
 	} finally {
@@ -794,11 +810,13 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 });
 describe("Consultation recovery and replacement through the UI", () => {
 	test("an interrupted opening recovers with r", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, OPENING_ID, { agent: false });
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: reviewing");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			commands: stubReviewingCheckout,
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, OPENING_ID, checkout, { agent: false });
 		try {
 			await withApp(
 				async (setup) => {
@@ -820,33 +838,36 @@ describe("Consultation recovery and replacement through the UI", () => {
 					);
 					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("working");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("recovery re-checks the stored settings before it resumes the Agent", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		let runner: ConsultationRunner;
+		const state = freshState();
 		// The interrupted launch recorded its Agent pane and the count its type
 		// named, and never reached a settled state. Herdr reports no Agent, so the
 		// stored count is the one thing that can refuse this recovery: pi maps no
 		// context window setting.
-		seed(state, OPENING_ID, {
+		const short = OPENING_ID.slice(0, 8);
+		const { planeRecord } = await consultationBoot({
+			state,
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, OPENING_ID, checkout, {
 			agent: false,
 			createdAt: "2026-09-01T10:00:00.000Z",
 			contextWindow: "131072",
 		});
-		const short = OPENING_ID.slice(0, 8);
 		state.consultationRecord.recordConsultationAgentHandles(OPENING_ID, {
 			paneId: `pane-${short}`,
 			tabId: `tab-${short}`,
 			workspaceId: `ws-${short}`,
 			sessionId: `sess-${short}`,
 		});
-		const inner = new FakeRunner();
-		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
 				async (setup) => {
@@ -865,20 +886,21 @@ describe("Consultation recovery and replacement through the UI", () => {
 					expect(commands).not.toContain("agent start");
 					expect(commands).not.toContain("agent prompt");
 				},
-				{ width: WIDTH, height: 30, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 30, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a failed Consultation refuses r and opens a Replacement launcher from c", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, FAILED_ID, { agent: false });
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			commands: stubReviewingCheckout,
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, FAILED_ID, checkout, { agent: false });
 		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: reviewing");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
 		const expectedInput = state.consultationRecord.replacementInput(FAILED_ID);
 		try {
 			await withApp(
@@ -937,14 +959,13 @@ describe("Consultation recovery and replacement through the UI", () => {
 					expect(replacements[0].replacementOf).toBe(FAILED_ID);
 					expect(replacements[0].state).toBe("working");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
 });
-
 /**
  * Enter answers the Consultation under the cursor with the surface its state
  * needs: the Agent or the response on a live record, the recovery panel on a
@@ -953,11 +974,13 @@ describe("Consultation recovery and replacement through the UI", () => {
  */
 describe("Consultation Enter reaches the recovery surface its state needs", () => {
 	test("Enter on an opening Consultation opens the recovery panel, and Recover retries it", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, OPENING_ID, { agent: false });
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: reviewing");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			commands: stubReviewingCheckout,
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, OPENING_ID, checkout, { agent: false });
 		try {
 			await withApp(
 				async (setup) => {
@@ -988,17 +1011,19 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					);
 					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("working");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the recovery panel's Close takes an opening Consultation through its dialog", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, OPENING_ID, { agent: false });
-		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, OPENING_ID, checkout, { agent: false });
 		try {
 			await withApp(
 				async (setup) => {
@@ -1026,20 +1051,21 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					);
 					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("opening");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("Enter on a missing Consultation opens the recovery panel, and Replace links its replacement", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, MISSING_ID, { agent: false });
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			commands: stubReviewingCheckout,
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, MISSING_ID, checkout, { agent: false });
 		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: reviewing");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
 		const expectedInput = state.consultationRecord.replacementInput(MISSING_ID);
 		try {
 			await withApp(
@@ -1079,19 +1105,23 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					// The replaced record keeps its own state beside the new one.
 					expect(state.consultationRecord.consultation(MISSING_ID)?.state).toBe("missing");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the recovery panel's Close retires a failed record without a dialog", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, FAILED_ID, { agent: false });
-		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const short = FAILED_ID.slice(0, 8);
-		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		const { planeRecord } = await consultationBoot({
+			state,
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, FAILED_ID, checkout, { agent: false });
+		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
 		try {
 			await withApp(
 				async (setup) => {
@@ -1112,18 +1142,20 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					expect(frame).not.toContain("Close Consultation");
 					expect(state.consultationRecord.consultation(FAILED_ID)?.state).toBe("closed");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("Enter on a closing Consultation opens the close panel's Retry and Force-close", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, CLOSE_A_ID);
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, CLOSE_A_ID, checkout);
 		state.consultationRecord.beginConsultationClose(CLOSE_A_ID);
-		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
 		try {
 			await withApp(
 				async (setup) => {
@@ -1141,22 +1173,24 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					expect(frameText(panel)).toContain("Force-close");
 					expect(state.consultationRecord.consultation(CLOSE_A_ID)?.state).toBe("closing");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("Enter on a closed Consultation says the record is already closed", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, CLOSED_DIRECT_ID);
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, CLOSED_DIRECT_ID, checkout);
 		state.consultationRecord.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", {
 			settledStatus: "idle",
 		});
 		state.consultationRecord.beginConsultationClose(CLOSED_DIRECT_ID);
 		state.consultationRecord.finishConsultationClose(CLOSED_DIRECT_ID);
-		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
 		try {
 			await withApp(
 				async (setup) => {
@@ -1169,25 +1203,29 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					);
 					expect(state.consultationRecord.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
 });
-
 describe("Consultation responses through the UI", () => {
 	test("a response becomes a turn only after Herdr accepts the prompt", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, RESPONSE_ID);
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, `pane-${RESPONSE_ID.slice(0, 8)}`, "Agent: waiting");
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, RESPONSE_ID, checkout);
 		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "first answer", {
 			settledStatus: "idle",
 		});
 		state.consultationRecord.setConsultationDraft(RESPONSE_ID, "follow up");
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, `pane-${RESPONSE_ID.slice(0, 8)}`, "Agent: waiting");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
 				async (setup) => {
@@ -1213,27 +1251,31 @@ describe("Consultation responses through the UI", () => {
 					expect(turns).toHaveLength(2);
 					expect(turns[1].input).toBe("follow up");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a rejected prompt keeps the draft and leaves no pending delivery", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, RESPONSE_ID);
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				fake.set("herdr", ["agent", "prompt", AGENT, "follow up"], {
+					code: 1,
+					stderr: "refused\n",
+				});
+				stubPaneReadText(fake, `pane-${RESPONSE_ID.slice(0, 8)}`, "Agent: waiting");
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, RESPONSE_ID, checkout);
 		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "first answer", {
 			settledStatus: "idle",
 		});
 		state.consultationRecord.setConsultationDraft(RESPONSE_ID, "follow up");
-		const inner = new FakeRunner();
-		inner.set("herdr", ["agent", "prompt", AGENT, "follow up"], {
-			code: 1,
-			stderr: "refused\n",
-		});
-		stubPaneReadText(inner, `pane-${RESPONSE_ID.slice(0, 8)}`, "Agent: waiting");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
 				async (setup) => {
@@ -1255,23 +1297,30 @@ describe("Consultation responses through the UI", () => {
 					expect(state.consultationRecord.consultationTurns(RESPONSE_ID)).toHaveLength(1);
 					expect(frameText(setup.captureCharFrame())).toContain("follow up");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the settled Agent output stays visible until an accepted response opens the next turn", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, RESPONSE_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
+		const paneId = `pane-${RESPONSE_ID.slice(0, 8)}`;
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, paneId, "Agent: the design holds");
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(fake, agentListJson([{ pane: paneId, status: "idle" }]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, RESPONSE_ID, checkout);
 		state.consultationRecord.settleConsultationTurn(RESPONSE_ID, null, "the design holds", {
 			settledStatus: "idle",
 		});
-		const paneId = `pane-${RESPONSE_ID.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, paneId, "Agent: the design holds");
-		const runner = new ConsultationRunner(inner, agentListJson([{ pane: paneId, status: "idle" }]));
 		try {
 			await withApp(
 				async (setup) => {
@@ -1292,7 +1341,6 @@ describe("Consultation responses through the UI", () => {
 					await press(setup, "r", "refresh instead of response", (f) =>
 						messageRowOf(f).includes("no Ticket sources exist"),
 					);
-
 					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
 					setup.mockInput.typeText("then ship it");
 					await sendResponseDraft(setup);
@@ -1310,7 +1358,8 @@ describe("Consultation responses through the UI", () => {
 				{
 					width: WIDTH,
 					height: 32,
-					props: { state, runner, config: configFor(), home, pollIntervalMs: 100 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
 				},
 			);
 		} finally {
@@ -1318,16 +1367,22 @@ describe("Consultation responses through the UI", () => {
 		}
 	});
 });
-
 describe("Agent interaction through the UI", () => {
 	test("interaction renders pane ANSI safely and serializes Unicode input", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, INTERACTION_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
-		const inner = stubHerdrWorld(interactionStanding(paneId));
-		stubPaneReadText(inner, paneId, "Agent: working");
-		stubPaneReadAnsi(inner, paneId, "\u001b[31mERROR: authz\u001b[0m and more");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, paneId, "Agent: working");
+				stubPaneReadAnsi(fake, paneId, "\u001b[31mERROR: authz\u001b[0m and more");
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, INTERACTION_ID, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -1354,69 +1409,81 @@ describe("Agent interaction through the UI", () => {
 					await pressEnter(setup, "the frame to stay in interaction", (f) =>
 						f.includes("F12 Exit interaction"),
 					);
-					// The sends reach the pane the world holds; the test reads
-					// what the pane received, not the commands that carried it.
-					await waitForSends(inner, paneId, "the serialized interaction input");
-					expect(inner.sentTextFor(paneId)).toEqual(["h\u00e9"]);
-					expect(inner.sentKeysFor(paneId)).toEqual(["enter"]);
+					await waitForCommands(
+						runner,
+						[`herdr pane send-text ${paneId} h\u00e9`, `herdr pane send-keys ${paneId} enter`],
+						"the serialized interaction input",
+					);
+					const commands = runner.commands();
+					const textAt = commands.indexOf(`herdr pane send-text ${paneId} h\u00e9`);
+					const keyAt = commands.indexOf(`herdr pane send-keys ${paneId} enter`);
+					expect(textAt).toBeGreaterThan(-1);
+					expect(keyAt).toBeGreaterThan(textAt);
 					// The configured exit key leaves the mode.
 					await pressF12(setup, "the exit from interaction mode", (f) =>
 						f.includes("left Agent interaction mode"),
 					);
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
 });
-
 describe("Consultation close and cleanup through the UI", () => {
 	test("close takes down only what is exclusively owned, and keeps every worktree", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		// A: an exclusive workspace: the workspace close is safe.
-		seed(state, CLOSE_A_ID);
-		seedResources(state, CLOSE_A_ID);
-		// B: a foreign tab shares the workspace: only the owned tab closes.
-		seed(state, CLOSE_B_ID);
-		seedResources(state, CLOSE_B_ID);
-		// C: a foreign pane sits in the owned tab: only the pane closes.
-		seed(state, CLOSE_C_ID);
-		seedResources(state, CLOSE_C_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const a = CLOSE_A_ID.slice(0, 8);
 		const b = CLOSE_B_ID.slice(0, 8);
 		const c = CLOSE_C_ID.slice(0, 8);
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, `pane-${a}`, "Agent: done a");
-		stubPaneReadText(inner, `pane-${b}`, "Agent: done b");
-		stubPaneReadText(inner, `pane-${c}`, "Agent: done c");
-		stubTopology(inner, `ws-${a}`, [`tab-${a}`], [{ pane_id: `pane-${a}`, tab_id: `tab-${a}` }]);
-		stubTopology(
-			inner,
-			`ws-${b}`,
-			[`tab-${b}`, "tab-foreign"],
-			[{ pane_id: `pane-${b}`, tab_id: `tab-${b}` }],
-		);
-		stubTopology(
-			inner,
-			`ws-${c}`,
-			[`tab-${c}`],
-			[
-				{ pane_id: `pane-${c}`, tab_id: `tab-${c}` },
-				{ pane_id: "pane-foreign", tab_id: `tab-${c}` },
-			],
-		);
 		// The close verifies each Agent's identity before it takes anything
 		// down, so the list holds all three at their recorded panes.
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([
-				{ pane: `pane-${a}`, status: "idle" },
-				{ pane: `pane-${b}`, status: "idle" },
-				{ pane: `pane-${c}`, status: "idle" },
-			]),
-		);
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, `pane-${a}`, "Agent: done a");
+				stubPaneReadText(fake, `pane-${b}`, "Agent: done b");
+				stubPaneReadText(fake, `pane-${c}`, "Agent: done c");
+				stubTopology(fake, `ws-${a}`, [`tab-${a}`], [{ pane_id: `pane-${a}`, tab_id: `tab-${a}` }]);
+				stubTopology(
+					fake,
+					`ws-${b}`,
+					[`tab-${b}`, "tab-foreign"],
+					[{ pane_id: `pane-${b}`, tab_id: `tab-${b}` }],
+				);
+				stubTopology(
+					fake,
+					`ws-${c}`,
+					[`tab-${c}`],
+					[
+						{ pane_id: `pane-${c}`, tab_id: `tab-${c}` },
+						{ pane_id: "pane-foreign", tab_id: `tab-${c}` },
+					],
+				);
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([
+						{ pane: `pane-${a}`, status: "idle" },
+						{ pane: `pane-${b}`, status: "idle" },
+						{ pane: `pane-${c}`, status: "idle" },
+					]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		// A: an exclusive workspace: the workspace close is safe.
+		seed(state, CLOSE_A_ID, checkout);
+		seedResources(state, CLOSE_A_ID);
+		// B: a foreign tab shares the workspace: only the owned tab closes.
+		seed(state, CLOSE_B_ID, checkout);
+		seedResources(state, CLOSE_B_ID);
+		// C: a foreign pane sits in the owned tab: only the pane closes.
+		seed(state, CLOSE_C_ID, checkout);
+		seedResources(state, CLOSE_C_ID);
 		try {
 			await withApp(
 				async (setup) => {
@@ -1447,36 +1514,43 @@ describe("Consultation close and cleanup through the UI", () => {
 						expect(retained[0].details).toContain("retained after close");
 					}
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a failed cleanup recovers through the force-close panel", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, FORCE_ID);
-		seedResources(state, FORCE_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const short = FORCE_ID.slice(0, 8);
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, `pane-${short}`, "Agent: closing output");
-		stubTopology(
-			inner,
-			`ws-${short}`,
-			[`tab-${short}`],
-			[{ pane_id: `pane-${short}`, tab_id: `tab-${short}` }],
-		);
-		inner.set("herdr", ["workspace", "close", `ws-${short}`], {
-			code: 1,
-			stderr: "refused\n",
-		});
 		// The close verifies the Agent's identity before it takes the workspace
 		// down, so the list holds the record's Agent at its recorded pane.
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: `pane-${short}`, status: "idle" }]),
-		);
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, `pane-${short}`, "Agent: closing output");
+				stubTopology(
+					fake,
+					`ws-${short}`,
+					[`tab-${short}`],
+					[{ pane_id: `pane-${short}`, tab_id: `tab-${short}` }],
+				);
+				fake.set("herdr", ["workspace", "close", `ws-${short}`], {
+					code: 1,
+					stderr: "refused\n",
+				});
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: `pane-${short}`, status: "idle" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, FORCE_ID, checkout);
+		seedResources(state, FORCE_ID);
 		try {
 			await withApp(
 				async (setup) => {
@@ -1522,18 +1596,25 @@ describe("Consultation close and cleanup through the UI", () => {
 						.filter((resource) => resource.kind === "worktree");
 					expect(worktrees[0]).toMatchObject({ owned: false });
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a missing or a failed Consultation closes directly, without a dialog", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		let runner: ConsultationRunner;
+		const state = freshState();
 		// Neither record holds an Agent, so the close has nothing to confirm.
-		seed(state, MISSING_DIRECT_ID, { agent: false });
-		seed(state, FAILED_DIRECT_ID, { agent: false });
+		const missing8 = MISSING_DIRECT_ID.slice(0, 8);
+		const failed8 = FAILED_DIRECT_ID.slice(0, 8);
+		const { planeRecord } = await consultationBoot({
+			state,
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, MISSING_DIRECT_ID, checkout, { agent: false });
+		seed(state, FAILED_DIRECT_ID, checkout, { agent: false });
 		state.consultationRecord.setConsultationState(
 			MISSING_DIRECT_ID,
 			"missing",
@@ -1544,9 +1625,6 @@ describe("Consultation close and cleanup through the UI", () => {
 			"failed",
 			"herdr refused the launch",
 		);
-		const missing8 = MISSING_DIRECT_ID.slice(0, 8);
-		const failed8 = FAILED_DIRECT_ID.slice(0, 8);
-		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
 		try {
 			await withApp(
 				async (setup) => {
@@ -1575,22 +1653,24 @@ describe("Consultation close and cleanup through the UI", () => {
 					expect(state.consultationRecord.consultation(FAILED_DIRECT_ID)?.state).toBe("closed");
 					expect(frame).not.toContain("Close Consultation");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the Delete key on a closed Consultation removes it behind the confirmation", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, CLOSED_DIRECT_ID);
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, CLOSED_DIRECT_ID, checkout);
 		state.consultationRecord.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", {
 			settledStatus: "idle",
 		});
 		state.consultationRecord.beginConsultationClose(CLOSED_DIRECT_ID);
 		state.consultationRecord.finishConsultationClose(CLOSED_DIRECT_ID);
-		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
 		try {
 			await withApp(
 				async (setup) => {
@@ -1612,35 +1692,42 @@ describe("Consultation close and cleanup through the UI", () => {
 					);
 					expect(state.consultationRecord.consultation(CLOSED_DIRECT_ID)).toBeUndefined();
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the close confirmation lets go of the keys when the Agent dies first", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, CONFIRM_GONE_ID);
-		state.consultationRecord.setConsultationState(CONFIRM_GONE_ID, "working");
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const gone8 = CONFIRM_GONE_ID.slice(0, 8);
 		// The Agent is alive at first: the observation loop matches its pane,
 		// so the Consultation stays working until the list loses it.
-		const inner = new FakeRunner();
 		// The workspace of the dead Agent holds the Consultation's own tab and
 		// pane alone, so the direct close takes the pane down and finishes.
-		inner.set("herdr", ["tab", "list", "--workspace", `ws-${gone8}`], {
-			stdout: JSON.stringify({ result: { tabs: [{ tab_id: `tab-${gone8}` }] } }),
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				fake.set("herdr", ["tab", "list", "--workspace", `ws-${gone8}`], {
+					stdout: JSON.stringify({ result: { tabs: [{ tab_id: `tab-${gone8}` }] } }),
+				});
+				fake.set("herdr", ["pane", "list", "--workspace", `ws-${gone8}`], {
+					stdout: JSON.stringify({
+						result: { panes: [{ pane_id: `pane-${gone8}`, tab_id: `tab-${gone8}` }] },
+					}),
+				});
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: `pane-${gone8}`, status: "working" }]),
+				)),
 		});
-		inner.set("herdr", ["pane", "list", "--workspace", `ws-${gone8}`], {
-			stdout: JSON.stringify({
-				result: { panes: [{ pane_id: `pane-${gone8}`, tab_id: `tab-${gone8}` }] },
-			}),
-		});
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: `pane-${gone8}`, status: "working" }]),
-		);
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, CONFIRM_GONE_ID, checkout);
+		state.consultationRecord.setConsultationState(CONFIRM_GONE_ID, "working");
 		try {
 			await withApp(
 				async (setup) => {
@@ -1675,9 +1762,8 @@ describe("Consultation close and cleanup through the UI", () => {
 				{
 					width: WIDTH,
 					height: 32,
-					props: // The observation loop runs only on the real projection, so this
-						// boot carries no initialTickets, like the settle test above.
-						{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
 				},
 			);
 		} finally {
@@ -1685,14 +1771,18 @@ describe("Consultation close and cleanup through the UI", () => {
 		}
 	});
 });
-
 describe("Consultation geometry, privacy, and history through the UI", () => {
 	test("a narrow terminal keeps the Consultation list beside the detail", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, WORKING_ID);
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, `pane-${WORKING_ID.slice(0, 8)}`, "Agent: working");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, `pane-${WORKING_ID.slice(0, 8)}`, "Agent: working");
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, WORKING_ID, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -1709,23 +1799,24 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					expect(frameText(crossed)).toContain("no ticket selected");
 					expect(crossed).toContain("┌─❯ Tickets");
 				},
-				{ width: 70, height: 32, props: bootProps(state, runner) },
+				{ width: 70, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("consultation history stays out of the ticket view and delete removes it", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, CLOSED_ID);
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, CLOSED_ID, checkout);
 		state.consultationRecord.settleConsultationTurn(CLOSED_ID, null, "secret output", {
 			settledStatus: "idle",
 		});
 		state.consultationRecord.beginConsultationClose(CLOSED_ID);
 		state.consultationRecord.finishConsultationClose(CLOSED_ID);
-		const inner = new FakeRunner();
-		const runner = new ConsultationRunner(inner, agentListJson([]));
 		try {
 			await withApp(
 				async (setup) => {
@@ -1757,27 +1848,34 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					);
 					expect(state.consultationRecord.consultation(CLOSED_ID)).toBeUndefined();
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
 });
-
 describe("Consultation attention through the UI", () => {
 	test("a newly settled turn rings once, and the startup reconciliation never rings", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, WORKING_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, paneId, "Agent: answer one");
 		// The startup cycle finds the Agent still working: nothing settles.
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: paneId, status: "working", seq: 1 }]),
-		);
 		const bells = countBells();
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, paneId, "Agent: answer one");
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: paneId, status: "working", seq: 1 }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, WORKING_ID, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -1818,7 +1916,8 @@ describe("Consultation attention through the UI", () => {
 				{
 					width: WIDTH,
 					height: 32,
-					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 50 },
 				},
 			);
 		} finally {
@@ -1826,19 +1925,26 @@ describe("Consultation attention through the UI", () => {
 			state.close();
 		}
 	});
-
 	test("a settle found by the startup reconciliation rings no bell", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, WORKING_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, paneId, "Agent: answer one");
 		// The startup cycle finds the Agent already settled.
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: paneId, status: "idle", seq: 1 }]),
-		);
 		const bells = countBells();
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, paneId, "Agent: answer one");
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: paneId, status: "idle", seq: 1 }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, WORKING_ID, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -1862,7 +1968,8 @@ describe("Consultation attention through the UI", () => {
 				{
 					width: WIDTH,
 					height: 32,
-					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 50 },
 				},
 			);
 		} finally {
@@ -1870,20 +1977,23 @@ describe("Consultation attention through the UI", () => {
 			state.close();
 		}
 	});
-
 	test("the cross takes the first Consultation row, and awaiting response wins", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		let runner: ConsultationRunner;
+		const state = freshState();
 		// Creation order is future-dated so the wall-clock stamps of the state
 		// transitions (now) stay older than every seeded created_at.
 		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
-		seed(state, FAILED_ID, { agent: false, createdAt: t(1) });
-		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
 		await sleep(20);
-		seed(state, MISSING_ID, { agent: true, createdAt: t(3) });
+		const { planeRecord } = await consultationBoot({
+			state,
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, FAILED_ID, checkout, { agent: false, createdAt: t(1) });
+		state.consultationRecord.failConsultationOpening(FAILED_ID, "herdr refused the launch");
+		seed(state, MISSING_ID, checkout, { agent: true, createdAt: t(3) });
 		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
-		seed(state, OPENING_ID, { agent: false, createdAt: t(2) });
-		const inner = new FakeRunner();
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		seed(state, OPENING_ID, checkout, { agent: false, createdAt: t(2) });
 		try {
 			await withApp(
 				async (setup) => {
@@ -1898,7 +2008,7 @@ describe("Consultation attention through the UI", () => {
 					// hold the observation off, so the Refresh key re-projects the
 					// list; the new row takes the top and the cursor follows its
 					// retained row. One more step up takes it.
-					seed(state, AWAITING_ID, { agent: true, createdAt: t(4) });
+					seed(state, AWAITING_ID, checkout, { agent: true, createdAt: t(4) });
 					state.consultationRecord.settleConsultationTurn(AWAITING_ID, null, "answer", {
 						settledStatus: "idle",
 					});
@@ -1920,23 +2030,30 @@ describe("Consultation attention through the UI", () => {
 					);
 					expect(detailPaneText(selected)).toContain("State: awaiting-response");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a Consultation that needs the operator adds no row to the compact frame", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, AWAITING_ID, { agent: true });
+		let runner: ConsultationRunner;
+		const state = freshState();
+		const paneId = `pane-${AWAITING_ID.slice(0, 8)}`;
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, paneId, "Agent: waiting");
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(fake, agentListJson([{ pane: paneId, status: "idle" }]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, AWAITING_ID, checkout, { agent: true });
 		state.consultationRecord.settleConsultationTurn(AWAITING_ID, null, "answer", {
 			settledStatus: "idle",
 		});
-		const paneId = `pane-${AWAITING_ID.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, paneId, "Agent: waiting");
-		const runner = new ConsultationRunner(inner, agentListJson([{ pane: paneId, status: "idle" }]));
 		try {
 			await withApp(
 				async (setup) => {
@@ -1948,7 +2065,6 @@ describe("Consultation attention through the UI", () => {
 						"the attention line in the tickets view",
 					);
 					expect(normal).toContain("recovery: 0");
-
 					// Below the minimum size the compact frame keeps exactly its
 					// reserved rows: the attention line adds none of them.
 					setup.resize(25, 10);
@@ -1958,20 +2074,22 @@ describe("Consultation attention through the UI", () => {
 					expect(rows[1]).toContain("Terminal too small");
 					expect(rows.join("\n")).not.toContain("awaiting response");
 				},
-				{ width: WIDTH, height: 32, props: bootProps(state, runner) },
+				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
 		} finally {
 			state.close();
 		}
 	});
 });
-
 describe("Consultation live-worktree launch through the UI", () => {
 	test("an existing checkout workspace receives the Consultation in a fresh tab", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(liveLaunchStanding(true));
-		stubPaneReadText(inner, "pane-1", "Agent: live answer");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			config: { consultationTypes: liveGrillTypes },
+			commands: stubLiveExistingCheckout,
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
 		try {
 			await withApp(
 				async (setup) => {
@@ -1988,51 +2106,70 @@ describe("Consultation live-worktree launch through the UI", () => {
 						[
 							"herdr workspace list",
 							`herdr tab create --workspace ws-live --cwd ${checkout} --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the live launch sequence",
 					);
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
-					expect(consultation.paneId).toBe("pane-1");
+					expect(consultation.paneId).toBe("pane-c1");
 					expect(consultation.workspaceId).toBe("ws-live");
 				},
-				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
+				{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a Consultation type's context window rides on its agent start", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(liveLaunchStanding(true));
-		// The count is part of the argv, so the stub that answers the start
-		// names it: a Consultation that loses its context window never reaches
-		// this answer and the launch below fails.
-		inner.set(
-			"herdr",
-			["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-1", "--", "--context", "131072"],
-			{ stdout: JSON.stringify({ result: { agent: { session_id: "sess-c1" } } }) },
-		);
-		stubPaneReadText(inner, "pane-1", "Agent: live answer");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
-		const config: FactoryConfig = {
-			...liveConfigFor(),
-			agents: {
-				...BASE_CONFIG.agents,
-				pi: { ...BASE_CONFIG.agents.pi, contextWindow: "--context {value}" },
-			},
-			consultationTypes: {
-				"grill-live": {
-					agent: "pi",
-					environment: "live-worktree",
-					template: "/grill {input}",
-					contextWindow: "131072",
+		let runner: ConsultationRunner;
+		const state = freshState();
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config: {
+				agents: {
+					...BASE_CONFIG.agents,
+					pi: { ...BASE_CONFIG.agents.pi, contextWindow: "--context {value}" },
+				},
+				consultationTypes: {
+					"grill-live": {
+						agent: "pi",
+						environment: "live-worktree",
+						template: "/grill {input}",
+						contextWindow: "131072",
+					},
 				},
 			},
-		};
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubLiveCheckout(fake, checkout, false);
+				stubLiveLaunchExisting(fake, checkout);
+				// The count is part of the argv, so the stub that answers the
+				// start names it: a Consultation that loses its context window
+				// never reaches this answer and the launch below fails.
+				fake.set(
+					"herdr",
+					[
+						"agent",
+						"start",
+						AGENT,
+						"--kind",
+						"pi",
+						"--pane",
+						"pane-c1",
+						"--",
+						"--context",
+						"131072",
+					],
+					{ stdout: JSON.stringify({ result: { agent: { session_id: "sess-c1" } } }) },
+				);
+				stubPaneReadText(fake, "pane-c1", "Agent: live answer");
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
 		try {
 			await withApp(
 				async (setup) => {
@@ -2048,7 +2185,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					await waitForCommands(
 						runner,
-						[`herdr agent start ${AGENT} --kind pi --pane pane-1 -- --context 131072`],
+						[`herdr agent start ${AGENT} --kind pi --pane pane-c1 -- --context 131072`],
 						"the live start with the count",
 					);
 					// The record keeps the count the Agent started with, so a
@@ -2056,18 +2193,25 @@ describe("Consultation live-worktree launch through the UI", () => {
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.contextWindow).toBe("131072");
 				},
-				{ width: WIDTH, height: 32, props: { state, runner, config, home } },
+				{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a missing checkout workspace is created and uses its root pane", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(liveLaunchStanding(false));
-		stubPaneReadText(inner, "pane-1", "Agent: live answer");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			config: { consultationTypes: liveGrillTypes },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubLiveCheckout(fake, checkout, false);
+				stubLiveLaunchNew(fake, checkout);
+				stubPaneReadText(fake, "pane-c1", "Agent: live answer");
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const _checkout = join(planeRecord.home, "src", "factory");
 		try {
 			await withApp(
 				async (setup) => {
@@ -2081,16 +2225,15 @@ describe("Consultation live-worktree launch through the UI", () => {
 					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
-					expect(consultation.paneId).toBe("pane-1");
+					expect(consultation.paneId).toBe("pane-c1");
 					expect(consultation.workspaceId).toBe("ws-new");
 				},
-				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
+				{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	/**
 	 * ADR 0060: the ignore moves a resting row, and it changes no fact - and no
 	 * machine read follows the operator's List filter. The safety read that names
@@ -2101,9 +2244,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 	 * would lose. Neither conflict degrades to a bare Herdr Agent.
 	 */
 	test("every live checkout conflict is named whatever the List filter draws", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(liveLaunchStanding(true));
-		stubPaneReadText(inner, "pane-1", "Agent: live answer");
+		let runner!: ConsultationRunner;
+		const state = freshState();
 		// Two Tickets work in this exact checkout: the judged-out one and the one
 		// the operator left in the list. Both Agents are live; neither row's place
 		// in the filter decides whether the safety read names it.
@@ -2141,6 +2283,34 @@ describe("Consultation live-worktree launch through the UI", () => {
 			});
 		}
 		expect(state.ticketWorkCycle.setTicketIgnored(ignoredTicket, true, null)).toEqual({ ok: true });
+		const planeRecord = await plane({
+			existing: state,
+			sources: [
+				{
+					config: {
+						name: "issues",
+						kind: "github-issues",
+						refreshIntervalSeconds: 60,
+						repositories: ["acme/factory"],
+						host: "github.com",
+					},
+					tickets: [
+						ticketOf(issueTicket(ignoredTicket, { title: "Watch agent turns" })),
+						ticketOf(
+							issueTicket(listedTicket, {
+								title: "Rank tickets by priority",
+								externalKey: "#7",
+							}),
+						),
+					],
+				},
+			],
+			config: { consultationTypes: liveGrillTypes, maxParallelAgents: 4 },
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: stubLiveExistingCheckout,
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
 		const conflictList = JSON.stringify({
 			result: {
 				agents: [
@@ -2165,10 +2335,11 @@ describe("Consultation live-worktree launch through the UI", () => {
 				],
 			},
 		});
-		const runner = new ConsultationRunner(inner, conflictList);
+		runner.agentListJson = conflictList;
 		try {
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
 					// The pile view: the drawn rows hold only the Ticket the operator
 					// judged out, so the list the screen shows is not the list the
 					// machine reads.
@@ -2197,17 +2368,12 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(frameText(panel)).toContain(`Conflict: Ticket ${listedTicket}`);
 					expect(frameText(panel)).not.toContain("Conflict: Herdr Agent");
 				},
-				{
-					width: WIDTH,
-					height: 32,
-					props: { state, runner, config: { ...liveConfigFor(), maxParallelAgents: 4 }, home },
-				},
+				{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	/**
 	 * ADR 0060: the launcher's repository choices come from the rows the machine
 	 * reads, so a cycle of the operator's List filter moves nothing and
@@ -2218,8 +2384,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 	 * second. The cycle visits all three choices, and it asks git for nothing new.
 	 */
 	test("the repository catalog holds every Ticket's repository across a filter cycle", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(worldCheckout());
+		let runner: ConsultationRunner;
+		const state = freshState();
 		// Two repositories the config does not name, so the catalog can only learn
 		// them from a Ticket's own row: one on a judged-out Ticket with live work,
 		// one on a settled Ticket the pile leaves out.
@@ -2271,10 +2437,54 @@ describe("Consultation live-worktree launch through the UI", () => {
 		// One row the operator judged out, one row they left in the list: each
 		// carries a repository no other row names.
 		expect(state.ticketWorkCycle.setTicketIgnored(judged, true, null)).toEqual({ ok: true });
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		const planeRecord = await plane({
+			existing: state,
+			sources: [
+				{
+					config: {
+						name: "issues",
+						kind: "github-issues",
+						refreshIntervalSeconds: 60,
+						repositories: ["acme/factory"],
+						host: "github.com",
+					},
+					tickets: [
+						ticketOf(
+							issueTicket(judged, {
+								title: "Watch agent turns",
+								repository: {
+									identity: "github.com/acme/billing",
+									displayName: "acme/billing",
+									cloneUrl: "https://github.com/acme/billing.git",
+								},
+							}),
+						),
+						ticketOf(
+							issueTicket(settled, {
+								title: "Rank tickets by priority",
+								externalKey: "#7",
+								repository: {
+									identity: "github.com/acme/tools",
+									displayName: "acme/tools",
+									cloneUrl: "https://github.com/acme/tools.git",
+								},
+							}),
+						),
+					],
+				},
+			],
+			config: { consultationTypes: liveGrillTypes },
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubLiveCheckout(fake, checkout, false);
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
 		try {
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
 					// The pile view: the drawn rows hold only the judged-out Ticket, so
 					// acme/tools stands on no drawn row at all.
 					await press(setup, "f", "the pile", (f) => f.includes("ignored: 1"));
@@ -2306,19 +2516,22 @@ describe("Consultation live-worktree launch through the UI", () => {
 						.filter((command) => command.includes("rev-parse")).length;
 					expect(validatedAfter).toBe(validatedBefore);
 				},
-				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
+				{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a live checkout conflict blocks the launch until one explicit confirm", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(liveLaunchStanding(true));
-		stubPaneReadText(inner, "pane-1", "Agent: live answer");
+		let runner!: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			config: { consultationTypes: liveGrillTypes },
+			commands: stubLiveExistingCheckout,
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
 		// A Herdr agent already works in this exact checkout.
-		const conflictList = JSON.stringify({
+		runner.agentListJson = JSON.stringify({
 			result: {
 				agents: [
 					{
@@ -2332,7 +2545,6 @@ describe("Consultation live-worktree launch through the UI", () => {
 				],
 			},
 		});
-		const runner = new ConsultationRunner(inner, conflictList);
 		try {
 			await withApp(
 				async (setup) => {
@@ -2361,7 +2573,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					await waitForCommands(
 						runner,
 						[
-							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the confirmed launch sequence",
@@ -2374,13 +2586,12 @@ describe("Consultation live-worktree launch through the UI", () => {
 						state.consultationRecord.confirmedCheckoutConflicts(realpathSync(checkout)),
 					).toContain("pane-herdr");
 				},
-				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
+				{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	/**
 	 * ADR 0049 puts the Consultation's hard checks at the Work queue's enqueue:
 	 * the type still exists and its settings fit, so a start the config cannot
@@ -2395,22 +2606,31 @@ describe("Consultation live-worktree launch through the UI", () => {
 	 * walks it at the operations seam.
 	 */
 	test("an unfit Model refuses the submit before the record or any external step", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(liveLaunchStanding(true));
-		// pi reports a list the Consultation type's Model is not in.
-		inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
-		const runner = new ConsultationRunner(inner, agentListJson([]));
-		const config: FactoryConfig = {
-			...liveConfigFor(),
-			consultationTypes: {
-				"grill-live": {
-					agent: "pi",
-					environment: "live-worktree",
-					model: "openai/gpt-4o",
-					template: "/grill {input}",
+		let runner: ConsultationRunner;
+		const state = freshState();
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config: {
+				consultationTypes: {
+					"grill-live": {
+						agent: "pi",
+						environment: "live-worktree",
+						model: "openai/gpt-4o",
+						template: "/grill {input}",
+					},
 				},
 			},
-		};
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubLiveCheckout(fake, checkout, false);
+				stubLiveLaunchExisting(fake, checkout);
+				// pi reports a list the Consultation type's Model is not in.
+				fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
 		// The reads that resolve one Repository: the launcher makes them to
 		// verify its option.
 		const resolveReads = () =>
@@ -2447,20 +2667,27 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(joined).not.toContain("agent start");
 					expect(joined).not.toContain("agent prompt");
 					// The ask asks the Agent's CLI once.
-					expect(inner.modelListCalls).toEqual(["pi"]);
+					expect(planeRecord.fakeRunner.modelListCalls).toEqual(["pi"]);
 				},
-				{ width: WIDTH, height: 32, props: { state, runner, config, home } },
+				{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a dirty live checkout warns but never blocks the launch", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(liveLaunchStanding(false, true));
-		stubPaneReadText(inner, "pane-1", "Agent: live answer");
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			config: { consultationTypes: liveGrillTypes },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubLiveCheckout(fake, checkout, true);
+				stubLiveLaunchNew(fake, checkout);
+				stubPaneReadText(fake, "pane-c1", "Agent: live answer");
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const _checkout = join(planeRecord.home, "src", "factory");
 		try {
 			await withApp(
 				async (setup) => {
@@ -2477,31 +2704,37 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.state).toBe("working");
 					expect(consultation.warning).toBe("the live checkout has uncommitted changes");
 				},
-				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
+				{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a live-worktree close confirms and names the checkout that stays", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		let runner: ConsultationRunner;
+		const state = freshState();
 		// The live Consultation works in the operator's own checkout, so the
 		// confirmation names the checkout as the resource the close keeps,
 		// not the worktree and branch a worktree Consultation keeps.
-		seed(state, LIVE_CLOSE_ID, {
+		// The Agent is alive at the recorded pane: the observation loop keeps
+		// the record working while the dialog stands.
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { consultationTypes: liveGrillTypes },
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: `pane-${LIVE_CLOSE_ID.slice(0, 8)}`, status: "working" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, LIVE_CLOSE_ID, checkout, {
 			agent: true,
 			createdAt: "2026-09-01T10:00:00.000Z",
 			contextWindow: "",
 			environment: "live-worktree",
 		});
 		state.consultationRecord.setConsultationState(LIVE_CLOSE_ID, "working");
-		// The Agent is alive at the recorded pane: the observation loop keeps
-		// the record working while the dialog stands.
-		const runner = new ConsultationRunner(
-			new FakeRunner(),
-			agentListJson([{ pane: `pane-${LIVE_CLOSE_ID.slice(0, 8)}`, status: "working" }]),
-		);
 		try {
 			await withApp(
 				async (setup) => {
@@ -2526,29 +2759,36 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					expect(state.consultationRecord.consultation(LIVE_CLOSE_ID)?.state).toBe("working");
 				},
-				{ width: WIDTH, height: 32, props: { state, runner, config: liveConfigFor(), home } },
+				{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
 		} finally {
 			state.close();
 		}
 	});
 });
-
 describe("Consultation response gating by observed Agent status", () => {
 	test("a blocked Agent takes Enter into interaction, with the exit key shown first", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, INTERACTION_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
+		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, paneId, "Agent: blocked on approval");
+				stubPaneReadAnsi(fake, paneId, "agent: waiting for input");
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: paneId, status: "blocked" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, INTERACTION_ID, checkout);
 		state.consultationRecord.settleConsultationTurn(INTERACTION_ID, null, "first answer", {
 			settledStatus: "blocked",
 		});
-		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, paneId, "Agent: blocked on approval");
-		stubPaneReadAnsi(inner, paneId, "agent: waiting for input");
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: paneId, status: "blocked" }]),
-		);
 		try {
 			await withApp(
 				async (setup) => {
@@ -2583,25 +2823,33 @@ describe("Consultation response gating by observed Agent status", () => {
 				{
 					width: WIDTH,
 					height: 32,
-					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 50 },
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("an unblocked Agent keeps the response editor after a blocked turn", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, INTERACTION_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		// The last settled turn was blocked, but the Agent itself is idle now.
+		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, paneId, "Agent: now idle");
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(fake, agentListJson([{ pane: paneId, status: "idle" }]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, INTERACTION_ID, checkout);
 		state.consultationRecord.settleConsultationTurn(INTERACTION_ID, null, "first answer", {
 			settledStatus: "blocked",
 		});
-		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, paneId, "Agent: now idle");
-		const runner = new ConsultationRunner(inner, agentListJson([{ pane: paneId, status: "idle" }]));
 		try {
 			await withApp(
 				async (setup) => {
@@ -2631,25 +2879,33 @@ describe("Consultation response gating by observed Agent status", () => {
 				{
 					width: WIDTH,
 					height: 32,
-					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 50 },
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a forwarded input re-reads the pane before the next refresh tick", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, INTERACTION_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, paneId, "Agent: working");
-		stubPaneReadAnsi(inner, paneId, "agent: typing...");
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: paneId, status: "working" }]),
-		);
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, paneId, "Agent: working");
+				stubPaneReadAnsi(fake, paneId, "agent: typing...");
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: paneId, status: "working" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, INTERACTION_ID, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -2677,7 +2933,8 @@ describe("Consultation response gating by observed Agent status", () => {
 				{
 					width: WIDTH,
 					height: 32,
-					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 50 },
 				},
 			);
 		} finally {
@@ -2685,7 +2942,6 @@ describe("Consultation response gating by observed Agent status", () => {
 		}
 	});
 });
-
 const interactionExitCases = [
 	{
 		name: "ctrl+e",
@@ -2702,19 +2958,29 @@ const interactionExitCases = [
 		send: (setup: Setup) => setup.mockInput.pressKey("\u001b[57376u"),
 	},
 ] as const;
-
 for (const exitCase of interactionExitCases) {
 	test(`the configured ${exitCase.name} exits Agent interaction end to end`, async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, INTERACTION_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
-		const inner = new FakeRunner();
-		stubPaneReadText(inner, paneId, "Agent: working");
-		stubPaneReadAnsi(inner, paneId, "agent: waiting for input");
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: paneId, status: "working" }]),
-		);
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config: { consultationTypes: grillTypes, interactionExitKey: exitCase.config },
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, paneId, "Agent: working");
+				stubPaneReadAnsi(fake, paneId, "agent: waiting for input");
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: paneId, status: "working" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, INTERACTION_ID, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -2735,12 +3001,8 @@ for (const exitCase of interactionExitCases) {
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: { ...configFor(), interactionExitKey: exitCase.config },
-						home,
-					},
+					plane: planeRecord,
+					loopPolicy: { kind: "production" },
 					rendererOptions: { kittyKeyboard: true },
 				},
 			);
@@ -2749,21 +3011,35 @@ for (const exitCase of interactionExitCases) {
 		}
 	});
 }
-
 describe("The full Consultation operator flow", () => {
 	test("launch, settle, respond, blocked interaction, settle, close, and inspect the history", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: answer one");
-		stubPaneReadAnsi(inner, "pane-1", "agent: typing...");
-		stubTopology(inner, "ws-1", ["tab-1"], [{ pane_id: "pane-1", tab_id: "tab-1" }]);
-		inner.set("herdr", ["agent", "prompt", AGENT, "answer one"], { code: 0 });
-		inner.set("herdr", ["workspace", "close", "ws-1"], { code: 0 });
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ ...launchedAgent, status: "working", seq: 1 }]),
-		);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const bells = countBells();
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubCheckout(fake, checkout);
+				stubWorktreeLaunch(fake, checkout);
+				stubPaneReadText(fake, "pane-c1", "Agent: answer one");
+				stubPaneReadAnsi(fake, "pane-c1", "agent: typing...");
+				stubTopology(
+					fake,
+					"ws-new",
+					["tab-ws-new"],
+					[{ pane_id: "pane-c1", tab_id: "tab-ws-new" }],
+				);
+				fake.set("herdr", ["agent", "prompt", AGENT, "answer one"], { code: 0 });
+				fake.set("herdr", ["workspace", "close", "ws-new"], { code: 0 });
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ ...launchedAgent, status: "working", seq: 1 }]),
+				)),
+		});
+		const _checkout = join(planeRecord.home, "src", "factory");
 		try {
 			await withApp(
 				async (setup) => {
@@ -2815,7 +3091,7 @@ describe("The full Consultation operator flow", () => {
 						f.includes("F12 Exit interaction"),
 					);
 					setup.mockInput.pressKey("h");
-					await waitForCommands(runner, [`herdr pane send-text pane-1 h`], "the forwarded key");
+					await waitForCommands(runner, [`herdr pane send-text pane-c1 h`], "the forwarded key");
 					await pressF12(setup, "the exit from interaction mode", (f) =>
 						f.includes("left Agent interaction mode"),
 					);
@@ -2844,7 +3120,7 @@ describe("The full Consultation operator flow", () => {
 					await confirmPanel(setup, "the closing status", (f) =>
 						f.includes(`${id.slice(0, 8)} closed`),
 					);
-					await waitForCommands(runner, ["herdr workspace close ws-1"], "the workspace cleanup");
+					await waitForCommands(runner, ["herdr workspace close ws-new"], "the workspace cleanup");
 					expect(state.consultationRecord.consultation(id)?.state).toBe("closed");
 					// The captured history keeps every turn in order.
 					await press(setup, "f", "the closed history", (f) => f.includes("State: closed"));
@@ -2862,7 +3138,8 @@ describe("The full Consultation operator flow", () => {
 				{
 					width: WIDTH,
 					height: 30,
-					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 50 },
 				},
 			);
 		} finally {
@@ -2870,22 +3147,31 @@ describe("The full Consultation operator flow", () => {
 			state.close();
 		}
 	});
-
 	test("a launch stays on the launched Consultation, not on older attention", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		let runner: ConsultationRunner;
+		const state = freshState();
 		// An older Consultation already needs the operator. The launch must
 		// not jump the view onto it: the operator is watching the one it
 		// just created.
 		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
-		seed(state, MISSING_ID, { agent: true, createdAt: t(1) });
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubCheckout(fake, checkout);
+				stubWorktreeLaunch(fake, checkout);
+				stubPaneReadText(fake, "pane-c1", "Agent: answer one");
+				fake.set("herdr", ["agent", "prompt", AGENT, "answer one"], { code: 0 });
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ ...launchedAgent, status: "working", seq: 1 }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, MISSING_ID, checkout, { agent: true, createdAt: t(1) });
 		state.consultationRecord.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: answer one");
-		inner.set("herdr", ["agent", "prompt", AGENT, "answer one"], { code: 0 });
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ ...launchedAgent, status: "working", seq: 1 }]),
-		);
 		try {
 			await withApp(
 				async (setup) => {
@@ -2907,17 +3193,16 @@ describe("The full Consultation operator flow", () => {
 				{
 					width: WIDTH,
 					height: 30,
-					props: { state, runner, config: configFor(), home, pollIntervalMs: 50 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 50 },
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("a settling refresh cannot clear the Consultation's progress line", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const ticketSource = { name: "tickets", kind: "github-issues" };
+		const state = freshState();
 		const sourceConfig = {
 			name: "tickets",
 			kind: "github-issues" as const,
@@ -2930,18 +3215,29 @@ describe("The full Consultation operator flow", () => {
 			fetchedAt: "2026-09-01T10:00:00.000Z",
 			tickets: [],
 		};
-		state.sourceFact.initializeSources([ticketSource]);
-		state.sourceFact.applyFetch(ticketSource, outcome);
-		const source = new FakeSource(ticketSource.name, ticketSource.kind, outcome);
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		// The Consultation's own herdr command never answers, so the Consultation
-		// stays in flight and its progress line holds the Message line. The
-		// source's refresh runs on its own, so the two operations overlap.
-		const runner = new GatedRunner(
-			new ConsultationRunner(inner, agentListJson([])),
-			(command, args) =>
-				command === "herdr" && args.includes("worktree") && args.includes("create"),
-		);
+		state.sourceFact.initializeSources([{ name: sourceConfig.name, kind: sourceConfig.kind }]);
+		state.sourceFact.applyFetch({ name: sourceConfig.name, kind: sourceConfig.kind }, outcome);
+		const planeRecord = await plane({
+			existing: state,
+			sources: [{ config: sourceConfig, tickets: [] }],
+			config: { consultationTypes: grillTypes },
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubCheckout(fake, checkout);
+				stubWorktreeLaunch(fake, checkout);
+			},
+			// The Consultation's own herdr command never answers, so the Consultation
+			// stays in flight and its progress line holds the Message line. The
+			// source's refresh runs on its own, so the two operations overlap.
+			runner: (fake) =>
+				new GatedRunner(
+					new ConsultationRunner(fake, agentListJson([])),
+					(command, args) =>
+						command === "herdr" && args.includes("worktree") && args.includes("create"),
+				),
+		});
+		const source = planeRecord.sources[0] as FakeSource;
 		try {
 			await withApp(
 				async (setup) => {
@@ -2993,15 +3289,7 @@ describe("The full Consultation operator flow", () => {
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: { ...configFor(), sources: [sourceConfig] },
-						home,
-						sources: [source],
-						pollIntervalMs: 60_000,
-						initialTickets: [],
-					},
+					plane: planeRecord,
 				},
 			);
 		} finally {
@@ -3009,7 +3297,6 @@ describe("The full Consultation operator flow", () => {
 		}
 	});
 });
-
 describe("the Consultation detail reads the Agent's session record (ADR 0025)", () => {
 	/** Seed the record file the agent list points at. */
 	function seedRecord(id: string): { dir: string; path: string } {
@@ -3030,17 +3317,21 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 		);
 		return { dir, path };
 	}
-
 	test("the working detail shows the record's rows, and g focuses the pane without touching the Consultation", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, WORKING_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
 		const { dir, path } = seedRecord(WORKING_ID);
-		const inner = new FakeRunner();
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: paneId, status: "idle", record: path }]),
-		);
+		const { planeRecord } = await consultationBoot({
+			state,
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: paneId, status: "idle", record: path }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, WORKING_ID, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3076,9 +3367,8 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 				{
 					width: WIDTH,
 					height: 32,
-					props: // No initialTickets: the observation loop must poll herdr for
-						// the record path, and it stands down on a test projection.
-						{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
 				},
 			);
 		} finally {
@@ -3086,23 +3376,30 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 			state.close();
 		}
 	});
-
 	test("g names the workspace in the focus confirmation so the operator can switch herdr's view", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, WORKING_ID);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const short = WORKING_ID.slice(0, 8);
 		const paneId = `pane-${short}`;
 		const workspaceId = `ws-${short}`;
 		const label = "factory-consultation-11111111";
 		const { dir, path } = seedRecord(WORKING_ID);
-		const inner = new FakeRunner();
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: paneId, status: "idle", record: path }]),
-		);
-		inner.set("herdr", ["workspace", "get", workspaceId], {
-			stdout: workspaceGetJson(workspaceId, label),
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (fake, home) => {
+				const _checkout = join(home, "src", "factory");
+				fake.set("herdr", ["workspace", "get", workspaceId], {
+					stdout: workspaceGetJson(workspaceId, label),
+				});
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: paneId, status: "idle", record: path }]),
+				)),
 		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, WORKING_ID, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3125,9 +3422,8 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 				{
 					width: WIDTH,
 					height: 32,
-					props: // No initialTickets: the observation loop must poll herdr for
-						// the record path, and it stands down on a test projection.
-						{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
 				},
 			);
 		} finally {
@@ -3135,21 +3431,25 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 			state.close();
 		}
 	});
-
 	test("a closed Consultation shows its record for the after-the-fact review, and g loses its pane when the poll drops it", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const closedId = uid("9");
-		seed(state, closedId);
-		state.consultationRecord.setConsultationState(closedId, "closed");
 		const paneId = `pane-${closedId.slice(0, 8)}`;
 		const { dir, path } = seedRecord(closedId);
-		const inner = new FakeRunner();
 		// herdr still lists the Agent as done, with the record it wrote:
 		// the closed detail can read it for the after-the-fact review.
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: paneId, status: "done", record: path }]),
-		);
+		const { planeRecord } = await consultationBoot({
+			state,
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: paneId, status: "done", record: path }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, closedId, checkout);
+		state.consultationRecord.setConsultationState(closedId, "closed");
 		try {
 			await withApp(
 				async (setup) => {
@@ -3183,9 +3483,8 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 				{
 					width: WIDTH,
 					height: 32,
-					props: // No initialTickets: the observation loop must poll herdr for
-						// the record path, and it stands down on a test projection.
-						{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
 				},
 			);
 		} finally {
@@ -3194,7 +3493,6 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 		}
 	});
 });
-
 describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)", () => {
 	/**
 	 * The seat the cap tests hold: a working Consultation whose Agent the
@@ -3203,16 +3501,25 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	 * record.
 	 */
 	const seatId = uid("1");
-
 	test("a launch at the full cap queues the Consultation in the Work queue", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, seatId);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const paneId = `pane-${seatId.slice(0, 8)}`;
-		const inner = stubHerdrWorld(worldCheckout());
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: paneId, status: "working" }]),
-		);
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubCheckout(fake, checkout);
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: paneId, status: "working" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, seatId, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3273,22 +3580,13 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 				{
 					width: WIDTH,
 					height: 32,
-					props: // The test projection holds the seat: no poll can free it or
-						// pick the item up out from under the test.
-						{
-							state,
-							runner,
-							config: { ...configFor(), maxParallelAgents: 1 },
-							home,
-							initialTickets: [],
-						},
+					plane: planeRecord,
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	/**
 	 * The regression the full-cap pair guards against: the submit used to stand
 	 * its "waits in the Work queue" line before the pickup pass ran, so a launch
@@ -3297,13 +3595,17 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	 * stands the pickup's own line with the queue left empty.
 	 */
 	test("a launch with a free seat starts the Consultation and stands no waits line", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: opened");
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: "pane-1", status: "working", sess: "sess-c1" }]),
-		);
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			config: { maxParallelAgents: 1 },
+			commands: stubOpenedCheckout,
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: "pane-c1", status: "working", sess: "sess-c1" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
 		try {
 			await withApp(
 				async (setup) => {
@@ -3327,7 +3629,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the pickup's launch sequence",
@@ -3356,21 +3658,14 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: { ...configFor(), maxParallelAgents: 1 },
-						home,
-						pollIntervalMs: 100,
-						initialTickets: [],
-					},
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	/**
 	 * ADR 0052: the queue pause holds the drain, a Consultation's item and a
 	 * Handoff's alike. The seat stands free here on purpose - the pause, not
@@ -3378,11 +3673,20 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	 * instead of promising a seat that will not come.
 	 */
 	test("the queue pause holds a Consultation's item with a free seat, and the submit says why", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		let runner: ConsultationRunner;
+		const state = freshState();
 		// No seeded Consultation: nothing holds the one seat.
-		const inner = stubHerdrWorld(worldCheckout());
-		const runner = new ConsultationRunner(inner, agentListJson([]));
 		state.workQueue.setQueuePaused(true);
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubCheckout(fake, checkout);
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const _checkout = join(planeRecord.home, "src", "factory");
 		try {
 			await withApp(
 				async (setup) => {
@@ -3423,29 +3727,32 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: { ...configFor(), maxParallelAgents: 1 },
-						home,
-						initialTickets: [],
-					},
+					plane: planeRecord,
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the Delete key takes a queued Consultation's item out of the queue, and the record stays", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, seatId);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const paneId = `pane-${seatId.slice(0, 8)}`;
-		const inner = stubHerdrWorld(worldCheckout());
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: paneId, status: "working" }]),
-		);
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubCheckout(fake, checkout);
+			},
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: paneId, status: "working" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, seatId, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3488,30 +3795,29 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: { ...configFor(), maxParallelAgents: 1 },
-						home,
-						initialTickets: [],
-					},
+					plane: planeRecord,
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the pickup at a freed seat starts the queued Consultation", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, seatId);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: opened");
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: seatPane, status: "working" }]),
-		);
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
+			commands: stubOpenedCheckout,
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: seatPane, status: "working" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, seatId, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3536,7 +3842,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// pickup's start verifies on the next cycle.
 					runner.agentListJson = agentListJson([
 						{ pane: seatPane, status: "working" },
-						{ pane: "pane-1", status: "working", sess: "sess-c1" },
+						{ pane: "pane-c1", status: "working", sess: "sess-c1" },
 					]);
 					// Free the seat: the record leaves the states that hold one.
 					state.consultationRecord.setConsultationState(seatId, "awaiting-response");
@@ -3552,7 +3858,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the pickup's launch sequence",
@@ -3571,30 +3877,30 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: { ...configFor(), maxParallelAgents: 1 },
-						home,
-						pollIntervalMs: 100,
-					},
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("Enter on the queue item force-dispatches the Consultation over the cap", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, seatId);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: opened");
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: seatPane, status: "working" }]),
-		);
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
+			commands: stubOpenedCheckout,
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: seatPane, status: "working" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, seatId, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3640,7 +3946,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the force-dispatch's launch sequence",
@@ -3655,27 +3961,13 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: { ...configFor(), maxParallelAgents: 1 },
-						home,
-						// The test projection holds the seat: no poll can free it or
-						// pick the item up out from under the test. The projection also
-						// keeps the observation loop off the start's Message line: a tick
-						// that lands while the record stands in `opening` cannot verify
-						// its Agent yet and would clear the start's notice with its
-						// recovery warning, so the line the test asserts on stays where
-						// the start left it.
-						initialTickets: [],
-					},
+					plane: planeRecord,
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	/**
 	 * The shared walk of the unscheduling tests (issue #91): the cap is held
 	 * by the seed's seat, the launcher queues the Consultation, the Work
@@ -3732,12 +4024,18 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		expect(detailPaneText(setup.captureCharFrame())).toContain("State: unscheduled");
 		return queued.id;
 	}
-
 	test("removing the queue item unschedules the record, and the record keeps standing", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, seatId);
-		const inner = stubHerdrWorld(worldCheckout());
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			config: { maxParallelAgents: 1 },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubCheckout(fake, checkout);
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, seatId, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3752,27 +4050,25 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 				{
 					width: WIDTH,
 					height: 32,
-					props: // The test projection holds the seat: no poll can free it or
-						// pick the item up out from under the test.
-						{
-							state,
-							runner,
-							config: { ...configFor(), maxParallelAgents: 1 },
-							home,
-							initialTickets: [],
-						},
+					plane: planeRecord,
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the Consultation section schedules the unscheduled record back into the queue", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, seatId);
-		const inner = stubHerdrWorld(worldCheckout());
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			config: { maxParallelAgents: 1 },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubCheckout(fake, checkout);
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, seatId, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3822,30 +4118,29 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: { ...configFor(), maxParallelAgents: 1 },
-						home,
-						initialTickets: [],
-					},
+					plane: planeRecord,
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the Consultation section starts the unscheduled record now, over the cap", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, seatId);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: opened");
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: seatPane, status: "working" }]),
-		);
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
+			commands: stubOpenedCheckout,
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: seatPane, status: "working" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, seatId, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3866,7 +4161,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the start-now launch sequence",
@@ -3877,37 +4172,29 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: { ...configFor(), maxParallelAgents: 1 },
-						home,
-						// The test projection holds the seat: no poll can free it or
-						// pick the item up out from under the test. The projection also
-						// keeps the observation loop off the start's Message line: a tick
-						// that lands while the record stands in `opening` cannot verify
-						// its Agent yet and would clear the start's notice with its
-						// recovery warning, so the line the test asserts on stays where
-						// the start left it.
-						initialTickets: [],
-					},
+					plane: planeRecord,
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the Consultation section starts the unscheduled record now, under the cap", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, seatId);
+		let runner: ConsultationRunner;
+		const state = freshState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
-		const inner = stubHerdrWorld(worktreeLaunchStanding());
-		stubPaneReadText(inner, "pane-1", "Agent: opened");
-		const runner = new ConsultationRunner(
-			inner,
-			agentListJson([{ pane: seatPane, status: "working" }]),
-		);
+		const { planeRecord } = await consultationBoot({
+			state,
+			config: { maxParallelAgents: 1 },
+			commands: stubOpenedCheckout,
+			runner: (fake) =>
+				(runner = new ConsultationRunner(
+					fake,
+					agentListJson([{ pane: seatPane, status: "working" }]),
+				)),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, seatId, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3937,7 +4224,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						runner,
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
-							`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the start-now launch sequence",
@@ -3948,32 +4235,25 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: { ...configFor(), maxParallelAgents: 1 },
-						home,
-						// The test projection holds the seat: no poll can free it or
-						// pick the item up out from under the test. The projection also
-						// keeps the observation loop off the start's Message line: a tick
-						// that lands while the record stands in `opening` cannot verify
-						// its Agent yet and would clear the start's notice with its
-						// recovery warning, so the line the test asserts on stays where
-						// the start left it.
-						initialTickets: [],
-					},
+					plane: planeRecord,
 				},
 			);
 		} finally {
 			state.close();
 		}
 	});
-
 	test("the Consultation section deletes the unscheduled record", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
-		seed(state, seatId);
-		const inner = stubHerdrWorld(worldCheckout());
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		let runner: ConsultationRunner;
+		const { state, planeRecord } = await consultationBoot({
+			config: { maxParallelAgents: 1 },
+			commands: (fake, home) => {
+				const checkout = join(home, "src", "factory");
+				stubCheckout(fake, checkout);
+			},
+			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, seatId, checkout);
 		try {
 			await withApp(
 				async (setup) => {
@@ -3994,13 +4274,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 				{
 					width: WIDTH,
 					height: 32,
-					props: {
-						state,
-						runner,
-						config: { ...configFor(), maxParallelAgents: 1 },
-						home,
-						initialTickets: [],
-					},
+					plane: planeRecord,
 				},
 			);
 		} finally {

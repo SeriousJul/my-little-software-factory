@@ -78,8 +78,9 @@ directory, and resolves the home once. The four `??` defaults leave the module.
 
 **The Loop policy is named, not inferred.** Three cases stand in the record:
 production, which polls the Ticket sources and the Agent observation at the
-config's interval; held, which starts neither; and polled, which starts both at an
-interval the rig names in milliseconds. The branch that switches the observation
+config's interval; held, which runs the one-shot boot read and starts neither
+poll; and polled, which polls both, the observation's interval the one the rig
+names in milliseconds. The branch that switches the observation
 cycle off when a field is absent retires, and the policy decides. The config's
 `agent-poll-interval-seconds` stays a whole-second operator value, so the rig's
 fast poll stops being a test-only slot on the plane's interface.

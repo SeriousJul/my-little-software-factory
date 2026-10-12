@@ -16,15 +16,10 @@
  * its action rows.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
-import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	detailPaneText,
 	focusDetail,
@@ -38,15 +33,11 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { agentListJson, FakeRunner, tabCreateJson, workspaceListJson } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
+import { agentListJson, tabCreateJson, workspaceListJson } from "./fake-runner.ts";
+import type { FakeSource } from "./fake-source.ts";
+import { plane, ticketOf } from "./seeded-plane.ts";
 
-const paths: string[] = [];
-afterEach(() => {
-	for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true });
-});
-
-const source = { name: "issues", kind: "github-issues" };
+const _source = { name: "issues", kind: "github-issues" };
 const identityA = "github:github.com:I_5";
 const identityB = "github:github.com:I_6";
 const identityC = "github:github.com:I_7";
@@ -74,62 +65,54 @@ function fetched(index: number, title: string): FetchedTicket {
 	};
 }
 
-/**
- * A state with the first ticket in flight and the other three open:
- * claimed, settled to the stored herdr handles, and resting in handed-off.
- */
-function seededState(): FactoryState {
-	const dir = mkdtempSync(join(tmpdir(), "factory-hold-state-"));
-	paths.push(dir);
-	const state = openFactoryState(join(dir, "state.sqlite"));
-	// The frames assert the unsplit list: a fresh file opens grouped by
-	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.grouping.setGroupingAxis("tickets", "none");
-	state.sourceFact.initializeSources([source]);
-	const success: FetchOutcome = {
-		status: "success",
-		fetchedAt: "2026-08-31T10:01:00Z",
-		tickets: [
-			fetched(5, "Persist source facts"),
-			fetched(6, "Second open ticket"),
-			fetched(7, "Third open ticket"),
-			fetched(8, "Fourth open ticket"),
-		],
-	};
-	state.sourceFact.applyFetch(source, success);
-	const claim = state.handoff.claimHandoff(
-		identityA,
-		{
-			agentType: "pi",
-			environment: "live-worktree",
-			taskType: "implement",
-			model: "",
-			thinking: "",
-			contextWindow: "",
-		},
-		"open",
-	);
-	if (!claim.ok) throw new Error(claim.reason);
-	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-		paneId: "pane-1",
-		tabId: "tab-1",
-		workspaceId: "ws-1",
-	});
-	return state;
-}
-
 describe("the held turn through the real app flow", () => {
 	test("a failed pi turn holds, arms the pause, and shows the held surfaces", async () => {
-		const runner = new FakeRunner();
-		const dir = mkdtempSync(join(tmpdir(), "factory-hold-"));
-		paths.push(dir);
-		const checkoutPath = join(dir, "checkout");
-		mkdirSync(checkoutPath);
-		const recordPath = join(dir, "session.jsonl");
-		const state = seededState();
-		// The held-turn flow runs unattended: the mode is factory state (ADR 0036),
-		// so the test writes it to the state file the plane reads at startup.
-		state.handoff.setAutoHandoffMode(true);
+		// The plane stands the held-turn world: the first ticket in flight,
+		// claimed and settled to the stored herdr handles and resting in
+		// handed-off, the other three open, the mode on in the state file.
+		const tickets = [
+			ticketOf(fetched(5, "Persist source facts"), {
+				state: "handed-off",
+				handoff: {
+					agentType: "pi",
+					environment: "live-worktree",
+					taskType: "implement",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+					attemptId: "seeded",
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					herdrName: null,
+				},
+				handoffCount: 1,
+			}),
+			ticketOf(fetched(6, "Second open ticket")),
+			ticketOf(fetched(7, "Third open ticket")),
+			ticketOf(fetched(8, "Fourth open ticket")),
+		];
+		const planeRecord = await plane({
+			groupingAxis: "none",
+			sources: [
+				{
+					config: {
+						name: "issues",
+						kind: "github-issues",
+						refreshIntervalSeconds: 60,
+						repositories: ["acme/live"],
+						host: "github.com",
+					},
+					tickets,
+				},
+			],
+			config: { ...BASE_CONFIG, maxParallelAgents: 3 },
+			repos: { [repoIdentity]: "checkout" },
+			autoHandoffMode: true,
+		});
+		const runner = planeRecord.fakeRunner;
+		const checkoutPath = join(planeRecord.home, "checkout");
+		const recordPath = join(planeRecord.home, "session.jsonl");
 		// The session file the production reader reads from disk: one
 		// assistant message that failed on the provider's own text, with a
 		// turn log of its own so the fallback never runs. The timestamp is
@@ -148,21 +131,6 @@ describe("the held turn through the real app flow", () => {
 			})}\n`,
 			"utf8",
 		);
-		const config: FactoryConfig = {
-			...BASE_CONFIG,
-			repos: { [repoIdentity]: checkoutPath },
-			maxParallelAgents: 3,
-		};
-		const src = new FakeSource("issues", "github-issues", {
-			status: "success",
-			fetchedAt: "2026-08-31T10:01:00Z",
-			tickets: [
-				fetched(5, "Persist source facts"),
-				fetched(6, "Second open ticket"),
-				fetched(7, "Third open ticket"),
-				fetched(8, "Fourth open ticket"),
-			],
-		});
 		// The checkout's git answers and the herdr workspaces the
 		// auto-handoffs dispatch into.
 		runner.set("git", ["-C", checkoutPath, "rev-parse", "--git-dir"], { stdout: ".git\n" });
@@ -210,6 +178,8 @@ describe("the held turn through the real app flow", () => {
 
 		await withApp(
 			async (setup) => {
+				const state = setup.plane.state;
+				const src = setup.plane.sources[0] as FakeSource;
 				src.settle({
 					status: "success",
 					fetchedAt: "2026-08-31T10:02:00Z",
@@ -358,9 +328,8 @@ describe("the held turn through the real app flow", () => {
 				expect(narrowRow?.trim().endsWith("● manual")).toBe(true);
 			},
 			{
-				width: undefined,
-				height: undefined,
-				props: { config, state, runner, sources: [src], pollIntervalMs: 20 },
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
 			},
 		);
 	});

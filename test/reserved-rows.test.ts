@@ -19,7 +19,6 @@ import {
 	cellColors,
 	FRAME_DEADLINE_MS,
 	HEIGHT,
-	markerRowOf,
 	messageRowOf,
 	press,
 	rgb,
@@ -31,9 +30,6 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
-import { BASE_CONFIG } from "./base-config.ts";
-import { FakeRunner } from "./fake-runner.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 /**
  * The glyphs only a border draws.
@@ -117,9 +113,7 @@ async function expectReservedRows(setup: Setup, width: number, height: number): 
 
 /** Select the awaiting Ticket and open its decision. */
 async function openDecision(setup: Setup): Promise<void> {
-	await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 4);
-	await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 5);
-	await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 6);
+	// The seeded order puts the awaiting ticket first: the cursor starts on it.
 	await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 }
 
@@ -136,7 +130,6 @@ async function closeSurface(setup: Setup, what: RegExp): Promise<void> {
 
 describe("the reserved bottom rows at every size", () => {
 	test("the compact frame keeps its Help control at any height", async () => {
-		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
 				// Three rows: the size message, the Message line, and the bar.
@@ -166,13 +159,12 @@ describe("the reserved bottom rows at every size", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("paints the base rows on the terminal default, and a surface on its own", async () => {
-		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
 				const base = rowsOf(await settle(setup)).length;
@@ -197,13 +189,12 @@ describe("the reserved bottom rows at every size", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
 
 	test("no open surface paints its Action bar over its own border", async () => {
-		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
 				await openDecision(setup);
@@ -230,7 +221,7 @@ describe("the reserved bottom rows at every size", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
@@ -255,9 +246,15 @@ describe("the reserved bottom rows at every size", () => {
 			[18, 3],
 			[30, 12],
 		] as const) {
-			const runner = new FakeRunner();
 			await withApp(
 				async (setup) => {
+					// The boot read settles on the seeded snapshot, so the open rows
+					// stand actionable, and the walk down lands the cursor on one.
+					setup.plane.settleFirstFetch();
+					await settle(setup);
+					await press(setup, "j", "the running row", () => true);
+					await press(setup, "j", "the handed-off row", () => true);
+					await press(setup, "j", "the open row", () => true);
 					await press(setup, "e", "the override panel", () => true);
 					const frame = await expectReservedRows(setup, width, height);
 					// The panel scrolls its rows rather than drawing its border
@@ -268,14 +265,13 @@ describe("the reserved bottom rows at every size", () => {
 				{
 					width: width,
 					height: height,
-					props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+					loopPolicy: { kind: "held" },
 				},
 			);
 		}
 	});
 
 	test("a held-back surface keeps the bar's row for its own bar", async () => {
-		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
 				// Every surface that owns the screen also owns its last two rows,
@@ -295,7 +291,7 @@ describe("the reserved bottom rows at every size", () => {
 			{
 				width: WIDTH,
 				height: HEIGHT,
-				props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				loopPolicy: { kind: "held" },
 			},
 		);
 	});
@@ -308,7 +304,6 @@ describe("the reserved bottom rows at every size", () => {
 			[120, 4],
 			[18, 3],
 		] as const) {
-			const runner = new FakeRunner();
 			await withApp(
 				async (setup) => {
 					await press(setup, "?", "the guide", () => true);
@@ -322,7 +317,7 @@ describe("the reserved bottom rows at every size", () => {
 				{
 					width: width,
 					height: height,
-					props: { config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+					loopPolicy: { kind: "held" },
 				},
 			);
 		}

@@ -71,9 +71,10 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
-import { FakeSource } from "./fake-source.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-import { issueTicket, success } from "./state-fixture.ts";
+import { plane, ticketOf } from "./seeded-plane.ts";
+import { issueTicket, RATE_LIMITED, success } from "./state-fixture.ts";
 
 /**
  * The braille glyph the spinner face stands on, as a character class.
@@ -89,21 +90,24 @@ describe("the control plane", () => {
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		try {
-			await withApp(
-				async (setup) => {
-					const frame = await awaitFrame(
-						setup,
-						(candidate) => candidate.includes("no ticket sources configured"),
-						"the no-sources state",
-					);
-					expect(frame).not.toContain(SAMPLE_TICKETS[0].title);
-				},
-				{ width: WIDTH, height: 30, props: { state } },
-			);
-		} finally {
-			state.close();
-		}
+		// The empty source set is a stated fact of the standing, not an
+		// omitted field: the refresh loop runs over nothing and the list says so.
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config: BASE_CONFIG,
+		});
+		await withApp(
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(candidate) => candidate.includes("no ticket sources configured"),
+					"the no-sources state",
+				);
+				expect(frame).not.toContain(SAMPLE_TICKETS[0].title);
+			},
+			{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "production" } },
+		);
 	});
 
 	test("Goto refuses a running ticket whose pane holds a foreign agent", async () => {
@@ -116,6 +120,13 @@ describe("the control plane", () => {
 		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const source = { name: "issues", kind: "github-issues" as const };
+		const sourceConfig = {
+			name: "issues",
+			kind: "github-issues" as const,
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/factory"],
+			host: "github.com",
+		};
 		const identity = "github:github.com:I_5";
 		try {
 			state.sourceFact.initializeSources([source]);
@@ -177,6 +188,13 @@ describe("the control plane", () => {
 				]),
 			});
 
+			const planeRecord = await plane({
+				existing: state,
+				sources: [{ config: sourceConfig, tickets: [] }],
+				config: { ...BASE_CONFIG, sources: [sourceConfig] },
+				applyFetch: false,
+				runner: () => runner,
+			});
 			await withApp(
 				async (setup) => {
 					// The row wears the missing badge, not the [running] state badge:
@@ -205,7 +223,12 @@ describe("the control plane", () => {
 					expect(messageRowOf(after)).toContain("the Agent's pane is not alive in the last poll");
 					expect(runner.commands()).not.toContain("herdr agent focus pane-1");
 				},
-				{ width: WIDTH, height: 30, props: { state, runner, pollIntervalMs: 100 } },
+				{
+					width: WIDTH,
+					height: 30,
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
+				},
 			);
 		} finally {
 			state.close();
@@ -222,6 +245,13 @@ describe("the control plane", () => {
 		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const source = { name: "issues", kind: "github-issues" as const };
+		const sourceConfig = {
+			name: "issues",
+			kind: "github-issues" as const,
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/factory"],
+			host: "github.com",
+		};
 		const identity = "github:github.com:I_5";
 		try {
 			state.sourceFact.initializeSources([source]);
@@ -292,6 +322,13 @@ describe("the control plane", () => {
 				]),
 			});
 
+			const planeRecord = await plane({
+				existing: state,
+				sources: [{ config: sourceConfig, tickets: [] }],
+				config: { ...BASE_CONFIG, sources: [sourceConfig] },
+				applyFetch: false,
+				runner: () => runner,
+			});
 			await withApp(
 				async (setup) => {
 					await awaitFrame(
@@ -320,7 +357,12 @@ describe("the control plane", () => {
 					);
 					expect(runner.commands()).not.toContain("herdr agent focus pane-1");
 				},
-				{ width: WIDTH, height: 30, props: { state, runner, pollIntervalMs: 100 } },
+				{
+					width: WIDTH,
+					height: 30,
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
+				},
 			);
 		} finally {
 			state.close();
@@ -335,7 +377,6 @@ describe("the control plane", () => {
 		const state = openFactoryState(":memory:");
 		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
-		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
 		const sourceConfig = {
 			name: "issues",
 			kind: "github-issues" as const,
@@ -409,8 +450,16 @@ describe("the control plane", () => {
 				completedAt: "2026-08-31T12:00:00Z",
 			});
 
+			const planeRecord = await plane({
+				existing: state,
+				sources: [{ config: sourceConfig, tickets: [ticketOf(issueTicket())] }],
+				config,
+				applyFetch: false,
+				runner: () => runner,
+			});
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
 					await awaitFrame(
 						setup,
 						(candidate) => frameText(candidate).includes("[awaiting]"),
@@ -435,7 +484,8 @@ describe("the control plane", () => {
 				{
 					width: WIDTH,
 					height: 30,
-					props: { state, runner, sources: [source], config, pollIntervalMs: 100 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
 				},
 			);
 		} finally {
@@ -451,7 +501,6 @@ describe("the control plane", () => {
 		const state = openFactoryState(":memory:");
 		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
-		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
 		const sourceConfig = {
 			name: "issues",
 			kind: "github-issues" as const,
@@ -520,8 +569,16 @@ describe("the control plane", () => {
 			// badge the recovery screen offers on.
 			state.ticketWorkCycle.markTicketRunning(identity);
 
+			const planeRecord = await plane({
+				existing: state,
+				sources: [{ config: sourceConfig, tickets: [ticketOf(issueTicket())] }],
+				config,
+				applyFetch: false,
+				runner: () => runner,
+			});
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
 					await awaitFrame(
 						setup,
 						(candidate) => frameText(candidate).includes("missing"),
@@ -552,7 +609,8 @@ describe("the control plane", () => {
 				{
 					width: WIDTH,
 					height: 30,
-					props: { state, runner, sources: [source], config, pollIntervalMs: 100 },
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
 				},
 			);
 		} finally {
@@ -573,19 +631,23 @@ describe("the control plane", () => {
 	test("detail pane shows the full detail of the selected ticket", async () => {
 		await withApp(async (setup) => {
 			const detail = detailPaneText(setup.captureCharFrame());
-			const first = SAMPLE_TICKETS[0];
+			// The list stands the selection on the first ticket the attention
+			// band reads, the awaiting one, and the detail carries its full
+			// facts.
+			const first = SAMPLE_TICKETS[3];
 			// The full title and description live in the detail pane.
 			expect(detail).toContain(first.description);
-			expect(detail).toContain("Agent: pi");
+			expect(detail).toContain("Agent: claude");
 			expect(detail).toContain("Model: left to agent");
 			expect(detail).toContain("Thinking: left to agent");
 			// A setting the profile leaves out reads the same way: the agent's own
 			// default is the only one the control plane does not know.
 			expect(detail).toContain("Context: left to agent");
-			expect(detail).toContain("Source state: open");
-			// The open ticket's task type line says which fact it is.
-			expect(detail).toContain("Suggested task type: implement");
-			expect(detail).not.toContain("Handoff task type:");
+			expect(detail).toContain("Source state: closed");
+			// The non-open ticket's task type line says which fact it is: the
+			// handoff's own type, not a suggestion.
+			expect(detail).toContain("Handoff task type: review");
+			expect(detail).not.toContain("Suggested task type:");
 		});
 	});
 
@@ -593,20 +655,38 @@ describe("the control plane", () => {
 		// The machine's parking state offers no task (ADR 0027): the row and
 		// the detail both state the park, so the operator reads why the plane
 		// starts nothing.
-		const parked: Ticket = { ...SAMPLE_TICKETS[0], suggestedTaskType: null };
+		const sourceConfig = {
+			name: "issues",
+			kind: "github-issues" as const,
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/factory"],
+			host: "github.com",
+		};
+		// The State the config parks on offers no taskType, so the list rule
+		// the plane reads stands the row as parked.
+		const parkingConfig = {
+			...BASE_CONFIG,
+			sources: [sourceConfig],
+			workflowStates: [
+				...BASE_CONFIG.workflowStates,
+				{ name: "parking", match: { labelsAny: ["parking"] } },
+			],
+		};
+		const parked = ticketOf(issueTicket(undefined, { labels: ["parking"] }));
+		const planeRecord = await plane({
+			sources: [{ config: sourceConfig, tickets: [parked] }],
+			config: parkingConfig,
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
-				const frame = setup.captureCharFrame();
-				expect(frame).toContain("[parked]");
+				planeRecord.settleFirstFetch();
+				const frame = await awaitFrame(setup, (f) => f.includes("[parked]"), "the parked row");
 				// The park is a machine fact, not a missing one: it wears no
 				// warning color, unlike `unknown`.
 				expect(detailPaneText(frame)).toContain("Suggested task type: parked");
 			},
-			{
-				width: undefined,
-				height: undefined,
-				props: { initialTickets: [parked], config: BASE_CONFIG },
-			},
+			{ plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
@@ -621,13 +701,9 @@ describe("the control plane", () => {
 			const repos = new Set([...frame.matchAll(/\b[a-z]+\/[a-z-]+\b/g)].map((m) => m[0]));
 			expect(repos.size).toBeGreaterThanOrEqual(2);
 
-			// A ticket can carry the GitHub closed status. Navigate to the
-			// awaiting ticket and read the source fact in the detail pane.
-			for (let i = 1; i <= 3; i += 1) {
-				await press(setup, "j", `the selection to move to ticket ${i + 1}`, (f) =>
-					showsTicket(f, SAMPLE_TICKETS[i]),
-				);
-			}
+			// A ticket can carry the GitHub closed status: the attention band
+			// stands the selection on the awaiting ticket at boot, and the
+			// source fact reads in the detail pane.
 			frame = frameText(setup.captureCharFrame());
 			expect(frame).toContain("Source state: closed");
 			// The awaiting ticket is done with its turn: ticket state and
@@ -638,31 +714,35 @@ describe("the control plane", () => {
 
 	test("j and k move the selection down and up", async () => {
 		await withApp(async (setup) => {
+			// The attention band stands the selection on the awaiting ticket,
+			// the list's first row.
 			await press(
 				setup,
 				"j",
-				"the selection to move to the second ticket",
-				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && !showsTicket(f, SAMPLE_TICKETS[0]),
+				"the selection to move to the running ticket",
+				(f) => showsTicket(f, SAMPLE_TICKETS[2]) && !showsTicket(f, SAMPLE_TICKETS[3]),
 			);
 			await press(
 				setup,
 				"k",
-				"the selection to move back to the first ticket",
-				(f) => showsTicket(f, SAMPLE_TICKETS[0]) && !showsTicket(f, SAMPLE_TICKETS[1]),
+				"the selection to move back to the awaiting ticket",
+				(f) => showsTicket(f, SAMPLE_TICKETS[3]) && !showsTicket(f, SAMPLE_TICKETS[2]),
 			);
 		});
 	});
 
 	test("the up and down arrows move the selection", async () => {
 		await withApp(async (setup) => {
-			await pressArrow(setup, "down", "the selection to move to the second ticket", (f) =>
-				showsTicket(f, SAMPLE_TICKETS[1]),
+			// The attention band stands the selection on the awaiting ticket,
+			// the list's first row.
+			await pressArrow(setup, "down", "the selection to move to the running ticket", (f) =>
+				showsTicket(f, SAMPLE_TICKETS[2]),
 			);
 			await pressArrow(
 				setup,
 				"up",
-				"the selection to move back to the first ticket",
-				(f) => showsTicket(f, SAMPLE_TICKETS[0]) && !showsTicket(f, SAMPLE_TICKETS[1]),
+				"the selection to move back to the awaiting ticket",
+				(f) => showsTicket(f, SAMPLE_TICKETS[3]) && !showsTicket(f, SAMPLE_TICKETS[2]),
 			);
 		});
 	});
@@ -692,19 +772,19 @@ describe("the control plane", () => {
 			// preserved.
 			frame = await press(setup, "h", "the list pane to take focus", listFocused);
 			expect(markerRowOf(frame)).toBe(3);
-			expect(showsTicket(frame, SAMPLE_TICKETS[0])).toBe(true);
+			expect(showsTicket(frame, SAMPLE_TICKETS[3])).toBe(true);
 		});
 	});
 
 	test("the left and right arrows switch pane focus and the selection is preserved", async () => {
 		await withApp(async (setup) => {
-			// Move the selection to the second ticket while the list is
+			// Move the selection to the list's second row while the list is
 			// focused.
 			await press(
 				setup,
 				"j",
-				"the selection to move to the second ticket",
-				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && markerRowOf(f) === 4,
+				"the selection to move to the second row",
+				(f) => showsTicket(f, SAMPLE_TICKETS[2]) && markerRowOf(f) === 4,
 			);
 
 			// The right arrow focuses the detail pane. The selection is
@@ -717,13 +797,13 @@ describe("the control plane", () => {
 				detailFocused,
 			);
 			expect(markerRowOf(right)).toBe(4);
-			expect(showsTicket(right, SAMPLE_TICKETS[1])).toBe(true);
+			expect(showsTicket(right, SAMPLE_TICKETS[2])).toBe(true);
 
 			// The left arrow focuses the list pane. The selection is
 			// preserved.
 			const left = await pressArrow(setup, "left", "the list pane to take focus", listFocused);
 			expect(markerRowOf(left)).toBe(4);
-			expect(showsTicket(left, SAMPLE_TICKETS[1])).toBe(true);
+			expect(showsTicket(left, SAMPLE_TICKETS[2])).toBe(true);
 		});
 	});
 
@@ -777,7 +857,7 @@ describe("the control plane", () => {
 					setup,
 					"j",
 					"the detail to scroll down one row",
-					(f) => agentRowOf(f) === agentRow - 1 && f.includes("Retry policy for webhooks"),
+					(f) => agentRowOf(f) === agentRow - 1 && f.includes("Drop the legacy auth shim"),
 				);
 				// The selection did not move.
 				expect(markerRowOf(scrolled)).toBe(3);
@@ -787,7 +867,7 @@ describe("the control plane", () => {
 					setup,
 					"k",
 					"the detail to scroll back to the top",
-					(f) => agentRowOf(f) === agentRow && f.includes("Retry policy for webhooks"),
+					(f) => agentRowOf(f) === agentRow && f.includes("Drop the legacy auth shim"),
 				);
 				expect(markerRowOf(back)).toBe(3);
 			},
@@ -815,8 +895,7 @@ describe("the control plane", () => {
 				}
 				const atBottom = await awaitFrame(
 					setup,
-					(f) =>
-						frameText(f).includes("their retries.") && !f.includes("Retry policy for webhooks"),
+					(f) => frameText(f).includes("feature flag.") && !f.includes("Drop the legacy auth shim"),
 					"the detail to reach its bottom",
 				);
 
@@ -864,15 +943,15 @@ describe("the control plane", () => {
 					setup.mockInput.pressKey("j");
 					frame = frameText(await settle(setup));
 				}
-				expect(frame).toContain("[running]");
-				expect(frame).toContain("[awaiting]");
-				expect(frame).not.toContain("Retry polic");
+				expect(frame).toContain("[open]");
+				expect(frame).not.toContain("[awaiting]");
+				expect(frame).not.toContain("Drop the lega");
 
 				frame = await press(setup, "end", "the window to slide to the last tickets", (f) =>
 					(rowsOf(f).find((row) => row.startsWith("│ ❯")) ?? "").includes("Ticket id"),
 				);
 				expect(frame).toContain("Observe the agent");
-				expect(frame).not.toContain("Retry polic");
+				expect(frame).not.toContain("Drop the legacy");
 			},
 			{ width: WIDTH, height: 27 },
 		);
@@ -884,11 +963,11 @@ describe("the control plane", () => {
 			await press(
 				setup,
 				"j",
-				"the selection to move to the second ticket",
-				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && markerRowOf(f) === 4,
+				"the selection to move to the second row",
+				(f) => showsTicket(f, SAMPLE_TICKETS[2]) && markerRowOf(f) === 4,
 			);
 			// The badge rides on the selected row at this width.
-			expect(setup.captureCharFrame()).toContain("[implement]");
+			expect(setup.captureCharFrame()).toContain("[fix]");
 
 			// Shrink the terminal mid-session, across a width where the badge
 			// no longer fits. The new size lands in two renders: the outer
@@ -933,7 +1012,7 @@ describe("the control plane", () => {
 			// The detail pane keeps its focus, and its scroll survives.
 			await press(setup, "l", "the focus to move to the detail pane", detailFocused);
 			const selectedAgentRow = (frame: string) =>
-				rowsOf(frame).findIndex((row) => row.includes("Agent: codex"));
+				rowsOf(frame).findIndex((row) => row.includes("Agent: pi"));
 			const agentBeforeScroll = selectedAgentRow(setup.captureCharFrame());
 			await press(
 				setup,
@@ -962,12 +1041,12 @@ describe("the control plane", () => {
 			expect(large).toContain("Tickets");
 			expect(large).toContain("Detail");
 			expect(markerRowOf(large)).toBe(4);
-			expect(showsTicket(large, SAMPLE_TICKETS[1])).toBe(true);
+			expect(showsTicket(large, SAMPLE_TICKETS[2])).toBe(true);
 			// The badge comes back, the focus stays, and the detail scroll
 			// clamps to the window that now fits the whole ticket.
 			expect(large).toContain("[implement]");
 			expect(detailFocused(large)).toBe(true);
-			expect(detailPaneText(large)).toContain(SAMPLE_TICKETS[1].title);
+			expect(detailPaneText(large)).toContain(SAMPLE_TICKETS[2].title);
 		});
 	});
 
@@ -1022,7 +1101,7 @@ describe("the control plane", () => {
 					expect(row[73]).toMatch(/[ ▀▄█]/);
 				}
 				// The detail pane carries its content at this size.
-				expect(frameText(setup.captureCharFrame())).toContain("Source state: open");
+				expect(frameText(setup.captureCharFrame())).toContain("Source state: closed");
 			},
 			{ width: 75, height: 27 },
 		);
@@ -1052,7 +1131,7 @@ describe("the control plane", () => {
 				expect(listHalf).not.toContain("acme/");
 				// The repository stays reachable in the detail pane of the
 				// selected ticket.
-				expect(frameText(setup.captureCharFrame())).toContain("acme/billing");
+				expect(frameText(setup.captureCharFrame())).toContain("acme/portal");
 			},
 			{ width: 60, height: 27 },
 		);
@@ -1091,90 +1170,175 @@ describe("the control plane", () => {
 			const row = (ticket: Ticket) =>
 				listHalfOf(rows.find((r) => listHalfOf(r).includes(ticket.title.slice(0, 8))) as string);
 
-			// The selected open ticket wears its suggested type, and every
-			// field rides in the row's fixed order.
-			const first = SAMPLE_TICKETS[0];
-			expect(row(first).slice(2, 16)).toBe("❯ [open]      ");
-			expect(row(first).slice(16, 27)).toBe("[implement]");
-			expect(row(first).slice(27, 45)).toBe(" Retry policy for ");
-			expect(row(first).slice(45, 58)).toBe(" acme/billing");
+			// The selected ticket wears its task type badge, and every field
+			// rides in the row's fixed order.
+			const first = SAMPLE_TICKETS[3];
+			expect(row(first).slice(2, 16)).toBe("❯ [awaiting]  ");
+			expect(row(first).slice(16, 24)).toBe("[review]");
+			expect(row(first).slice(24, 45)).toBe(" Drop the legacy auth");
+			expect(row(first).slice(45, 58)).toBe("  acme/portal");
 
-			// The non-open tickets wear the task type their handoff recorded.
+			// The other tickets wear the badges their rows carry: the open
+			// ones their suggestions, the Starting window's row its face
+			// beside the badge it does not replace.
+			expect(row(SAMPLE_TICKETS[0]).slice(16, 27)).toBe("[implement]");
 			expect(row(SAMPLE_TICKETS[1]).slice(16, 27)).toBe("[implement]");
 			expect(row(SAMPLE_TICKETS[2]).slice(16, 21)).toBe("[fix]");
-			expect(row(SAMPLE_TICKETS[3]).slice(16, 24)).toBe("[review]");
 		});
 	});
 
 	test("an open ticket wears its suggestion, not a stale handoff value", async () => {
 		// A ticket that was handed off, returned, and opened again: the row
 		// must describe the next handoff, not the closed one.
-		const stale: Ticket = {
-			...SAMPLE_TICKETS[1],
-			state: "open",
-			suggestedTaskType: "rework",
-			handoff: {
+		const sourceConfig = {
+			name: "issues",
+			kind: "github-issues" as const,
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/portal"],
+			host: "github.com",
+		};
+		const portalSourceConfig = sourceConfig;
+		// The closed review cycle the ticket wore: the seed moves it through
+		// the state module, so the row the list rule reads is the open ticket
+		// with one closed handoff, and its suggestion stands from the config's
+		// fallback, not from the closed cycle's type.
+		const stale = ticketOf(
+			issueTicket("github:github.com:I_2", {
+				title: "Fix pan drift in split panes",
+				repository: {
+					identity: "github.com/acme/portal",
+					displayName: "acme/portal",
+					cloneUrl: "https://github.com/acme/portal.git",
+				},
+			}),
+			{
+				handoff: {
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "review",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+					attemptId: "attempt-1",
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "w-1",
+					herdrName: "sample-agent",
+				},
+				handoffCount: 1,
+			},
+		);
+		const planeRecord = await plane({
+			sources: [{ config: portalSourceConfig, tickets: [stale] }],
+			config: { ...BASE_CONFIG, sources: [portalSourceConfig] },
+			groupingAxis: "none",
+		});
+		await withApp(
+			async (setup) => {
+				planeRecord.settleFirstFetch();
+				const frame = await settle(setup);
+				const rows = rowsOf(frame);
+				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[open]")) as string);
+				expect(line).toBe("│ ❯ [open]      [implement] Fix pan drift in s acme/portal │");
+				const detail = detailPaneText(frame);
+				expect(detail).toContain("Suggested task type: implement");
+				expect(detail).not.toContain("Handoff task type:");
+			},
+			{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "held" } },
+		);
+	});
+
+	test("a non-open ticket keeps its handoff value when the suggestion differs", async () => {
+		// The awaiting review cycle the sample stands on: the seed moves the
+		// ticket through the state module, so the handoff the row reads is the
+		// live one the state keeps, not a stored value.
+		const sourceConfig = {
+			name: "issues",
+			kind: "github-issues" as const,
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/portal"],
+			host: "github.com",
+		};
+		const planeRecord = await plane({
+			sources: [{ config: sourceConfig, tickets: [SAMPLE_TICKETS[3]] }],
+			config: { ...BASE_CONFIG, sources: [sourceConfig] },
+			groupingAxis: "none",
+		});
+		await withApp(
+			async (setup) => {
+				planeRecord.settleFirstFetch();
+				const frame = await settle(setup);
+				const rows = rowsOf(frame);
+				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[awaiting]")) as string);
+				expect(line).toBe("│ ❯ [awaiting]  [review] Drop the legacy auth  acme/portal │");
+				const detail = detailPaneText(frame);
+				expect(detail).toContain("Handoff task type: review");
+				expect(detail).not.toContain("Suggested task type:");
+			},
+			{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "held" } },
+		);
+	});
+
+	test("non-actionable and recovery-required tickets keep their task type lines", async () => {
+		// Two pull requests the source lists: both match the ready-for-review
+		// State, so both stand on the review type. The blocked one stands on
+		// the source's failure the boot fetch reports; the recovery one on an
+		// attempt the start claimed and never settled.
+		const state = openFactoryState(":memory:");
+		state.grouping.setGroupingAxis("tickets", "none");
+		const sourceConfig = {
+			name: "issues",
+			kind: "github-issues" as const,
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/factory"],
+			host: "github.com",
+		};
+		const definition = { name: "issues", kind: "github-issues" as const };
+		const fetchedOver = {
+			sourceKind: "github-pull-request" as const,
+			labels: ["ready-for-review"],
+		};
+		const blockedFetched = issueTicket("github:github.com:I_5", fetchedOver);
+		const recoveryFetched = issueTicket("github:github.com:I_6", fetchedOver);
+		state.sourceFact.initializeSources([definition]);
+		state.sourceFact.applyFetch(definition, success([blockedFetched, recoveryFetched]));
+		// The recovery ticket's start was claimed and never settled: the
+		// attempt stands unresolved, and the plane asks for recovery before
+		// it hands the ticket off again.
+		const claim = state.handoff.claimHandoff(
+			"github:github.com:I_6",
+			{
 				agentType: "pi",
 				environment: "worktree",
 				taskType: "review",
 				model: "",
 				thinking: "",
 				contextWindow: "",
-				attemptId: "attempt-1",
-				paneId: "pane-1",
-				tabId: "tab-1",
-				workspaceId: "w-1",
-				herdrName: "sample-agent",
 			},
-			handoffCount: 1,
-		};
-		await withApp(
-			async (setup) => {
-				const rows = rowsOf(setup.captureCharFrame());
-				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[open]")) as string);
-				expect(line).toBe("│ ❯ [open]      [rework] Fix pan drift in spli acme/portal │");
-				const detail = detailPaneText(setup.captureCharFrame());
-				expect(detail).toContain("Suggested task type: rework");
-				expect(detail).not.toContain("Handoff task type:");
-			},
-			{ width: WIDTH, height: 30, props: { initialTickets: [stale] } },
+			"open",
 		);
-	});
-
-	test("a non-open ticket keeps its handoff value when the suggestion differs", async () => {
-		const drifted: Ticket = { ...SAMPLE_TICKETS[3], suggestedTaskType: "implement" };
+		if (!claim.ok) throw new Error(claim.reason);
+		const planeRecord = await plane({
+			existing: state,
+			sources: [
+				{ config: sourceConfig, tickets: [ticketOf(blockedFetched), ticketOf(recoveryFetched)] },
+			],
+			config: { ...BASE_CONFIG, sources: [sourceConfig] },
+			groupingAxis: "none",
+			applyFetch: false,
+		});
 		await withApp(
 			async (setup) => {
-				const rows = rowsOf(setup.captureCharFrame());
-				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[awaiting]")) as string);
-				expect(line).toBe("│ ❯ [awaiting]  [review] Drop the legacy auth  acme/portal │");
-				const detail = detailPaneText(setup.captureCharFrame());
-				expect(detail).toContain("Handoff task type: review");
-				expect(detail).not.toContain("Suggested task type:");
-			},
-			{ width: WIDTH, height: 30, props: { initialTickets: [drifted] } },
-		);
-	});
-
-	test("non-actionable and recovery-required open tickets keep their suggestion", async () => {
-		const blocked: Ticket = {
-			...SAMPLE_TICKETS[0],
-			actionable: false,
-			suggestedTaskType: "review",
-		};
-		const recovery: Ticket = {
-			...SAMPLE_TICKETS[0],
-			identity: "I_recovery",
-			handoffRecoveryRequired: true,
-			suggestedTaskType: "review",
-		};
-		await withApp(
-			async (setup) => {
-				const frame = setup.captureCharFrame();
+				const source = planeRecord.sources[0] as FakeSource;
+				// The source stands on a failure: the rows stop being actionable,
+				// and the list rule keeps standing them on their suggestion.
+				source.settle(RATE_LIMITED);
+				const frame = await settle(setup);
 				const rows = rowsOf(frame);
-				// Both rows wear the suggestion... and the badges are intact.
+				// Both rows wear the review type: the blocked one its
+				// suggestion, the recovery one its live handoff's.
 				expect(rows.filter((r) => listHalfOf(r).includes("[review]")).length).toBe(2);
-				// ...and the detail says so for the selected ticket.
+				// The detail says so for the selected, blocked ticket.
 				expect(detailPaneText(frame)).toContain("Suggested task type: review");
 
 				await press(setup, "j", "the selection to move to the recovery ticket", (f) =>
@@ -1184,28 +1348,7 @@ describe("the control plane", () => {
 				expect(detail).toContain("Handoff: recovery required");
 				expect(detail).toContain("Suggested task type: review");
 			},
-			{ width: WIDTH, height: 30, props: { initialTickets: [blocked, recovery] } },
-		);
-	});
-
-	test("a non-open ticket without a handoff wears the warning [unknown]", async () => {
-		const orphan: Ticket = { ...SAMPLE_TICKETS[2], handoff: null };
-		await withApp(
-			async (setup) => {
-				const frame = setup.captureCharFrame();
-				const rows = rowsOf(frame);
-				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[unknown]")) as string);
-				expect(line).toBe("│ ❯ [running]   [unknown] Migrate scheduler to acme/ingest │");
-				// The missing-data badge is the only warning-colored text in
-				// the row; the configured types keep the neutral style.
-				expect(spanColors(setup, "[unknown]")).toEqual([rgb(roleColor("yellow"))]);
-				expect(spanColors(setup, "[running]")).toEqual([rgb(roleColor("green"))]);
-				// The detail carries the explicit line for the missing data.
-				const detail = detailPaneText(frame);
-				expect(detail).toContain("Handoff task type: unknown");
-				expect(detail).not.toContain("Suggested task type:");
-			},
-			{ width: WIDTH, height: 30, props: { initialTickets: [orphan] } },
+			{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
@@ -1240,34 +1383,33 @@ describe("the control plane", () => {
 
 		// 120: marker, state, badge, title, and repository all ride.
 		expect(await selectedRowAt(120, 30)).toBe(
-			"│ ❯ [open]      [implement] Retry policy for  acme/billing │",
+			"│ ❯ [awaiting]  [review] Drop the legacy auth  acme/portal │",
 		);
-		// 80: the badge keeps its place; the repository drops before the
-		// title does.
-		expect(await selectedRowAt(80, 27)).toBe("│ ❯ [open]      [implement] Retry poli │");
-		// 60: the badge no longer fits beside the title minimum, so it
-		// drops complete. A short type on another row still fits.
+		// 80: the badge and the repository keep their places; the title
+		// truncates to the cells that remain.
+		expect(await selectedRowAt(80, 27)).toBe("│ ❯ [awaiting]  [review] D acme/portal │");
+		// 60: the repository no longer fits beside the title minimum, so it
+		// drops complete. The badge still rides.
 		const narrow = await selectedRowAt(60, 27);
-		expect(narrow).toBe("│ ❯ [open]       Retry polic │");
-		// 40: nothing but the marker and the state badge fits.
-		expect(await selectedRowAt(40, 27)).toBe("│ ❯ [open]       R │");
+		expect(narrow).toBe("│ ❯ [awaiting]  [review] Dro │");
+		// 40: nothing but the marker, the state badge, and one title cell
+		// fits.
+		expect(await selectedRowAt(40, 27)).toBe("│ ❯ [awaiting]   D │");
 	});
 
 	test("the badge drops when its complete text cannot fit, and the detail keeps the value", async () => {
 		await withApp(
 			async (setup) => {
-				// Select the handed-off ticket: its row is where the
-				// [implement] badge and the title minimum do not share the 12
-				// cells the row has left, so the badge drops and the title
-				// keeps the cells.
-				await press(
-					setup,
-					"j",
-					"the selection to move to the second ticket",
-					(f) =>
-						startingFaceOf(listHalfOf(rowsOf(f).find((r) => r.startsWith("│ ❯")) as string)) !==
-						null,
+				// Select the Starting-window ticket: its row is where the
+				// [implement] badge and the title minimum do not share the cells
+				// the row has left, so the badge drops and the title keeps the
+				// cells.
+				const faceOnMarkerRow = (f: string) =>
+					startingFaceOf(listHalfOf(rowsOf(f).find((r) => r.startsWith("│ ❯")) as string)) !== null;
+				await press(setup, "j", "the selection to pass the running ticket", (f) =>
+					showsTicket(f, SAMPLE_TICKETS[2]),
 				);
+				await press(setup, "j", "the selection to reach the Starting window", faceOnMarkerRow);
 				const frame = setup.captureCharFrame();
 				const rows = rowsOf(frame);
 				const line = listHalfOf(rows.find((r) => startingFaceOf(listHalfOf(r)) !== null) as string);
@@ -1287,23 +1429,48 @@ describe("the control plane", () => {
 	});
 
 	test("a long task type and wide Unicode titles keep every row exact", async () => {
+		const sourceConfig = {
+			name: "issues",
+			kind: "github-issues" as const,
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/billing"],
+			host: "github.com",
+		};
+		// The State the ticket's label matches offers the consultation task,
+		// so the plane stands the suggestion from the machine, not a stored
+		// value.
 		const longConfig = {
 			...BASE_CONFIG,
+			sources: [sourceConfig],
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				consultation: { template: "Consult the record.", autoClose: false },
 			},
+			workflowStates: [
+				...BASE_CONFIG.workflowStates,
+				{ name: "consultation", taskType: "consultation", match: { labelsAny: ["consultation"] } },
+			],
 		};
-		const wide: Ticket = {
-			...SAMPLE_TICKETS[0],
-			identity: "I_wide",
-			title: "中文 webhook 重试策略",
-			suggestedTaskType: "consultation",
-		};
-		const props = { initialTickets: [wide], config: longConfig };
+		const wide = ticketOf(
+			issueTicket("github:github.com:I_wide", {
+				title: "中文 webhook 重试策略",
+				labels: ["consultation"],
+				repository: {
+					identity: "github.com/acme/billing",
+					displayName: "acme/billing",
+					cloneUrl: "https://github.com/acme/billing.git",
+				},
+			}),
+		);
+		const planeRecord = await plane({
+			sources: [{ config: sourceConfig, tickets: [wide] }],
+			config: longConfig,
+			groupingAxis: "none",
+		});
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				// At the normal width the long badge rides complete, and the
 				// wide title truncates on cell boundaries without splitting a
 				// character.
@@ -1314,16 +1481,19 @@ describe("the control plane", () => {
 				expect(listHalfOf(rows[markerRowOf(setup.captureCharFrame())])).toBe(
 					"│ ❯ [open]      [consultation] 中文 webhook   acme/billing │",
 				);
-				// The full value still lives in the detail pane.
-				expect(detailPaneText(setup.captureCharFrame())).toContain(
-					"Suggested task type: consultation",
-				);
+				// The full value still lives in the detail pane. The value wraps
+				// to its own line below the label, the right column's source
+				// line between them.
+				const detailRows = rowsOf(setup.captureCharFrame()).map((row) => row.slice(62, 118));
+				const label = detailRows.findIndex((row) => row.includes("Suggested task type:"));
+				expect(detailRows[label + 1] ?? "").toContain("consultation");
 			},
-			{ width: 120, height: 30, props: props },
+			{ width: 120, height: 30, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				// At the narrow width the long badge cannot fit complete, so
 				// it drops, and the row still keeps its exact width.
 				const rows = rowsOf(setup.captureCharFrame());
@@ -1341,23 +1511,44 @@ describe("the control plane", () => {
 					detailPaneText(candidate, 60).includes("Suggested task type: consultation"),
 				);
 			},
-			{ width: 60, height: 27, props: props },
+			{ width: 60, height: 27, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("the detail pane carries one explicit task type line for every ticket", async () => {
 		await withApp(async (setup) => {
-			// The open ticket: the suggestion, labeled as a suggestion.
+			// The awaiting ticket the selection stands on: its recorded value,
+			// labeled as a handoff.
 			let detail = detailPaneText(setup.captureCharFrame());
+			expect(detail).toContain("Handoff task type: review");
+			expect(detail).not.toContain("Suggested task type:");
+
+			// The open ticket: the suggestion, labeled as a suggestion.
+			await press(setup, "j", "the selection to pass the running ticket", (f) =>
+				showsTicket(f, SAMPLE_TICKETS[2]),
+			);
+			await press(setup, "j", "the selection to pass the Starting window", (f) =>
+				showsTicket(f, SAMPLE_TICKETS[1]),
+			);
+			await press(
+				setup,
+				"j",
+				"the selection to reach the open ticket",
+				(f) => showsTicket(f, SAMPLE_TICKETS[0]) && !showsTicket(f, SAMPLE_TICKETS[1]),
+			);
+			detail = detailPaneText(setup.captureCharFrame());
 			expect(detail).toContain("Suggested task type: implement");
 			expect(detail).not.toContain("Handoff task type:");
 
-			// The handed-off ticket: the recorded value, labeled as a handoff.
-			await press(setup, "j", "the selection to move to the second ticket", (f) =>
+			// The running ticket: the live handoff's value, labeled as a handoff.
+			await press(setup, "k", "the selection back past the Starting window", (f) =>
 				showsTicket(f, SAMPLE_TICKETS[1]),
 			);
+			await press(setup, "k", "the selection back to the running ticket", (f) =>
+				showsTicket(f, SAMPLE_TICKETS[2]),
+			);
 			detail = detailPaneText(setup.captureCharFrame());
-			expect(detail).toContain("Handoff task type: implement");
+			expect(detail).toContain("Handoff task type: fix");
 			expect(detail).not.toContain("Suggested task type:");
 		});
 	});
@@ -1371,15 +1562,15 @@ describe("the control plane", () => {
 					setup,
 					"pagedown",
 					"the detail to move one viewport with context",
-					(frame) => !frame.includes("Retry policy for webhooks"),
+					(frame) => !frame.includes("Drop the legacy auth shim"),
 				);
-				expect(page).toContain("❯ [open]");
+				expect(page).toContain("❯ [awaiting]");
 				const end = await press(setup, "end", "the detail to reach its end", (frame) =>
-					frameText(frame).includes("their retries."),
+					frameText(frame).includes("feature flag."),
 				);
-				expect(end).toContain("❯ [open]");
+				expect(end).toContain("❯ [awaiting]");
 				const home = await press(setup, "home", "the detail to return to its start", (frame) =>
-					frame.includes("Retry policy for webhooks"),
+					frame.includes("Drop the legacy auth shim"),
 				);
 				setup.mockInput.pressKey("HOME");
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(home));
@@ -1403,7 +1594,7 @@ describe("the control plane", () => {
 					selectedState(frame).includes("Ticket id i"),
 				);
 				await press(setup, "home", "the list to select its first ticket", (frame) =>
-					selectedState(frame).includes("Retry polic"),
+					selectedState(frame).includes("Drop"),
 				);
 			},
 			{ width: 60, height: 27 },
@@ -1413,8 +1604,9 @@ describe("the control plane", () => {
 	test("mouse input focuses and moves its Ticket surface through OpenTUI hit testing", async () => {
 		await withApp(
 			async (setup) => {
-				// A visible list row is a direct selection target.
-				await mouseClick(setup, 4, paneRow(3));
+				// A visible list row is a direct selection target: the
+				// Starting window's row.
+				await mouseClick(setup, 4, paneRow(4));
 				await awaitFrame(
 					setup,
 					(frame) =>
@@ -1424,12 +1616,12 @@ describe("the control plane", () => {
 				);
 				// List wheels select exactly one adjacent Ticket. They have no
 				// detail speed profile or acceleration.
-				await mouseWheel(setup, { x: 4, y: paneRow(3), direction: "down" });
+				await mouseWheel(setup, { x: 4, y: paneRow(4), direction: "down" });
 				await awaitFrame(
 					setup,
 					(frame) =>
 						listFocused(frame) &&
-						(rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "").includes("[running]"),
+						(rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "").includes("[open]"),
 					"one list wheel event to select one Ticket",
 				);
 
@@ -1441,7 +1633,7 @@ describe("the control plane", () => {
 					(frame) => detailFocused(frame) && stillFrame(frame) !== stillFrame(before),
 					"the detail wheel event to move its surface",
 				);
-				expect(markerRowOf(scrolled)).toBe(5);
+				expect(markerRowOf(scrolled)).toBe(6);
 
 				// Horizontal and Shift-wheel gestures are inert for wrapped detail text.
 				const stable = setup.captureCharFrame();
@@ -1483,7 +1675,7 @@ describe("the control plane", () => {
 				await mouseDrag(setup, [58, thumbRow], [58, paneRow(1)]);
 				await awaitFrame(
 					setup,
-					(frame) => frame.includes("Retry policy for webhooks"),
+					(frame) => frame.includes("Drop the legacy auth shim"),
 					"a scrollbar thumb drag to move toward the start",
 				);
 			},
@@ -1496,6 +1688,7 @@ describe("the control plane", () => {
 			...BASE_CONFIG,
 			scroll: { speed: 2, acceleration: 0, maximumSpeed: 2 },
 		};
+		const planeRecord = await plane({ config });
 		await withApp(
 			async (setup) => {
 				await focusDetail(setup);
@@ -1507,7 +1700,7 @@ describe("the control plane", () => {
 					(frame) => agentRowOf(frame) === before - 2,
 				);
 			},
-			{ width: 60, height: 27, props: { config } },
+			{ width: 60, height: 27, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
@@ -1516,6 +1709,7 @@ describe("the control plane", () => {
 			...BASE_CONFIG,
 			scroll: { speed: 2, acceleration: 0, maximumSpeed: 2 },
 		};
+		const planeRecord = await plane({ config });
 		await withApp(
 			async (setup) => {
 				const before = agentRowOf(setup.captureCharFrame());
@@ -1526,7 +1720,7 @@ describe("the control plane", () => {
 					"the configured linear wheel step to move two rows",
 				);
 			},
-			{ width: 60, height: 27, props: { config } },
+			{ width: 60, height: 27, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
@@ -1564,6 +1758,7 @@ describe("the control plane", () => {
 			...BASE_CONFIG,
 			scroll: { speed: 1, acceleration: 0, maximumSpeed: 1 },
 		};
+		const planeRecord = await plane({ config });
 		await withApp(
 			async (setup) => {
 				const frames: string[] = [];
@@ -1588,20 +1783,37 @@ describe("the control plane", () => {
 					expect(detailPaneText(frame, 60).trim()).not.toBe("");
 				}
 			},
-			{ width: 60, height: 27, props: { config } },
+			{ width: 60, height: 27, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
 	test("mouse input below an open modal leaves both Ticket surfaces inert", async () => {
+		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
+				// The awaiting ticket the selection stands on offers no
+				// override of its own: move to an open ticket before the
+				// panel opens. At this height the descriptions sit below the
+				// detail's fold, so the walk reads the selected row, not the
+				// detail.
+				const selectedRow = (f: string) => rowsOf(f).find((row) => row.startsWith("│ ❯")) ?? "";
+				await press(setup, "j", "the selection to pass the running ticket", (f) =>
+					selectedRow(f).includes("Migrat"),
+				);
+				await press(setup, "j", "the selection to pass the Starting window", (f) =>
+					selectedRow(f).includes("Fix pan dri"),
+				);
+				await press(setup, "j", "the selection to reach the open ticket", (f) =>
+					selectedRow(f).includes("Retry polic"),
+				);
 				await openPanel(setup);
 				const before = setup.captureCharFrame();
 				await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "down" });
 				await mouseClick(setup, 4, paneRow(3));
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(before));
 			},
-			{ width: 60, height: 27 },
+			{ width: 60, height: 27, plane: planeRecord, loopPolicy: { kind: "held" } },
 		);
 	});
 
@@ -1612,6 +1824,11 @@ describe("the control plane", () => {
 		const state = openFactoryState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config: BASE_CONFIG,
+		});
 		try {
 			await withApp(
 				async (setup) => {
@@ -1688,7 +1905,7 @@ describe("the control plane", () => {
 						"the Key guide to close",
 					);
 				},
-				{ width: WIDTH, height: 30, props: { state } },
+				{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);
 		} finally {
 			state.close();

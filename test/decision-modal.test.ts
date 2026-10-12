@@ -7,6 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { EMPTY_TURN_LOG_NOTE } from "../src/components/decision-modal.ts";
+import type { TicketSourceConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import {
 	type AppSetup,
@@ -23,6 +24,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import { plane } from "./seeded-plane.ts";
 
 const WIDTH = 120;
 // The box at this height: nine box rows hold the context row, the pane's
@@ -39,6 +41,19 @@ const SCROLL_COL = WIDTH - 5;
 /** A terminal wide enough for the pop-in overflow to reach the last column. */
 const WIDE = 145;
 const WIDE_HEIGHT = 40;
+
+/** The issues source config the suite's planes carry. */
+const issuesSource: TicketSourceConfig = {
+	name: "issues",
+	kind: "github-issues",
+	refreshIntervalSeconds: 60,
+	repositories: ["acme/billing", "acme/portal", "acme/ingest"],
+	host: "github.com",
+};
+
+/** A plane that stands one source holding the named tickets. */
+const modalPlane = (tickets: readonly Ticket[]) =>
+	plane({ sources: [{ config: issuesSource, tickets }], groupingAxis: "none" });
 
 /**
  * A long turn log: paragraphs long enough to wrap at every width the scan
@@ -172,8 +187,10 @@ async function openModal(setup: AppSetup): Promise<string> {
  */
 describe("the decision modal's pop-in", () => {
 	test("no content ever reaches the terminal's edge while the box grows", async () => {
+		const planeRecord = await modalPlane([longLogTicket]);
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				setup.mockInput.pressEnter();
 				// The first frame that holds the modal, waited with the harness's
 				// deadline: a pop-in that lands late lands on a wait that still
@@ -206,15 +223,17 @@ describe("the decision modal's pop-in", () => {
 				// It opens at the bottom, where the conclusion sits.
 				expect(rowsOf(settled).some((row) => row.includes("352"))).toBe(true);
 			},
-			{ width: WIDE, height: WIDE_HEIGHT, props: { initialTickets: [longLogTicket] } },
+			{ width: WIDE, height: WIDE_HEIGHT, loopPolicy: { kind: "held" }, plane: planeRecord },
 		);
 	});
 });
 
 describe("the decision modal's scrollbar", () => {
 	test("pins the thumb and track to the body's last column", async () => {
+		const planeRecord = await modalPlane([awaitingTicket]);
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				const settled = await openModal(setup);
 				const body = bodyRowsOf(settled);
 				// The log is six rows, and the pane keeps the three the box has
@@ -235,13 +254,15 @@ describe("the decision modal's scrollbar", () => {
 					rgb(roleColor("subtext0")),
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, props: { initialTickets: [awaitingTicket] } },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "held" }, plane: planeRecord },
 		);
 	});
 
 	test("a blank row between text blocks keeps the track pinned", async () => {
+		const planeRecord = await modalPlane([awaitingTicket]);
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				await openModal(setup);
 				// One row up brings the blank row between the two text
 				// blocks into the window.
@@ -255,7 +276,7 @@ describe("the decision modal's scrollbar", () => {
 				// not a lone mark next to the left border.
 				expectPinnedScrollbar(frame);
 			},
-			{ width: WIDTH, height: HEIGHT, props: { initialTickets: [awaitingTicket] } },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "held" }, plane: planeRecord },
 		);
 	});
 });
@@ -288,8 +309,10 @@ describe("the decision modal's nested border at the declared minimum", () => {
 	}
 
 	test("the pane keeps its full chrome inside the box, and the region keeps its rows", async () => {
+		const planeRecord = await modalPlane([awaitingTicket]);
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				const frame = await openAtMinimum(setup);
 				const rows = rowsOf(frame);
 				// The box's border is the terminal's edge one cell in, on
@@ -314,13 +337,15 @@ describe("the decision modal's nested border at the declared minimum", () => {
 				const bar = rows[MIN_HEIGHT - 1];
 				expect(bar).toContain("Select action");
 			},
-			{ width: MIN_WIDTH, height: MIN_HEIGHT, props: { initialTickets: [awaitingTicket] } },
+			{ width: MIN_WIDTH, height: MIN_HEIGHT, loopPolicy: { kind: "held" }, plane: planeRecord },
 		);
 	});
 
 	test("the keys dispatch in both regions at the minimum", async () => {
+		const planeRecord = await modalPlane([longLogTicket]);
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				await openAtMinimum(setup);
 				// The pane opens pinned to the log's tail, as it does at every
 				// size, and the long turn's head stands above the window: a 27-row
@@ -341,7 +366,7 @@ describe("the decision modal's nested border at the declared minimum", () => {
 					f.includes("First I read the ticket"),
 				);
 			},
-			{ width: MIN_WIDTH, height: MIN_HEIGHT, props: { initialTickets: [longLogTicket] } },
+			{ width: MIN_WIDTH, height: MIN_HEIGHT, loopPolicy: { kind: "held" }, plane: planeRecord },
 		);
 	});
 });
@@ -433,8 +458,10 @@ describe("the decision modal's region and the log's floor", () => {
 	}
 
 	test("a short log keeps the region pinned to the box's floor without a scrollbar", async () => {
+		const planeRecord = await modalPlane([oneLineTicket]);
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				const frame = await openSettled(setup);
 				const rows = rowsOf(frame);
 				// The body holds one row and the pane's window eight, so the log
@@ -453,13 +480,15 @@ describe("the decision modal's region and the log's floor", () => {
 				expect(rows[bottom + 2]).toContain("Goto");
 				expect(rows[bottom + 4].slice(0, 2)).toBe(" └");
 			},
-			{ width: FLOOR_WIDTH, height: 22, props: { initialTickets: [oneLineTicket] } },
+			{ width: FLOOR_WIDTH, height: 22, loopPolicy: { kind: "held" }, plane: planeRecord },
 		);
 	});
 
 	test("a dense turn at a small terminal keeps the log's floor, scrolls the surplus rows, and rides the bar's range", async () => {
+		const planeRecord = await modalPlane([denseTicket]);
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				const frame = await openSettled(setup);
 				const rows = rowsOf(frame);
 				const { top, bottom } = expectPaneOf(rows);
@@ -498,7 +527,7 @@ describe("the decision modal's region and the log's floor", () => {
 				);
 				expect(slid).toContain("❯ Handoff: fix");
 			},
-			{ width: FLOOR_WIDTH, height: 21, props: { initialTickets: [denseTicket] } },
+			{ width: FLOOR_WIDTH, height: 21, loopPolicy: { kind: "held" }, plane: planeRecord },
 		);
 	});
 
@@ -531,8 +560,10 @@ describe("the decision modal's region and the log's floor", () => {
 
 		test("a living route reads as the fact line, not the row", async () => {
 			const position = positionOf("running");
+			const planeRecord = await modalPlane([routedAt("running"), position]);
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
 					const frame = await openSettled(setup);
 					// The route runs on its position ticket: the row reads as the
 					// fact line that names the standing, and takes no key.
@@ -546,22 +577,40 @@ describe("the decision modal's region and the log's floor", () => {
 				{
 					width: FLOOR_WIDTH,
 					height: 21,
-					props: { initialTickets: [routedAt("running"), position] },
+					loopPolicy: { kind: "held" },
+					plane: planeRecord,
 				},
 			);
 		});
 
 		test("a dead route stands as the live row again", async () => {
 			const position = positionOf("open");
+			const planeRecord = await modalPlane([routedAt("open"), position]);
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
 					const frame = await openSettled(setup);
 					// The position holds no handoff and nothing waits for it: the
-					// route is dead, and the confirmable row stands again.
+					// route is dead. The stateful world derives the Next step's
+					// gate on the position - the position offers no `fix` - and
+					// states the hold beside the key the operator still holds
+					// (ADR 0092).
 					expect(frame).not.toContain("the route is running on its position ticket");
-					expect(frame).toContain("Handoff: fix");
+					expect(frame).toContain("the Next step is held: the position no longer offers the task");
+					// The hold does not withdraw the key: the region's window shows
+					// two of its three rows, and down walks to the handoff row.
+					await pressArrow(setup, "down", "the selection on the Goto row", (f) =>
+						f.includes("❯ Goto"),
+					);
+					const atHandoff = await pressArrow(
+						setup,
+						"down",
+						"the selection on the handoff row",
+						(f) => f.includes("❯ Handoff: fix"),
+					);
+					expect(atHandoff).toContain("Handoff: fix");
 				},
-				{ width: FLOOR_WIDTH, height: 21, props: { initialTickets: [routedAt("open"), position] } },
+				{ width: FLOOR_WIDTH, height: 21, loopPolicy: { kind: "held" }, plane: planeRecord },
 			);
 		});
 	});
@@ -587,8 +636,10 @@ describe("the decision modal's region and the log's floor", () => {
 				},
 			},
 		};
+		const planeRecord = await modalPlane([noFireTicket]);
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				const frame = await openSettled(setup);
 				// The no-fire's reason stands as the region's fact line. The
 				// region shows two of its three rows, Close first, and the bar
@@ -613,7 +664,7 @@ describe("the decision modal's region and the log's floor", () => {
 				);
 				expect(atRefire).toContain("3-3/3");
 			},
-			{ width: WIDTH, height: HEIGHT, props: { initialTickets: [noFireTicket] } },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "held" }, plane: planeRecord },
 		);
 	});
 
@@ -627,8 +678,10 @@ describe("the decision modal's region and the log's floor", () => {
 	 */
 	describe("the chrome the pane yields at the low box", () => {
 		test("the pane yields its padding, keeps its border and the log's floor, and only then stands down", async () => {
+			const planeRecord = await modalPlane([awaitingTicket]);
 			await withApp(
 				async (setup) => {
+					planeRecord.settleFirstFetch();
 					const full = await openSettled(setup);
 					// Full chrome: the pane's padding stands above the body's rows.
 					let borders = expectPaneOf(rowsOf(full));
@@ -684,38 +737,41 @@ describe("the decision modal's region and the log's floor", () => {
 					expect(frame).not.toContain("Turn log");
 					expect(rowsOf(frame).slice(-1)[0]).toContain("Cancel");
 				},
-				{ width: FLOOR_WIDTH, height: 22, props: { initialTickets: [awaitingTicket] } },
+				{ width: FLOOR_WIDTH, height: 22, loopPolicy: { kind: "held" }, plane: planeRecord },
 			);
 		});
 	});
 
-	test("an empty turn log states its reason inside the pane, and the pane keeps its chrome", async () => {
+	test("a turn with no recorded log reads as the capture's lines, and the pane keeps its chrome", async () => {
+		// A settle that recorded no log: the state's read falls back to the
+		// last message, one entry per line - the seam's decode contract - so
+		// the pane shows the message's lines, and the empty-log note stands
+		// nowhere in the stateful world.
+		const planeRecord = await modalPlane([emptyLogTicket]);
 		await withApp(
 			async (setup) => {
+				planeRecord.settleFirstFetch();
 				const frame = await openSettled(setup);
 				const rows = rowsOf(frame);
-				const { top, bottom } = expectPaneOf(rows);
-				// The reason is one dim row inside the pane's border, and the
-				// pane keeps its border and its title.
-				const noteRow = rows.findIndex((row) => row.includes(EMPTY_TURN_LOG_NOTE));
-				expect(noteRow).toBe(top + 1);
-				expect(noteRow).toBeLessThan(bottom);
-				// The body carries nothing that scrolls, so the pane holds no
-				// thumb, and the scroll's key refuses with its reason on the
-				// Message line.
+				const { bottom } = expectPaneOf(rows);
+				// The capture's lines stand inside the pane's border, and the
+				// pane keeps its border and its title. The empty-log note is
+				// the stateless read's, and the stateful decode does not give it.
+				expect(frame).not.toContain(EMPTY_TURN_LOG_NOTE);
+				expect(frame).toContain("The auth shim and its flag are removed.");
+				expect(frame).toContain("All 142 tests pass. I left the migration note in docs/auth.md.");
+				// The body fills the window, so the pane holds no thumb, and the
+				// scroll's key refuses with its reason on the Message line.
 				expect(frame).not.toContain("█");
 				const refused = await press(setup, "j", "the scroll's refusal", (f) =>
-					f.includes("the body carries no rows"),
+					f.includes("the body fills its pane"),
 				);
 				expect(refused).not.toContain("█");
 				// The region keeps its rows at the floor, below the pane.
-				const refusedRows = rowsOf(refused);
-				expect(refusedRows[refusedRows.length - 2]).toContain("the body carries no rows");
-				const refusedBorders = expectPaneOf(refusedRows);
-				expect(refusedRows[refusedBorders.bottom + 1]).toContain("❯ Close");
-				expect(refusedRows[refusedBorders.bottom + 2]).toContain("Goto");
+				expect(rows[bottom + 1]).toContain("❯ Close");
+				expect(rows[bottom + 2]).toContain("Goto");
 			},
-			{ width: FLOOR_WIDTH, height: 15, props: { initialTickets: [emptyLogTicket] } },
+			{ width: FLOOR_WIDTH, height: 15, loopPolicy: { kind: "held" }, plane: planeRecord },
 		);
 	});
 });
