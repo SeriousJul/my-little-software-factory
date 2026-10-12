@@ -69,6 +69,8 @@ interface AgentRow {
 	workspace_id?: string;
 	agent?: string;
 	agent_status?: string;
+	/** The checkout or worktree path the Agent's pane workspace stands on. */
+	checkout_path?: string;
 	agent_session?: unknown;
 }
 
@@ -572,6 +574,21 @@ describe("the live side", () => {
 });
 
 describe("the Agent side", () => {
+	test("the agent list reports the pane's workspace checkout, and omits it for a pane it does not hold", async () => {
+		const world = healthyWorld();
+		const listed = await world.run("herdr", ["agent", "list"]);
+		expect(listed.code).toBe(0);
+		const agents = resultOf<{ agents: AgentRow[] }>(listed.stdout).agents;
+		// The workspace the pane stands in names the checkout the conflict
+		// check matches a launch against.
+		const worker = agents.find((agent) => agent.name === "worker-1");
+		expect(worker?.checkout_path).toBe(CHECKOUT);
+		// The Agent's pane is not one the world holds: the checkout cannot be
+		// read, and the row does not name one. The plane skips such an Agent.
+		const unheld = agents.find((agent) => agent.name === "settler-1");
+		expect(unheld?.checkout_path).toBeUndefined();
+	});
+
 	test("an agent list agrees with the world's standing, and the session path rides along", async () => {
 		const world = healthyWorld();
 		const listed = await world.run("herdr", ["agent", "list"]);
