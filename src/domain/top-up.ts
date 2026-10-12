@@ -345,6 +345,11 @@ export function automaticAddsHold(facts: AutomaticAddFacts): AutomaticHold | nul
  * The hold the fresh-work adds stand under: the gates every automatic add reads,
  * then the queue's own depth (ADR 0051). null means the walk may add.
  *
+ * The depth counts the queue's rows, not the starts the rows started
+ * (ADR 0136): a row the pickup claimed whose start has not answered is a
+ * standing row, and the add it holds out lands on the cycle after the
+ * start's answer removes it, not on the cycle the queue drained.
+ *
  * The continuation add reads the same gates and its own queue rule instead,
  * because ADR 0094 lets it enter ahead of a standing fresh-work row.
  */
