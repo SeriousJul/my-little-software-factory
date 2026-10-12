@@ -14,6 +14,13 @@ import { type MouseButton, MouseButtons } from "@opentui/core/testing";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { App, type AppLoopPolicy } from "../src/components/app.ts";
+import {
+	type ControlDefinition,
+	controlById,
+	controlsForMode,
+	type InteractionMode,
+} from "../src/components/controls.ts";
+import { controlInk } from "../src/components/shared/presentation.ts";
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import { resolveTheme, type ThemeRole } from "../src/components/shared/theme.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
@@ -30,45 +37,18 @@ export const WIDTH = 120;
 export const HEIGHT = 30;
 const FRAME_POLL_MS = 10;
 /**
- * How long one frame wait may run before the effect is called missing.
+ * The one deadline every rig wait runs against, local and CI alike.
  *
- * The suite runs a real renderer, a real state database, and the machine's
- * other work at the same time, and an effect can cross a process boundary on
- * the way to the frame: the heaviest waits here launch a Handoff or an Agent
- * through a command runner. A deadline tuned to a quiet machine fails such a
- * wait by a few hundred ms under load, and the run reads as a broken app
- * rather than a busy one. A test whose effect never arrives still fails, only
- * at this deadline; the runner's own budget (the test script's `--timeout`)
- * stays above the sum of a test's waits.
- *
- * CI hosts set `CI`, and their shared runners run the suite under a load the
- * deadline was not tuned for. Doubling it there keeps a slow runner slow
- * instead of red; a test whose effect never arrives still fails, at 20000 ms
- * instead of 10000.
- *
- * The #311 sweep counts every wait that stands on this deadline, at the
- * fix's head: 814 direct `awaitFrame` sites in 34 test files (813 on this
- * deadline, one on its own 350 ms in `ticket-grouping-frame`), 986
- * press-family sites that each await one frame through this file (647
- * `press`, 217 `pressArrow`, 89 `pressReturn`, 19 `pressEnterQuiet`, 12
- * `pressScrollKey`, 2 `pressQuiet`), and 188 open- and close-helper sites
- * (32 `closeOverlay`, 13 `confirmPanel`, 143 open helpers) that each await
- * one frame plus one key handler. The 193 key handler waits - 5 direct
- * (4 `awaitNewKeyHandler`, 1 `awaitBaseKeyHandlers`) and the rest through
- * the helpers - are the ones that can end only on a pass the plane does
- * not owe. They end on React's
- * passive-effect flush - the mount subscribe and the unmount unsubscribe -
- * scheduled at the normal priority, and owed to the reconciler, not to the
- * renderer. The plane paints on
- * invalidation, so no frame ends them on its own (the #302/#310 class was
- * the renderer-pass mirror of the same shape). `awaitFrameChecking`, the
- * wait that landed for issue #312 after the sweep's head, stands on the
- * same deadline at its call, and its loop is the one the direct `awaitFrame`
- * sites run. Every wait above runs `flushPassiveNow` per poll before it
- * reads, so each of them ends on what it waits for instead of on the
- * scheduler's next turn.
+ * The rig owns the wait, the flush, and the window in which the pressed
+ * key must belong to the app (ADR 0128), and one clock covers all of them:
+ * a per-test budget would let a slow plane stretch one wait past the test's
+ * end, and a CI split would let the same press prove different things on
+ * the two machines. Twenty seconds stands above the measured waits at the
+ * head that set it - the record names them - and above the load a shared
+ * runner puts on them; a wait that still needs more than the deadline is a
+ * slow plane, and the deadline names it instead of a tuned constant.
  */
-export const FRAME_DEADLINE_MS = process.env.CI ? 20000 : 10000;
+export const FRAME_DEADLINE_MS = 20000;
 /** The dispatch grace `settle` waits out before trusting stability. */
 const SETTLE_GRACE_MS = 30;
 /**
@@ -1495,4 +1475,830 @@ export function spanColorAt(
 		if (span.text.includes(needle)) return span.fg;
 	}
 	return null;
+}
+
+// ===========================================================================
+// The frame rig: controls, not keys (ADR 0128)
+//
+// A frame test names one control from the control catalogue and one outcome
+// from a closed set. The rig resolves the key from the hint the Action bar
+// painted for that control, sends only that key, and owns the wait, the
+// flush, the window in which the pressed key belongs to the app, and the one
+// deadline. A test never picks a key character, and it never writes a frame
+// predicate where a named outcome stands.
+//
+// The closed escape list for the input the Action bar does not advertise:
+//   typeText / pasteText / fieldKey   raw input into the focused field, the
+//     Key guide's field-editing rows, which the plane dispatches itself
+//   tabUntilSlot                      the walk across a form's slots
+//   launchConsultationDraft           typed input and the submit it lands on
+//   sendResponseDraft                 the Response editor's submit
+//   quitApp / emergencyExit /         the controls the Action bar never
+//   initRepository / toggleAutoHandoff   hints: the quit key, the emergency
+//                                     exit, the repository-init key, and the
+//                                     auto-handoff toggle (F5 in a field)
+//   frameUntil                        a custom frame check, named for what it
+//                                     waits for, where no named outcome fits
+//
+// `opens` and `closes` pair: the opening press records the key bus as it was
+// and watches it; the closing press waits for the surface's handlers to give
+// the keys back, and a close that never had any hands them back proves
+// nothing, so the rig fails it.
+
+export interface ControlOutcomeFields {
+	/**
+	 * The frame gains a surface named for this, and the surface takes over
+	 * the keys. The name is the surface's painted title or row text.
+	 */
+	opens?: string;
+	/**
+	 * The surface an opening press named with `opens` leaves, and it gives
+	 * its keys back to the mode underneath.
+	 */
+	closes?: string;
+	/**
+	 * The Message line states the catalogue's own refusal for the control.
+	 * The string form names the wording the line must carry; the boolean
+	 * form accepts the state word alone, and a test that refused twice in
+	 * a row should name the wording, because a line that was already
+	 * warning keeps standing when the control runs.
+	 */
+	refuses?: boolean | string;
+	/** The frame paints this. */
+	shows?: string;
+	/** The frame no longer paints this. */
+	hides?: string;
+	/**
+	 * Where the cursor fact lands: `"tickets"`, `"consultations"`, `"queue"`,
+	 * or `"detail"` name the pane that holds the cursor marker, and any
+	 * other value names the row the marker reaches, read off that row's
+	 * visible text. A name two visible rows show cannot be resolved.
+	 */
+	moved?: string;
+	/** The app is quiet after the input: the frame rests. */
+	quiet?: boolean;
+}
+
+export interface PressControlFields extends ControlOutcomeFields {
+	/**
+	 * Of the key tokens the bar's hint painted for the control, the one this
+	 * press sends. The default is the first: a hint that names `↑↓/jk`
+	 * sends `↑` unless the press asks for `j`.
+	 */
+	via?: string;
+}
+
+const OUTCOME_FIELDS = new Set(["opens", "closes", "refuses", "shows", "hides", "moved", "quiet"]);
+
+/** The outcomes are a closed set: a misspelled one is a rig error, not a quiet no-op. */
+function checkOutcomeFields(fields: ControlOutcomeFields, viaAllowed: boolean): void {
+	const known = viaAllowed ? new Set([...OUTCOME_FIELDS, "via"]) : OUTCOME_FIELDS;
+	const words = [...OUTCOME_FIELDS, ...(viaAllowed ? ["via"] : [])].join(", ");
+	for (const key of Object.keys(fields)) {
+		if (!known.has(key))
+			throw new Error(`the frame rig's outcomes are a closed set: no "${key}" (the set: ${words})`);
+	}
+}
+
+function catalogueControl(id: string): ControlDefinition {
+	try {
+		return controlById(id);
+	} catch {
+		throw new Error(
+			`the frame rig cannot press "${id}": the control catalogue names no such control`,
+		);
+	}
+}
+
+/** The facts a control's keys rule reads, for a key that names none. */
+const DUMMY_FACTS = {} as never;
+
+/**
+ * The display form of a raw key: the rig's own copy of the catalogue's key
+ * names. A re-key flows from the catalogue, and the rig's suite pins the
+ * agreement on the one frame it walks.
+ */
+const KEY_DISPLAY: Record<string, string> = {
+	up: "↑",
+	down: "↓",
+	left: "←",
+	right: "→",
+	pageup: "PgUp",
+	pagedown: "PgDn",
+	home: "Home",
+	end: "End",
+	tab: "Tab",
+	space: "Space",
+	return: "Enter",
+	escape: "Esc",
+	backspace: "Backspace",
+	delete: "Delete",
+	"ctrl+c": "Ctrl+C",
+};
+
+function displayKey(raw: string): string {
+	if (raw in KEY_DISPLAY) return KEY_DISPLAY[raw];
+	if (raw.startsWith("ctrl+")) return `Ctrl+${raw.slice(5).toUpperCase()}`;
+	if (/^f\d{1,2}$/.test(raw)) return raw.toUpperCase();
+	return raw;
+}
+
+/** The plane under the test, where the test booted one. */
+function planeOf(setup: Setup): SeededPlane | undefined {
+	return "plane" in setup ? (setup as { plane: SeededPlane }).plane : undefined;
+}
+
+/**
+ * The display names a control's keys and its bar key label can be painted
+ * as, across every mode the control runs in: the rig's match set. A bar
+ * hint whose painted key tokens intersect this set is the hint for the
+ * control.
+ */
+function keyAliases(setup: Setup, control: ControlDefinition): Set<string> {
+	const names = new Set<string>();
+	for (const token of keyTokens(control.keyLabel)) names.add(token);
+	for (const mode of control.modes) {
+		let keys: readonly string[];
+		try {
+			keys = control.keys(mode, DUMMY_FACTS);
+		} catch {
+			continue;
+		}
+		for (const key of keys) names.add(displayKey(key));
+	}
+	// The Agent terminal's exit key is read from the plane's config, so its
+	// painted name is the rig's to compute the way the catalogue states it.
+	if (control.id === "interact-exit") {
+		const exit = planeOf(setup)?.config.interactionExitKey ?? "f12";
+		names.add(displayKey(String(exit).trim().toLowerCase()));
+	}
+	return names;
+}
+
+interface BarHint {
+	/** The key label the hint painted, as written. */
+	key: string;
+	/** The label's individual keys: one per run character, or the named key whole. */
+	tokens: string[];
+	/** The hint's word beside its key. */
+	label: string;
+	/** The foreground the key part paints in. */
+	keyFg: [number, number, number] | null;
+}
+
+/** The named key tokens a key label can carry whole, the rest runs of single keys. */
+const NAMED_KEY_TOKEN =
+	/^(F\d{1,2}|PgUp|PgDn|Home|End|Enter|Esc|Space|Tab|Backspace|Delete|Del|Ctrl\+[A-Z]|⌫)$/;
+
+/** The individual keys a painted key label names: `↑↓/jk` names ↑, ↓, j, and k. */
+function keyTokens(label: string): string[] {
+	const tokens: string[] = [];
+	for (const group of label.split("/")) {
+		if (group === "" || group.includes("/")) continue;
+		if (NAMED_KEY_TOKEN.test(group)) {
+			tokens.push(group);
+			continue;
+		}
+		for (const key of group) tokens.push(key);
+	}
+	return tokens;
+}
+
+/**
+ * The hints the Action bar painted on the last row of the captured frame.
+ *
+ * The renderer merges the spans of equal color, so a hint the state cannot run -
+ * whose key and label both wear the unavailable ink - stands as one span, `g Goto`,
+ * with no trailing space to mark its key. A hint the state can run keeps its key
+ * span apart from its label, because the two wear different inks. The parser
+ * groups the row's spans on its gaps, so both shapes read back: a one-span
+ * group is a merged key and label, a two-span group is the key span and the
+ * label. A frame that paints no ink at all merges the whole row into one span,
+ * and the gaps alone then divide its hints.
+ */
+function barHints(setup: Setup): BarHint[] {
+	const line = setup.captureSpans().lines.at(-1);
+	if (line === undefined || line.spans.length === 0) return [];
+	const spans = line.spans;
+	if (spans.length === 1) return parseBarText(spans[0].text, resolveColor(spans[0].fg));
+	const hints: BarHint[] = [];
+	let group: { text: string; fg: [number, number, number] | null }[] = [];
+	for (const span of spans) {
+		if (span.text.trim() !== "") {
+			group.push({ text: span.text, fg: resolveColor(span.fg) });
+			continue;
+		}
+		pushGroupHint(hints, group);
+		group = [];
+	}
+	pushGroupHint(hints, group);
+	return hints;
+}
+
+/** The spans of one gap-delimited group, read back as one bar hint. */
+function pushGroupHint(
+	hints: BarHint[],
+	group: { text: string; fg: [number, number, number] | null }[],
+): void {
+	if (group.length === 0) return;
+	if (group.length === 1) {
+		const text = group[0].text;
+		const cut = text.indexOf(" ");
+		const key = cut === -1 ? "" : text.slice(0, cut);
+		const tokens = keyTokens(key);
+		if (tokens.length === 0) return;
+		hints.push({ key, tokens, label: text.slice(cut + 1).trimEnd(), keyFg: group[0].fg });
+		return;
+	}
+	if (!group[0].text.endsWith(" ")) return;
+	const key = group[0].text.slice(0, -1);
+	const tokens = keyTokens(key);
+	if (tokens.length === 0) return;
+	hints.push({
+		key,
+		tokens,
+		label: group
+			.slice(1)
+			.map((member) => member.text)
+			.join(""),
+		keyFg: group[0].fg,
+	});
+}
+
+/** The hints one ink-less (or compact) row states, divided on the bar's gaps. */
+function parseBarText(text: string, fg: [number, number, number] | null): BarHint[] {
+	const hints: BarHint[] = [];
+	for (const segment of text.split(/ {2,}/)) {
+		if (segment === "") continue;
+		const cut = segment.indexOf(" ");
+		const key = cut === -1 ? segment : segment.slice(0, cut);
+		const tokens = keyTokens(key);
+		if (cut === -1 || cut === 0 || tokens.length === 0) continue;
+		hints.push({ key, tokens, label: segment.slice(cut + 1).trimEnd(), keyFg: fg });
+	}
+	return hints;
+}
+
+export interface ControlResolution {
+	/** The key token the rig will send. */
+	key: string;
+	/** The hint's word that owns the key. */
+	label: string;
+}
+
+/**
+ * Resolve a control to the key the Action bar of the current frame painted
+ * for it. When `via` is named, it must be one of the tokens the hint
+ * painted. The rig throws when the bar paints no hint the control answers
+ * to, when several painted hints answer to it, or when `via` is not among
+ * the hint's tokens.
+ */
+export function resolveControl(setup: Setup, controlId: string, via?: string): ControlResolution {
+	const control = catalogueControl(controlId);
+	const all = barHints(setup);
+	const hints = all.filter((hint) =>
+		hint.tokens.some((token) => keyAliases(setup, control).has(token)),
+	);
+	const paint = all
+		.map((hint) => (hint.label === "" ? hint.key : `${hint.key} ${hint.label}`))
+		.join("  ");
+	if (hints.length === 0)
+		throw new Error(
+			`the frame rig cannot press "${controlId}": the bar paints no hint whose key the control answers to (the bar paints: ${paint || "nothing"}); if the control is off the bar, the rig's escape list reaches it`,
+		);
+	if (via !== undefined) {
+		const chosen = hints.find((hint) => hint.tokens.includes(via));
+		if (chosen === undefined)
+			throw new Error(
+				`the frame rig cannot press "${controlId}" via "${via}": the bar's hint names ${hints[0].key}, and the key is not among its tokens`,
+			);
+		return { key: via, label: chosen.label };
+	}
+	if (hints.length > 1)
+		throw new Error(
+			`the frame rig cannot press "${controlId}": ${hints.length} bar hints answer to it (${hints.map((h) => h.key).join(" | ")}); name the key with \`via\``,
+		);
+	return { key: hints[0].tokens[0], label: hints[0].label };
+}
+
+const ARROW_BY_TOKEN: Record<string, "up" | "down" | "left" | "right"> = {
+	"↑": "up",
+	"↓": "down",
+	"←": "left",
+	"→": "right",
+};
+
+/**
+ * The modes the catalogue runs, the rig's own copy: the closed walk unions the
+ * controls of every mode to reach the whole catalogue without a production
+ * export the plane does not make.
+ */
+const ALL_MODES: InteractionMode[] = [
+	"ticket-list",
+	"ticket-detail",
+	"consultation-list",
+	"consultation-detail",
+	"work-queue-list",
+	"work-queue-detail",
+	"override-list",
+	"override-model",
+	"override-text",
+	"form-field",
+	"form-selector",
+	"form-action",
+	"action-panel",
+	"decision-modal",
+	"missing-modal",
+	"repository-select",
+	"live-view",
+	"key-guide",
+	"message-view",
+	"consultation-interaction",
+];
+
+/** The catalogue's controls, every mode's union de-duplicated on the control's id. */
+function allControls(): ControlDefinition[] {
+	const seen = new Map<string, ControlDefinition>();
+	for (const mode of ALL_MODES) for (const def of controlsForMode(mode)) seen.set(def.id, def);
+	return [...seen.values()];
+}
+
+/**
+ * The catalogue controls the current bar paints a hint for: the closed set a
+ * press can resolve from this frame. The rig's suite walks it to prove the rig
+ * resolves every control the bar advertises, and the architecture check reads
+ * it to name the controls a frame suite must reach by a control, not a
+ * hand-picked key.
+ */
+export function barControlIds(setup: Setup): string[] {
+	const hints = barHints(setup);
+	return allControls()
+		.filter((def) => hints.some((h) => h.tokens.some((t) => keyAliases(setup, def).has(t))))
+		.map((def) => def.id);
+}
+
+/** Send one painted key token through the app's own input parser. */
+function sendKey(setup: Setup, token: string): void {
+	const input = setup.mockInput;
+	const arrow = ARROW_BY_TOKEN[token];
+	if (arrow !== undefined) {
+		input.pressArrow(arrow);
+		return;
+	}
+	if (/^F\d{1,2}$/.test(token)) {
+		input.pressKey(token);
+		return;
+	}
+	switch (token) {
+		case "Enter":
+			input.pressEnter();
+			return;
+		case "Esc":
+			input.pressEscape();
+			return;
+		case "Tab":
+			input.pressTab();
+			return;
+		case "Backspace":
+		case "⌫":
+			input.pressBackspace();
+			return;
+		case "Delete":
+		case "Del":
+			input.pressKey("\u001b[3~");
+			return;
+		case "PgUp":
+			input.pressKey("\u001b[5~");
+			return;
+		case "PgDn":
+			input.pressKey("\u001b[6~");
+			return;
+		case "Home":
+			input.pressKey("\u001b[H");
+			return;
+		case "End":
+			input.pressKey("\u001b[F");
+			return;
+		case "Ctrl+C":
+			input.pressCtrlC();
+			return;
+		case "Space":
+			input.pressKey(" ");
+			return;
+	}
+	if (/^[a-z?+-=]$/.test(token)) {
+		input.pressKey(token);
+		return;
+	}
+	throw new Error(`the frame rig cannot send the key the bar named: "${token}"`);
+}
+
+interface SurfaceHolding {
+	/** The name the opening press gave the surface it opens. */
+	name: string;
+	/** The key bus's subscriptions when the opening press was sent. */
+	base: readonly unknown[];
+	/**
+	 * The subscriptions the surface itself added, read off the bus once it stood
+	 * open: the bus's list minus the base it held when the opening press was
+	 * sent. A mode a surface opens can re-create the base mode's handlers with
+	 * fresh identity on the way back, so the release is proved on the handlers
+	 * the surface owned, not on the base surviving intact.
+	 */
+	added: unknown[];
+	/** Whether a handler outside `base` joined while the holding stood. */
+	readonly grew: boolean;
+	/** Stop watching the bus. */
+	stop(): void;
+}
+
+const surfaceHoldings = new WeakMap<Setup, SurfaceHolding[]>();
+
+function holdingsFor(setup: Setup): SurfaceHolding[] {
+	let stack = surfaceHoldings.get(setup);
+	if (stack === undefined) {
+		stack = [];
+		surfaceHoldings.set(setup, stack);
+	}
+	return stack;
+}
+
+function startHolding(setup: Setup, name: string): SurfaceHolding {
+	const watch = baseKeyHandlers(setup);
+	return {
+		name,
+		base: watch.base,
+		added: [],
+		get grew() {
+			return watch.grew;
+		},
+		stop: () => watch.stop(),
+	};
+}
+
+/**
+ * Record the keys a surface that stands open now holds: the bus's list minus
+ * the base the opening press saw. Called once the opening outcome has stood, so
+ * the surface's own handler is on the bus and in the list.
+ */
+function recordHoldingKeys(setup: Setup, holding: SurfaceHolding): void {
+	const now = keyHandlerListeners(setup);
+	holding.added = now.filter((handler) => !holding.base.includes(handler));
+}
+
+interface PressContext {
+	/** The frame captured before the input, settled. */
+	preFrame: string;
+	/** Its Message line. */
+	preLine: string;
+	/** The holding the input opened, when the outcomes name `opens`. */
+	holding?: SurfaceHolding;
+}
+
+function toHex(rgb: [number, number, number]): string {
+	const part = (n: number) => n.toString(16).padStart(2, "0");
+	return `#${part(rgb[0])}${part(rgb[1])}${part(rgb[2])}`;
+}
+
+/**
+ * Press one catalogue control. The rig settles the frame, resolves the key
+ * from the hint the Action bar painted for the control, sends only that key,
+ * and waits for the named outcomes in their standing order: the surface the
+ * press opens and its taking of the keys, the surface it closes and its
+ * giving of the keys back, the Message line's refusal, the frame that shows
+ * or stops showing, the cursor that moves, and the app's quiet.
+ */
+export async function pressControl(
+	setup: Setup,
+	controlId: string,
+	fields: PressControlFields = {},
+): Promise<string> {
+	const control = catalogueControl(controlId);
+	checkOutcomeFields(fields, true);
+	const effective: PressControlFields =
+		Object.keys(fields).filter((key) => key !== "via").length === 0
+			? { ...fields, quiet: true }
+			: fields;
+	const preFrame = await settle(setup);
+	const resolution = resolveControl(setup, controlId, effective.via);
+	if (effective.refuses !== undefined) {
+		// A hint the bar painted in its available ink will run the control,
+		// so a refusal the test names there is the test's own error: fail now,
+		// not at the deadline. The read runs only where both inks resolve: the
+		// no-color presentation paints neither, and the words stand alone.
+		const hint = barHints(setup).find(
+			(h) => h.label === resolution.label && h.tokens.includes(resolution.key),
+		);
+		const ink = controlInk();
+		if (hint !== undefined && ink.indicator.fg !== null && hint.keyFg !== null) {
+			if (toHex(hint.keyFg) === ink.indicator.fg.toLowerCase())
+				throw new Error(
+					`the frame rig cannot refuse "${control.id}": the bar painted its hint available, so the press runs the control instead of stating a refusal`,
+				);
+		}
+	}
+	const holding = effective.opens !== undefined ? startHolding(setup, effective.opens) : undefined;
+	sendKey(setup, resolution.key);
+	try {
+		return await runOutcomes(setup, effective, {
+			preFrame,
+			preLine: messageRowOf(preFrame),
+			holding,
+		});
+	} catch (error) {
+		holding?.stop();
+		throw error;
+	}
+}
+
+function movedChecker(target: string, preFrame: string): (frame: string) => boolean {
+	switch (target) {
+		case "tickets":
+			return (f) => f.includes("❯ Tickets");
+		case "consultations":
+			return (f) => f.includes("❯ Consultations");
+		case "queue":
+			return (f) => f.includes("❯ Work queue");
+		case "detail":
+			return (f) => f.includes("❯ Detail");
+	}
+	const shown = rowsOf(preFrame).filter((row) => row.includes(target));
+	if (shown.length > 1)
+		throw new Error(
+			`the frame rig cannot move to the row named "${target}": ${shown.length} visible rows show it, so the marker could land on either; name a row text only one row shows`,
+		);
+	return (frame: string) => {
+		const row = markerRowOf(frame);
+		return row !== -1 && rowsOf(frame)[row]?.includes(target) === true;
+	};
+}
+
+async function runOutcomes(
+	setup: Setup,
+	fields: ControlOutcomeFields,
+	ctx: PressContext,
+): Promise<string> {
+	let frame = ctx.preFrame;
+	if (fields.opens !== undefined) {
+		const opens = fields.opens;
+		if (ctx.holding === undefined)
+			throw new Error(`the frame rig cannot open "${opens}": no press recorded it`);
+		const holding = ctx.holding;
+		frame = await awaitFrame(setup, (f) => frameText(f).includes(opens), "the surface to open");
+		await awaitKeyBus(setup, `the keys the ${opens} takes over`, () => holding.grew);
+		frame = await settle(setup);
+		recordHoldingKeys(setup, holding);
+		holdingsFor(setup).push(holding);
+	}
+	if (fields.closes !== undefined) {
+		const stack = holdingsFor(setup);
+		const holding = stack.find((h) => h.name === fields.closes);
+		if (holding === undefined)
+			throw new Error(
+				`the frame rig cannot close "${fields.closes}": no opening press named it with \`opens\``,
+			);
+		if (holding.added.length === 0)
+			throw new Error(
+				`the frame rig cannot prove the ${fields.closes} closed: it never took over the keys, so a close that owned nothing proves nothing; name the frame that stops showing it with \`hides\` instead`,
+			);
+		// The close is the surface giving back the keys it took: every handler it
+		// added leaves the bus. The base mode's own handlers are not waited on,
+		// because a mode the surface opened can re-create them with fresh identity
+		// on the way back, and that is not the surface holding a key.
+		await awaitKeyBus(setup, `the keys the ${fields.closes} gives back`, (now) =>
+			holding.added.every((handler) => !now.includes(handler)),
+		);
+		holding.stop();
+		stack.splice(stack.indexOf(holding), 1);
+		frame = await settle(setup);
+	}
+	if (fields.refuses !== undefined) {
+		const target = typeof fields.refuses === "string" ? fields.refuses : undefined;
+		frame = await awaitFrame(
+			setup,
+			(f) => {
+				const line = messageRowOf(f);
+				if (!line.startsWith("Warning:")) return false;
+				if (line === ctx.preLine && !ctx.preLine.startsWith("Warning:")) return false;
+				return target === undefined || line.includes(target);
+			},
+			"the Message line to state the refusal",
+		);
+	}
+	if (fields.shows !== undefined) {
+		const shows = fields.shows;
+		frame = await awaitFrame(setup, (f) => frameText(f).includes(shows), "the frame to show");
+	}
+	if (fields.hides !== undefined) {
+		const hides = fields.hides;
+		frame = await awaitFrame(
+			setup,
+			(f) => !frameText(f).includes(hides),
+			"the frame to stop showing",
+		);
+	}
+	if (fields.moved !== undefined) {
+		const check = movedChecker(fields.moved, ctx.preFrame);
+		frame = await awaitFrame(setup, check, "the cursor to move");
+	}
+	if (fields.quiet) frame = await settle(setup);
+	return frame;
+}
+
+/**
+ * Wait for named outcomes without pressing: the app's own events - a source
+ * update, a turn settling - carry the frame to the state the test names.
+ * `opens` belongs to a press, which the rig watches hand the keys over, and
+ * a close it waits on must be one the rig recorded opening.
+ */
+export async function waitFor(setup: Setup, fields: ControlOutcomeFields): Promise<string> {
+	checkOutcomeFields(fields, false);
+	if (fields.opens !== undefined)
+		throw new Error(
+			`the frame rig cannot wait for the ${fields.opens} to open: \`opens\` belongs to a press, which the rig watches take the keys`,
+		);
+	const preFrame = setup.captureCharFrame();
+	return runOutcomes(setup, fields, {
+		preFrame,
+		preLine: messageRowOf(preFrame),
+	});
+}
+
+/**
+ * The escape hatch for a frame check no named outcome names: wait for the
+ * frame to satisfy `check`, named for what it waits for, until the deadline.
+ */
+export async function frameUntil(
+	setup: Setup,
+	what: string,
+	check: (frame: string) => boolean,
+	deadlineMs: number = FRAME_DEADLINE_MS,
+): Promise<string> {
+	return awaitFrame(setup, check, what, deadlineMs);
+}
+
+/** Type characters into the focused field: the field owns its characters. */
+export async function typeText(setup: Setup, text: string): Promise<void> {
+	await setup.mockInput.typeText(text);
+}
+
+/** Paste text into the focused field through the terminal's paste. */
+export async function pasteText(setup: Setup, text: string): Promise<void> {
+	await setup.mockInput.pasteBracketedText(text);
+}
+
+/**
+ * One raw key into the focused field: the Key guide's field-editing rows,
+ * which the plane dispatches itself and the Action bar names nowhere. The
+ * named keys stand as the guide shows them, and a single printable
+ * character stands for itself.
+ */
+export type FieldKey =
+	| "left"
+	| "right"
+	| "up"
+	| "down"
+	| "ctrl+left"
+	| "ctrl+right"
+	| "shift+left"
+	| "shift+right"
+	| "shift+up"
+	| "shift+down"
+	| "home"
+	| "end"
+	| "delete"
+	| "backspace"
+	| "ctrl+backspace"
+	| "ctrl+z"
+	| "ctrl+y"
+	| "ctrl+a"
+	| "enter"
+	| "tab"
+	| "space"
+	| `F${number}`
+	| (string & {});
+
+const FIELD_ARROW: Record<string, "up" | "down" | "left" | "right"> = {
+	left: "left",
+	right: "right",
+	up: "up",
+	down: "down",
+};
+
+export function fieldKey(setup: Setup, key: FieldKey): void {
+	const input = setup.mockInput;
+	const mods: { ctrl?: boolean; shift?: boolean } = {};
+	let base = key.toLowerCase();
+	if (base.startsWith("ctrl+")) {
+		mods.ctrl = true;
+		base = base.slice(5);
+	} else if (base.startsWith("shift+")) {
+		mods.shift = true;
+		base = base.slice(6);
+	}
+	const arrow = FIELD_ARROW[base];
+	if (arrow !== undefined) {
+		input.pressArrow(arrow, mods);
+		return;
+	}
+	const upper = base.toUpperCase();
+	switch (upper) {
+		case "HOME":
+			input.pressKey("HOME");
+			return;
+		case "END":
+			input.pressKey("END");
+			return;
+		case "DELETE":
+			input.pressKey("DELETE");
+			return;
+		case "BACKSPACE":
+			input.pressBackspace(mods);
+			return;
+		case "ENTER":
+			input.pressEnter();
+			return;
+		case "TAB":
+			input.pressTab();
+			return;
+		case "SPACE":
+			input.pressKey(" ");
+			return;
+	}
+	if (/^F\d{1,2}$/.test(upper)) {
+		input.pressKey(upper, mods);
+		return;
+	}
+	if (/^[a-z0-9?+-=]$/.test(base)) {
+		input.pressKey(key, mods);
+		return;
+	}
+	throw new Error(
+		`the frame rig cannot send "${key}" to a field: name a field-editing key (an arrow, Home, End, Delete, Backspace, a Ctrl combination, a function key) or a single printable character`,
+	);
+}
+
+/** The key the catalogue gives a control in one mode: a catalogue read, not a hand-picked literal. */
+function catalogueKey(id: string, mode: InteractionMode): string {
+	const keys = controlById(id).keys(mode, DUMMY_FACTS);
+	if (keys.length === 0)
+		throw new Error(`the frame rig cannot press "${id}": the catalogue gives it no key in ${mode}`);
+	return displayKey(keys[0]);
+}
+
+/**
+ * Whether the frame shows a live text caret. The renderer parks the
+ * terminal's cursor on the focused field's caret and holds it off the first
+ * cell otherwise, so the cursor's row is the rig's read of which mode the
+ * app sits in: a field, where F5 toggles auto-handoff, or a section, where
+ * the bare letter does. The rig's suite pins the read.
+ */
+function textEntryFocused(setup: Setup): boolean {
+	const [x, y] = setup.captureSpans().cursor;
+	return !(x === 1 && y === 1);
+}
+
+/**
+ * Press the controls the Action bar never hints, one named operation each:
+ * the quit key, the emergency exit, the repository-init key, and the
+ * auto-handoff toggle, whose key the rig reads off the mode the frame shows.
+ */
+export async function quitApp(setup: Setup, fields: ControlOutcomeFields = {}): Promise<string> {
+	checkOutcomeFields(fields, false);
+	const key = catalogueKey("quit", "ticket-list");
+	const preFrame = await settle(setup);
+	sendKey(setup, key);
+	return runOutcomes(setup, fields, { preFrame, preLine: messageRowOf(preFrame) });
+}
+
+export async function emergencyExit(
+	setup: Setup,
+	fields: ControlOutcomeFields = {},
+): Promise<string> {
+	checkOutcomeFields(fields, false);
+	const preFrame = await settle(setup);
+	sendKey(setup, "Ctrl+C");
+	return runOutcomes(setup, fields, { preFrame, preLine: messageRowOf(preFrame) });
+}
+
+export async function initRepository(
+	setup: Setup,
+	fields: ControlOutcomeFields = {},
+): Promise<string> {
+	checkOutcomeFields(fields, false);
+	const key = catalogueKey("repository-init", "ticket-list");
+	const preFrame = await settle(setup);
+	sendKey(setup, key);
+	return runOutcomes(setup, fields, { preFrame, preLine: messageRowOf(preFrame) });
+}
+
+export async function toggleAutoHandoff(
+	setup: Setup,
+	fields: ControlOutcomeFields = {},
+): Promise<string> {
+	checkOutcomeFields(fields, false);
+	const preFrame = await settle(setup);
+	const key = catalogueKey("auto-handoff", textEntryFocused(setup) ? "form-field" : "ticket-list");
+	sendKey(setup, key);
+	return runOutcomes(setup, fields, { preFrame, preLine: messageRowOf(preFrame) });
 }

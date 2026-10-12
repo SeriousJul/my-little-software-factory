@@ -15,9 +15,9 @@ import { join } from "node:path";
 
 import { resolveTheme } from "../src/components/shared/theme.ts";
 import {
-	awaitFrame,
 	cellColors,
-	press,
+	frameUntil,
+	pressControl,
 	rgb,
 	rowsOf,
 	settle,
@@ -60,14 +60,14 @@ describe("theme inheritance", () => {
 				// An overlay surface paints the theme's own panel role: the Key
 				// guide owns its last two rows and paints them on dracula's
 				// panel background, not the terminal's default.
-				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				await pressControl(setup, "help", { opens: "Key guide" });
 				const guide = rowsOf(await settle(setup)).length;
 				expect(cellColors(setup, 0, guide - 1).bg).toEqual(rgb(theme.roles.panel_bg));
 				expect(cellColors(setup, 0, guide - 2).bg).toEqual(rgb(theme.roles.panel_bg));
 				// The panel pin also stands on dracula's own value, so a theme
 				// table that moved fails here as well.
 				expect(cellColors(setup, 0, guide - 1).bg).toEqual([0x28, 0x2a, 0x36]);
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
 			});
 		} finally {
 			cleanup();
@@ -84,10 +84,8 @@ describe("theme inheritance", () => {
 			await withApp(async (setup) => {
 				// The fallback lands as the boot's info notice (ADR 0118): a fact
 				// the plane met on its own degraded boot, stated without a fault.
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("Info:"),
-					"the fallback notice on the Message line",
+				const frame = await frameUntil(setup, "the fallback notice on the Message line", (f) =>
+					f.includes("Info:"),
 				);
 				expect(frame).toContain(`unknown theme name "frobnicate" in herdr's config`);
 				expect(frame).toContain("using the built-in default catppuccin");
@@ -131,11 +129,11 @@ describe("theme inheritance", () => {
 				expect(spanColorAt(setup, faceRow, "starting")).toEqual(rgb(theme.roles.subtext0));
 				// The overlay surface is light as well: the Key guide paints on
 				// one-light's panel, not the terminal's default.
-				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				await pressControl(setup, "help", { opens: "Key guide" });
 				const guide = rowsOf(await settle(setup)).length;
 				expect(cellColors(setup, 0, guide - 1).bg).toEqual(rgb(theme.roles.panel_bg));
 				expect(cellColors(setup, 0, guide - 2).bg).toEqual([0xfa, 0xfa, 0xfa]);
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
 			});
 		} finally {
 			cleanup();
