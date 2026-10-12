@@ -33,7 +33,7 @@ import { MouseButtons } from "@opentui/core/testing";
 import stringWidth from "string-width";
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import {
 	agentRowOf,
 	awaitFrame,
@@ -70,11 +70,18 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import {
+	fetchedTicket,
+	fetchRateLimited,
+	fetchSuccess,
+	issueTicket,
+	ticketOf,
+} from "./fact-fixtures.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
+
+import { plane, reopenState } from "./plane.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-import { plane, ticketOf } from "./seeded-plane.ts";
-import { issueTicket, RATE_LIMITED, success } from "./state-fixture.ts";
 
 /**
  * The braille glyph the spinner face stands on, as a character class.
@@ -87,7 +94,7 @@ const SPINNER_GLYPH = `[${SPINNER_FRAMES.join("")}]`;
 
 describe("the control plane", () => {
 	test("production starts with no configured ticket sources instead of sample data", async () => {
-		const state = openFactoryState(":memory:");
+		const state = reopenState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		// The empty source set is a stated fact of the standing, not an
@@ -114,9 +121,8 @@ describe("the control plane", () => {
 		// The reported symptom: herdr handed the id of the ticket's closed pane
 		// out again, and a Consultation's agent works in it now. The ticket's
 		// stored handle still names that id, so the pane reads as missing - the
-		// row wears the failure badge, and Goto focuses nothing. The clock sits
-		// past the startup grace: the Agent is gone, not booting.
-		const state = openFactoryState(":memory:", () => Date.now() - 60_000);
+		// row wears the failure badge, and Goto focuses nothing.
+		const state = reopenState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
@@ -134,25 +140,7 @@ describe("the control plane", () => {
 			state.sourceFact.applyFetch(source, {
 				status: "success",
 				fetchedAt: "2026-08-31T10:01:00Z",
-				tickets: [
-					{
-						identity,
-						sourceKind: "github-issue",
-						externalKey: "#5",
-						sourceState: "open",
-						url: "https://github.com/acme/factory/issues/5",
-						title: "Persist source facts",
-						description: "Keep state independent from GitHub.",
-						labels: ["ready-for-agent"],
-						externalUpdatedAt: "2026-08-31T10:00:00Z",
-						repository: {
-							identity: "github.com/acme/factory",
-							displayName: "acme/factory",
-							cloneUrl: "https://github.com/acme/factory.git",
-						},
-						attributes: {},
-					},
-				],
+				tickets: [fetchedTicket({ identity })],
 			});
 			const claim = state.handoff.claimHandoff(
 				identity,
@@ -241,7 +229,7 @@ describe("the control plane", () => {
 		// its recorded pane now holds a Consultation's agent. ADR 0033's
 		// recorded-pane standing gives way to the identity: the base key
 		// refuses, and the decision's Goto row refuses the same focus.
-		const state = openFactoryState(":memory:");
+		const state = reopenState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
@@ -259,25 +247,7 @@ describe("the control plane", () => {
 			state.sourceFact.applyFetch(source, {
 				status: "success",
 				fetchedAt: "2026-08-31T10:01:00Z",
-				tickets: [
-					{
-						identity,
-						sourceKind: "github-issue",
-						externalKey: "#5",
-						sourceState: "open",
-						url: "https://github.com/acme/factory/issues/5",
-						title: "Persist source facts",
-						description: "Keep state independent from GitHub.",
-						labels: ["ready-for-agent"],
-						externalUpdatedAt: "2026-08-31T10:00:00Z",
-						repository: {
-							identity: "github.com/acme/factory",
-							displayName: "acme/factory",
-							cloneUrl: "https://github.com/acme/factory.git",
-						},
-						attributes: {},
-					},
-				],
+				tickets: [fetchedTicket({ identity })],
 			});
 			const claim = state.handoff.claimHandoff(
 				identity,
@@ -375,7 +345,7 @@ describe("the control plane", () => {
 		// ticket's factory branch and closes the draft it carries. A published
 		// pull request is never touched: only a draft closes, and a branch
 		// that carries no draft closes nothing and says nothing.
-		const state = openFactoryState(":memory:");
+		const state = reopenState(":memory:");
 		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const sourceConfig = {
@@ -421,7 +391,7 @@ describe("the control plane", () => {
 		);
 		try {
 			state.sourceFact.initializeSources([sourceConfig]);
-			state.sourceFact.applyFetch(sourceConfig, success([issueTicket()]));
+			state.sourceFact.applyFetch(sourceConfig, fetchSuccess([issueTicket()]));
 			const claim = state.handoff.claimHandoff(
 				identity,
 				{
@@ -499,7 +469,7 @@ describe("the control plane", () => {
 		// Abandon ends the cycle of a ticket whose agent herdr no longer
 		// lists, and the draft the ticket still wears is read off its factory
 		// branch and closed, the way the decided cycle's Close does.
-		const state = openFactoryState(":memory:", () => Date.now() - 60_000);
+		const state = reopenState(":memory:");
 		state.grouping.setGroupingAxis("tickets", "none");
 		const runner = new FakeRunner();
 		const sourceConfig = {
@@ -547,7 +517,7 @@ describe("the control plane", () => {
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		try {
 			state.sourceFact.initializeSources([sourceConfig]);
-			state.sourceFact.applyFetch(sourceConfig, success([issueTicket()]));
+			state.sourceFact.applyFetch(sourceConfig, fetchSuccess([issueTicket()]));
 			const claim = state.handoff.claimHandoff(
 				identity,
 				{
@@ -1225,7 +1195,6 @@ describe("the control plane", () => {
 					tabId: "tab-1",
 					workspaceId: "w-1",
 					herdrName: "sample-agent",
-					startedAt: "2026-01-01T00:00:00Z",
 				},
 				handoffCount: 1,
 			},
@@ -1286,7 +1255,7 @@ describe("the control plane", () => {
 		// State, so both stand on the review type. The blocked one stands on
 		// the source's failure the boot fetch reports; the recovery one on an
 		// attempt the start claimed and never settled.
-		const state = openFactoryState(":memory:");
+		const state = reopenState(":memory:");
 		state.grouping.setGroupingAxis("tickets", "none");
 		const sourceConfig = {
 			name: "issues",
@@ -1303,7 +1272,7 @@ describe("the control plane", () => {
 		const blockedFetched = issueTicket("github:github.com:I_5", fetchedOver);
 		const recoveryFetched = issueTicket("github:github.com:I_6", fetchedOver);
 		state.sourceFact.initializeSources([definition]);
-		state.sourceFact.applyFetch(definition, success([blockedFetched, recoveryFetched]));
+		state.sourceFact.applyFetch(definition, fetchSuccess([blockedFetched, recoveryFetched]));
 		// The recovery ticket's start was claimed and never settled: the
 		// attempt stands unresolved, and the plane asks for recovery before
 		// it hands the ticket off again.
@@ -1334,7 +1303,7 @@ describe("the control plane", () => {
 				const source = planeRecord.sources[0] as FakeSource;
 				// The source stands on a failure: the rows stop being actionable,
 				// and the list rule keeps standing them on their suggestion.
-				source.settle(RATE_LIMITED);
+				source.settle(fetchRateLimited);
 				const frame = await settle(setup);
 				const rows = rowsOf(frame);
 				// Both rows wear the review type: the blocked one its
@@ -1823,7 +1792,7 @@ describe("the control plane", () => {
 		// The operator's own path: the app's key handler opens the guide, and
 		// the ordering the app computes is the ordering on screen. A hint
 		// priority that moves reorders these rows.
-		const state = openFactoryState(":memory:");
+		const state = reopenState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const planeRecord = await plane({

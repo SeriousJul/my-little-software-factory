@@ -21,7 +21,7 @@ import { type FetchedTicket, withIssueReferences } from "../src/domain/ticket.ts
 import { agentNameFor, cycleAgentName } from "../src/naming.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import {
@@ -52,6 +52,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { DEFAULT_TICKET_TITLE, fetchedTicket } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -62,8 +63,8 @@ import {
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner as gateOnRunner } from "./gated-runner.ts";
+import { type Plane, plane, reopenState } from "./plane.ts";
 import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
-import { plane, type SeededPlane } from "./seeded-plane.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -98,8 +99,8 @@ const pullsSource: TicketSourceConfig = {
  * The herdr names the naming rule gives the fixture Ticket (ADR 0098): its
  * stable name, and the name of its second work cycle.
  */
-const AGENT = agentNameFor({ identity, title: "Persist source facts" });
-const CYCLE2 = cycleAgentName({ identity, title: "Persist source facts" }, 2);
+const AGENT = agentNameFor({ identity, title: DEFAULT_TICKET_TITLE });
+const CYCLE2 = cycleAgentName({ identity, title: DEFAULT_TICKET_TITLE }, 2);
 /** The herdr name the naming rule gives the second fixture Ticket. */
 const SECOND_AGENT = agentNameFor({ identity: secondIdentity, title: "Watch agent turns" });
 /**
@@ -135,26 +136,14 @@ const WIDE_STATUS = 240;
 /** A fetched ticket of the issues source; the index is the issue number. */
 function fetched(
 	index = 5,
-	title = "Persist source facts",
+	title = DEFAULT_TICKET_TITLE,
 	labels: readonly string[] = ["ready-for-agent"],
 ): FetchedTicket {
-	return {
+	return fetchedTicket({
 		identity: `github:github.com:I_${index}`,
-		sourceKind: "github-issue",
-		externalKey: `#${index}`,
-		sourceState: "open",
-		url: `https://github.com/acme/factory/issues/${index}`,
 		title,
-		description: "Keep state independent from GitHub.",
 		labels: [...labels],
-		externalUpdatedAt: "2026-08-31T10:00:00Z",
-		repository: {
-			identity: repoIdentity,
-			displayName: "acme/factory",
-			cloneUrl: "https://github.com/acme/factory.git",
-		},
-		attributes: {},
-	};
+	});
 }
 
 /** The commands that change herdr's or git's state: every read is dropped. */
@@ -184,7 +173,7 @@ const success: FetchOutcome = {
 const pairSuccess: FetchOutcome = {
 	status: "success",
 	fetchedAt: "2026-08-31T10:01:00Z",
-	tickets: [fetched(5, "Persist source facts"), fetched(6, "Watch agent turns")],
+	tickets: [fetched(5, DEFAULT_TICKET_TITLE), fetched(6, "Watch agent turns")],
 };
 
 /** A checkout directory the config maps the ticket's repository to. */
@@ -288,7 +277,7 @@ function seed(
 ): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));
 	paths.push(dir);
-	const state = openFactoryState(join(dir, "state.sqlite"), detail.stateNow);
+	const state = reopenState(join(dir, "state.sqlite"), detail.stateNow);
 	// The frames assert the unsplit list: a fresh file opens grouped by
 	// repository (ADR 0066), so the fixture holds the flat axis.
 	state.grouping.setGroupingAxis("tickets", "none");
@@ -417,7 +406,7 @@ function seededApp(
  * stands beside it, and the config the plane writes carries the fixture's
  * source configs in place of the fixture's empty default.
  */
-async function planeOf(app: SeededApp, runner?: CommandRunner): Promise<SeededPlane> {
+async function planeOf(app: SeededApp, runner?: CommandRunner): Promise<Plane> {
 	return plane({
 		config: {
 			...app.config,
@@ -447,7 +436,7 @@ async function bootedApp(
 		detail?: SeedDetail;
 		pullOutcome?: FetchOutcome;
 	} = {},
-): Promise<{ app: SeededApp; planeRecord: SeededPlane }> {
+): Promise<{ app: SeededApp; planeRecord: Plane }> {
 	const app = seededApp(shape, fields);
 	if (!app.runner.hasStub("herdr", ["agent", "list"])) {
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -548,7 +537,7 @@ async function pressEscape(
  * marker and the title's leading cells, with the full-title row (the detail
  * pane, the modal's title) as the fallback a modal frame offers.
  */
-function ticketRow(frame: string, title = "Persist source facts"): string {
+function ticketRow(frame: string, title = DEFAULT_TICKET_TITLE): string {
 	const rows = rowsOf(frame);
 	const row =
 		rows.find((line) => line.includes("❯") && line.includes(title.slice(0, 3))) ??
@@ -601,7 +590,7 @@ describe("the mode cell and the a key", () => {
 		planeRecord.close();
 
 		// The next run reads the mode back off the same file, not off the config.
-		const reopened = openFactoryState(statePath);
+		const reopened = reopenState(statePath);
 		expect(reopened.handoff.autoHandoffMode()).toBe(true);
 		const src = new FakeSource("issues", "github-issues", success);
 		const restarted = await plane({
@@ -908,8 +897,6 @@ describe("the failure markers", () => {
 				message: "",
 				model: "gpt-5.6",
 				thinking: "high",
-				// The agent ran a while before it died: past the startup grace.
-				stateNow: () => Date.now() - 600_000,
 			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -951,10 +938,7 @@ describe("the failure markers", () => {
 	});
 
 	test("abandon in the Missing modal closes the cycle and increments its durable number", async () => {
-		const { app, planeRecord } = await bootedApp("in-flight", {
-			// The agent ran a while before it died: past the startup grace.
-			detail: { stateNow: () => Date.now() - 600_000 },
-		});
+		const { app, planeRecord } = await bootedApp("in-flight");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1047,10 +1031,7 @@ describe("the failure markers", () => {
 	});
 
 	test("esc on the missing modal closes it and leaves the ticket in flight", async () => {
-		const { app, planeRecord } = await bootedApp("in-flight", {
-			// The agent ran a while before it died: past the startup grace.
-			detail: { stateNow: () => Date.now() - 600_000 },
-		});
+		const { app, planeRecord } = await bootedApp("in-flight");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1073,8 +1054,6 @@ describe("the failure markers", () => {
 	test("a ticket at the handoff limit wears the trailing marker on its row", async () => {
 		const { app, planeRecord } = await bootedApp("in-flight", {
 			extra: { maxHandoffsPerTicket: 1 },
-			// The agent ran a while before it died: past the startup grace.
-			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 		await withApp(
 			async (setup) => {
@@ -1141,8 +1120,6 @@ describe("the Ticket Close key", () => {
 			extra: {},
 			outcome: success,
 			environment: "worktree",
-			// The agent ran a while before it died: past the startup grace.
-			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 		await withApp(
 			async (setup) => {
@@ -1202,8 +1179,6 @@ describe("the Ticket Close key", () => {
 			extra: {},
 			outcome: success,
 			environment: "worktree",
-			// The agent ran a while before it died: past the startup grace.
-			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 		await withApp(
 			async (setup) => {
@@ -1227,10 +1202,7 @@ describe("the Ticket Close key", () => {
 	});
 
 	test("the confirmation names the live-worktree tab, not the worktree checkout", async () => {
-		const { app, planeRecord } = await bootedApp("in-flight", {
-			// The agent ran a while before it died: past the startup grace.
-			detail: { stateNow: () => Date.now() - 600_000 },
-		});
+		const { app, planeRecord } = await bootedApp("in-flight");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1372,8 +1344,6 @@ describe("the Ticket Close key", () => {
 			extra: {},
 			outcome: success,
 			environment: "worktree",
-			// The agent ran a while before it died: past the startup grace.
-			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 		await withApp(
 			async (setup) => {
@@ -1411,13 +1381,7 @@ describe("the Ticket Close key", () => {
 	});
 
 	test("an in-flight close herdr refuses records the leftover fact", async () => {
-		const app = seededApp("in-flight", {
-			extra: {},
-			outcome: success,
-			environment: "worktree",
-			// The agent ran a while before it died: past the startup grace.
-			detail: { stateNow: () => Date.now() - 600_000 },
-		});
+		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
 
@@ -1711,7 +1675,7 @@ describe("the decision modal", () => {
 		const landed: FetchOutcome = {
 			status: "success",
 			fetchedAt: "2026-08-31T10:01:00Z",
-			tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+			tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-review"])],
 		};
 		const app = seededApp("awaiting", {
 			extra: { maxHandoffsPerTicket: 1 },
@@ -1745,7 +1709,7 @@ describe("the decision modal", () => {
 		const landed: FetchOutcome = {
 			status: "success",
 			fetchedAt: "2026-08-31T10:01:00Z",
-			tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+			tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-review"])],
 		};
 		const app = seededApp("awaiting", {
 			extra: {},
@@ -2963,8 +2927,6 @@ describe("the Close cleanup", () => {
 			extra: {},
 			outcome: success,
 			environment: "worktree",
-			// The agent ran a while before it died: past the startup grace.
-			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 		await withApp(
 			async (setup) => {
@@ -2991,10 +2953,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("abandon on a live worktree handoff closes only the tab it made", async () => {
-		const { app, planeRecord } = await bootedApp("in-flight", {
-			// The agent ran a while before it died: past the startup grace.
-			detail: { stateNow: () => Date.now() - 600_000 },
-		});
+		const { app, planeRecord } = await bootedApp("in-flight");
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -3185,13 +3144,7 @@ describe("the leftover environment", () => {
 		// The Abandon row of the missing panel ends the cycle, and its Close
 		// cleanup is the same cleanup the automatic end runs: a checkout herdr
 		// will not remove lands as the ticket's fact.
-		const app = seededApp("in-flight", {
-			extra: {},
-			outcome: success,
-			environment: "worktree",
-			// The agent ran a while before it died: past the startup grace.
-			detail: { stateNow: () => Date.now() - 600_000 },
-		});
+		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
 
@@ -3658,17 +3611,15 @@ describe("the auto dispatch", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("○ auto 1/2") && ticketRow(f).includes("starting"),
+					(f) => f.includes("○ auto 1/2") && ticketRow(f).includes("missing"),
 					"the dispatch",
 				);
-				// The new agent's pane is not in the faked list yet, and the
-				// start is inside its startup grace: the row keeps the
-				// Starting face instead of reading missing (issue #379), and the
-				// detail pane shows the handoff. The mode cell holds the booting
-				// seat: a started agent inside its startup grace counts against
-				// the parallel limit, from the same shared seat count the gates
-				// read.
-				expect(ticketRow(frame)).not.toContain("missing");
+				// The new agent's pane is not in the faked list: the row wears
+				// the missing badge, and the detail pane shows the handoff.
+				// The mode cell holds the booting seat: a started agent inside
+				// its startup grace counts against the parallel limit, from the
+				// same shared seat count the gates read.
+				expect(ticketRow(frame)).toContain("missing");
 				const commands = app.runner.commands();
 				expect(commands).toContain(`herdr workspace create --cwd ${path} --no-focus`);
 				expect(commands.some((c) => c.startsWith("herdr agent prompt"))).toBe(true);
@@ -3765,15 +3716,13 @@ describe("the auto dispatch", () => {
 				// 0051): the first cycle starts the first ticket in list order,
 				// and the second cycle, the queue drained, starts the second.
 				// Both started agents are inside their startup grace, so the
-				// mode cell holds both booting seats against the cap, and each
-				// row keeps the Starting face instead of reading missing
-				// (issue #379).
+				// mode cell holds both booting seats against the cap.
 				await awaitFrame(
 					setup,
 					(f) =>
 						f.includes("○ auto 2/2") &&
-						ticketRow(f).includes("starting") &&
-						ticketRow(f, "Watch agent turns").includes("starting"),
+						ticketRow(f).includes("missing") &&
+						ticketRow(f, "Watch agent turns").includes("missing"),
 					"both dispatches",
 				);
 				// One herdr agent start per ticket, under the ticket's own
@@ -3860,7 +3809,7 @@ describe("the auto dispatch", () => {
 				await awaitFrame(
 					setup,
 					(f) =>
-						f.includes("\u25cb auto 2/2") && ticketRow(f, "Watch agent turns").includes("starting"),
+						f.includes("\u25cb auto 2/2") && ticketRow(f, "Watch agent turns").includes("missing"),
 					"both dispatches after the mapping write-back",
 				);
 				clearInterval(pump);
@@ -3912,15 +3861,13 @@ describe("the auto dispatch", () => {
 				// cycle, and the pair takes the dispatch. The finished ticket
 				// rests open, waiting on the re-read its close provoked.
 				// The finished ticket holds no seat; the pair's started agent
-				// is inside its startup grace, so the mode cell holds one seat,
-				// and the pair's row keeps the Starting face instead of reading
-				// missing (issue #379).
+				// is inside its startup grace, so the mode cell holds one seat.
 				await awaitFrame(
 					setup,
 					(f) =>
 						f.includes("○ auto 1/2") &&
 						ticketRow(f).includes("[open]") &&
-						ticketRow(f, "Watch agent turns").includes("starting"),
+						ticketRow(f, "Watch agent turns").includes("missing"),
 					"the auto close and the pair dispatch",
 				);
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
@@ -4050,7 +3997,7 @@ describe("the auto decision", () => {
 				app.src.settle({
 					status: "success",
 					fetchedAt: "2026-08-31T10:02:00Z",
-					tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+					tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-review"])],
 				});
 				// No operator key: the loop routed the settled turn, and the
 				// trace carries the automatic decision. The predicate waits for
@@ -4137,7 +4084,7 @@ describe("the auto decision", () => {
 				app.src.settle({
 					status: "success",
 					fetchedAt: "2026-08-31T10:02:00Z",
-					tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+					tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-review"])],
 				});
 				// Wait for the start command as well as the frame: under load the
 				// route's frame can be captured before the runner records the start,
@@ -4192,7 +4139,7 @@ describe("the auto decision", () => {
 				app.src.settle({
 					status: "success",
 					fetchedAt: "2026-08-31T10:02:00Z",
-					tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+					tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-review"])],
 				});
 				// The loud reason reaches the status line as the drop warning, and
 				// it names the ticket the route was for.
@@ -4609,7 +4556,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 		const bugOutcome: FetchOutcome = {
 			status: "success",
 			fetchedAt: "2026-08-31T10:01:00Z",
-			tickets: [fetched(5, "Persist source facts", ["bug"])],
+			tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["bug"])],
 		};
 		const pullFetched = (labels: string[] = []): FetchedTicket => ({
 			identity: pullIdentity,
@@ -4722,7 +4669,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 	const specSuccess: FetchOutcome = {
 		status: "success",
 		fetchedAt: "2026-08-31T10:00:00Z",
-		tickets: [fetched(5, "Persist source facts", ["ready-for-spec"])],
+		tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-spec"])],
 	};
 
 	/** Stub the live-worktree handoff's sequence at the convention checkout. */
@@ -4857,8 +4804,6 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 			environment: "live-worktree",
 			detail: {
 				taskType: "analyze",
-				// The agent ran a while before it died: past the startup grace.
-				stateNow: () => Date.now() - 600_000,
 			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -4922,13 +4867,11 @@ describe("the handoff queue", () => {
 			status: "success",
 			fetchedAt: "2026-08-31T10:01:00Z",
 			tickets: [
-				fetched(5, "Persist source facts"),
+				fetched(5, DEFAULT_TICKET_TITLE),
 				{ ...fetched(6, "Watch agent turns"), externalUpdatedAt: "2026-08-31T10:05:00Z" },
 			],
 		};
-		// Pinned past the startup grace: the seeded handoff is a dead Agent,
-		// not a booting one, so its missing badge stands on the first poll.
-		const state = openFactoryState(join(dir, "state.sqlite"), () => Date.now() - 600_000);
+		const state = reopenState(join(dir, "state.sqlite"));
 		// The test reads the list unsplit: a fresh file opens grouped by
 		// repository (ADR 0066), so the fixture holds the flat axis.
 		state.grouping.setGroupingAxis("tickets", "none");
@@ -5061,7 +5004,7 @@ describe("the handoff queue", () => {
 				// read on the queue's own row: the handoff's item keeps the queue
 				// holding one row, and the selection clamps onto it.
 				await pressQuietFor("delete", "the item removed", (f) =>
-					queueRowLeads(f, "Persist source facts"),
+					queueRowLeads(f, DEFAULT_TICKET_TITLE),
 				);
 				// Back to the Ticket list: up crosses the empty Consultation
 				// section to the last Ticket, and one more step lands the
@@ -5366,7 +5309,7 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 					setup,
 					(f) =>
 						f.includes("○ auto 1/2") &&
-						ticketRow(f, "Persist source facts in state").includes("starting"),
+						ticketRow(f, "Persist source facts in state").includes("missing"),
 					"the review route on the pull request",
 				);
 				const commands = app.runner.commands();

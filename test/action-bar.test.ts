@@ -13,7 +13,7 @@
  * harness; no mock sees a key.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
 import type { TicketSourceConfig } from "../src/config.ts";
@@ -51,6 +51,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
+import { fetchRateLimited, fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
 import {
 	type FakeRunner,
 	tabCreateJson,
@@ -58,20 +59,9 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-import { plane, ticketOf } from "./seeded-plane.ts";
-import {
-	callsReached,
-	cleanupStateFixtures,
-	freshState,
-	issueTicket,
-	RATE_LIMITED,
-	success,
-} from "./state-fixture.ts";
 
-afterEach(() => {
-	cleanupStateFixtures();
-});
+import { callsReached, plane, wrappedState } from "./plane.ts";
+import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 /** The issues source the standing seeds, as its config stands in the file. */
 const issueSource: TicketSourceConfig = {
@@ -378,7 +368,7 @@ describe("the contextual Action bar", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(
 					setup,
 					(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
@@ -1054,7 +1044,7 @@ describe("the contextual Action bar", () => {
 
 		// The response editor open on an awaiting-response Consultation.
 		{
-			const state = freshState();
+			const state = wrappedState();
 			const planeRecord = await plane({
 				existing: state,
 				sources: [],
@@ -1117,7 +1107,7 @@ describe("the contextual Action bar", () => {
 
 		// Agent interaction mode, entered on a blocked Consultation.
 		{
-			const state = freshState();
+			const state = wrappedState();
 			const id = "55555555-1111-4111-8111-111111111111";
 			const planeRecord = await plane({
 				existing: state,
@@ -1193,7 +1183,7 @@ describe("the contextual Action bar", () => {
 
 		// The legacy ActionPanel open (a close panel over an opening Consultation).
 		{
-			const state = freshState();
+			const state = wrappedState();
 			const id = "66666666-1111-4111-8111-111111111111";
 			const planeRecord = await plane({
 				existing: state,
@@ -1333,7 +1323,7 @@ describe("the contextual Action bar", () => {
 				// stays visible, but it is no longer actionable.
 				setup.mockInput.pressKey("r");
 				await callsReached(source, 2);
-				source.settle(RATE_LIMITED);
+				source.settle(fetchRateLimited);
 				const frame = await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),

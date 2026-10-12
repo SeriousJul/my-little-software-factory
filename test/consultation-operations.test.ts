@@ -13,8 +13,7 @@
  */
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -41,7 +40,6 @@ import type { RepositoryMapping } from "../src/repo.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 import type { Consultation } from "../src/state/consultation-record.ts";
 import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
 import { utf8ByteLength } from "../src/text-bounds.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
@@ -49,18 +47,20 @@ import {
 	agentListJson,
 	FakeRunner,
 	herdrFocusCommands,
+	tabCreateJson,
+	workspaceCreateJson,
+	workspaceListJson,
 	worktreeCreateJson,
+	worktreeListJson,
 } from "./fake-runner.ts";
-import { type HerdrWorldDescription, type StubHerdrWorld, stubHerdrWorld } from "./herdr-world.ts";
+import { type HerdrWorldDescription, stubHerdrWorld } from "./herdr-world.ts";
+import { type Plane, plane } from "./plane.ts";
 import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
 
-const directories: string[] = [];
-const states: FactoryState[] = [];
+const openPlanes: Plane[] = [];
 
 afterEach(() => {
-	for (const state of states.splice(0)) state.close();
-	for (const directory of directories.splice(0))
-		rmSync(directory, { recursive: true, force: true });
+	for (const p of openPlanes.splice(0)) p.close();
 });
 
 /** A deterministic Consultation id, so its branch and Agent name are pinnable. */
@@ -87,16 +87,16 @@ interface Fixture {
 	otherRepository: ConsultationRepositoryOption;
 }
 
-/** A real state file, a config with two mapped Repositories, and two checkouts. */
-function makeFixture(model = ""): Fixture {
-	const home = mkdtempSync(join(tmpdir(), "factory-consultation-operations-"));
-	directories.push(home);
+/** A real state file on the Seeded plane, a config with two mapped Repositories, and two checkouts. */
+async function makeFixture(model = ""): Promise<Fixture> {
+	const p = await plane({ checkout: "none", sourceTickets: { issues: [] } });
+	openPlanes.push(p);
+	const home = p.home;
 	const checkout = join(home, "src", "factory");
 	const otherCheckout = join(home, "src", "other");
 	mkdirSync(checkout, { recursive: true });
 	mkdirSync(otherCheckout, { recursive: true });
-	const state = openFactoryState(join(home, "state.sqlite"));
-	states.push(state);
+	const state = p.state;
 	const repository = {
 		identity: "github.com/acme/factory",
 		displayName: "acme/factory",
@@ -372,19 +372,36 @@ function worldCheckout(
 /** Both checkouts the fixture maps, stated as a world. */
 function bothCheckoutsWorld(fixture: Fixture, dirty = false): HerdrWorldDescription {
 	const world = worldCheckout(fixture.repository, dirty);
-	world.checkouts[0].worktreesRoot = worktreesRootOf(fixture.repository);
 	world.checkouts.push({
 		path: fixture.otherRepository.path,
 		cloneUrl: fixture.otherRepository.cloneUrl,
 		defaultBranch: "main",
-		worktreesRoot: worktreesRootOf(fixture.otherRepository),
 	});
 	return world;
 }
 
-/** The worktrees root a checkout's worktrees stand in, beside the checkout. */
-function worktreesRootOf(repository: ConsultationRepositoryOption): string {
-	return join(repository.path.slice(0, repository.path.lastIndexOf("/")), "worktrees");
+/** The standing a pinned worktree launch leaves behind, stated as a world. */
+function worktreeLaunchWorld(
+	repository: ConsultationRepositoryOption,
+	handles: Array<typeof LAUNCH> = [LAUNCH],
+): HerdrWorldDescription {
+	const world = worldCheckout(repository);
+	const worktreesRoot = join(
+		repository.path.slice(0, repository.path.lastIndexOf("/")),
+		"worktrees",
+	);
+	world.workspaces = handles.map((item) => ({
+		id: item.workspaceId,
+		checkoutPath: join(worktreesRoot, item.workspaceId),
+		isWorktree: true,
+	}));
+	world.tabs = handles.map((item) => ({ id: item.tabId, workspaceId: item.workspaceId }));
+	world.panes = handles.map((item) => ({
+		id: item.paneId,
+		tabId: item.tabId,
+		workspaceId: item.workspaceId,
+	}));
+	return world;
 }
 
 /**
@@ -394,7 +411,10 @@ function worktreesRootOf(repository: ConsultationRepositoryOption): string {
  */
 function worktreeLaunchStanding(repository: ConsultationRepositoryOption): HerdrWorldDescription {
 	const world = worldCheckout(repository);
-	world.checkouts[0].worktreesRoot = worktreesRootOf(repository);
+	world.checkouts[0].worktreesRoot = join(
+		repository.path.slice(0, repository.path.lastIndexOf("/")),
+		"worktrees",
+	);
 	return world;
 }
 
@@ -413,26 +433,82 @@ function liveLaunchStanding(
 	return world;
 }
 
-/**
- * The standing a live conflict test stands its world on: the operator's
- * workspace holds the checkout, and the operator's own Agent works in its own
- * pane. A live launch opens a new tab in the workspace, and the world hands
- * it its first free numbers.
- */
-function liveConflictWorld(fixture: Fixture): StubHerdrWorld {
-	return stubHerdrWorld({
-		checkouts: [
-			{
-				path: fixture.checkout,
-				cloneUrl: fixture.repository.cloneUrl,
-				defaultBranch: "main",
-			},
-		],
-		workspaces: [{ id: "ws-live", checkoutPath: fixture.checkout }],
-		tabs: [{ id: "tab-herdr", workspaceId: "ws-live", cwd: fixture.checkout }],
-		panes: [{ id: "pane-herdr", tabId: "tab-herdr", workspaceId: "ws-live" }],
-		agents: [{ name: "operator-agent", kind: "pi", status: "working", paneId: "pane-herdr" }],
+/** The standing a pinned live launch leaves behind, stated as a world. */
+function liveLaunchWorld(
+	repository: ConsultationRepositoryOption,
+	workspaceId: string,
+	dirty = false,
+): HerdrWorldDescription {
+	const world = worldCheckout(repository, dirty);
+	world.workspaces = [{ id: workspaceId, checkoutPath: repository.path }];
+	world.tabs = [{ id: LAUNCH.tabId, workspaceId, cwd: repository.path }];
+	world.panes = [{ id: LAUNCH.paneId, tabId: LAUNCH.tabId, workspaceId }];
+	return world;
+}
+
+/** Stub the whole worktree launch at a checkout, down to the prompt. */
+function stubWorktreeLaunch(
+	runner: EgressDouble,
+	checkout: string,
+	id: string,
+	fields: { handles?: typeof LAUNCH; displayName?: string } = {},
+): void {
+	const { handles = LAUNCH } = fields;
+	const branch = consultationBranchName(id, "grill");
+	runner.set("git", ["-C", checkout, "branch", "--list", branch], { stdout: "" });
+	// The worktree base rule: the origin/HEAD symref names the default
+	// branch, the fetch of its single ref succeeds, and the base is the
+	// fetched remote ref.
+	runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+		stdout: "refs/remotes/origin/main\n",
 	});
+	runner.set(
+		"herdr",
+		[
+			"worktree",
+			"create",
+			"--cwd",
+			checkout,
+			"--branch",
+			branch,
+			"--base",
+			"origin/main",
+			"--no-focus",
+		],
+		{ stdout: worktreeCreateJson(handles.workspaceId, handles.paneId) },
+	);
+	// herdr answers the start with its session handle.
+	runner.set("herdr", ["agent", "start", agentOf(id), "--kind", "pi", "--pane", handles.paneId], {
+		stdout: JSON.stringify({ result: { agent: { session_id: `sess-${id.slice(0, 8)}` } } }),
+	});
+	runner.set("herdr", ["agent", "prompt", agentOf(id), `/grill review auth`], { code: 0 });
+}
+
+/** Stub the live launch into a workspace herdr already holds at the checkout. */
+function stubLiveLaunch(
+	runner: EgressDouble,
+	checkout: string,
+	id: string,
+	workspaceId = "ws-live",
+): void {
+	const agent = agentOf(id);
+	runner.set("herdr", ["workspace", "list"], {
+		stdout: JSON.stringify({
+			result: {
+				workspaces: [{ workspace_id: workspaceId, worktree: { checkout_path: checkout } }],
+			},
+		}),
+	});
+	runner.set(
+		"herdr",
+		["tab", "create", "--workspace", workspaceId, "--cwd", checkout, "--no-focus"],
+		{ stdout: tabCreateJson(LAUNCH.paneId, LAUNCH.tabId) },
+	);
+	// herdr answers the start with its session handle.
+	runner.set("herdr", ["agent", "start", agent, "--kind", "pi", "--pane", LAUNCH.paneId], {
+		stdout: JSON.stringify({ result: { agent: { session_id: `sess-${id.slice(0, 8)}` } } }),
+	});
+	runner.set("herdr", ["agent", "prompt", agent, `/grill review auth`], { code: 0 });
 }
 
 /** Stub the herdr topology of one workspace. */
@@ -509,8 +585,8 @@ function current(state: FactoryState, id: string): Consultation {
 }
 
 describe("Consultation operations: launch", () => {
-	test("refuses an unknown Consultation type through the module interface", () => {
-		const fixture = makeFixture();
+	test("refuses an unknown Consultation type through the module interface", async () => {
+		const fixture = await makeFixture();
 		const harness = makeHarness(fixture, new LifecycleRunner());
 
 		expect(
@@ -533,7 +609,7 @@ describe("Consultation operations: launch", () => {
 	 */
 	describe("the enqueue's hard check (ADR 0049)", () => {
 		test("a type the config no longer names refuses the enqueue", async () => {
-			const fixture = makeFixture();
+			const fixture = await makeFixture();
 			const runner = new LifecycleRunner();
 			const harness = makeHarness(fixture, runner);
 
@@ -547,7 +623,7 @@ describe("Consultation operations: launch", () => {
 		});
 
 		test("an unfit Model refuses the enqueue before any external step", async () => {
-			const fixture = makeFixture("gpt-4o");
+			const fixture = await makeFixture("gpt-4o");
 			const runner = new LifecycleRunner();
 			runner.inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const harness = makeHarness(fixture, runner);
@@ -561,7 +637,7 @@ describe("Consultation operations: launch", () => {
 		});
 
 		test("a fitting type passes the enqueue check and asks nothing else", async () => {
-			const fixture = makeFixture();
+			const fixture = await makeFixture();
 			const runner = new LifecycleRunner();
 			runner.inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const harness = makeHarness(fixture, runner);
@@ -571,8 +647,8 @@ describe("Consultation operations: launch", () => {
 		});
 	});
 
-	test("refuses empty and oversized opening input before creating a record", () => {
-		const fixture = makeFixture();
+	test("refuses empty and oversized opening input before creating a record", async () => {
+		const fixture = await makeFixture();
 		const harness = makeHarness(fixture, new LifecycleRunner());
 
 		for (const initialInput of ["   ", "x".repeat(CONSULTATION_INPUT_LIMIT + 1)])
@@ -592,7 +668,7 @@ describe("Consultation operations: launch", () => {
 	});
 
 	test("runs the setting fit check before its first external change", async () => {
-		const fixture = makeFixture("gpt-4o");
+		const fixture = await makeFixture("gpt-4o");
 		const runner = new LifecycleRunner();
 		runner.inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 		const id = uid("1");
@@ -610,7 +686,7 @@ describe("Consultation operations: launch", () => {
 	});
 
 	test("launches a worktree Consultation, reports every stage, and owns its resources", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const id = uid("2");
 		const consultation = seed(fixture.state, fixture, id);
@@ -655,36 +731,33 @@ describe("Consultation operations: launch", () => {
 	});
 
 	test("no default branch ref on the remote starts the worktree from the checkout HEAD with a note", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
 		const id = uid("2f");
-		// The checkout the world holds names no default branch, and its head is
-		// the SHA the launch falls back to. The launch stands on the world: the
-		// worktree workspace the create opens, and its tab and pane.
-		const world = stubHerdrWorld({
-			checkouts: [
-				{
-					path: fixture.checkout,
-					cloneUrl: fixture.repository.cloneUrl,
-					head: WORKTREE_HEAD,
-					worktreesRoot: worktreesRootOf(fixture.repository),
-				},
-			],
-			workspaces: [
-				{
-					id: LAUNCH.workspaceId,
-					checkoutPath: join(worktreesRootOf(fixture.repository), LAUNCH.workspaceId),
-					isWorktree: true,
-				},
-			],
-			tabs: [{ id: LAUNCH.tabId, workspaceId: LAUNCH.workspaceId }],
-			panes: [{ id: LAUNCH.paneId, tabId: LAUNCH.tabId, workspaceId: LAUNCH.workspaceId }],
-		});
-		const runner = new LifecycleRunner(world);
 		const consultation = seed(fixture.state, fixture, id);
 		const branch = consultationBranchName(id, "grill");
-		// The pin stands in for the one answer the world cannot give: its
-		// `worktree create` checks the base against ref names, and the base
-		// here is a raw SHA. The git fallback the launch runs is the world's own.
+		runner.inner.set("git", ["-C", fixture.checkout, "branch", "--list", branch], {
+			stdout: "",
+		});
+		// No default branch ref: the symref is not one, and neither tracking
+		// ref verifies, so the launch falls back to the checkout's HEAD.
+		runner.inner.set("git", ["-C", fixture.checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			code: 1,
+			stderr: "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref\n",
+		});
+		runner.inner.set(
+			"git",
+			["-C", fixture.checkout, "rev-parse", "--verify", "--quiet", "origin/main^{commit}"],
+			{ code: 1 },
+		);
+		runner.inner.set(
+			"git",
+			["-C", fixture.checkout, "rev-parse", "--verify", "--quiet", "origin/master^{commit}"],
+			{ code: 1 },
+		);
+		runner.inner.set("git", ["-C", fixture.checkout, "rev-parse", "HEAD"], {
+			stdout: `${WORKTREE_HEAD}\n`,
+		});
 		runner.inner.set(
 			"herdr",
 			[
@@ -700,6 +773,15 @@ describe("Consultation operations: launch", () => {
 			],
 			{ stdout: worktreeCreateJson(LAUNCH.workspaceId, LAUNCH.paneId) },
 		);
+		runner.inner.set(
+			"herdr",
+			["agent", "start", agentOf(id), "--kind", "pi", "--pane", LAUNCH.paneId],
+			{ stdout: JSON.stringify({ result: { agent: { session_id: `sess-${id.slice(0, 8)}` } } }) },
+		);
+		runner.inner.set("herdr", ["agent", "prompt", agentOf(id), "/grill review auth"], {
+			code: 0,
+		});
+		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -722,41 +804,25 @@ describe("Consultation operations: launch", () => {
 	});
 
 	test("a Consultation create a leftover directory blocks moves the leftover aside and starts", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
 		const id = uid("2c");
 		const consultation = seed(fixture.state, fixture, id);
 		const branch = consultationBranchName(id, "grill");
-		// The checkout the world stands the launch on holds no worktrees root of
-		// its own: the create falls back to the parent of the checkout's linked
-		// worktree, and the plane's leftover search walks that same tree.
-		const root = join(fixture.home, "worktrees", "acme-factory");
-		const candidate = join(root, branch.replaceAll("/", "-"));
-		const world = stubHerdrWorld({
-			checkouts: [
-				{
-					path: fixture.checkout,
-					cloneUrl: fixture.repository.cloneUrl,
-					defaultBranch: "main",
-					branches: [{ name: "main", local: true, remote: true }],
-					worktrees: [
-						{
-							path: join(root, "factory-6-another-consultation"),
-							branch: "factory-6",
-							linked: true,
-						},
-					],
-				},
-			],
-		});
-		const runner = new LifecycleRunner(world);
+		stubWorktreeLaunch(runner.inner, fixture.checkout, id);
 		// The naming rule's path for this Consultation stands on disk with a
 		// build cache in it, and git holds no record of it: the same residue a
 		// ticket handoff meets, at the shared create step (ADR 0062).
+		const root = join(fixture.home, "worktrees", "acme-factory");
+		const candidate = join(root, branch.replaceAll("/", "-"));
+		runner.inner.set("herdr", ["worktree", "list", "--cwd", fixture.checkout], {
+			stdout: worktreeListJson([
+				{ path: fixture.checkout, linked: false },
+				{ path: join(root, "factory-6-another-consultation") },
+			]),
+		});
 		mkdirSync(join(candidate, ".docusaurus"), { recursive: true });
 		writeFileSync(join(candidate, ".docusaurus", "routes.js"), "cache");
-		// The pin stands in for the one answer the world cannot give: its own
-		// create would open the path the checkout already holds. The plane reads
-		// the refusal, moves the leftover aside, and the retry is the world's own.
 		runner.inner.setSequence(
 			"herdr",
 			[
@@ -777,8 +843,10 @@ describe("Consultation operations: launch", () => {
 						`{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out '${branch}')` +
 						`\\nfatal: '${candidate}' already exists"},"id":"cli:worktree:create"}\n`,
 				},
+				{ stdout: worktreeCreateJson(LAUNCH.workspaceId, LAUNCH.paneId) },
 			],
 		);
+		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -792,11 +860,17 @@ describe("Consultation operations: launch", () => {
 	});
 
 	test("leaves a refused launch failed with the readable reason", async () => {
-		const fixture = makeFixture();
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
 		const id = uid("3");
 		const consultation = seed(fixture.state, fixture, id);
 		const branch = consultationBranchName(id, "grill");
+		runner.inner.set("git", ["-C", fixture.checkout, "branch", "--list", branch], {
+			stdout: "",
+		});
+		runner.inner.set("git", ["-C", fixture.checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			stdout: "refs/remotes/origin/main\n",
+		});
 		runner.inner.set(
 			"herdr",
 			[
@@ -826,7 +900,7 @@ describe("Consultation operations: launch", () => {
 	});
 
 	test("reports an already in-progress opening instead of racing it", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const id = uid("4");
 		const consultation = seed(fixture.state, fixture, id);
@@ -849,7 +923,7 @@ describe("Consultation operations: launch", () => {
 	});
 
 	test("launches on a free live checkout in a fresh tab of its workspace", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(
 			stubHerdrWorld(liveLaunchStanding(fixture.repository, "ws-live")),
 		);
@@ -868,12 +942,29 @@ describe("Consultation operations: launch", () => {
 	});
 
 	test("holds a conflicted live launch for one explicit confirmation", async () => {
-		const fixture = makeFixture();
-		// A Herdr Agent already works in this exact checkout, in the operator's
-		// workspace: the world holds it beside the workspace the launch joins.
-		const runner = new LifecycleRunner(liveConflictWorld(fixture));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(
+			stubHerdrWorld(liveLaunchWorld(fixture.repository, "ws-live")),
+		);
 		const id = uid("6");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		// A Herdr Agent already works in this exact checkout.
+		const busy = agentListJson([
+			{
+				paneId: "pane-herdr",
+				tabId: "tab-herdr",
+				workspaceId: "ws-herdr",
+				agent: "pi",
+				status: "working",
+			},
+		]);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busy.replace(
+				'"pane_id":"pane-herdr"',
+				`"pane_id":"pane-herdr","checkout_path":"${realpathSync(fixture.checkout)}"`,
+			),
+		});
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -904,10 +995,27 @@ describe("Consultation operations: launch", () => {
 	});
 
 	test("keeps a cancelled conflict recoverable, and checks it again", async () => {
-		const fixture = makeFixture();
-		const runner = new LifecycleRunner(liveConflictWorld(fixture));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(
+			stubHerdrWorld(liveLaunchWorld(fixture.repository, "ws-live")),
+		);
 		const id = uid("7");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-herdr",
+					tabId: "tab-herdr",
+					workspaceId: "ws-herdr",
+					agent: "pi",
+					status: "working",
+				},
+			]).replace(
+				'"pane_id":"pane-herdr"',
+				`"pane_id":"pane-herdr","checkout_path":"${realpathSync(fixture.checkout)}"`,
+			),
+		});
 		const harness = makeHarness(fixture, runner);
 
 		// The operator cancels the panel: nothing was confirmed and nothing ran.
@@ -925,12 +1033,14 @@ describe("Consultation operations: launch", () => {
 	});
 
 	test("warns about a dirty live checkout without blocking its launch", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(
-			stubHerdrWorld(liveLaunchStanding(fixture.repository, "ws-live", true)),
+			stubHerdrWorld(liveLaunchWorld(fixture.repository, "ws-live", true)),
 		);
 		const id = uid("8");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -945,6 +1055,38 @@ describe("Consultation operations: launch", () => {
 });
 
 describe("Consultation operations: live checkout confirmation lifetime", () => {
+	/** Herdr's agent list of one Agent working in the named checkout. */
+	function busyAgentJson(checkout: string, paneId: string): string {
+		return agentListJson([
+			{
+				paneId,
+				tabId: `tab-${paneId}`,
+				workspaceId: `ws-${paneId}`,
+				agent: "pi",
+				status: "working",
+			},
+		]).replace(
+			`"pane_id":"${paneId}"`,
+			`"pane_id":"${paneId}","checkout_path":"${realpathSync(checkout)}"`,
+		);
+	}
+
+	/** Herdr's agent list of every named pane working in the named checkout. */
+	function busyAgentsJson(checkout: string, paneIds: readonly string[]): string {
+		return JSON.stringify({
+			result: {
+				agents: paneIds.map((paneId) => ({
+					pane_id: paneId,
+					tab_id: `tab-${paneId}`,
+					workspace_id: `ws-${paneId}`,
+					agent: "pi",
+					agent_status: "working",
+					checkout_path: realpathSync(checkout),
+				})),
+			},
+		});
+	}
+
 	/** A running ticket whose live-worktree handoff occupies the named pane. */
 	function runningTicket(identity: string, paneId: string): Ticket {
 		return {
@@ -969,7 +1111,6 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 				tabId: null,
 				workspaceId: null,
 				herdrName: "conflict-ticket",
-				startedAt: "2026-01-01T00:00:00Z",
 			},
 			workCycle: 1,
 			handoffCount: 1,
@@ -998,10 +1139,16 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 	}
 
 	test("does not re-ask a second launch for a confirmed conflict set", async () => {
-		const fixture = makeFixture();
-		const runner = new LifecycleRunner(liveConflictWorld(fixture));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(
+			stubHerdrWorld(liveLaunchWorld(fixture.repository, "ws-live")),
+		);
 		const id = uid("a");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-herdr"),
+		});
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -1013,25 +1160,28 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
 
 		// A second Consultation into the same checkout: the same Agents still
-		// occupy it, and a previous run confirmed the set they form.
-		fixture.state.consultationRecord.recordCheckoutConflictConfirmation(
-			realpathSync(fixture.checkout),
-			["pane-herdr", id],
-		);
+		// occupy it, and none of them is unconfirmed.
 		const id2 = uid("b");
 		const second = seed(fixture.state, fixture, id2, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id2, "ws-live-2");
 
 		await harness.operations.launch(second);
 
 		expect(harness.conflicts).toHaveLength(1);
-		expect(current(fixture.state, id2)).toMatchObject({ state: "working", paneId: "pane-2" });
+		expect(current(fixture.state, id2)).toMatchObject({ state: "working", paneId: LAUNCH.paneId });
 	});
 
 	test("asks again when an unconfirmed identity enters the checkout", async () => {
-		const fixture = makeFixture();
-		const runner = new LifecycleRunner(liveConflictWorld(fixture));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(
+			stubHerdrWorld(liveLaunchWorld(fixture.repository, "ws-live")),
+		);
 		const id = uid("c");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-herdr"),
+		});
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -1041,17 +1191,20 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 		);
 		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
 
-		// The first Consultation's own Agent now occupies the checkout too, and
-		// it is not one the checkout confirmed.
+		// A second Agent enters the checkout while the first is still there.
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentsJson(fixture.checkout, ["pane-herdr", "pane-new"]),
+		});
 		const id2 = uid("d");
 		const second = seed(fixture.state, fixture, id2, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id2, "ws-live-2");
 
 		await harness.operations.launch(second);
 
 		expect(harness.conflicts).toHaveLength(2);
 		expect(harness.conflicts[1].safety.conflicts.map((c) => c.identity).sort()).toEqual([
-			id,
 			"pane-herdr",
+			"pane-new",
 		]);
 		expect(current(fixture.state, id2).state).toBe("opening");
 
@@ -1062,14 +1215,20 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			fixture.state.consultationRecord
 				.confirmedCheckoutConflicts(realpathSync(fixture.checkout))
 				.sort(),
-		).toEqual([id, "pane-herdr"]);
+		).toEqual(["pane-herdr", "pane-new"]);
 	});
 
 	test("does not re-ask when a confirmed identity leaves, and shrinks the stored set", async () => {
-		const fixture = makeFixture();
-		const runner = new LifecycleRunner(liveConflictWorld(fixture));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(
+			stubHerdrWorld(liveLaunchWorld(fixture.repository, "ws-live")),
+		);
 		const id = uid("e");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-herdr"),
+		});
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -1079,16 +1238,12 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 		);
 		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
 
-		// The operator's Agent leaves: its pane closes, and the world drops the
-		// Agent with it. The first Consultation's Agent stays, and a previous
-		// run confirmed the set both form.
-		fixture.state.consultationRecord.recordCheckoutConflictConfirmation(
-			realpathSync(fixture.checkout),
-			["pane-herdr", id],
-		);
-		await runner.inner.run("herdr", ["pane", "close", "pane-herdr"]);
+		// The occupying Agent is gone. A safer checkout never surprises the
+		// operator with a fresh panel.
+		runner.inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		const id2 = uid("f");
 		const second = seed(fixture.state, fixture, id2, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id2, "ws-live-2");
 
 		await harness.operations.launch(second);
 
@@ -1097,14 +1252,20 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 		// The stored set is updated to what the checkout holds now.
 		expect(
 			fixture.state.consultationRecord.confirmedCheckoutConflicts(realpathSync(fixture.checkout)),
-		).toEqual([id]);
+		).toEqual([]);
 	});
 
 	test("does not re-ask a fresh operations instance for a confirmed set", async () => {
-		const fixture = makeFixture();
-		const runner = new LifecycleRunner(liveConflictWorld(fixture));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(
+			stubHerdrWorld(liveLaunchWorld(fixture.repository, "ws-live")),
+		);
 		const id = uid("g");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-herdr"),
+		});
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -1114,18 +1275,12 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 		);
 		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
 
-		// The first Consultation's own Agent also occupies the checkout, and a
-		// previous run confirmed the set both form.
-		fixture.state.consultationRecord.recordCheckoutConflictConfirmation(
-			realpathSync(fixture.checkout),
-			["pane-herdr", id],
-		);
-
 		// A control plane restart reads the same state file: the confirmation
 		// belongs to the checkout, so the new instance asks nothing.
 		const fresh = makeHarness(fixture, runner);
 		const id2 = uid("h");
 		const second = seed(fixture.state, fixture, id2, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id2, "ws-live-2");
 
 		await fresh.operations.launch(second);
 
@@ -1134,37 +1289,37 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 	});
 
 	test("asks separately for a different checkout", async () => {
-		const fixture = makeFixture();
-		// Two checkouts hold their own operator workspaces, and each workspace's
-		// Agent works in its own checkout.
-		const runner = new LifecycleRunner(
-			stubHerdrWorld({
-				...bothCheckoutsWorld(fixture),
-				workspaces: [
-					{ id: "ws-live", checkoutPath: fixture.checkout },
-					{ id: "ws-other", checkoutPath: fixture.otherCheckout },
-				],
-				tabs: [
-					{ id: "tab-herdr", workspaceId: "ws-live", cwd: fixture.checkout },
-					{ id: "tab-herdr-other", workspaceId: "ws-other", cwd: fixture.otherCheckout },
-				],
-				panes: [
-					{ id: "pane-herdr", tabId: "tab-herdr", workspaceId: "ws-live" },
-					{ id: "pane-herdr-other", tabId: "tab-herdr-other", workspaceId: "ws-other" },
-				],
-				agents: [
-					{ name: "operator-agent", kind: "pi", status: "working", paneId: "pane-herdr" },
-					{
-						name: "operator-agent-other",
-						kind: "pi",
-						status: "working",
-						paneId: "pane-herdr-other",
-					},
-				],
-			}),
-		);
+		const fixture = await makeFixture();
+		const live = liveLaunchWorld(fixture.repository, "ws-live");
+		live.checkouts = bothCheckoutsWorld(fixture).checkouts;
+		const runner = new LifecycleRunner(stubHerdrWorld(live));
 		const id = uid("i");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: JSON.stringify({
+				result: {
+					agents: [
+						{
+							pane_id: "pane-herdr",
+							tab_id: "tab-herdr",
+							workspace_id: "ws-herdr",
+							agent: "pi",
+							agent_status: "working",
+							checkout_path: realpathSync(fixture.checkout),
+						},
+						{
+							pane_id: "pane-herdr-other",
+							tab_id: "tab-herdr-other",
+							workspace_id: "ws-herdr-other",
+							agent: "pi",
+							agent_status: "working",
+							checkout_path: realpathSync(fixture.otherCheckout),
+						},
+					],
+				},
+			}),
+		});
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -1182,6 +1337,7 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			environment: "live-worktree",
 			repository: fixture.otherRepository,
 		});
+		stubLiveLaunch(runner.inner, fixture.otherCheckout, id2, "ws-other");
 
 		await harness.operations.launch(second);
 
@@ -1193,10 +1349,16 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 	});
 
 	test("proceeds without a panel when no identity is unconfirmed", async () => {
-		const fixture = makeFixture();
-		const runner = new LifecycleRunner(liveConflictWorld(fixture));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(
+			stubHerdrWorld(liveLaunchWorld(fixture.repository, "ws-live")),
+		);
 		const id = uid("o");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-herdr"),
+		});
 		// The checkout already holds the confirmation, as a previous run left it.
 		fixture.state.consultationRecord.recordCheckoutConflictConfirmation(
 			realpathSync(fixture.checkout),
@@ -1207,32 +1369,28 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 		await harness.operations.launch(consultation);
 
 		expect(harness.conflicts).toHaveLength(0);
-		expect(current(fixture.state, id)).toMatchObject({ state: "working", paneId: "pane-1" });
+		expect(current(fixture.state, id)).toMatchObject({ state: "working", paneId: LAUNCH.paneId });
 		expect(runner.commands()).toContain(`herdr agent prompt ${agentOf(id)} /grill review auth`);
 	});
 
 	test("names an Agent owned by an open Consultation on one panel line", async () => {
-		const fixture = makeFixture();
-		// A Consultation that already occupies the checkout with its live Agent:
-		// the world holds it in its own tab of the operator's workspace.
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(
+			stubHerdrWorld(liveLaunchWorld(fixture.repository, "ws-live")),
+		);
+		// A Consultation that already occupies the checkout with its live Agent.
 		const occupier = seed(fixture.state, fixture, uid("k"), { environment: "live-worktree" });
 		startAgent(fixture.state, occupier.id, {
 			paneId: "pane-occ",
 			tabId: "tab-occ",
-			workspaceId: "ws-live",
+			workspaceId: "ws-occ",
 		});
-		const world = stubHerdrWorld({
-			checkouts: [
-				{ path: fixture.checkout, cloneUrl: fixture.repository.cloneUrl, defaultBranch: "main" },
-			],
-			workspaces: [{ id: "ws-live", checkoutPath: fixture.checkout }],
-			tabs: [{ id: "tab-occ", workspaceId: "ws-live", cwd: fixture.checkout }],
-			panes: [{ id: "pane-occ", tabId: "tab-occ", workspaceId: "ws-live" }],
-			agents: [{ name: agentOf(occupier.id), kind: "pi", status: "working", paneId: "pane-occ" }],
-		});
-		const runner = new LifecycleRunner(world);
 		const id = uid("l");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-occ"),
+		});
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -1250,24 +1408,16 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 	});
 
 	test("names an Agent owned by a running ticket, and does not re-ask it", async () => {
-		const fixture = makeFixture();
-		// The ticket's live-worktree handoff works in its own workspace on the
-		// checkout, beside the operator's.
-		const world = stubHerdrWorld({
-			checkouts: [
-				{ path: fixture.checkout, cloneUrl: fixture.repository.cloneUrl, defaultBranch: "main" },
-			],
-			workspaces: [
-				{ id: "ws-live", checkoutPath: fixture.checkout },
-				{ id: "ws-tick", checkoutPath: fixture.checkout },
-			],
-			tabs: [{ id: "tab-tick", workspaceId: "ws-tick", cwd: fixture.checkout }],
-			panes: [{ id: "pane-tick", tabId: "tab-tick", workspaceId: "ws-tick" }],
-			agents: [{ name: "conflict-ticket", kind: "pi", status: "working", paneId: "pane-tick" }],
-		});
-		const runner = new LifecycleRunner(world);
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(
+			stubHerdrWorld(liveLaunchWorld(fixture.repository, "ws-live")),
+		);
 		const id = uid("m");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-tick"),
+		});
 		const harness = makeHarness(fixture, runner, {
 			tickets: () => [runningTicket("ACME-42", "pane-tick")],
 		});
@@ -1279,20 +1429,15 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			{ kind: "ticket", identity: "ACME-42", label: "Ticket ACME-42" },
 		]);
 
-		// The ticket's Agent takes the same lifetime rule as a Consultation's:
-		// the first launch's own Agent now occupies the checkout as well, and a
-		// previous run confirmed the set both form.
+		// The ticket's Agent takes the same lifetime rule as a Consultation's.
 		await harness.operations.confirmSafetyConflict(
 			consultation,
 			harness.conflicts[0].safety.conflicts,
 		);
 		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
-		fixture.state.consultationRecord.recordCheckoutConflictConfirmation(
-			realpathSync(fixture.checkout),
-			["ACME-42", id],
-		);
 		const id2 = uid("n");
 		const second = seed(fixture.state, fixture, id2, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id2, "ws-live-2");
 
 		await harness.operations.launch(second);
 
@@ -1300,13 +1445,13 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 		expect(current(fixture.state, id2).state).toBe("working");
 		expect(
 			fixture.state.consultationRecord.confirmedCheckoutConflicts(realpathSync(fixture.checkout)),
-		).toEqual(["ACME-42", id]);
+		).toEqual(["ACME-42"]);
 	});
 });
 
 describe("Consultation operations: recovery", () => {
 	test("reconnects an interrupted opening to the Agent that survived", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("9");
 		const consultation = seed(fixture.state, fixture, id);
@@ -1341,7 +1486,7 @@ describe("Consultation operations: recovery", () => {
 	});
 
 	test("fails an interrupted opening whose Agent is gone", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("a");
 		const consultation = seed(fixture.state, fixture, id);
@@ -1359,7 +1504,7 @@ describe("Consultation operations: recovery", () => {
 	});
 
 	test("re-runs an opening that left no Agent handles behind", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const id = uid("b");
 		const consultation = seed(fixture.state, fixture, id);
@@ -1372,7 +1517,7 @@ describe("Consultation operations: recovery", () => {
 	});
 
 	test("reports a herdr that cannot answer without failing the opening", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("c");
 		const consultation = seed(fixture.state, fixture, id);
@@ -1389,7 +1534,7 @@ describe("Consultation operations: recovery", () => {
 	});
 
 	test("refuses to recover a Consultation that is not opening", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("d");
 		const consultation = seed(fixture.state, fixture, id);
@@ -1413,7 +1558,7 @@ describe("Consultation operations: response", () => {
 	}
 
 	test("reports a state write failure without rejecting the response operation", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("0");
 		const consultation = seedAwaiting(fixture, id);
@@ -1433,7 +1578,7 @@ describe("Consultation operations: response", () => {
 	});
 
 	test("opens a turn only after herdr accepts the response", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("1");
 		const consultation = seedAwaiting(fixture, id);
@@ -1456,7 +1601,7 @@ describe("Consultation operations: response", () => {
 	});
 
 	test("keeps a response draft when Herdr rejects delivery", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("2");
 		const consultation = seedAwaiting(fixture, id);
@@ -1477,7 +1622,7 @@ describe("Consultation operations: response", () => {
 	});
 
 	test("refuses an unusable draft before it reaches herdr", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("3");
 		const consultation = seedAwaiting(fixture, id);
@@ -1493,7 +1638,7 @@ describe("Consultation operations: response", () => {
 	});
 
 	test("refuses a response while a delivery is still pending", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("4");
 		const consultation = seedAwaiting(fixture, id);
@@ -1520,7 +1665,7 @@ describe("Consultation operations: close", () => {
 	}
 
 	test("closes an exclusively owned workspace whole and keeps its worktree", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("5");
 		const consultation = seedWorking(fixture, id);
@@ -1561,7 +1706,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("closes only the owned tab when a foreign tab shares the workspace", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("6");
 		const consultation = seedWorking(fixture, id);
@@ -1586,7 +1731,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("closes only the pane when a foreign pane shares the owned tab", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("7");
 		const consultation = seedWorking(fixture, id);
@@ -1612,7 +1757,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("finishes a Consultation that never started an Agent with no command at all", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("8");
 		const consultation = seed(fixture.state, fixture, id);
@@ -1625,7 +1770,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("keeps a failed close recoverable and retries it to the end", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("9");
 		const consultation = seedWorking(fixture, id);
@@ -1669,7 +1814,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("leaves the topology unverifiable as a recovery, never a blind close", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("a");
 		const consultation = seedWorking(fixture, id);
@@ -1690,7 +1835,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("refuses a second close while a cleanup is in progress", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("b");
 		const consultation = seedWorking(fixture, id);
@@ -1718,7 +1863,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("force-close records resources without issuing cleanup commands", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("c");
 		const consultation = seedWorking(fixture, id);
@@ -1743,7 +1888,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("stops a queued cleanup when a force-close closes the record first", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const first = uid("d");
 		const second = uid("e");
@@ -1787,7 +1932,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("stops an in-flight cleanup before its command reaches herdr", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("0");
 		const consultation = seedWorking(fixture, id);
@@ -1825,8 +1970,8 @@ describe("Consultation operations: close", () => {
 		).toBeGreaterThan(0);
 	});
 
-	test("refuses a force-close whose cleanup already finished", () => {
-		const fixture = makeFixture();
+	test("refuses a force-close whose cleanup already finished", async () => {
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("f");
 		const consultation = seed(fixture.state, fixture, id);
@@ -1842,7 +1987,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("closes a missing record without touching a reused tab of the same ids", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("m");
 		const stale = { workspaceId: "wAR", tabId: "wAR:t29", paneId: "wAR:p29" };
@@ -1903,7 +2048,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("retires the record when the stored pane holds a foreign Agent", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("n");
 		const stale = { workspaceId: "wAR", tabId: "wAR:t29", paneId: "wAR:p29" };
@@ -1944,7 +2089,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("refuses to take down an unverified opening, and leaves it for recovery", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("u");
 		const consultation = seed(fixture.state, fixture, id);
@@ -1976,7 +2121,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("keeps an ambiguous Agent identity as a recovery, never a blind close", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("v");
 		seedWorking(fixture, id);
@@ -2013,7 +2158,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("leaves the close as a recovery when the Agent list cannot be read", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("g");
 		seedWorking(fixture, id);
@@ -2030,7 +2175,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("follows a moved Agent to the tab it holds and closes that tab", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("w");
 		seedWorking(fixture, id);
@@ -2060,7 +2205,7 @@ describe("Consultation operations: close", () => {
 	});
 
 	test("closes on the stored pane when this herdr names no Agent", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("x");
 		seedWorking(fixture, id);
@@ -2097,22 +2242,27 @@ describe("Consultation operations: close", () => {
 		// rows it recorded for it. The record then holds no "Unclosed owned
 		// resources" line for a handle the plane already removed, and the operator's
 		// Close has nothing left to retry against a workspace herdr no longer holds.
-		const fixture = makeFixture();
-		// No workspace holds the checkout: the start creates its own, and the
-		// world answers its own create.
-		const runner = new LifecycleRunner(stubHerdrWorld(worldCheckout(fixture.repository)));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(
+			stubHerdrWorld(liveLaunchWorld(fixture.repository, "ws-new")),
+		);
 		const id = uid("y");
 		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
-		// The start creates its own workspace, records the workspace and its root
-		// tab, and then herdr refuses its Agent start.
+		// No workspace holds the checkout: the start creates its own, records the
+		// workspace and its root tab, and then herdr refuses its Agent start.
+		runner.inner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.inner.set("herdr", ["workspace", "create", "--cwd", fixture.checkout, "--no-focus"], {
+			stdout: workspaceCreateJson(LAUNCH.workspaceId, LAUNCH.paneId),
+		});
 		runner.inner.set(
 			"herdr",
-			["agent", "start", agentOf(id), "--kind", "pi", "--pane", WORKTREE_LAUNCH.paneId],
+			["agent", "start", agentOf(id), "--kind", "pi", "--pane", LAUNCH.paneId],
 			{
 				code: 1,
 				stderr: '{"error":{"code":"agent_start_failed","message":"the pane is gone"}}\n',
 			},
 		);
+		runner.inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.launch(consultation);
@@ -2120,7 +2270,7 @@ describe("Consultation operations: close", () => {
 		const failed = current(fixture.state, id);
 		expect(failed.state).toBe("failed");
 		// The start's own cleanup took the workspace it created down.
-		expect(runner.commands()).toContain(`herdr workspace close ${WORKTREE_LAUNCH.workspaceId}`);
+		expect(runner.commands()).toContain(`herdr workspace close ${LAUNCH.workspaceId}`);
 		// And it confirmed both rows it had written for that Environment.
 		expect(
 			failed.resources.map((resource) => `${resource.kind} ${resource.confirmedClosed}`).sort(),
@@ -2171,7 +2321,7 @@ describe("Consultation operations: replacement and deletion", () => {
 	}
 
 	test("opens a Replacement from a failed Consultation, linked and bounded", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("1");
 		const replaced = seedFailedWithHistory(fixture, id);
@@ -2200,7 +2350,7 @@ describe("Consultation operations: replacement and deletion", () => {
 	});
 
 	test("launches a Replacement the same way it launches a new Consultation", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const id = uid("2");
 		const replaced = seedFailedWithHistory(fixture, id);
@@ -2223,8 +2373,8 @@ describe("Consultation operations: replacement and deletion", () => {
 		);
 	});
 
-	test("refuses a Replacement of a Consultation the operator can still use", () => {
-		const fixture = makeFixture();
+	test("refuses a Replacement of a Consultation the operator can still use", async () => {
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("3");
 		const consultation = seed(fixture.state, fixture, id);
@@ -2242,8 +2392,8 @@ describe("Consultation operations: replacement and deletion", () => {
 		expect(fixture.state.consultationRecord.consultations("all")).toHaveLength(1);
 	});
 
-	test("builds the bounded recovery context the launcher shows", () => {
-		const fixture = makeFixture();
+	test("builds the bounded recovery context the launcher shows", async () => {
+		const fixture = await makeFixture();
 		const id = uid("4");
 		seedFailedWithHistory(fixture, id);
 		const harness = makeHarness(fixture, new LifecycleRunner());
@@ -2255,8 +2405,8 @@ describe("Consultation operations: replacement and deletion", () => {
 		expect(context).toContain("note: keep going");
 	});
 
-	test("deletes a closed Consultation's local history", () => {
-		const fixture = makeFixture();
+	test("deletes a closed Consultation's local history", async () => {
+		const fixture = await makeFixture();
 		const id = uid("5");
 		const consultation = seed(fixture.state, fixture, id);
 		const harness = makeHarness(fixture, new LifecycleRunner());
@@ -2268,8 +2418,8 @@ describe("Consultation operations: replacement and deletion", () => {
 		expect(statusTexts(harness).at(-1)).toContain("deleted; backups may retain data");
 	});
 
-	test("refuses to delete a Consultation that is still open", () => {
-		const fixture = makeFixture();
+	test("refuses to delete a Consultation that is still open", async () => {
+		const fixture = await makeFixture();
 		const id = uid("6");
 		const consultation = seed(fixture.state, fixture, id);
 		const harness = makeHarness(fixture, new LifecycleRunner());
@@ -2281,8 +2431,8 @@ describe("Consultation operations: replacement and deletion", () => {
 });
 
 describe("Consultation operations: stale Agent output", () => {
-	test("records a failed read and clears it when a read succeeds", () => {
-		const fixture = makeFixture();
+	test("records a failed read and clears it when a read succeeds", async () => {
+		const fixture = await makeFixture();
 		const id = uid("7");
 		seed(fixture.state, fixture, id);
 		const harness = makeHarness(fixture, new LifecycleRunner());
@@ -2299,8 +2449,8 @@ describe("Consultation operations: stale Agent output", () => {
 		expect(harness.changes).toBe(changesAfterSet + 1);
 	});
 
-	test("clears the stale warning an observation left behind", () => {
-		const fixture = makeFixture();
+	test("clears the stale warning an observation left behind", async () => {
+		const fixture = await makeFixture();
 		const id = uid("8");
 		seed(fixture.state, fixture, id);
 		startAgent(fixture.state, id);
@@ -2314,8 +2464,8 @@ describe("Consultation operations: stale Agent output", () => {
 		expect(current(fixture.state, id).warning).toBeNull();
 	});
 
-	test("clears the legacy stale-output spelling", () => {
-		const fixture = makeFixture();
+	test("clears the legacy stale-output spelling", async () => {
+		const fixture = await makeFixture();
 		const id = uid("9");
 		seed(fixture.state, fixture, id);
 		fixture.state.consultationRecord.setConsultationWarning(id, "Agent output is stale");
@@ -2326,8 +2476,8 @@ describe("Consultation operations: stale Agent output", () => {
 		expect(current(fixture.state, id).warning).toBeNull();
 	});
 
-	test("keeps a warning that is not about stale output", () => {
-		const fixture = makeFixture();
+	test("keeps a warning that is not about stale output", async () => {
+		const fixture = await makeFixture();
 		const id = uid("9");
 		seed(fixture.state, fixture, id);
 		fixture.state.consultationRecord.setConsultationWarning(
@@ -2342,8 +2492,8 @@ describe("Consultation operations: stale Agent output", () => {
 		expect(current(fixture.state, id).warning).toBe(STALE_AGENT_OUTPUT_WARNING);
 	});
 
-	test("ignores a read of a Consultation that no longer exists", () => {
-		const fixture = makeFixture();
+	test("ignores a read of a Consultation that no longer exists", async () => {
+		const fixture = await makeFixture();
 		const harness = makeHarness(fixture, new LifecycleRunner());
 
 		expect(() => harness.operations.recordOutputRead(uid("a"), null)).not.toThrow();
@@ -2353,7 +2503,7 @@ describe("Consultation operations: stale Agent output", () => {
 
 describe("Consultation operations: Agent interaction input", () => {
 	test("owns ordered terminal input and flushes it", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const harness = makeHarness(fixture, runner);
 
@@ -2368,7 +2518,7 @@ describe("Consultation operations: Agent interaction input", () => {
 	});
 
 	test("batches pasted text, keeps keys in order, and respects the byte bound", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const harness = makeHarness(fixture, runner, { textBatchBytes: 8 });
 
@@ -2395,7 +2545,7 @@ describe("Consultation operations: Agent interaction input", () => {
 	});
 
 	test("settles the queued input for the pane the operator left", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const harness = makeHarness(fixture, runner);
 
@@ -2411,7 +2561,7 @@ describe("Consultation operations: Agent interaction input", () => {
 	});
 
 	test("reports a failed key so the view can name the Agent interaction error", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		runner.inner.set("herdr", ["pane", "send-keys", "pane-1", "enter"], {
 			code: 1,
@@ -2428,45 +2578,23 @@ describe("Consultation operations: Agent interaction input", () => {
 
 describe("Consultation operations: Repository serialization", () => {
 	test("serializes a launch and a close on one Repository, and no others", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
 		const launchId = uid("b");
 		const closeId = uid("c");
-		// The close stands on the world too: the worktree workspace the closing
-		// Consultation launched into, its tab and pane, and its Agent. The launch
-		// the world builds on its own: the world's first free numbers.
-		const world = stubHerdrWorld({
-			...worktreeLaunchStanding(fixture.repository),
-			workspaces: [
-				{
-					id: LAUNCH.workspaceId,
-					checkoutPath: join(worktreesRootOf(fixture.repository), LAUNCH.workspaceId),
-					isWorktree: true,
-				},
-			],
-			tabs: [{ id: LAUNCH.tabId, workspaceId: LAUNCH.workspaceId }],
-			panes: [
-				{
-					id: LAUNCH.paneId,
-					tabId: LAUNCH.tabId,
-					workspaceId: LAUNCH.workspaceId,
-					content: "Agent: done",
-				},
-			],
-			agents: [
-				{
-					name: agentOf(closeId),
-					kind: "pi",
-					status: "idle",
-					paneId: LAUNCH.paneId,
-					sessionId: `sess-${closeId.slice(0, 8)}`,
-				},
-			],
-		});
-		const runner = new LifecycleRunner(world);
 		const launching = seed(fixture.state, fixture, launchId);
 		const closing = seed(fixture.state, fixture, closeId);
 		startAgent(fixture.state, closeId);
 		seedResources(fixture.state, closeId);
+		stubOwnAgent(runner.inner, closeId);
+		stubWorktreeLaunch(runner.inner, fixture.checkout, launchId);
+		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: done");
+		stubTopology(
+			runner.inner,
+			LAUNCH.workspaceId,
+			[LAUNCH.tabId],
+			[{ pane_id: LAUNCH.paneId, tab_id: LAUNCH.tabId }],
+		);
 		runner.holdWhile((command) => command.startsWith("herdr worktree create"));
 		const harness = makeHarness(fixture, runner);
 
@@ -2496,13 +2624,18 @@ describe("Consultation operations: Repository serialization", () => {
 	});
 
 	test("reports concurrent progress under each Consultation's own owner", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(stubHerdrWorld(bothCheckoutsWorld(fixture)));
 		const firstId = uid("g");
 		const secondId = uid("h");
 		const first = seed(fixture.state, fixture, firstId);
 		const second = seed(fixture.state, fixture, secondId, {
 			repository: fixture.otherRepository,
+		});
+		stubWorktreeLaunch(runner.inner, fixture.checkout, firstId);
+		stubWorktreeLaunch(runner.inner, fixture.otherCheckout, secondId, {
+			handles: LAUNCH,
+			displayName: "other",
 		});
 		runner.holdWhile(
 			(command) =>
@@ -2545,13 +2678,18 @@ describe("Consultation operations: Repository serialization", () => {
 	});
 
 	test("lets a second Repository work while the first is held", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(stubHerdrWorld(bothCheckoutsWorld(fixture)));
 		const held = uid("d");
 		const other = uid("e");
 		const heldConsultation = seed(fixture.state, fixture, held);
 		const otherConsultation = seed(fixture.state, fixture, other, {
 			repository: fixture.otherRepository,
+		});
+		stubWorktreeLaunch(runner.inner, fixture.checkout, held);
+		stubWorktreeLaunch(runner.inner, fixture.otherCheckout, other, {
+			handles: LAUNCH,
+			displayName: "other",
 		});
 		runner.holdWhile(
 			(command) =>
@@ -2578,8 +2716,8 @@ describe("Consultation operations: Repository serialization", () => {
 	});
 });
 describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)", () => {
-	test("a queued submit creates the record and its queue item, and starts nothing", () => {
-		const fixture = makeFixture();
+	test("a queued submit creates the record and its queue item, and starts nothing", async () => {
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const harness = makeHarness(fixture, runner);
 
@@ -2604,9 +2742,8 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 	});
 
 	test("the pickup re-reads the type's settings from the config before it starts", async () => {
-		const fixture = makeFixture();
-		const world = stubHerdrWorld(worktreeLaunchStanding(fixture.repository));
-		const runner = new LifecycleRunner(world);
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
 		const harness = makeHarness(fixture, runner);
 		const consultation = harness.operations.create({
 			typeName: "grill",
@@ -2625,8 +2762,37 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 			model: "review-model",
 			template: "/re-grill {input}",
 		};
-		// The world holds the type's model list, so the re-read setting fits.
-		world.setModelList("pi", ["review-model"]);
+		const branch = consultationBranchName(id, "grill");
+		runner.inner.set("git", ["-C", fixture.checkout, "branch", "--list", branch], {
+			stdout: "",
+		});
+		runner.inner.set("git", ["-C", fixture.checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			stdout: "refs/remotes/origin/main\n",
+		});
+		runner.inner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				fixture.checkout,
+				"--branch",
+				branch,
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson(LAUNCH.workspaceId, LAUNCH.paneId) },
+		);
+		runner.inner.set(
+			"herdr",
+			["agent", "start", agentOf(id), "--kind", "pi", "--pane", LAUNCH.paneId],
+			{ stdout: JSON.stringify({ result: { agent: { session_id: `sess-${id.slice(0, 8)}` } } }) },
+		);
+		runner.inner.set("herdr", ["agent", "prompt", agentOf(id), "/re-grill review auth"], {
+			code: 0,
+		});
+		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
 
 		const outcome = await harness.operations.pickup(id, "pickup");
 
@@ -2645,7 +2811,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 			template: "/re-grill {input}",
 			renderedOpeningPrompt: "/re-grill review auth",
 			initialInput: "review auth",
-			paneId: WORKTREE_LAUNCH.paneId,
+			paneId: LAUNCH.paneId,
 		});
 		// The prompt went out with the re-read template. The claim took the
 		// record's pointer with it: the store keeps an item only while its
@@ -2656,8 +2822,8 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 	});
 
 	test("the pickup answers at the seat and lets the opening run behind it", async () => {
-		const fixture = makeFixture();
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
 		const harness = makeHarness(fixture, runner);
 		const consultation = harness.operations.create({
 			typeName: "grill",
@@ -2667,6 +2833,33 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		});
 		if (consultation === undefined) throw new Error("the queued submit created no record");
 		const id = consultation.id;
+		const branch = consultationBranchName(id, "grill");
+		runner.inner.set("git", ["-C", fixture.checkout, "branch", "--list", branch], { stdout: "" });
+		runner.inner.set("git", ["-C", fixture.checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			stdout: "refs/remotes/origin/main\n",
+		});
+		runner.inner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				fixture.checkout,
+				"--branch",
+				branch,
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson(LAUNCH.workspaceId, LAUNCH.paneId) },
+		);
+		runner.inner.set(
+			"herdr",
+			["agent", "start", agentOf(id), "--kind", "pi", "--pane", LAUNCH.paneId],
+			{ stdout: JSON.stringify({ result: { agent: { session_id: `sess-${id.slice(0, 8)}` } } }) },
+		);
+		runner.inner.set("herdr", ["agent", "prompt", agentOf(id), "/grill review auth"], { code: 0 });
+		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
 		// The environment build is held: this is the wait a cold clone or a slow
 		// worktree create makes an observation cycle pay, and the pickup must not
 		// make the loop - and every ticket poll in it - wait through it.
@@ -2689,11 +2882,11 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 			() => current(fixture.state, id).state === "working",
 			"the released opening to reach its Agent",
 		);
-		expect(current(fixture.state, id).paneId).toBe(WORKTREE_LAUNCH.paneId);
+		expect(current(fixture.state, id).paneId).toBe(LAUNCH.paneId);
 	});
 
 	test("a pickup whose start fails leaves the record failed with its reason", async () => {
-		const fixture = makeFixture("gpt-4o");
+		const fixture = await makeFixture("gpt-4o");
 		const runner = new LifecycleRunner();
 		runner.inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 		const harness = makeHarness(fixture, runner);
@@ -2726,7 +2919,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 	});
 
 	test("a pickup of a record that left the queue's wait starts nothing", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const harness = makeHarness(fixture, runner);
 
@@ -2741,7 +2934,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 	});
 
 	test("a pickup whose type left the config fails the record", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const harness = makeHarness(fixture, runner);
 		const consultation = harness.operations.create({
@@ -2766,8 +2959,8 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		expect(statusTexts(harness).at(-1)).toContain("unknown Consultation type grill");
 	});
 
-	test("a queued Replacement links to its record and waits in the queue", () => {
-		const fixture = makeFixture();
+	test("a queued Replacement links to its record and waits in the queue", async () => {
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const harness = makeHarness(fixture, runner);
 		const failed = seed(fixture.state, fixture, uid("f"));
@@ -2804,9 +2997,21 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		return state.consultationRecord.consultationsByState(["opening", "working"]).length;
 	}
 
+	/** Stub the whole opening one picked-up record runs behind its answer. */
+	function stubOpening(
+		fixture: Fixture,
+		runner: LifecycleRunner,
+		id: string,
+		handles = LAUNCH,
+	): void {
+		stubWorktreeLaunch(runner.inner, fixture.checkout, id, { handles: handles });
+		runner.inner.set("herdr", ["agent", "prompt", agentOf(id), "/grill review auth"], { code: 0 });
+		stubPaneRead(runner.inner, handles.paneId, "Agent: opened");
+	}
+
 	test("the Work queue pickup writes its start line with its mode and its seat reading", async () => {
-		const fixture = makeFixture();
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
 		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
 			log: recordLogger(lines),
@@ -2820,6 +3025,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		});
 		if (consultation === undefined) throw new Error("the queued submit created no record");
 		const id = consultation.id;
+		stubOpening(fixture, runner, id);
 
 		expect(await harness.operations.pickup(id, "pickup")).toEqual({ kind: "started" });
 		await until(
@@ -2841,8 +3047,8 @@ describe("Consultation operations: the start line (issue #220)", () => {
 	});
 
 	test("a force-dispatch start line names the cap it ran over", async () => {
-		const fixture = makeFixture();
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
 		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
 			log: recordLogger(lines),
@@ -2857,6 +3063,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		});
 		if (consultation === undefined) throw new Error("the queued submit created no record");
 		const id = consultation.id;
+		stubOpening(fixture, runner, id);
 
 		expect(await harness.operations.pickup(id, "force-dispatch")).toEqual({ kind: "started" });
 		await until(
@@ -2876,8 +3083,8 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		// App names the start now key `force-dispatch` even when the cap has free
 		// seats, so `mode force-dispatch` beside `seats 0/2` is a legal line and a
 		// normal start, not a contradiction of ADR 0092's reading rule.
-		const fixture = makeFixture();
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
 		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
 			log: recordLogger(lines),
@@ -2892,6 +3099,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		});
 		if (consultation === undefined) throw new Error("the queued submit created no record");
 		const id = consultation.id;
+		stubOpening(fixture, runner, id);
 
 		expect(await harness.operations.pickup(id, "force-dispatch")).toEqual({ kind: "started" });
 		await until(
@@ -2907,9 +3115,9 @@ describe("Consultation operations: the start line (issue #220)", () => {
 	});
 
 	test("an unlimited cap states its held seats with no limit", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		fixture.config.maxParallelAgents = 0;
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchWorld(fixture.repository)));
 		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
 			log: recordLogger(lines),
@@ -2924,6 +3132,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		});
 		if (consultation === undefined) throw new Error("the queued submit created no record");
 		const id = consultation.id;
+		stubOpening(fixture, runner, id);
 
 		expect(await harness.operations.pickup(id, "pickup")).toEqual({ kind: "started" });
 		await until(
@@ -2939,7 +3148,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 	});
 
 	test("a start that claims nothing writes no start line", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
@@ -2968,9 +3177,16 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		// operations behind the real Handoff dispatch's Consultation seam, on one
 		// logger. `max-parallel-agents = 1`, two queued records, and the log file
 		// has to say which path took the one seat.
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		fixture.config.maxParallelAgents = 1;
-		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
+		const runner = new LifecycleRunner(
+			stubHerdrWorld(
+				worktreeLaunchWorld(fixture.repository, [
+					{ workspaceId: "ws-a", tabId: "tab-a", paneId: "pane-a" },
+					{ workspaceId: "ws-b", tabId: "tab-b", paneId: "pane-b" },
+				]),
+			),
+		);
 		const lines: RecordedLine[] = [];
 		const harness = makeHarness(fixture, runner, {
 			log: recordLogger(lines),
@@ -3008,6 +3224,16 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		});
 		if (first === undefined || second === undefined)
 			throw new Error("the queued submits created no records");
+		stubOpening(fixture, runner, first.id, {
+			workspaceId: "ws-a",
+			tabId: "tab-a",
+			paneId: "pane-a",
+		});
+		stubOpening(fixture, runner, second.id, {
+			workspaceId: "ws-b",
+			tabId: "tab-b",
+			paneId: "pane-b",
+		});
 
 		// The pickup takes the one free seat for the leading row and holds the
 		// other row behind the cap it cannot cross.
@@ -3072,7 +3298,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 	}
 
 	test("a queued worktree pickup waits at the gate, and the record keeps its seat in the queue", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const hold = holdStub(() => ({
 			ok: false,
@@ -3099,7 +3325,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 	});
 
 	test("the refusal the bound gives is a failed record, on the refusal's own seam", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const hold = holdStub(() => ({
 			ok: false,
@@ -3140,7 +3366,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 	});
 
 	test("the direct start now of a record that holds no row answers the key, and starts nothing", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const hold = holdStub(() => ({
 			ok: false,
@@ -3177,7 +3403,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 	});
 
 	test("a pickup that crosses a free gate takes the hold, and the settle lets it go", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const hold = holdStub(() => ({ ok: true, checkoutKey: "github.com/acme/factory" }));
 		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
@@ -3209,7 +3435,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 	});
 
 	test("a live-worktree pickup crosses no gate", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(
 			stubHerdrWorld(liveLaunchStanding(fixture.repository, "ws-live")),
 		);
@@ -3240,7 +3466,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 	});
 
 	test("a recovery that meets a held checkout answers the key, and the record keeps its opening", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
 		const hold = holdStub(() => ({
 			ok: false,
@@ -3281,7 +3507,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 	});
 
 	test("a recovery that crosses a free gate takes the hold, and the settle lets it go", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const hold = holdStub(() => ({ ok: true, checkoutKey: "github.com/acme/factory" }));
 		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
@@ -3317,7 +3543,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 	});
 
 	test("a live-worktree recovery crosses no gate", async () => {
-		const fixture = makeFixture();
+		const fixture = await makeFixture();
 		const runner = new LifecycleRunner(
 			stubHerdrWorld(liveLaunchStanding(fixture.repository, "ws-live")),
 		);

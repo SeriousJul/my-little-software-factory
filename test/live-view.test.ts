@@ -52,6 +52,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { DEFAULT_TICKET_TITLE, fetchedTicket, ticketOf } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -60,7 +61,7 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import { flushPassiveNow } from "./passive-flush-hold.ts";
-import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
+import { type Plane, plane } from "./plane.ts";
 
 /** The pane read the Live view's stream runs, for a pane and its tail. */
 const READ = (pane: string) =>
@@ -158,24 +159,8 @@ const _source = { name: "issues", kind: "github-issues" };
 const identity = "github:github.com:I_5";
 const repoIdentity = "github.com/acme/factory";
 
-function fetched(index = 5, title = "Persist source facts"): FetchedTicket {
-	return {
-		identity: `github:github.com:I_${index}`,
-		sourceKind: "github-issue",
-		externalKey: `#${index}`,
-		sourceState: "open",
-		url: `https://github.com/acme/factory/issues/${index}`,
-		title,
-		description: "Keep state independent from GitHub.",
-		labels: ["ready-for-agent"],
-		externalUpdatedAt: "2026-08-31T10:00:00Z",
-		repository: {
-			identity: repoIdentity,
-			displayName: "acme/factory",
-			cloneUrl: `https://${repoIdentity}.git`,
-		},
-		attributes: {},
-	};
+function fetched(index = 5, title = DEFAULT_TICKET_TITLE): FetchedTicket {
+	return fetchedTicket({ identity: `github:github.com:I_${index}`, title });
 }
 
 /** Stub the git answers for the checkout the plane's config maps to. */
@@ -204,7 +189,7 @@ const sourceConfig = {
  * the fixture day, so a session record stamped on it is this run's, not the
  * run before: the staleness guard keeps the settle's `completed` cause.
  */
-async function seededPlane(extra: Partial<FactoryConfig> = {}): Promise<SeededPlane> {
+async function seededPlane(extra: Partial<FactoryConfig> = {}): Promise<Plane> {
 	const ticket = ticketOf(fetched(), {
 		state: "handed-off",
 		workCycle: 2,
@@ -268,7 +253,7 @@ async function pressReturn(
  * full-title row (the detail pane, the modal's title) as the fallback a
  * modal frame offers.
  */
-function ticketRow(frame: string, title = "Persist source facts"): string {
+function ticketRow(frame: string, title = DEFAULT_TICKET_TITLE): string {
 	const rows = rowsOf(frame);
 	const row =
 		rows.find((line) => line.includes("❯") && line.includes(title.slice(0, 3))) ??
@@ -731,7 +716,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				// Enter confirms the Goto: the focus runs, the view closes. The
 				// confirmation is a result, not a warning, and names the
@@ -780,7 +765,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
 				// `g` is the base-mode Goto (ADR 0033): it focuses the agent's
 				// pane without opening a surface, and the ticket stays in flight
 				// under the face the poll wears.
@@ -825,7 +810,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("The fix is in the layout math."), "the stream");
 				// The agent reports done: the observation settles the turn,
@@ -930,7 +915,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				// The agent reports done. The turn settles, and the factory decides
 				// nothing for it: the Operator-decides flag parks the completion
@@ -993,7 +978,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the agent works"), "the stream");
 				// The agent leaves herdr: the box carries the missing modal.
@@ -1038,7 +1023,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
 				// The base mode's key handlers, taken at rest on the list before this
 				// walk mounts anything, which is the only place a base means something:
 				// the release wait at the fallback refuses a snapshot that never saw a
@@ -1067,8 +1052,7 @@ describe("the Live view against a running factory", () => {
 					setup,
 					"return",
 					"the confirmed route",
-					(f) =>
-						f.includes("Persist source facts") && !f.includes("Decision: Persist source facts"),
+					(f) => f.includes(DEFAULT_TICKET_TITLE) && !f.includes("Decision: Persist source facts"),
 				);
 				const listFrame = await awaitFallbackToTheList(setup, baseHandlers);
 				expect(listFrame).not.toContain("Live: Persist source facts");
@@ -1127,7 +1111,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
 				// The base mode's key handlers, taken at rest on the list before this
 				// walk mounts anything, the release wait's witness.
 				const base = baseKeyHandlers(setup);
@@ -1215,7 +1199,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				// The agent reports done: the same box turns into the decision.
 				planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
@@ -1281,7 +1265,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
 				// The base mode's key handlers for the same release wait, taken at the
 				// same place: at rest on the list, before this walk mounts anything.
 				const baseHandlers = baseKeyHandlers(setup);
@@ -1307,8 +1291,7 @@ describe("the Live view against a running factory", () => {
 					setup,
 					"return",
 					"the confirmed route",
-					(f) =>
-						f.includes("Persist source facts") && !f.includes("Decision: Persist source facts"),
+					(f) => f.includes(DEFAULT_TICKET_TITLE) && !f.includes("Decision: Persist source facts"),
 				);
 				// The same fallback as the decision sub-mode's case, waited for the
 				// same way: the override's confirm leaves the Live view on screen for
@@ -1366,7 +1349,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
 				// The turn settles, so the Ticket rests awaiting with the ask owed:
@@ -1445,7 +1428,7 @@ describe("the Live view against a running factory", () => {
 					(f) => f.includes("┌─❯ Tickets") && !f.includes("Live:"),
 					"the Live view to end with its work cycle",
 				);
-				expect(frameText(frame)).toContain("Persist source facts");
+				expect(frameText(frame)).toContain(DEFAULT_TICKET_TITLE);
 			},
 			{
 				width: WIDTH,
@@ -1491,7 +1474,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the agent is wrapping up"), "the stream");
 				// The agent reports done. The turn settles, the auto-close type

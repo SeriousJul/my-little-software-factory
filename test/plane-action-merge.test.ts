@@ -33,7 +33,7 @@ import { planeActionSettingOf } from "../src/plane-action-registry.ts";
 import { runMergePullRequest } from "../src/plane-actions.ts";
 import type { CommandOptions, CommandResult } from "../src/runner.ts";
 import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import { createTicketSource, type FetchOutcome, SEARCH_QUERY } from "../src/ticket-source.ts";
 import { firePlaneActionOutcome } from "../src/workflow.ts";
 import {
@@ -59,8 +59,8 @@ import {
 } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
 import { gatedRunner } from "./gated-runner.ts";
+import { type Plane, plane, reopenState } from "./plane.ts";
 import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
-import { plane, type SeededPlane } from "./seeded-plane.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -230,7 +230,7 @@ const pullClosingIssueSuccess = (
 function planeState(): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-plane-state-"));
 	paths.push(dir);
-	const state = openFactoryState(join(dir, "state.sqlite"));
+	const state = reopenState(join(dir, "state.sqlite"));
 	state.grouping.setGroupingAxis("tickets", "none");
 	state.sourceFact.initializeSources([pullsSource]);
 	state.sourceFact.applyFetch(pullsSource, pullSuccess());
@@ -2131,7 +2131,7 @@ describe("the decision screen's merge", () => {
 		state: FactoryState,
 		runner: FakeRunner,
 		extra: Partial<FactoryConfig> = {},
-	): Promise<SeededPlane> {
+	): Promise<Plane> {
 		return await plane({
 			existing: state,
 			sources: [{ config: pullsConfig, tickets: [] }],

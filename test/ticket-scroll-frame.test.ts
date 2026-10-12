@@ -5,7 +5,7 @@ import { CliRenderEvents } from "@opentui/core";
 
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	agentRowOf,
@@ -35,9 +35,9 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import type { FakeSource } from "./fake-source.ts";
+
+import { issuesSourceConfig, plane, reopenState } from "./plane.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-import { plane } from "./seeded-plane.ts";
-import { issuesSourceConfig } from "./state-fixture.ts";
 
 const SCROLL_WIDTH = 60;
 // The minimum terminal that holds the dual-list frame (ADR 0019): the scroll
@@ -580,7 +580,7 @@ describe("native Ticket detail viewport", () => {
 			`${SAMPLE_TICKETS[0].description} ${SAMPLE_TICKETS[0].description} ${SAMPLE_TICKETS[0].description}`,
 		);
 		const reference: string[] = [];
-		const state = openFactoryState(":memory:");
+		const state = reopenState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const planeRecord = await plane({
@@ -656,7 +656,7 @@ describe("native Ticket detail viewport", () => {
 	});
 
 	test("spends no terminal row on the mode cell through a resize", async () => {
-		const state = openFactoryState(":memory:");
+		const state = reopenState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const planeRecord = await plane({ existing: state, sources: [] });
@@ -710,7 +710,7 @@ describe("native Ticket detail viewport", () => {
 			},
 		);
 
-		const state = openFactoryState(":memory:");
+		const state = reopenState(":memory:");
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const longDescription = `${SAMPLE_TICKETS[0].description} ${SAMPLE_TICKETS[0].description}`;

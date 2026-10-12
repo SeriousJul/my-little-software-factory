@@ -34,6 +34,7 @@ import {
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
+import { DEFAULT_AGENT_NAME, fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	type FakeRunner,
@@ -43,8 +44,7 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane, ticketOf } from "./seeded-plane.ts";
-import { DEFAULT_AGENT_NAME, issueTicket, success } from "./state-fixture.ts";
+import { plane } from "./plane.ts";
 
 const FIRST = "github:github.com:I_5";
 const SECOND = "github:github.com:I_6";
@@ -215,7 +215,7 @@ describe("the route close moves no view", () => {
 				fake.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 			},
 		});
-		const outcome = success([issueTicket(FIRST)]);
+		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		const _state = planeRecord.state;
 		const runner = planeRecord.fakeRunner;
 		const source = planeRecord.sources[0] as FakeSource;
@@ -259,7 +259,7 @@ describe("the route close moves no view", () => {
 	test("a route that waited in the Work queue closes at the seat with no focus", async () => {
 		// The worst case has no keypress beside it: the close runs when a seat
 		// frees, so the view must be untouchable at that moment.
-		const outcome = success(twoTickets());
+		const outcome = fetchSuccess(twoTickets());
 		// The second ticket holds the factory's one seat with a live agent. Its
 		// handoff is aged past the Startup grace, so the seat is the agent's own:
 		// when herdr stops listing it, the seat frees and the queue drains.
@@ -389,7 +389,7 @@ describe("the Close cleanup moves no view", () => {
 				fake.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 			},
 		});
-		const outcome = success([issueTicket(FIRST)]);
+		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		const _state = planeRecord.state;
 		const runner = planeRecord.fakeRunner;
 		const source = planeRecord.sources[0] as FakeSource;
@@ -443,7 +443,7 @@ describe("the Close cleanup moves no view", () => {
 				});
 			},
 		});
-		const outcome = success([issueTicket(FIRST)]);
+		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		const state = planeRecord.state;
 		const runner = planeRecord.fakeRunner;
 		const source = planeRecord.sources[0] as FakeSource;
@@ -520,7 +520,7 @@ describe("Goto stays the one focus move", () => {
 				});
 			},
 		});
-		const outcome = success([issueTicket(FIRST)]);
+		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		const _state = planeRecord.state;
 		const runner = planeRecord.fakeRunner;
 		const source = planeRecord.sources[0] as FakeSource;
@@ -597,7 +597,7 @@ describe("the environment a handoff builds stays out of the view", () => {
 				});
 			},
 		});
-		const outcome = success([issueTicket(SECOND)]);
+		const outcome = fetchSuccess([issueTicket(SECOND)]);
 		const state = planeRecord.state;
 		const runner = planeRecord.fakeRunner;
 		const source = planeRecord.sources[0] as FakeSource;

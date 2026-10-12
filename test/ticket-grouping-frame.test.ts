@@ -25,7 +25,7 @@ import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
 import { repositoryInitSettingsHash } from "../src/repo-init.ts";
 import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	type AppSetup,
@@ -46,9 +46,9 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { ticketOf } from "./fact-fixtures.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
-import { callsReached } from "./state-fixture.ts";
+import { callsReached, type Plane, plane, reopenState } from "./plane.ts";
 
 let home = "";
 const opened: FactoryState[] = [];
@@ -221,7 +221,7 @@ async function groupedPlane(
 		init?: boolean;
 		existing?: FactoryState;
 	} = {},
-): Promise<SeededPlane> {
+): Promise<Plane> {
 	const hold = options.hold === true;
 	const listed = options.listed ?? tickets();
 	const axis = options.axis;
@@ -1154,7 +1154,7 @@ describe("the Ticket section's Groups", () => {
 
 		// A second boot on the same file: the axis stands where the operator
 		// left it (story 49), and every Group is open again (story 53).
-		const second = openFactoryState(stateFile());
+		const second = reopenState(stateFile());
 		opened.push(second);
 		expect(second.grouping.groupingAxis("tickets")).toBe("repository");
 		await bootGrouped(
@@ -1765,7 +1765,7 @@ describe("the operator's Group order (ADR 0071)", () => {
 		);
 		first.close();
 
-		const second = openFactoryState(stateFile());
+		const second = reopenState(stateFile());
 		opened.push(second);
 		await bootGrouped(
 			async (setup) => {

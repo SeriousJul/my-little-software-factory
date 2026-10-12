@@ -33,9 +33,10 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { DEFAULT_TICKET_TITLE, fetchedTicket, ticketOf } from "./fact-fixtures.ts";
 import { agentListJson, tabCreateJson, workspaceListJson } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane, ticketOf } from "./seeded-plane.ts";
+import { plane } from "./plane.ts";
 
 const _source = { name: "issues", kind: "github-issues" };
 const identityA = "github:github.com:I_5";
@@ -46,23 +47,15 @@ const repoIdentity = "github.com/acme/live";
 const QUOTA = "Your token-plan 1-week quota has been exhausted";
 
 function fetched(index: number, title: string): FetchedTicket {
-	return {
+	return fetchedTicket({
 		identity: `github:github.com:I_${index}`,
-		sourceKind: "github-issue",
-		externalKey: `#${index}`,
-		sourceState: "open",
-		url: `https://github.com/acme/live/issues/${index}`,
 		title,
-		description: "Keep state independent from GitHub.",
-		labels: ["ready-for-agent"],
-		externalUpdatedAt: "2026-08-31T10:00:00Z",
 		repository: {
 			identity: repoIdentity,
 			displayName: "acme/live",
 			cloneUrl: `https://${repoIdentity}.git`,
 		},
-		attributes: {},
-	};
+	});
 }
 
 describe("the held turn through the real app flow", () => {
@@ -71,7 +64,7 @@ describe("the held turn through the real app flow", () => {
 		// claimed and settled to the stored herdr handles and resting in
 		// handed-off, the other three open, the mode on in the state file.
 		const tickets = [
-			ticketOf(fetched(5, "Persist source facts"), {
+			ticketOf(fetched(5, DEFAULT_TICKET_TITLE), {
 				state: "handed-off",
 				handoff: {
 					agentType: "pi",
@@ -185,7 +178,7 @@ describe("the held turn through the real app flow", () => {
 					status: "success",
 					fetchedAt: "2026-08-31T10:02:00Z",
 					tickets: [
-						fetched(5, "Persist source facts"),
+						fetched(5, DEFAULT_TICKET_TITLE),
 						fetched(6, "Second open ticket"),
 						fetched(7, "Third open ticket"),
 						fetched(8, "Fourth open ticket"),
@@ -266,7 +259,7 @@ describe("the held turn through the real app flow", () => {
 				expect(rows[0]).toContain("○ auto 2/3 held");
 				// The row is the list's own row in the left column; the detail
 				// pane's title carries the same title in the right column.
-				const rowA = rows.find((row) => row.slice(0, 60).includes("Persist source facts"));
+				const rowA = rows.find((row) => row.slice(0, 60).includes(DEFAULT_TICKET_TITLE));
 				expect(rowA).toBeDefined();
 				expect(rowA).toContain("held");
 				expect(rowA).not.toContain("[awaiting]");

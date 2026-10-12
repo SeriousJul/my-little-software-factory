@@ -38,6 +38,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { DEFAULT_AGENT_NAME, fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	tabCreateJson,
@@ -45,9 +46,8 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
+import { type Plane, plane, seedAwaitingTurn } from "./plane.ts";
 import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
-import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
-import { DEFAULT_AGENT_NAME, issueTicket, seedAwaitingTurn, success } from "./state-fixture.ts";
 
 const FIRST = "github:github.com:I_5";
 const SECOND = "github:github.com:I_6";
@@ -98,7 +98,7 @@ async function forcedFixture() {
 		url: "https://github.com/acme/factory/issues/6",
 		title: "Close the stale deploy branch",
 	});
-	const outcome = success([heldTicket, forcedTicket]);
+	const outcome = fetchSuccess([heldTicket, forcedTicket]);
 	// The held seat: a settled handoff whose live agent stands working in the
 	// list, so the cap is full from the boot.
 	const planeRecord = await plane({
@@ -251,7 +251,7 @@ async function queuedFixture(holdSeat = true) {
 // resting ones.
 const booted = (
 	body: Parameters<typeof withApp>[0],
-	planeRecord: SeededPlane,
+	planeRecord: Plane,
 	fields: { logger?: Logger; width?: number } = {},
 ): Promise<void> => {
 	const { logger, width = WIDTH } = fields;
@@ -325,7 +325,7 @@ describe("the Work queue section", () => {
 		enqueue(SECOND, "workflow");
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => f.includes("waiting: 2"), "the Work header");
 				await clickWorkHeader(setup);
 				// The top-up's item, first in the queue: the detail says the
@@ -360,7 +360,7 @@ describe("the Work queue section", () => {
 		enqueue(FIRST);
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 				await clickWorkHeader(setup);
 				// The state file refuses every write, the way a read-only
@@ -390,7 +390,7 @@ describe("the Work queue section", () => {
 		enqueue(FIRST);
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 				// The header carries no pause fact while the drain runs.
 				const resting = await settle(setup);
@@ -451,7 +451,7 @@ describe("the Work queue section", () => {
 		const lines: RecordedLine[] = [];
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 				await clickWorkHeader(setup);
 				await press(setup, "p", "the queue pause", (f) =>
@@ -491,7 +491,7 @@ describe("the Work queue section", () => {
 		const lines: RecordedLine[] = [];
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 				// The real write path, made to fail while the read still works: the
 				// pause table is replaced by a view of the same name, so the plane's
@@ -538,7 +538,7 @@ describe("the Work queue section", () => {
 		enqueue(FIRST);
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 				await clickWorkHeader(setup);
 				await awaitFrame(setup, (f) => f.includes("┌─❯ Work queue"), "the cursor on the queue row");
@@ -578,7 +578,7 @@ describe("the Work queue section", () => {
 		enqueue(FIRST);
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 				// The cursor is on the queue row, and the list stands.
 				await clickWorkHeader(setup);
@@ -616,7 +616,7 @@ describe("the Work queue section", () => {
 		enqueue(SECOND, "workflow");
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => queueRowIndex(f, firstRowLead) >= 0, "the queued start");
 				await clickWorkHeader(setup);
 				const before = await settle(setup);
@@ -638,7 +638,7 @@ describe("the Work queue section", () => {
 		const { source, plane: planeRecord } = await queuedFixture();
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				const frame = await awaitFrame(
 					setup,
 					(f) => f.includes("▾ Tickets"),
@@ -667,7 +667,7 @@ describe("the Work queue section", () => {
 		const { source, plane: planeRecord } = await queuedFixture();
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => f.includes("waiting: 0"), "the empty queue's header");
 				// The walk down: the last Ticket row, the empty Consultation
 				// list, and the empty Work queue, one step each.
@@ -700,7 +700,7 @@ describe("the Work queue section", () => {
 		enqueue(FIRST);
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => f.includes("waiting: 1"), "the queue's wait");
 				await clickWorkHeader(setup);
 				await awaitFrame(setup, (f) => f.includes("┌─❯ Work queue"), "the cursor on the queue row");
@@ -738,7 +738,7 @@ describe("the Work queue section", () => {
 		enqueue(FIRST);
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => f.includes("waiting: 1"), "the queue's wait");
 				// The cursor rests on the open Ticket that waits with the
 				// row: the counts read both tickets open, and the row
@@ -803,7 +803,7 @@ describe("the Work queue section", () => {
 		enqueue(FIRST);
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => f.includes("waiting: 1"), "the queue's wait");
 				// The detail states the waiting fact too: the cursor's
 				// Ticket wears the queued badge in the detail's state
@@ -852,7 +852,7 @@ describe("the Work queue section", () => {
 		enqueue(SECOND, "workflow");
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(setup, (f) => f.includes("waiting: 2"), "the Work header");
 				await clickWorkHeader(setup);
 				// The detail answers for the item under the cursor, where
@@ -898,7 +898,7 @@ describe("the Work queue section", () => {
 		enqueue(SECOND, "workflow");
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				const frame = await awaitFrame(
 					setup,
 					(f) => f.includes("Work") && f.includes("waiting: 2"),
@@ -944,7 +944,7 @@ describe("the Work queue section", () => {
 		// The claim keeps the free-seat figure at zero, so the observation's
 		// pickup never runs and the Waiting badge the test reads is the resting
 		// one.
-		const outcome = success(twoTickets());
+		const outcome = fetchSuccess(twoTickets());
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		const held = state.handoff.claimHandoff(
@@ -1016,7 +1016,7 @@ describe("the Work queue section", () => {
 	 */
 	test("the route's wait wears the queued badge on the position's row (ADR 0072)", async () => {
 		const { state, source, plane: planeRecord } = await queuedFixture(false);
-		const outcome = success(twoTickets());
+		const outcome = fetchSuccess(twoTickets());
 		// The first ticket's turn settles and routes to the second's position:
 		// the decision records at the ask and ends the source's cycle in the
 		// same write, so the source rests open. The second ticket's own
@@ -1073,7 +1073,7 @@ describe("the Work queue section", () => {
 		enqueue(SECOND, "workflow");
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(
 					setup,
 					(f) => f.includes("Work") && f.includes("waiting: 2"),
@@ -1112,7 +1112,7 @@ describe("the Work queue section", () => {
 		enqueue(SECOND, "workflow");
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(
 					setup,
 					(f) => f.includes("Work") && f.includes("waiting: 2"),
@@ -1151,7 +1151,7 @@ describe("the Work queue section", () => {
 	 */
 	test("Delete on the route item takes the item and marks the turn (ADR 0072)", async () => {
 		const { state, source, plane: planeRecord } = await queuedFixture(false);
-		const outcome = success(twoTickets());
+		const outcome = fetchSuccess(twoTickets());
 		// The first ticket's turn settles and routes to the second's position:
 		// the decision records at the ask and ends the source's cycle in the
 		// same write, and the second ticket's durable claim holds the one
@@ -1262,7 +1262,7 @@ describe("the Work queue section", () => {
 		enqueue(SECOND, "workflow");
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(
 					setup,
 					(f) => f.includes("Work") && f.includes("waiting: 2"),
@@ -1337,7 +1337,7 @@ describe("the Work queue section", () => {
 		enqueue(SECOND, "workflow");
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(
 					setup,
 					(f) => f.includes("Work") && f.includes("waiting: 2"),
@@ -1376,7 +1376,7 @@ describe("the Work queue section", () => {
 	 */
 	test("a decision-row route at a full cap waits in the Work queue with its choice", async () => {
 		const tickets = twoTickets();
-		const outcome = success(tickets);
+		const outcome = fetchSuccess(tickets);
 		const planeRecord = await plane({
 			groupingAxis: "none",
 			sources: [
@@ -1637,7 +1637,7 @@ describe("the Work queue section", () => {
 		enqueue(SECOND, "workflow");
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(
 					setup,
 					(f) => f.includes("Work") && f.includes("waiting: 2"),
@@ -1685,7 +1685,7 @@ describe("the Work queue section", () => {
 		enqueue(FIRST);
 		await booted(
 			async (setup) => {
-				source.settle(success(twoTickets()));
+				source.settle(fetchSuccess(twoTickets()));
 				await awaitFrame(
 					setup,
 					(f) => f.includes("Work") && f.includes("waiting: 1"),

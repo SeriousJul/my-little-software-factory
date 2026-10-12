@@ -30,10 +30,10 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { DEFAULT_TICKET_TITLE, fetchedTicket, fetchSuccess, ticketOf } from "./fact-fixtures.ts";
 import { FakeRunner, type RecordedCommand } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane, ticketOf } from "./seeded-plane.ts";
-import { success } from "./state-fixture.ts";
+import { plane } from "./plane.ts";
 
 /** Let a fire-and-forget send settle through the fake runner. */
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -81,23 +81,7 @@ function makeService(
  * hold so the ask the park holds is the one that runs.
  */
 const PARK_IDENTITY = "github:github.com:I_5";
-const parkTicket: FetchedTicket = {
-	identity: PARK_IDENTITY,
-	sourceKind: "github-issue",
-	externalKey: "#5",
-	sourceState: "open",
-	url: "https://github.com/acme/factory/issues/5",
-	title: "Persist source facts",
-	description: "Keep state independent from GitHub.",
-	labels: ["ready-for-agent"],
-	externalUpdatedAt: "2026-08-31T10:00:00Z",
-	repository: {
-		identity: "github.com/acme/factory",
-		displayName: "acme/factory",
-		cloneUrl: "https://github.com/acme/factory.git",
-	},
-	attributes: {},
-};
+const parkTicket: FetchedTicket = fetchedTicket({ identity: PARK_IDENTITY });
 /** The read that lands the Ticket row, before the app mounts. */
 const _parkFetch: FetchOutcome = {
 	status: "success",
@@ -467,7 +451,7 @@ describe("the Message line's fact to the desktop", () => {
 		const runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
-				source.settle(success([singleTicket]));
+				source.settle(fetchSuccess([singleTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				await press(setup, "return", "the fault", (f) =>
 					messageRowOf(f).includes("the daemon is down"),
@@ -513,7 +497,7 @@ describe("the Message line's fact to the desktop", () => {
 				expect(notificationCalls(runner)).toHaveLength(0);
 				// The failing handoff's fault takes the line: a different fact,
 				// and it sends.
-				source.settle(success([singleTicket]));
+				source.settle(fetchSuccess([singleTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				await press(setup, "return", "the fault", (f) =>
 					messageRowOf(f).includes("the daemon is down"),
@@ -529,7 +513,7 @@ describe("the Message line's fact to the desktop", () => {
 				setup.mockInput.pressKey("r");
 				await awaitFrame(setup, (f) => f.includes("refreshing"), "the refresh to start");
 				setup.mockInput.pressKey("r");
-				source.settle(success([singleTicket]));
+				source.settle(fetchSuccess([singleTicket]));
 				await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).includes("every Ticket source is already refreshing"),
@@ -565,7 +549,7 @@ describe("the Message line's fact to the desktop", () => {
 		const runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
-				source.settle(success([singleTicket]));
+				source.settle(fetchSuccess([singleTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				// The fault stands on the queued start's warning, which carries the
 				// command's own reason after its prefix.
@@ -632,7 +616,7 @@ describe("the Message line's fact to the desktop", () => {
 		const runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
-				source.settle(success([singleTicket]));
+				source.settle(fetchSuccess([singleTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				await press(setup, "return", "the refusal", (f) =>
 					messageRowOf(f).includes("unknown agent type: nope"),
@@ -715,7 +699,7 @@ describe("the Message line's fact to the desktop", () => {
 				const calls = notificationCalls(runner);
 				expect(calls.at(-1)?.args.join(" ")).toContain("Factory: warning");
 				expect(calls.at(-1)?.args.join(" ")).toContain(
-					'handoff failure park: "Persist source facts" (2 Handoff starts in a row never reached an Agent)',
+					`handoff failure park: "${DEFAULT_TICKET_TITLE}" (2 Handoff starts in a row never reached an Agent)`,
 				);
 			},
 			{

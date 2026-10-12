@@ -20,7 +20,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { awaitFrame, withApp } from "./app-harness.ts";
-import { plane } from "./seeded-plane.ts";
+import { plane } from "./plane.ts";
 
 /** The ticket the named plane stands on, beside the default standing's. */
 const NAMED_TICKET: Ticket = {

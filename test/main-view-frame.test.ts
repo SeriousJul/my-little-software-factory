@@ -21,7 +21,7 @@ import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -49,8 +49,9 @@ import {
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
+
+import { type Plane, plane, reopenState } from "./plane.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-import { plane, type SeededPlane } from "./seeded-plane.ts";
 
 let home = "";
 
@@ -323,7 +324,7 @@ const consultMarkerRowOf = (frame: string): number => {
  */
 const booted = (
 	body: Parameters<typeof withApp>[0],
-	planeRecord: SeededPlane,
+	planeRecord: Plane,
 	fields: { width?: number; height?: number; loopPolicy?: AppLoopPolicy } = {},
 ): Promise<void> => {
 	const { width = WIDTH, height = 32, loopPolicy = { kind: "production" } } = fields;
@@ -540,7 +541,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("x collapses the section under the cursor, and x again restores it", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("c"));
@@ -599,7 +600,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("a step past the last visible row crosses the section boundary", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const ids = [uid("c"), uid("d")];
@@ -649,7 +650,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("a key after a cross uses the newly focused list", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const ids = [uid("c"), uid("d")];
@@ -688,7 +689,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("a click on a section header toggles that section", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("d"));
@@ -729,7 +730,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("refresh reports a readable no-op when no Ticket source exists", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("n"));
@@ -752,7 +753,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("refresh reports an in-flight Ticket source without fake progress", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("o"));
@@ -773,7 +774,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("the Consultation header carries the attention facts, and adds no row", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("e"));
@@ -812,7 +813,7 @@ describe("the merged Main view", () => {
 		// count cells up from their tail - the same drop rule the Ticket header runs
 		// beside its mode cell - and never wraps onto a second row, so the frame
 		// keeps its row count and the section keeps its box.
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("k"));
 		const planeRecord = await plane({
@@ -835,7 +836,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("the Consultation header's counts read the machine, not the History filter", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("h"));
@@ -878,7 +879,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("the Message line survives a cross, and m reads it in full", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("m"));
@@ -927,7 +928,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("the frame answers its controls at the minimum size", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("1"));
@@ -968,7 +969,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("the Consultation panes answer the mouse as the Ticket panes do", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("5"));
@@ -1010,7 +1011,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("a refusal names the state that is missing, in the section that owns it", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("r"));
@@ -1078,7 +1079,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("the mode cell, the panes and the bar keep their rows in both sections", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("2"));
@@ -1135,7 +1136,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("the Key guide from a Consultation mode names the section controls once", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("3"));
@@ -1198,7 +1199,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("a collapsed section keeps its selection, and re-expanding returns to it", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("4"));
@@ -1321,7 +1322,7 @@ describe("the merged Main view", () => {
 	}
 
 	const bootedScrollRoundTrip = async (body: (setup: Setup) => Promise<void>) => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		seedConsultation(state, uid("t"));
@@ -1357,7 +1358,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("the Consultation header carries the attention bell, collapsed and expanded", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const a = seedWorking(state, uid("q"));
@@ -1423,7 +1424,7 @@ describe("the merged Main view", () => {
 	});
 
 	test("the new output fact shows on the Consultation header, collapsed and expanded", async () => {
-		const state = openFactoryState(join(home, "state.sqlite"));
+		const state = reopenState(join(home, "state.sqlite"));
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const { paneId, sessionId } = seedWorking(state, uid("u"));

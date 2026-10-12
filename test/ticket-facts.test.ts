@@ -251,7 +251,7 @@ describe("the Queue wait", () => {
 	});
 
 	test("an item for another Ticket is not this Ticket's wait", () => {
-		expect(queueWait(ticket(), [queueItem("github:github.com:I_9", "open")])).toBe(false);
+		expect(queueWait(ticket(), [queueItem("github:github.com:I_8", "open")])).toBe(false);
 	});
 
 	test("a Consultation item is not a Ticket's wait", () => {
@@ -423,11 +423,11 @@ describe("the one read", () => {
 describe("the Live view's context line", () => {
 	test("it names the repository, the turn's task type, and the agent, with no time", () => {
 		const running = ticket({ state: "running", handoff: handoff({ taskType: "fix" }) });
-		expect(liveContextLine(running, "implement")).toBe("acme/billing · fix · pi");
+		expect(liveContextLine(running, "implement")).toBe("acme/factory · fix · pi");
 	});
 
 	test("an agent that is not named keeps the placeholder", () => {
-		expect(liveContextLine(ticket(), "implement")).toBe("acme/billing · implement · ?");
+		expect(liveContextLine(ticket(), "implement")).toBe("acme/factory · implement · ?");
 	});
 });
 

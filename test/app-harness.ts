@@ -29,7 +29,7 @@ import type { Logger } from "../src/logging.ts";
 import { NOOP_LOGGER } from "../src/logging.ts";
 import type { FactoryState } from "../src/state.ts";
 import { flushPassiveNow } from "./passive-flush-hold.ts";
-import { plane, type SeededPlane } from "./seeded-plane.ts";
+import { type Plane, plane } from "./plane.ts";
 import "./theme-isolation.ts";
 
 export type Setup = Awaited<ReturnType<typeof testRender>>;
@@ -360,7 +360,7 @@ afterEach(() => {
 /** A booted app: the test renderer, the plane it stands on, and the app's teardown handle. */
 export interface AppSetup extends Setup {
 	/** The Seeded plane the app boots from. */
-	plane: SeededPlane;
+	plane: Plane;
 	/**
 	 * Stops the app's background loops. The test renderer's unmount does not
 	 * run effect cleanups reliably, so tests stop the app explicitly before
@@ -375,7 +375,7 @@ export interface AppBootFields {
 	 * The Seeded plane the app boots from. The default is the module's default
 	 * standing: the sample tickets under one issues source.
 	 */
-	plane?: SeededPlane;
+	plane?: Plane;
 	/**
 	 * The loop policy the app runs under. The default is `held`: the
 	 * deterministic frame, where nothing moves until a key press or a settle

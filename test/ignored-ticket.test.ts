@@ -21,7 +21,7 @@ import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { withIssueReferences } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
 import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	actionBarRowOf,
@@ -36,6 +36,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	emptyAgentRunner,
@@ -45,8 +46,7 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
-import { issuesSourceConfig, issueTicket, seedInFlightTurn, success } from "./state-fixture.ts";
+import { issuesSourceConfig, type Plane, plane, reopenState, seedInFlightTurn } from "./plane.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -83,7 +83,7 @@ interface Rig {
 	runner: FakeRunner;
 	config: FactoryConfig;
 	home: string;
-	plane: SeededPlane;
+	plane: Plane;
 	loopPolicy: AppLoopPolicy;
 }
 
@@ -106,7 +106,7 @@ async function rig(
 ): Promise<Rig> {
 	const planeRecord = await plane({
 		groupingAxis: "none",
-		sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(success(twoTickets())) }],
+		sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(fetchSuccess(twoTickets())) }],
 		repos: { [repoIdentity]: "src/factory" },
 		config: over.config ?? {},
 		autoHandoffMode: over.autoMode === true ? true : undefined,
@@ -199,7 +199,7 @@ async function listed(
 	src: FakeSource,
 	lead = FIRST_LEAD,
 ): Promise<string> {
-	src.settle(success(twoTickets()));
+	src.settle(fetchSuccess(twoTickets()));
 	return await awaitFrame(setup, (f) => listRowOf(f, lead) >= 0, "the Ticket rows");
 }
 
@@ -207,7 +207,7 @@ async function listed(
 async function refreshed(
 	setup: Parameters<Parameters<typeof withApp>[0]>[0],
 	src: FakeSource,
-	outcome = success(twoTickets()),
+	outcome = fetchSuccess(twoTickets()),
 ): Promise<void> {
 	// The refresh control reaches the source on the next frame, and the fake
 	// holds that fetch until this test settles it.
@@ -396,10 +396,10 @@ describe("the ignore key", () => {
 	 * nothing, in every filter state.
 	 */
 	test("cycling the filter moves no count and rings no bell", async () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success(twoTickets());
+		const outcome = fetchSuccess(twoTickets());
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		// One held turn rests on the operator's decision, and one open Ticket is
@@ -669,10 +669,10 @@ describe("the ignore key", () => {
 
 describe("the obligation gate", () => {
 	test("the key refuses an awaiting Ticket and states its reason", async () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success([issueTicket(FIRST)]);
+		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		// A settled turn rests on the operator's decision: the row is the way to
 		// the Decision modal, so the ignore cannot take it away.
 		const attemptId = seedInFlightTurn(state, outcome);
@@ -720,12 +720,10 @@ describe("the obligation gate", () => {
 	});
 
 	test("the key refuses a missing Agent, and its row keeps the badge the choice lives on", async () => {
-		// Pinned past the startup grace: the recorded pane is a dead Agent, not
-		// a booting one, so its missing badge stands on the first poll.
-		const state = openFactoryState(statePath(), () => Date.now() - 60_000);
+		const state = reopenState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success([issueTicket(FIRST)]);
+		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
 		const planeRecord = await plane({
@@ -765,10 +763,10 @@ describe("the obligation gate", () => {
 
 describe("the ignore and the machine", () => {
 	test("a live Agent keeps its seat, its row, and its badge under the ignored marker", async () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success([issueTicket(FIRST)]);
+		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
@@ -828,10 +826,10 @@ describe("the ignore and the machine", () => {
 		// One seat, and the fixture Ticket's own Agent holds it: the start the
 		// operator asked for waits in the Work queue for the seat, which is the
 		// waiting item the ignore takes away with the row.
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success(twoTickets());
+		const outcome = fetchSuccess(twoTickets());
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		seedInFlightTurn(state, outcome, FIRST);
@@ -918,10 +916,10 @@ describe("the ignore and the machine", () => {
 		// One seat, held by the second Ticket's own Agent, so the ignored
 		// Ticket's asked-for start stays in the queue: the row must name its
 		// ticket by title, not by the raw identity the list rule left behind.
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success(twoTickets());
+		const outcome = fetchSuccess(twoTickets());
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		seedInFlightTurn(state, outcome, SECOND);
@@ -1006,10 +1004,10 @@ describe("the ignore and the machine", () => {
 	test("the queue's cancel line names an ignored Ticket by title", async () => {
 		// One seat, held by the second Ticket's own Agent: the ignored Ticket's
 		// asked-for start waits in the queue, and its row is nowhere in the list.
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success(twoTickets());
+		const outcome = fetchSuccess(twoTickets());
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		seedInFlightTurn(state, outcome, SECOND);
@@ -1087,7 +1085,7 @@ describe("the ignore and the machine", () => {
 		expect(state.ticketWorkCycle.setTicketIgnored(SECOND, true, null).ok).toBe(true);
 		await withApp(
 			async (setup) => {
-				src.settle(success(twoTickets()));
+				src.settle(fetchSuccess(twoTickets()));
 				const frame = await awaitFrame(
 					setup,
 					(f) => headerRow(f).includes("ignored: 2"),
@@ -1125,7 +1123,7 @@ describe("the ignore and the machine", () => {
 				await refreshed(
 					setup,
 					src,
-					success([issueTicket(SECOND, { title: secondTitle, externalKey: "#6" })]),
+					fetchSuccess([issueTicket(SECOND, { title: secondTitle, externalKey: "#6" })]),
 				);
 				const dropped = await awaitFrame(
 					setup,
@@ -1149,10 +1147,10 @@ describe("the ignore and the machine", () => {
 		);
 		// A second plane on the same state file reads the same flag: two planes
 		// never disagree about one Ticket.
-		const reopened = openFactoryState(path);
+		const reopened = reopenState(path);
 		const secondPlane = await plane({
 			existing: reopened,
-			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(success(twoTickets())) }],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(fetchSuccess(twoTickets())) }],
 			repos: { [repoIdentity]: "src/factory" },
 		});
 		expect(reopened.ticketWorkCycle.ignoredTickets().has(FIRST)).toBe(true);
@@ -1185,12 +1183,10 @@ describe("the ignore and the machine", () => {
 	 * puts the Ticket back in the machine's way.
 	 */
 	test("an ignored Ticket whose Agent goes missing keeps its row and its flag", async () => {
-		// Pinned past the startup grace: when herdr stops listing the Agent, the
-		// row reads missing at once, not after the grace a booting start holds.
-		const state = openFactoryState(statePath(), () => Date.now() - 60_000);
+		const state = reopenState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success([issueTicket(FIRST)]);
+		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		// Auto mode from the boot: the Restart is the machine's own move, and the
 		// flag is what has to hold it out, cycle after cycle.
@@ -1300,7 +1296,7 @@ describe("the ignored marker's frame", () => {
 				// and mode lamp (issue #319, ADR 0111). One column less and the pile
 				// gives way whole.
 				setup.resize(74, HEIGHT);
-				src.settle(success(twoTickets()));
+				src.settle(fetchSuccess(twoTickets()));
 				const frame = await awaitFrame(
 					setup,
 					(f) => f.includes("ignored"),
@@ -1326,7 +1322,7 @@ describe("the ignored marker's frame", () => {
 	 * reach the key that puts it back.
 	 */
 	test("the pile reaches a Ticket the covered rule also hides", async () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const pull = (closes: boolean): FetchedTicket => ({
@@ -1348,16 +1344,19 @@ describe("the ignored marker's frame", () => {
 				? withIssueReferences({}, [{ identity: null, number: 5, repository: "acme/factory" }])
 				: {},
 		});
-		const withPull = success([...twoTickets(), pull(true)]);
+		const withPull = fetchSuccess([...twoTickets(), pull(true)]);
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
+		state.sourceFact.applyFetch(
+			{ name: "issues", kind: "github-issues" },
+			fetchSuccess(twoTickets()),
+		);
 		// The ignore lands first, while the Ticket is only ignored.
 		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
 		const runner = emptyAgentRunner();
 		const planeRecord = await plane({
 			existing: state,
 			runner: () => runner,
-			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(success(twoTickets())) }],
+			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(fetchSuccess(twoTickets())) }],
 			repos: { [repoIdentity]: "src/factory" },
 		});
 		const src = planeRecord.sources[0] as FakeSource;
@@ -1435,10 +1434,10 @@ describe("the ignored marker's frame", () => {
 	 * cell is a steady fact, and this measures it where the operator reads it.
 	 */
 	test("a narrow frame cuts the ignored cell before the held count", async () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
-		const outcome = success(twoTickets());
+		const outcome = fetchSuccess(twoTickets());
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		// One held turn rests on the operator's decision, and one open Ticket is

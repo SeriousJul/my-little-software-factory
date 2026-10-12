@@ -161,7 +161,19 @@ naming-rule change in one instead of twelve, an axis rule in one instead of twen
 
 The suite gains the ratchet the plane's sources already have: the clone count is reported at each
 step and only falls, and the static check refuses the two ways a suite can opt back out - a
-hand-opened state file, and a hand-built default Ticket.
+hand-opened state file, and a hand-spelled default Ticket title.
+
+## Deviation from the spec
+
+The spec says no case reads wall-clock time. The plane does not hold that at the interface: where a
+case names no clock, the plane's clock stands on the wall clock, and the state file it opens stands
+on the same clock. The suites hold the sentence themselves: the frame suites pin their clock through
+the frame harness, the plane's own suite names its clock at boot, and no case that depends on a time
+reads the wall. The wall-clock default stands for the scratch boots that name nothing. The Ticket
+source double settles beside it on the same discipline: a self-settling read is restamped on the
+clock the plane owns, so a settle never carries a stamp the state's own clock would call older. The
+[verification record](../verification/seeded-plane.md) states the same deviation beside the fields
+the plane admits and refuses.
 
 The state module's suites keep their seam, and the module suites keep theirs. The suite ends with one
 app-level standing, one database-level tool set, and one set of fact builders between them.

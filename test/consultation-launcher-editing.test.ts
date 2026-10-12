@@ -25,7 +25,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import type { FakeRunner } from "./fake-runner.ts";
-import { plane } from "./seeded-plane.ts";
+import { plane } from "./plane.ts";
 
 const IDENTITY = "github.com/acme/repo";
 
