@@ -28,10 +28,10 @@ and [test/plane.ts](../../test/plane.ts) for the module.
 | Runtime | Bun 1.4.2 (Linux x64) |
 | Test layer | `bun test` on the unit layer: the real App against a real SQLite state file on a temp path, the fake command runner and the Stub herdr world at the runner seam, and no desktop control |
 | Plane module | [test/plane.ts](../../test/plane.ts), one `plane` factory, its `Plane` record, and its `withPlane` form |
-| Plane suite | [test/plane.test.ts](../../test/plane.test.ts), 48 cases on the module's own standing |
+| Plane suite | [test/plane.test.ts](../../test/plane.test.ts), 48 cases on the module's own standing, beside the [test/plane-cleanup.ts](../../test/plane-cleanup.ts) preload that owns the close of every plane the run's tests open |
 | Fact module | [test/fact-fixtures.ts](../../test/fact-fixtures.ts), the one default Ticket, the fetched-Ticket and fetch-outcome builders, the Handoff choices, the repository references |
-| Static check | [test/seeded-plane-check.test.ts](../../test/seeded-plane-check.test.ts), 5 cases: a frame suite that imports the frame harness must not open a state file by hand, and must not spell the default Ticket's title by hand |
-| Suite size | 152 test files; the full suite green on the merged tree: 3,357 pass, 0 fail |
+| Static check | [test/seeded-plane-check.test.ts](../../test/seeded-plane-check.test.ts), 4 cases: a frame suite that imports the frame harness, in its own directory or a subdirectory's, must not open a state file by hand, and must not spell the default Ticket's title by hand |
+| Suite size | 152 test files; the full suite green on the merged tree: 3,358 pass, 0 fail |
 
 ## The interface, against the spec's standing
 
@@ -71,6 +71,26 @@ binds over the plane's own. Naming those paths on the standing would hand the
 build's internals to every caller, and the one case-facing seam keeps them
 inside the module. The refusal the depth rule names is recorded here rather
 than made.
+
+## The one external key the default Ticket carries
+
+The default Ticket is one identity, `github:github.com:I_9`, and its external
+key is the number that identity carries: `#9`. Both fact builders take the
+key from the identity through one shared reading, the fetched-ticket builder
+and the ticket builder alike, so a builder that stood the key on a copy of
+its own would stand a key no other reader of the builders would build. The
+branch the naming rule reads off that key is `factory/9-persist-source-facts`,
+and the pins in the suites that read it stand on that branch: the plane's
+own standing writes the default Ticket on its own key, and the plane's suite
+reads the branch the naming rule derives from the row the standing wrote.
+
+The title stands beside the key on the same one-copy rule: the static check
+refuses the default Ticket's title text anywhere in the frame suites, a pin's
+quoted word among it, and the frame suites compose their pins from the fact
+module's one copy of the title. The sample's other ticket, the one whose
+title carries the default's words before more of its own, keeps its own
+title beside it: the rule takes the title as one word, not as a run of
+letters.
 
 ## The flat axis the plane settles
 
@@ -157,33 +177,46 @@ record states what the rig stands for and what it hides:
 ## The temporary directories
 
 At the head ADR 0131 measured, the suite held 119 temporary-directory
-creations across 40 files. At this change's head the test tree holds 94
-`mkdtemp` creations across 35 files and 64 `tmpdir` resolutions across 38
-files. The plane's own cleanup registration stands for the frame suites'
-directories: the plane makes its home and checkout and takes them back when
-the test ends, however the test ends, and the suites that open their own
-state file keep their own creation beside it.
+creations across 40 files. At this change's head the test tree holds 97
+`mkdtemp` creations across 36 files and 68 `tmpdir` resolutions across 39
+files. The plane's cleanup stands for the frame suites' directories:
+the plane registers its close in the run's preload, and the preload's hook
+closes every plane every test of every file opens, however the test ends.
+The hold cannot live in the plane's own module scope: Bun evaluates a plain
+run's modules once, and a module-scope `afterEach` there would bind to the
+one file that first imports the plane, leaking every plane the other files
+open. The preload's hook belongs to no file, so it holds in every file of
+the run, with or without `--isolate`: the runner evaluates the preload in
+each worker the isolated run starts, and in the one process the plain run
+uses. The suites that open their own state file keep their own creation
+beside it.
 
 ## The duplication count at each step
 
-The Quality audit ratchets `test-dup`, the jscpd count over the test files.
-The count `origin/main` carries is 271. This branch's committed baseline
-holds the value the tree measures:
+The Quality audit ratchets `test-dup`, the jscpd count over the test files,
+and it ratchets on exact equality: a count below the baseline fails the
+audit the way a count above it does, so the baseline is restated beside the
+head it was measured on.
 
-| Step on this branch | `test-dup` baseline |
+The branch split from `origin/main` before the main test-dup campaign landed
+there. The branch's tree before the rework measured 263 at its own head,
+beside a 271 it read off `origin/main` at the split. The rebase moved the
+branch's tree onto the campaign's main, which carries the campaign's 211
+measured at its own head, and the rework on the merged tree stands the count
+the baseline now holds:
+
+| Step on this branch | `test-dup` |
 | --- | --- |
-| `origin/main` before the branch | 271 |
-| The migration onto the plane | 263 |
+| `origin/main` at the split, before the campaign | 271 |
+| The branch's tree before the rework | 263 |
+| `origin/main` at the rebase, after the campaign | 211 |
+| This branch after the rebase and the rework, measured at its head | 205 |
 
-The migration steps squashed into the branch's commits before this record
-landed, so the per-step counts ADR 0131's plan named are not the record's
-measured values: the only count that stands is the net one, from 271 on
-`origin/main` to 263 on this branch's tree. The count moves up and down
-inside a step in general: a rig lands before the fixture it replaces is
-deleted, and a builder that retires leaves its clone behind for one
-measurement. The final tree stands at 263, below the 271 of
-`origin/main`, and the Quality audit passes it against the baseline beside
-the config.
+The count moves up and down inside a step in general: a rig lands before
+the fixture it replaces is deleted, and a builder that retires leaves its
+clone behind for one measurement. The final tree stands at 205, below the
+211 of `origin/main` at the rebase, and the Quality audit passes it against
+the baseline beside the config.
 
 ## What is not measured
 

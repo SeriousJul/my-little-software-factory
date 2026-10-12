@@ -43,7 +43,6 @@
  * the spec's wall-clock-free standing; the verification record names the
  * cases the default clock reaches.
  */
-import { afterEach } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -71,7 +70,6 @@ import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome, TicketSource } from "../src/ticket-source.ts";
 import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
-import { sleep } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import {
 	DEFAULT_IDENTITY,
@@ -84,6 +82,7 @@ import {
 } from "./fact-fixtures.ts";
 import { emptyAgentRunner, type FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { holdPlaneClose } from "./plane-cleanup.ts";
 
 // ---------------------------------------------------------------------------
 // The standing a test asks for.
@@ -427,20 +426,17 @@ export const issuesConfig: FactoryConfig = { ...BASE_CONFIG, sources: [issuesSou
 // The plane's own directories and state files, cleaned up when the test ends.
 // ---------------------------------------------------------------------------
 
-interface PlaneRegistration {
-	close(): void;
-}
-const registrations: PlaneRegistration[] = [];
-
 /**
- * The plane's directories go when the test ends, however the test ends. The
- * state file closes first, so a background loop never reads a closed
- * database's neighbor: the close is idempotent, and a plane the test closed
- * on its own leaves nothing here to do.
+ * The plane's close goes to the run's preload, not to a module-scope hook of
+ * this file: Bun evaluates this file once per run, and a module-scope
+ * `afterEach` would bind to the one test file that first imports the plane,
+ * leaking every plane the other files open. The preload's hook belongs to no
+ * file, so it drains the register for every test of every file of the run.
  */
-afterEach(() => {
-	for (const reg of registrations.splice(0)) reg.close();
-});
+
+/** The sleep the plane's settles and waits run on. */
+export const sleep = (ms: number): Promise<void> =>
+	new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Open a fresh state database the suites wrap in the plane's standing,
@@ -455,11 +451,9 @@ export function wrappedState(axis: GroupingAxis = "none"): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-plane-state-"));
 	const state = openFactoryState(join(dir, "state.sqlite"), () => Date.now());
 	state.grouping.setGroupingAxis("tickets", axis);
-	registrations.push({
-		close: () => {
-			state.close();
-			rmSync(dir, { recursive: true, force: true });
-		},
+	holdPlaneClose(() => {
+		state.close();
+		rmSync(dir, { recursive: true, force: true });
 	});
 	return state;
 }
@@ -503,9 +497,9 @@ function planeHome(standing: PlaneStanding): { home: string; checkout: string | 
 	// resolution convention's last-segment path: a case that maps the
 	// repository to it works that path through its runner, and a case that
 	// maps nothing keeps the convention missing, the way the resolution's
-	// clone path asks for it.
+	// clone path asks for it. The directory stands only when a repository
+	// maps to it: a standing that maps nothing gives the checkout no disk.
 	const checkout = join(home, "src", DEFAULT_REPOSITORY.displayName);
-	mkdirSync(checkout, { recursive: true });
 	return { home, checkout };
 }
 
@@ -1192,7 +1186,7 @@ export async function plane(standing: PlaneStanding = {}): Promise<Plane> {
 			for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 		},
 	};
-	registrations.push({ close: record.close });
+	holdPlaneClose(record.close);
 	return record;
 }
 

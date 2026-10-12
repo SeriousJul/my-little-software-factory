@@ -26,10 +26,9 @@ import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import { resolveTheme, type ThemeRole } from "../src/components/shared/theme.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
 import type { Logger } from "../src/logging.ts";
-import { NOOP_LOGGER } from "../src/logging.ts";
 import type { FactoryState } from "../src/state.ts";
 import { flushPassiveNow } from "./passive-flush-hold.ts";
-import { type Plane, plane } from "./plane.ts";
+import { type Plane, plane, sleep } from "./plane.ts";
 import "./theme-isolation.ts";
 
 export type Setup = Awaited<ReturnType<typeof testRender>>;
@@ -102,7 +101,10 @@ export const stillFrame = (frame: string): string =>
 		frame,
 	);
 
-export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+// The sleep stands in the plane's own module, the harness's boot reads from
+// the plane, and no test file that imports the plane through the harness
+// pulls the terminal test renderer into a module-only suite with it.
+export { sleep } from "./plane.ts";
 
 // The panes wrap long text, so substring checks run on the frame with the
 // box borders stripped and the whitespace collapsed: wrapped lines merge
@@ -393,20 +395,26 @@ export interface AppBootFields {
 export async function bootApp(fields: AppBootFields = {}): Promise<AppSetup> {
 	const { loopPolicy, logger, width = WIDTH, height = HEIGHT, rendererOptions = {} } = fields;
 	const planeRecord = fields.plane ?? (await plane({}));
+	// The app boots from the plane's own props: the standing the plane opened
+	// on stands the app's fields, its poll interval among them, and a field
+	// the case names here stands over the plane's.
+	const appFields = {
+		config: planeRecord.props.config,
+		runner: planeRecord.props.runner,
+		home: planeRecord.props.home,
+		configPath: planeRecord.props.configPath,
+		state: planeRecord.props.state,
+		sources: planeRecord.props.sources,
+		logger: logger ?? planeRecord.props.logger,
+		loopPolicy: loopPolicy ?? planeRecord.props.loopPolicy,
+	};
 	let stopApp: (() => void) | null = null;
 	// Match src/factory.ts: the renderer does not own Ctrl+C. The app's
 	// emergency-exit dispatch is what destroys the renderer under test, so
 	// the frame tests verify the catalogue's control, not OpenTUI's built-in.
 	const setup = await testRender(
 		createElement(App, {
-			config: planeRecord.config,
-			runner: planeRecord.runner,
-			home: planeRecord.home,
-			configPath: planeRecord.configPath,
-			state: planeRecord.state,
-			sources: planeRecord.sources,
-			logger: logger ?? NOOP_LOGGER,
-			loopPolicy: loopPolicy ?? { kind: "held" },
+			...appFields,
 			onReady: (ready) => (stopApp = ready.stop),
 		}),
 		{

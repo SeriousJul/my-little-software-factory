@@ -1006,7 +1006,9 @@ describe("the failure markers", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("blocked"), "the blocked badge");
 				// Enter on the blocked ticket opens the Live view: the Goto is
 				// one confirm away, and nothing focuses before it.
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent focus");
 				// The stream shows the pane output under the ticket's context,
 				// and the blocked status stands on the context line.
@@ -1128,7 +1130,7 @@ describe("the Ticket Close key", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				const before = app.runner.commands();
 				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				const body = frameText(opened);
 				// The first line names who is alive - here, the fact the last
@@ -1150,7 +1152,7 @@ describe("the Ticket Close key", () => {
 				const cancelled = await pressEscape(
 					setup,
 					"the base view",
-					(f) => !f.includes("Close: Persist source facts"),
+					(f) => !f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				await settle(setup);
 				// Cancel is the way out with nothing changed: the ticket, its
@@ -1187,7 +1189,7 @@ describe("the Ticket Close key", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				await focusDetail(setup);
 				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				expect(frameText(opened)).toContain(
 					"Close removes the worktree checkout; a dirty checkout stays as a leftover.",
@@ -1209,7 +1211,7 @@ describe("the Ticket Close key", () => {
 				// with no Agent to stop, and the close is the way out of it.
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				const body = frameText(opened);
 				expect(body).toContain(
@@ -1351,7 +1353,7 @@ describe("the Ticket Close key", () => {
 				// with no Agent to stop, and the close is the way out of it.
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				const frame = await confirmPanel(setup, "the close", (f) =>
 					ticketRow(f).includes("[open]"),
@@ -1392,7 +1394,7 @@ describe("the Ticket Close key", () => {
 				// with no Agent to stop, and the close is the way out of it.
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				// The dialog warned about this outcome before the answer was given.
 				expect(frameText(setup.captureCharFrame())).toContain(
@@ -1455,7 +1457,7 @@ describe("the Ticket Close key", () => {
 					"the in-flight ticket",
 				);
 				await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				// The Agent dies while the dialog stands. Auto mode ends the missing
 				// cycle at the handoff limit, so the ticket returns to open under it.
@@ -1463,7 +1465,7 @@ describe("the Ticket Close key", () => {
 				const released = await awaitFrame(
 					setup,
 					(f) =>
-						!frameText(f).includes("Close: Persist source facts") &&
+						!frameText(f).includes(`Close: ${DEFAULT_TICKET_TITLE}`) &&
 						ticketRow(f).includes("[open]"),
 					"the panel to let go when its cycle ends",
 				);
@@ -1472,7 +1474,7 @@ describe("the Ticket Close key", () => {
 				const refused = await press(setup, "delete", "the refusal on the open ticket", (f) =>
 					messageRowOf(f).includes("no work is in flight to close"),
 				);
-				expect(frameText(refused)).not.toContain("Close: Persist source facts");
+				expect(frameText(refused)).not.toContain(`Close: ${DEFAULT_TICKET_TITLE}`);
 				expect(frameText(released)).toContain("[open]");
 			},
 			{
@@ -1496,7 +1498,7 @@ describe("the Ticket Close key", () => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
 				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				expect(frameText(opened)).toContain("The turn has settled, and no Agent works.");
 				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");
@@ -2764,7 +2766,7 @@ describe("the decision modal", () => {
 				const modal = frameText(await settle(setup));
 				// The border names the ticket, and the context line names the
 				// repository, the task type, the agent, and the completion time.
-				expect(modal).toContain("Decision: Persist source facts");
+				expect(modal).toContain(`Decision: ${DEFAULT_TICKET_TITLE}`);
 				expect(modal).toContain("acme/factory · implement · pi · 2026-08-31 11:00");
 				// The log renders in order: the opening text, the tool notes,
 				// and the markdown-dressed conclusion. The heading's hash and
@@ -3033,7 +3035,7 @@ describe("the leftover environment", () => {
 				// The refusal is readable on the Message line, in the catalogue's
 				// own words, and no panel opened under it.
 				expect(messageRowOf(frame)).toContain("no work is in flight to close");
-				expect(frame).not.toContain("Close: Persist source facts");
+				expect(frame).not.toContain(`Close: ${DEFAULT_TICKET_TITLE}`);
 				// No panel and no reopened decision, and no herdr command ran:
 				// the refusal's fact sends its own desktop notification (ADR 0080),
 				// and the command list before and after holds everything else.
@@ -4432,7 +4434,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				// re-derives where the machine offers it next - open, and ready
 				// to be offered for implementation.
 				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");
 				await confirmPanel(setup, "the close", (f) => ticketRow(f).includes("[open]"));
@@ -4562,7 +4564,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 			externalKey: "#12",
 			sourceState: "open",
 			url: "https://github.com/acme/factory/pulls/12",
-			title: "Diagnose Persist source facts",
+			title: `Diagnose ${DEFAULT_TICKET_TITLE}`,
 			description: "The diagnosis of #5.",
 			labels,
 			externalUpdatedAt: "2026-08-31T10:30:00Z",

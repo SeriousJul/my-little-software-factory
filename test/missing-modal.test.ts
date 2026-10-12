@@ -7,6 +7,7 @@ import { testRender } from "@opentui/react/test-utils";
 import type { StandingFacts } from "../src/components/controls.ts";
 import { MissingModal } from "../src/components/missing-modal.ts";
 import { awaitFrame } from "./app-harness.ts";
+import { DEFAULT_TICKET_TITLE } from "./fact-fixtures.ts";
 
 /** The base control facts a modal is mounted over: the list, idle. */
 const BASE_STANDING: StandingFacts = {
@@ -23,7 +24,7 @@ describe("the Missing modal", () => {
 	test("j and k scroll a long reason while arrows move only the recovery rows", async () => {
 		const setup = await testRender(
 			createElement(MissingModal, {
-				title: "Missing: Persist source facts",
+				title: `Missing: ${DEFAULT_TICKET_TITLE}`,
 				bodyLines: Array.from({ length: 24 }, (_, index) => `reason line ${index + 1}`),
 				actions: [
 					{ key: "restart", label: "Restart", detail: "same task type, same workspace" },

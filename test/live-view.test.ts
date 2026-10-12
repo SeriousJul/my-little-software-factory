@@ -624,7 +624,7 @@ describe("the Live view on the ticket list", () => {
 		await withApp(
 			async (setup) => {
 				const frame = await pressEnterQuiet(setup, "the Live view", (f) =>
-					f.includes("Live: Persist source facts"),
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
 				);
 				expect(frame).toContain("no agent pane is recorded for this ticket");
 				// The context line names the repository, the task type, and the
@@ -717,7 +717,9 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				// Enter confirms the Goto: the focus runs, the view closes. The
 				// confirmation is a result, not a warning, and names the
 				// workspace herdr's view must switch to: since herdr 0.9 a CLI
@@ -811,7 +813,9 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				await awaitFrame(setup, (f) => f.includes("The fix is in the layout math."), "the stream");
 				// The agent reports done: the observation settles the turn,
 				// and the same box turns into the decision.
@@ -831,10 +835,10 @@ describe("the Live view against a running factory", () => {
 				// decision now, and the Live title is gone (ADR 0040).
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
+					(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
 					"the decision",
 				);
-				expect(frame).not.toContain("Live: Persist source facts");
+				expect(frame).not.toContain(`Live: ${DEFAULT_TICKET_TITLE}`);
 				// The settled turn's log stands in the pane under its own title,
 				// and the decision's rows sit below it.
 				expect(frame).toContain("Turn log");
@@ -916,7 +920,9 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				// The agent reports done. The turn settles, and the factory decides
 				// nothing for it: the Operator-decides flag parks the completion
 				// ahead of every outcome check, so the ticket rests awaiting.
@@ -944,7 +950,7 @@ describe("the Live view against a running factory", () => {
 				// The mode owns the body, not the outcome: the stream stands where
 				// the operator left it, and no decision rows appear at all while the
 				// parked turn waits.
-				expect(frame).toContain("Live: Persist source facts");
+				expect(frame).toContain(`Live: ${DEFAULT_TICKET_TITLE}`);
 				expect(frame).toContain("the agent is finishing up");
 				expect(frame).not.toContain("Handoff: review");
 				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
@@ -979,13 +985,15 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				await awaitFrame(setup, (f) => f.includes("the agent works"), "the stream");
 				// The agent leaves herdr: the box carries the missing modal.
 				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("Missing: Persist source facts"),
+					(f) => f.includes(`Missing: ${DEFAULT_TICKET_TITLE}`),
 					"the missing modal",
 				);
 				expect(frame).toContain("Restart");
@@ -995,7 +1003,7 @@ describe("the Live view against a running factory", () => {
 				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working") });
 				await awaitFrame(
 					setup,
-					(f) => f.includes("Live: Persist source facts") && !f.includes("Missing:"),
+					(f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`) && !f.includes("Missing:"),
 					"the stream to return",
 				);
 				expect(planeRecord.state.ticketWorkCycle.ticketState(identity)).toBe("running");
@@ -1029,14 +1037,16 @@ describe("the Live view against a running factory", () => {
 				// the release wait at the fallback refuses a snapshot that never saw a
 				// surface take the keys.
 				const baseHandlers = baseKeyHandlers(setup);
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
 				// The agent reports done: the same box turns into the decision,
 				// the border re-titled in place.
 				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
 				await awaitFrame(
 					setup,
-					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
+					(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
 					"the decision",
 				);
 				// Close is the default; the workflow handoff is the last row.
@@ -1052,10 +1062,11 @@ describe("the Live view against a running factory", () => {
 					setup,
 					"return",
 					"the confirmed route",
-					(f) => f.includes(DEFAULT_TICKET_TITLE) && !f.includes("Decision: Persist source facts"),
+					(f) =>
+						f.includes(DEFAULT_TICKET_TITLE) && !f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`),
 				);
 				const listFrame = await awaitFallbackToTheList(setup, baseHandlers);
-				expect(listFrame).not.toContain("Live: Persist source facts");
+				expect(listFrame).not.toContain(`Live: ${DEFAULT_TICKET_TITLE}`);
 				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
 					"handed-off",
 				);
@@ -1070,7 +1081,7 @@ describe("the Live view against a running factory", () => {
 				await pressReturn(
 					setup,
 					"the Live view again",
-					(f) => f.includes("Live: Persist source facts") && f.includes("the reviewer is on it"),
+					(f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`) && f.includes("the reviewer is on it"),
 				);
 				expect(planeRecord.fakeRunner.commands()).toContain(READ_COMMAND("pane-9"));
 				expect(planeRecord.fakeRunner.commands().join("\n")).not.toContain("agent focus");
@@ -1115,12 +1126,14 @@ describe("the Live view against a running factory", () => {
 				// The base mode's key handlers, taken at rest on the list before this
 				// walk mounts anything, the release wait's witness.
 				const base = baseKeyHandlers(setup);
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
 				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
 				await awaitFrame(
 					setup,
-					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
+					(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
 					"the decision",
 				);
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
@@ -1140,7 +1153,7 @@ describe("the Live view against a running factory", () => {
 				setup.mockInput.pressEnter();
 				await awaitFrame(
 					setup,
-					(f) => f.includes("┌─❯ Tickets") && !f.includes("Live: Persist source facts"),
+					(f) => f.includes("┌─❯ Tickets") && !f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
 					"the fallback to the list",
 				);
 				// The window is the gap between that fallback frame and the close's
@@ -1163,7 +1176,7 @@ describe("the Live view against a running factory", () => {
 				const frame = setup.captureCharFrame();
 				expect(frame).not.toContain("already decided");
 				expect(frame).toContain("┌─❯ Tickets");
-				expect(frame).not.toContain("Live: Persist source facts");
+				expect(frame).not.toContain(`Live: ${DEFAULT_TICKET_TITLE}`);
 				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
 					"handed-off",
 				);
@@ -1200,7 +1213,9 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				// The agent reports done: the same box turns into the decision.
 				planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
@@ -1216,7 +1231,7 @@ describe("the Live view against a running factory", () => {
 				});
 				await awaitFrame(
 					setup,
-					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
+					(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
 					"the decision",
 				);
 				// The workflow handoff row, then e: the override opens on the
@@ -1233,7 +1248,7 @@ describe("the Live view against a running factory", () => {
 					setup,
 					"the Live view to return",
 					(f) =>
-						f.includes("Decision: Persist source facts") &&
+						f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) &&
 						f.includes("Handoff: review") &&
 						!f.includes("Override"),
 				);
@@ -1269,12 +1284,14 @@ describe("the Live view against a running factory", () => {
 				// The base mode's key handlers for the same release wait, taken at the
 				// same place: at rest on the list, before this walk mounts anything.
 				const baseHandlers = baseKeyHandlers(setup);
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
 				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
 				await awaitFrame(
 					setup,
-					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
+					(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
 					"the decision",
 				);
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
@@ -1291,13 +1308,14 @@ describe("the Live view against a running factory", () => {
 					setup,
 					"return",
 					"the confirmed route",
-					(f) => f.includes(DEFAULT_TICKET_TITLE) && !f.includes("Decision: Persist source facts"),
+					(f) =>
+						f.includes(DEFAULT_TICKET_TITLE) && !f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`),
 				);
 				// The same fallback as the decision sub-mode's case, waited for the
 				// same way: the override's confirm leaves the Live view on screen for
 				// a moment, and the frame that moment holds is quiet (issue #304).
 				const listFrame = await awaitFallbackToTheList(setup, baseHandlers);
-				expect(listFrame).not.toContain("Live: Persist source facts");
+				expect(listFrame).not.toContain(`Live: ${DEFAULT_TICKET_TITLE}`);
 				expect(listFrame).not.toContain("Edit handoff");
 				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
 					"handed-off",
@@ -1308,7 +1326,7 @@ describe("the Live view against a running factory", () => {
 				await pressReturn(
 					setup,
 					"the Live view again",
-					(f) => f.includes("Live: Persist source facts") && f.includes("the reviewer is on it"),
+					(f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`) && f.includes("the reviewer is on it"),
 				);
 				expect(planeRecord.fakeRunner.commands()).toContain(READ_COMMAND("pane-9"));
 			},
@@ -1350,7 +1368,9 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
 				// The turn settles, so the Ticket rests awaiting with the ask owed:
 				// the state the route's ask ends.
@@ -1368,7 +1388,7 @@ describe("the Live view against a running factory", () => {
 				});
 				await awaitFrame(
 					setup,
-					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
+					(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
 					"the decision",
 				);
 				const attempt = planeRecord.state.handoff.latestHandoff(identity);
@@ -1475,7 +1495,9 @@ describe("the Live view against a running factory", () => {
 			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await awaitFrame(setup, (f) => f.includes(DEFAULT_TICKET_TITLE), "the ticket row");
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				await awaitFrame(setup, (f) => f.includes("the agent is wrapping up"), "the stream");
 				// The agent reports done. The turn settles, the auto-close type
 				// decides for the factory, and the cycle ends while the operator
@@ -1494,7 +1516,7 @@ describe("the Live view against a running factory", () => {
 				});
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("[open]") && !f.includes("Live: Persist source facts"),
+					(f) => f.includes("[open]") && !f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
 					"the screen to close",
 				);
 				// The factory decided the turn, and the screen is gone with the

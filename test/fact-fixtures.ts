@@ -34,7 +34,6 @@ export const DEFAULT_IDENTITY = "github:github.com:I_9";
 /** The default Ticket's title. */
 export const DEFAULT_TICKET_TITLE = "Persist source facts";
 
-/** The default Ticket's description. */
 /**
  * The default Ticket's description.
  *
@@ -64,7 +63,7 @@ export const DEFAULT_REPOSITORY: RepositoryRef = {
  */
 export function fetchedTicket(over: Partial<FetchedTicket> = {}): FetchedTicket {
 	const identity = over.identity ?? DEFAULT_IDENTITY;
-	const number = /I_(\d+)$/.exec(identity)?.[1] ?? "5";
+	const number = issueNumber(identity);
 	return {
 		identity,
 		sourceKind: "github-issue",
@@ -81,6 +80,11 @@ export function fetchedTicket(over: Partial<FetchedTicket> = {}): FetchedTicket 
 	};
 }
 
+/** The issue number the identity carries: the ticket I_9 is issue #9. */
+function issueNumber(identity: string): string {
+	return /I_(\d+)$/.exec(identity)?.[1] ?? "5";
+}
+
 /**
  * One fetched issue on the shared sample repository.
  *
@@ -93,7 +97,7 @@ export function issueTicket(
 	identity = "github:github.com:I_5",
 	over: Partial<FetchedTicket> = {},
 ): FetchedTicket {
-	const number = /I_(\d+)$/.exec(identity)?.[1] ?? "5";
+	const number = issueNumber(identity);
 	return {
 		identity,
 		sourceKind: "github-issue",
@@ -273,8 +277,10 @@ export function completion(over: Partial<Completion> = {}): Completion {
 
 /** One domain Ticket: the default Ticket, open, with a suggestion, and nothing else. */
 export function ticket(over: Partial<Ticket> = {}): Ticket {
+	const identity = over.identity ?? DEFAULT_IDENTITY;
+	const number = issueNumber(identity);
 	return {
-		identity: DEFAULT_IDENTITY,
+		identity,
 		title: DEFAULT_TICKET_TITLE,
 		repository: DEFAULT_REPOSITORY.displayName,
 		repositoryRef: DEFAULT_REPOSITORY,
@@ -286,9 +292,9 @@ export function ticket(over: Partial<Ticket> = {}): Ticket {
 		lastCompletion: null,
 		description: DEFAULT_TICKET_DESCRIPTION,
 		sourceKind: "github-issue",
-		externalKey: "#5",
+		externalKey: `#${number}`,
 		sourceState: "open",
-		url: `https://github.com/acme/factory/issues/5`,
+		url: `https://github.com/acme/factory/issues/${number}`,
 		labels: [...DEFAULT_TICKET_LABELS],
 		externalUpdatedAt: "2026-08-31T10:00:00Z",
 		memberships: [],

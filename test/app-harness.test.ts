@@ -114,6 +114,28 @@ describe("the shared frame harness boots the Seeded plane", () => {
 		);
 	});
 
+	test("a plane that names a poll interval runs the loop the plane named", async () => {
+		// The standing the plane named names the loop policy, and the harness
+		// reads it off the plane's props, the way the App's own boot reads
+		// them: a plane that stands a poll interval boots the poll, and a
+		// policy named on the boot still stands over the plane's.
+		const named = await plane({ pollIntervalMs: 25 });
+		await withApp(
+			async (setup) => {
+				await awaitFrame(
+					setup,
+					() =>
+						setup.plane.fakeRunner
+							.commands()
+							.some((command) => command.startsWith("herdr agent list")),
+					"the observation poll",
+					5000,
+				);
+			},
+			{ plane: named },
+		);
+	});
+
 	test("a boot that names a plane boots the plane it named", async () => {
 		// The plane record the suite named is the one the app stands on: the
 		// harness takes the record, it does not replace it, and the frame

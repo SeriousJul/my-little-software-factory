@@ -92,7 +92,7 @@ function reasonOf(outcome: HandoffOutcome): string {
 }
 
 /** The ticket branch the handoff takes, in the words git and herdr hear. */
-const BRANCH = "factory/5-persist-source-facts";
+const BRANCH = "factory/9-persist-source-facts";
 
 const ticket: Ticket = defaultTicket();
 
@@ -162,7 +162,7 @@ function templateOf(taskType: { template?: string }): string {
 const PROMPT = renderPrompt(templateOf(BASE_CONFIG.taskTypes.implement), ticket);
 const EXPECTED_IMPLEMENT_PROMPT =
 	"Implement the following github-issue.\n\nRepository: acme/factory\n\n" +
-	"#5: Persist source facts\n\nURL: https://github.com/acme/factory/issues/5\n\n" +
+	"#9: Persist source facts\n\nURL: https://github.com/acme/factory/issues/9\n\n" +
 	"Labels: ready-for-agent\n\nDescription:\n" +
 	DEFAULT_TICKET_DESCRIPTION;
 const AGENT = agentNameFor(ticket);
@@ -670,7 +670,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 	test("stops retrying a pane that never reaches a shell", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
@@ -688,7 +688,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		// The bounded failure still uses the normal worktree cleanup.
 		expect(runner.commands()).toContain("herdr worktree remove --workspace ws-wt");
 		expect(runner.commands()).toContain(
-			`git -C ${repoPath(p.home)} branch -D factory/5-persist-source-facts`,
+			`git -C ${repoPath(p.home)} branch -D factory/9-persist-source-facts`,
 		);
 	});
 
@@ -816,7 +816,7 @@ describe("handOffTicket: the worktree sequence", () => {
 	test("checks the branch, fetches the remote default branch, creates the worktree, starts the agent, sends the prompt", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 
@@ -829,15 +829,15 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(runner.commands()).toEqual([
 			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
 			`git -C ${repoPath(p.home)} remote get-url origin`,
-			`git -C ${repoPath(p.home)} branch --list factory/5-persist-source-facts`,
+			`git -C ${repoPath(p.home)} branch --list factory/9-persist-source-facts`,
 			// A branch the checkout does not carry is checked on origin before it is
 			// built: the remote copy may stand under a draft of its own (issue #296).
-			`git -C ${repoPath(p.home)} ls-remote --heads origin factory/5-persist-source-facts`,
+			`git -C ${repoPath(p.home)} ls-remote --heads origin factory/9-persist-source-facts`,
 			// The base rule checks for a usable origin on its own...
 			`git -C ${repoPath(p.home)} remote get-url origin`,
 			`git -C ${repoPath(p.home)} symbolic-ref refs/remotes/origin/HEAD`,
 			`git -C ${repoPath(p.home)} fetch origin main`,
-			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --base origin/main --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base origin/main --no-focus`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -846,7 +846,7 @@ describe("handOffTicket: the worktree sequence", () => {
 	test("with no origin/HEAD symref, detection falls back to origin/main", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		runner.set("git", ["-C", repoPath(p.home), "symbolic-ref", "refs/remotes/origin/HEAD"], {
 			code: 1,
 			stderr: "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref\n",
@@ -866,14 +866,14 @@ describe("handOffTicket: the worktree sequence", () => {
 		);
 		expect(runner.commands()).toContain(`git -C ${repoPath(p.home)} fetch origin main`);
 		expect(runner.commands()).toContain(
-			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --base origin/main --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base origin/main --no-focus`,
 		);
 	});
 
 	test("a failed fetch starts on the local HEAD with a note naming the base and the reason", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		runner.set("git", ["-C", repoPath(p.home), "fetch", "origin", "main"], {
 			code: 128,
@@ -887,7 +887,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		// The handoff still starts, on the local HEAD...
 		expect(outcome.status).toBe("ok");
 		expect(runner.commands()).toContain(
-			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --base abc123def456 --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base abc123def456 --no-focus`,
 		);
 		// ...and the note names the base actually used (ref name plus short
 		// sha) and the reason for the fallback.
@@ -899,7 +899,7 @@ describe("handOffTicket: the worktree sequence", () => {
 	test("no default branch ref on the remote falls back to the local HEAD with a note", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		runner.set("git", ["-C", repoPath(p.home), "symbolic-ref", "refs/remotes/origin/HEAD"], {
 			code: 1,
 			stderr: "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref\n",
@@ -927,7 +927,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		// No fetch ran: there was no ref to fetch.
 		expectNoCommand(runner.commands(), "fetch origin");
 		expect(runner.commands()).toContain(
-			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --base abc123def456 --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base abc123def456 --no-focus`,
 		);
 		expect(outcome.notes?.worktreeBase).toBe(
 			"the worktree base fell back to HEAD abc123d: no default branch found on origin (tried the origin/HEAD symref, then origin/main, then origin/master)",
@@ -944,7 +944,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		runner.set("git", ["-C", repoPath(p.home), "remote", "get-url", "origin"], { code: 1 });
 		// The sibling is a local-only repository: no origin remote to fetch
 		// from, so the base is the checkout's own HEAD.
-		runner.set("git", ["-C", sibling, "branch", "--list", "factory/5-persist-source-facts"], {
+		runner.set("git", ["-C", sibling, "branch", "--list", "factory/9-persist-source-facts"], {
 			stdout: "",
 		});
 		runner.set("git", ["-C", sibling, "remote", "get-url", "origin"], { code: 1 });
@@ -957,7 +957,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--cwd",
 				sibling,
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--base",
 				"abc123def456",
 				"--no-focus",
@@ -973,7 +973,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		// ...and no fetch ran: there was no origin to fetch from.
 		expectNoCommand(runner.commands(), "fetch origin");
 		expect(runner.commands()).toContain(
-			`herdr worktree create --cwd ${sibling} --branch factory/5-persist-source-facts --base abc123def456 --no-focus`,
+			`herdr worktree create --cwd ${sibling} --branch factory/9-persist-source-facts --base abc123def456 --no-focus`,
 		);
 		// The fallback note and the resolution warning ride the same channel.
 		expect(outcome.notes?.worktreeBase).toBe(
@@ -994,7 +994,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--cwd",
 				repoPath(p.home),
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--no-focus",
 			],
 			{
@@ -1016,8 +1016,8 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(runner.commands()).toEqual([
 			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
 			`git -C ${repoPath(p.home)} remote get-url origin`,
-			`git -C ${repoPath(p.home)} branch --list factory/5-persist-source-facts`,
-			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --no-focus`,
+			`git -C ${repoPath(p.home)} branch --list factory/9-persist-source-facts`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 			`herdr tab create --workspace ws-wt --cwd ${worktreePath(p.home)} --no-focus`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-tab`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
@@ -1041,7 +1041,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--cwd",
 				repoPath(p.home),
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--no-focus",
 			],
 			{
@@ -1057,7 +1057,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --no-focus`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-wt`);
 		expect(commands).toContain(`herdr agent prompt ${AGENT} ${PROMPT}`);
@@ -1079,7 +1079,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const commands = runner.commands();
 		// The existing branch is checked out, not re-created from a base.
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expectNoCommand(commands, "--base");
 		expectNoCommand(commands, "rev-parse HEAD");
@@ -1098,7 +1098,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--cwd",
 				repoPath(p.home),
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--no-focus",
 			],
 			{
@@ -1147,7 +1147,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--cwd",
 				repoPath(p.home),
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--no-focus",
 			],
 			{
@@ -1210,7 +1210,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--cwd",
 				repoPath(p.home),
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--no-focus",
 			],
 			{ code: 1, stderr: "error: herdr is not running\n" },
@@ -1226,7 +1226,7 @@ describe("handOffTicket: the worktree sequence", () => {
 	test("a failed agent start removes the worktree and the branch", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
@@ -1243,7 +1243,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const commands = runner.commands();
 		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
 		expect(commands).toContain(
-			`git -C ${repoPath(p.home)} branch -D factory/5-persist-source-facts`,
+			`git -C ${repoPath(p.home)} branch -D factory/9-persist-source-facts`,
 		);
 		// The cleanup runs after the failure, not before it.
 		expect(commands.indexOf(`herdr worktree remove --workspace ws-wt`)).toBeGreaterThan(
@@ -1254,7 +1254,7 @@ describe("handOffTicket: the worktree sequence", () => {
 	test("a worktree create without a workspace id points at the leftover branch", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		// A worktree create result without the workspace block.
 		runner.set(
@@ -1265,7 +1265,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--cwd",
 				repoPath(p.home),
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--base",
 				"origin/main",
 				"--no-focus",
@@ -1277,7 +1277,7 @@ describe("handOffTicket: the worktree sequence", () => {
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("no workspace id");
-		expect(reasonOf(outcome)).toContain("leftover branch factory/5-persist-source-facts");
+		expect(reasonOf(outcome)).toContain("leftover branch factory/9-persist-source-facts");
 		// The cleanup needs the workspace id, so it cannot run and no
 		// command ran after the failed step.
 		expectNoCommand(runner.commands(), "worktree remove");
@@ -1298,14 +1298,14 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--cwd",
 				repoPath(p.home),
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--no-focus",
 			],
 			{
 				code: 1,
 				stderr:
-					'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'factory/5-persist-source-facts\')' +
-					"\\nfatal: 'factory/5-persist-source-facts' is already used by worktree at '/home/op/worktrees/factory/factory-5'" +
+					'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'factory/9-persist-source-facts\')' +
+					"\\nfatal: 'factory/9-persist-source-facts' is already used by worktree at '/home/op/worktrees/factory/factory-5'" +
 					'"},"id":"cli:worktree:create"}\n',
 			},
 		);
@@ -1316,14 +1316,14 @@ describe("handOffTicket: the worktree sequence", () => {
 		// The operator reads the refusal they can act on and herdr's stable
 		// code, never the progress line that precedes it.
 		expect(reasonOf(outcome)).toBe(
-			"fatal: 'factory/5-persist-source-facts' is already used by worktree at '/home/op/worktrees/factory/factory-5' (worktree_create_failed)",
+			"fatal: 'factory/9-persist-source-facts' is already used by worktree at '/home/op/worktrees/factory/factory-5' (worktree_create_failed)",
 		);
 	});
 
 	test("a started agent keeps the worktree even when the prompt fails", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		runner.set("herdr", ["agent", "prompt", AGENT, PROMPT], { code: 1, stderr: "prompt failed\n" });
@@ -1384,8 +1384,8 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(runner.commands()).toEqual([
 			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
 			`git -C ${repoPath(p.home)} remote get-url origin`,
-			`git -C ${repoPath(p.home)} branch --list factory/5-persist-source-facts`,
-			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --no-focus`,
+			`git -C ${repoPath(p.home)} branch --list factory/9-persist-source-facts`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 			`herdr worktree list --cwd ${repoPath(p.home)}`,
 			`herdr worktree open --cwd ${repoPath(p.home)} --path ${worktreePath(p.home)} --no-focus`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
@@ -1418,7 +1418,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const commands = runner.commands();
 		expect(commands).toContain(`herdr worktree list --cwd ${repoPath(p.home)}`);
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expectNoCommand(commands, "--path");
 	});
@@ -1447,7 +1447,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expectNoCommand(commands, "--path");
 	});
@@ -1470,7 +1470,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expectNoCommand(commands, "--path");
 	});
@@ -1550,7 +1550,7 @@ describe("handOffTicket: the worktree sequence", () => {
 			`herdr worktree open --cwd ${repoPath(p.home)} --path ${worktreePath(p.home)} --no-focus`,
 		);
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 	});
 
@@ -1683,7 +1683,7 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 				{ path: repoPath(p.home), linked: false },
 				{
 					path: worktreePath(p.home),
-					branch: "factory/5-persist-source-facts",
+					branch: "factory/9-persist-source-facts",
 					prunable: true,
 				},
 			]),
@@ -1691,7 +1691,7 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 		runner.set("herdr", createOnBranch(repoPath(p.home)), {
 			code: 1,
 			stderr:
-				'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'factory/5-persist-source-facts\')' +
+				'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'factory/9-persist-source-facts\')' +
 				`\\nfatal: '${worktreePath(p.home)}' is a missing but already registered worktree;` +
 				"\\nuse 'add -f' to override, or 'prune' or 'remove' to clear\"},\"id\":\"cli:worktree:create\"}\n",
 		});
@@ -1728,7 +1728,7 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 	test("the fresh create on a new branch takes the same recovery", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
 			stdout: siblingWorktreeList(repoPath(p.home), p.home),
@@ -2383,7 +2383,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 				"--cwd",
 				repoPath(p.home),
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--no-focus",
 			],
 			{ stdout: worktreeCreateJson("ws-reopen", "pane-ro") },
@@ -2402,7 +2402,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		expectNoCommand(commands, "branch --list");
 		expectNoCommand(commands, "rev-parse HEAD");
 		expect(commands).toContain(
-			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --no-focus`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-ro`);
 		expect(commands).toContain("herdr tab close tab-prev");
@@ -2440,7 +2440,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 	test("a stored workspace of another environment kind is not reused", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 
@@ -2454,7 +2454,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		// The choice says worktree, the storage says live: build fresh.
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/5-persist-source-facts --base origin/main --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base origin/main --no-focus`,
 		);
 		expectNoCommand(commands, "tab create --workspace ws-live");
 	});
@@ -2711,7 +2711,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 				"--cwd",
 				checkout,
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--no-focus",
 			],
 			{
@@ -2782,7 +2782,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 				"--cwd",
 				repoPath(p.home),
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--no-focus",
 			],
 			{
@@ -4907,7 +4907,7 @@ describe("the one start: one stage order on both paths", () => {
 	test("a Ticket worktree start reports the same stages in the same order", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		const stages: string[] = [];
@@ -5077,7 +5077,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 	test("a Ticket worktree start removes the checkout it created and the branch it created", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		stubStartFailure(runner, "pane-wt");
@@ -5091,7 +5091,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		const commands = runner.commands();
 		expect(commands).toContain("herdr worktree remove --workspace ws-wt");
 		expect(commands).toContain(
-			`git -C ${repoPath(p.home)} branch -D factory/5-persist-source-facts`,
+			`git -C ${repoPath(p.home)} branch -D factory/9-persist-source-facts`,
 		);
 		expectNoCommand(commands, "tab close");
 	});
@@ -5132,7 +5132,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 				"--cwd",
 				repoPath(p.home),
 				"--branch",
-				"factory/5-persist-source-facts",
+				"factory/9-persist-source-facts",
 				"--no-focus",
 			],
 			// herdr attached a fresh workspace and answered no root pane.
@@ -5231,7 +5231,7 @@ describe("the one start: a command that raises", () => {
 	test("a raise at the prompt keeps the started Agent and its Environment", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		stubBranchList(runner, repoPath(p.home), "factory/5-persist-source-facts", "");
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		runner.reject("herdr", ["agent", "prompt", AGENT, PROMPT], RAISED);

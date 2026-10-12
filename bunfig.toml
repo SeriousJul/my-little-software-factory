@@ -14,5 +14,16 @@
 # imports can load React's reconciler, which takes the scheduler's schedule
 # function at its own module init. It is inert until a test holds the
 # passive flushes, the way the hold's own header states (issue #311).
+#
+# The plane-cleanup preload owns the hook that closes every plane the run's
+# tests open, at the end of every test of every file. A module-scope hook
+# inside the plane's own file binds to the one file that first imports it,
+# and Bun evaluates a plain run's modules once, so the other files would leak
+# the planes they open; the preload's hook belongs to no file and holds in
+# every file, with or without `--isolate`.
 [test]
-preload = ["./test/theme-isolation.ts", "./test/passive-flush-hold.ts"]
+preload = [
+  "./test/theme-isolation.ts",
+  "./test/passive-flush-hold.ts",
+  "./test/plane-cleanup.ts",
+]

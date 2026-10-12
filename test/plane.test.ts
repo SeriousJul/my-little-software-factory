@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadConfigFile } from "../src/config.ts";
+import { branchNameFor } from "../src/naming.ts";
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
 import { openFactoryState } from "../src/state.ts";
 import {
@@ -134,6 +135,15 @@ describe("the seeded plane's standings", () => {
 			const handles = p.state.handoff.handoffHandles(DEFAULT_IDENTITY);
 			expect(handles.paneIds).toEqual(["pane-1"]);
 			expect(handles.workspaceIds).toEqual(["ws-1"]);
+			// The row the standing writes is the default Ticket on its own key:
+			// the branch the naming rule reads off that row is the key's number
+			// and the shared title, so a standing that writes the Ticket on
+			// another key would stand a branch no reader of the naming rule
+			// would build.
+			const row = viewsOf(p).active.find((t) => t.identity === DEFAULT_IDENTITY);
+			expect(row?.externalKey).toBe("#9");
+			if (!row) throw new Error("the standing's row is missing");
+			expect(branchNameFor(row)).toBe("factory/9-persist-source-facts");
 		});
 	});
 

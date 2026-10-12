@@ -19,9 +19,9 @@
  * Ticket: the plane stands the default on one identity, one title, and one
  * naming fact, and a frame suite that re-spells the title can pass on a
  * Ticket no other reader of the plane would build. The check refuses the
- * exact title literal in the frame suites; the suites take the title from the
- * shared fact module, and their builders take the ticket from the shared
- * `fetchedTicket` builder.
+ * title's text anywhere in the frame suites, a pin's quoted word among it,
+ * and the suites take the title from the shared fact module, their pins
+ * composed from its one copy.
  *
  * The module suites are not frame suites: they take the plane's parts, not its
  * props, and they may open a state of their own, so the check reads only the
@@ -31,6 +31,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
+import { DEFAULT_TICKET_TITLE } from "./fact-fixtures.ts";
 import { sourceFiles } from "./static-checks.ts";
 
 const frameSuites = sourceFiles(
@@ -38,19 +39,31 @@ const frameSuites = sourceFiles(
 	(file) =>
 		file.endsWith(".test.ts") &&
 		file !== "test/seeded-plane-check.test.ts" &&
-		readFileSync(file, "utf8").includes('from "./app-harness.ts"'),
+		(readFileSync(file, "utf8").includes('from "./app-harness.ts"') ||
+			readFileSync(file, "utf8").includes('from "../app-harness.ts"')),
 );
 
 /** A state opener a frame suite must not reach for: the plane owns the opening. */
 const OPENS_STATE = /openFactoryState\s*\(/u;
 
 /**
- * The default Ticket's title, quoted, split so this check's own source holds
- * no match for the rule it applies. A frame file that spells this literal
- * builds or reads the default Ticket outside the plane's one copy of it.
+ * The quoted title as the fact module defines it, split so this check's own
+ * source holds no match for the rule it applies.
  */
-const DEFAULT_TITLE_LITERAL = '"Persist source ' + 'facts"';
-const SPELLS_DEFAULT_TITLE = new RegExp(DEFAULT_TITLE_LITERAL, "u");
+const QUOTED_TITLE = '"Persist source ' + 'facts"';
+/**
+ * A frame file that holds the title's text anywhere, a pin's quoted word
+ * among it, builds or reads the default Ticket outside the plane's one copy
+ * of it. The guard is what follows the text: a pin ends the title at a quote
+ * or other mark, while the sample's other ticket, the one whose title carries
+ * this one's words before more of its own, keeps them running on, so the rule
+ * takes the title as one word, not as a run of letters.
+ */
+const SPELLS_DEFAULT_TITLE = (source: string): boolean =>
+	new RegExp(
+		DEFAULT_TICKET_TITLE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![\\s\\w-])",
+		"u",
+	).test(source);
 
 describe("the frame suites open state through the Seeded plane", () => {
 	test("a frame suite never opens a state file by hand", () => {
@@ -69,21 +82,24 @@ describe("the frame suites open state through the Seeded plane", () => {
 		expect(frameSuites.length).toBeGreaterThan(10);
 		expect(frameSuites).toContain("test/app.test.ts");
 		// The default title stands in the fact module, the one owner of it.
-		expect(readFileSync("test/fact-fixtures.ts", "utf8")).toContain(DEFAULT_TITLE_LITERAL);
+		expect(readFileSync("test/fact-fixtures.ts", "utf8")).toContain(QUOTED_TITLE);
 	});
 
 	test("a frame suite never spells the default Ticket's title by hand", () => {
 		const offenders: string[] = [];
 		for (const file of frameSuites) {
-			const source = readFileSync(file, "utf8");
-			if (SPELLS_DEFAULT_TITLE.test(source)) offenders.push(file);
+			if (SPELLS_DEFAULT_TITLE(readFileSync(file, "utf8"))) offenders.push(file);
 		}
 		expect(offenders).toEqual([]);
 	});
 
 	test("the opener pattern still matches the bypass it refuses", () => {
 		expect(OPENS_STATE.test("const state = openFactoryState(path);")).toBe(true);
-		expect(SPELLS_DEFAULT_TITLE.test('title: "Persist source facts"')).toBe(true);
-		expect(SPELLS_DEFAULT_TITLE.test("title: DEFAULT_TICKET_TITLE")).toBe(false);
+		expect(SPELLS_DEFAULT_TITLE('title: "Persist source facts"')).toBe(true);
+		expect(SPELLS_DEFAULT_TITLE('f.includes("Close: Persist source facts")')).toBe(true);
+		// The sample's other ticket keeps the title's words running on, and the
+		// guard lets its pin stand.
+		expect(SPELLS_DEFAULT_TITLE('title: "Persist source facts in state"')).toBe(false);
+		expect(SPELLS_DEFAULT_TITLE("title: DEFAULT_TICKET_TITLE")).toBe(false);
 	});
 });
