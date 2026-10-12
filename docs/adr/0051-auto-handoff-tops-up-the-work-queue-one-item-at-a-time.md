@@ -8,6 +8,8 @@ Superseded in part by ADR 0094: the cycle asks the continuation it owes before t
 
 Amended in part by ADR 0108: the Missing Agent's Restart is asked past a standing queue row, because the seat that Agent left is reserved for that row, and its row enters behind the owed continuation and ahead of the standing rows. The empty-queue rule over the open-ticket add, the one-item-per-cycle pace, and the gates stand.
 
+Amended in part by ADR 0136: a row the pickup claimed whose start has not answered is a standing row, so the fresh-work add the empty-queue rule holds out lands on the cycle after the queue drains, not on the cycle that drained it. The empty-queue rule over the fresh-work adds, the one-item-per-cycle pace, and the gates stand.
+
 ## Context
 
 Auto-handoff held three direct-dispatch jobs: the open dispatch that

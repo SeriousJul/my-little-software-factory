@@ -3807,7 +3807,7 @@ describe("the open dispatch", () => {
 		await coordinator.tick();
 		// The pickup claimed the operator's item and its start runs on behind
 		// the walk: the row stands until the start answers, so this cycle's
-		// top-up holds on the waiting row the pickup holds (issue #371).
+		// top-up holds on the waiting row the pickup holds (issue #371, ADR 0136).
 		expect(order).toEqual(["pickup"]);
 		expect(intents).toEqual([]);
 		// The start answers, the row leaves with it, and the queue that is
