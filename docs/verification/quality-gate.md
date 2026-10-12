@@ -1562,7 +1562,7 @@ wording.
 | The lowering of the 282 | Out of scope: the campaign that drives the count down is its own issue, in the shape of #350, and it works one metric at a time |
 | The CI load flake on the frame tests, and `bun run mutate` | Open and outside the gate, as the standing records state |
 
-## Issue #363: the test duplication campaign, the state suites' stage (2026-10-12, the landing)
+## Issue #363: the test duplication campaign, the state and handoff suites' stage (2026-10-12, the landing)
 
 The campaign drives the `test-dup` count down stage by stage. Each stage is a
 shippable unit: it keeps the audit green, it states the count before and after
@@ -1573,18 +1573,20 @@ no jscpd setting moves (ADR 0121).
 
 | Piece | Value |
 | --- | --- |
-| Heads | `ee89e153`, the branch head the stage starts from, standing level with `origin/main` at `241e63bb`; `66a4c9cc`, the head the stage lands on |
+| Heads | `ee89e153`, the branch head the stage starts from, standing level with `origin/main` at `241e63bb`; `66a4c9cc` and `76e08355`, the heads the state stage lands on; `2f02e125`, the head the stage lands on |
 | jscpd | 5.4.0, pinned as a devDependency, run with the settings `.jscpd.json` holds (`minTokens: 100`, `minLines: 5`) |
 | The `test` scope, at `ee89e153` | **271 clones** (34 cross-file, 237 intra-file), 5,662 duplicated lines, 3,169 `test(…)` sites |
 | The `test` scope, at `66a4c9cc` | **226 clones** (15 cross-file, 211 intra-file), 4,938 duplicated lines, 3,167 `test(…)` sites |
 | The `test` scope, at `76e08355` | **220 clones** (15 cross-file, 205 intra-file), 4,806 duplicated lines, 3,167 `test(…)` sites |
-| The baseline counts | `test-dup` lands at 220 in `.quality-baseline.json`, beside `measured-on` 76e08355 |
+| The `test` scope, at `2f02e125` | **211 clones** (15 cross-file, 196 intra-file), 4,355 duplicated lines, 3,167 `test(…)` sites |
+| The baseline counts | `test-dup` lands at 211 in `.quality-baseline.json`, beside `measured-on` 2f02e125 |
 
 ### What the stage changed
 
 - `test/state/harness.ts` now holds the one standing every state suite needs: `seeded()` opens the world with the tickets the test names, in memory or on a file or on a fixed clock; `claim`, `settleAttempt`, and `settle` carry the Handoff; `turn` and `decide` carry the cycle's end; `downgradeToV2/V4/V5/V7` carry the older schema shapes the migration tests re-stamp. A test that asserts a claim or a settlement's result still calls the API; a test that settles the world only to stand behind its fact uses the harness.
 - Eight state suites read their facts through the harness instead of re-opening and re-seeding the world test by test: `handoff`, `ticketWorkCycle`, `route`, `sourceFact`, `ignore`, `mute`, `consultationRecord` (its v4 downgrade now stands in the harness beside the one `state/handoff` reads), and `workQueue`.
 - The stage's residual cleanup, at `76e08355`, reads the last standing through shared helpers: the downgrade tools share one drop of the post-v10 facts, the migration tests' schema check is the harness' `schemaObjects`, the route suite's handed-off turn and its two queue items are its own `handedOffTurn` and `queueBoth`, and the trace rows a `ticketWorkCycle` test verifies are read by one `traceRows` read.
+- The handoff suite's stage, at `2f02e125`, reads its 117 handoff runs through the suite's `handoffRun` builder, which stands the base config, the open claim, and the home beside the overrides a case names. The branch the ticket takes stands once in the suite's `BRANCH` constant beside the worktree path that carries it, and the worktree choice stands once beside the default it overrides. Each case keeps its expected argv and its `expectNoCommand` claims literal: where the argv is the subject, the pin table is the correct adapter (ADR 0132). The suite drops from 64 clones over 1,608 lines to 23 clones over 353 lines, and the file from 6,919 lines to 5,860.
 - The fixture literals the tests verify stand as written, and each test's distinct claim stays visible beside the shared standing.
 
 ### The gate on this branch
@@ -1592,35 +1594,39 @@ no jscpd setting moves (ADR 0121).
 | Check | Result |
 | --- | --- |
 | `bun run lint` and `bun run typecheck`, on the merged tree | Pass, no findings |
-| `bun run audit`, on the merged tree | Pass: `type` 0, `lint` 0, `duplicates` 0 / baseline 0, `test-dup` 226 / baseline 271, the 6 pre-existing CodeQL findings stand as open alerts |
+| `bun run audit`, on the merged tree | Pass: `type` 0, `lint` 0, `duplicates` 0 / baseline 0, `test-dup` 211 / baseline 211, the 6 pre-existing CodeQL findings stand as open alerts |
 | `bun run test`, on the merged tree | Pass: 3,320 tests, 0 fail, across 151 files. No other `bun test` ran on this machine while the suite ran |
 | The state suites, alone | 229 pass, 0 fail, across the 16 files the stage touched and left untouched alike |
+| The handoff suite, alone | 172 pass, 0 fail, its 662 `expect()` calls |
 
-### The backlog the next stage inherits, at `66a4c9cc`
+### The backlog the next stage inherits, at `2f02e125`
 
-The remaining clones stand in the command-sequence suites, whose subject is the
-exact argv the world runs, and in the frame suites the campaign's later stages
+The remaining clones stand in the command-sequence suites whose other halves
+the campaign still works, and in the frame suites the campaign's later stages
 work (ADR 0132):
 
 | File | Clones | Duplicated lines |
 | --- | --- | --- |
-| `test/handoff.test.ts` | 64 | 1,608 |
-| `test/handoff-frame.test.ts` | 55 | 1,321 |
-| `test/plane-action-merge.test.ts` | 41 | 1,082 |
-| `test/auto-mode.test.ts` | 57 | 904 |
-| `test/handoff-dispatch.test.ts` | 40 | 744 |
-| `test/consultation-frame.test.ts` | 32 | 634 |
-| `test/live-view.test.ts` | 25 | 548 |
+| `test/handoff.test.ts` | 23 | 353 |
+| `test/handoff-frame.test.ts` | 27 | 1,321 |
+| `test/plane-action-merge.test.ts` | 20 | 1,082 |
+| `test/auto-mode.test.ts` | 28 | 904 |
+| `test/handoff-dispatch.test.ts` | 19 | 744 |
+| `test/consultation-frame.test.ts` | 15 | 634 |
+| `test/live-view.test.ts` | 12 | 548 |
 
-The 15 cross-file pairs stand in the same suites, beside `repo-init-stub.test.ts`
-and `repo-init.test.ts` at 38 lines and `security-source.test.ts` and
-`ticket-source.test.ts` at 37.
+The frame suites' duplicates stand in their `seededApp`, `withApp`, and
+frame-wait preambles, and the `plane-action-merge` suite's stand in the git
+sequences its pin tables pin: each is its own case-builder stage, beside the
+`handoff.test.ts` builder that landed here. The 15 cross-file pairs stand in
+the same suites, beside `repo-init-stub.test.ts` and `repo-init.test.ts` at
+38 lines and `security-source.test.ts` and `ticket-source.test.ts` at 37.
 
 ### What this stage did not measure
 
 | Item | State |
 | --- | --- |
-| The case builders for the command-sequence suites | Not built: those suites' subject is the command argv, and their dedup is the campaign's next stage |
+| The case builders for the command-sequence suites the stage did not reach | The handoff suite's builder landed at `2f02e125`. The `plane-action-merge` and `repo-init` suites' git pin tables, and the frame suites' preambles, are the next stages' work |
 | The frame suites' clones | Untouched by this stage |
 | The count on another machine | Measured on this machine only, the way the page's other cost rows stand |
 
