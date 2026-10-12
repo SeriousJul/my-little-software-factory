@@ -102,6 +102,38 @@ describe("RefreshCoordinator", () => {
 		state.close();
 	});
 
+	test("the one-shot start runs the boot read and stands no refresh schedule", async () => {
+		const state = openFactoryState(":memory:");
+		const source = new ControlledSource("issues", 60_000);
+		const clock = new FakeClock();
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, { clock });
+		coordinator.startOnce();
+		await turns();
+		expect(source.calls).toBe(1);
+		expect(coordinator.isFetching(source.name)).toBe(true);
+
+		source.settle(EMPTY);
+		await turns();
+		// The settled boot read applies and fires, and stands no schedule:
+		// the clock holds no timer behind the plane that holds its loops.
+		expect(clock.delays).toEqual([]);
+		expect(clock.pending).toBe(0);
+
+		// A manual refresh runs one read, and no schedule stands behind it
+		// either: the held plane refreshes where the operator names one, and
+		// the refresh stands down when it settles.
+		expect(coordinator.refreshNow(source.name)).toBe(true);
+		await turns();
+		expect(source.calls).toBe(2);
+		source.settle(EMPTY);
+		await turns();
+		expect(clock.delays).toEqual([]);
+		expect(clock.pending).toBe(0);
+		coordinator.stop();
+		expect(clock.pending).toBe(0);
+		state.close();
+	});
+
 	test("a slow in-flight source never blocks a fast source", async () => {
 		const state = openFactoryState(":memory:");
 		const slow = new ControlledSource("slow", 60_000);

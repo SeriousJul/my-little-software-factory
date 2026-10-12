@@ -83,8 +83,8 @@ describe("the shared frame harness boots the Seeded plane", () => {
 	test("a boot that names no policy holds the loops", async () => {
 		// The default policy is `held`: the deterministic frame, where
 		// nothing moves until a key press or a settle does. The observation
-		// poll is the loop the held policy refuses, so the runner's record
-		// of it is empty while the frame stands.
+		// poll is the loop the held policy holds, so the runner's record of
+		// it is empty while the frame stands.
 		await withApp(async (setup) => {
 			await awaitFrame(setup, SAMPLE_ROW, "the sample list");
 			const polls = setup.plane.fakeRunner

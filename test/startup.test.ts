@@ -12,7 +12,7 @@
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
@@ -468,6 +468,9 @@ describe("the whole startup", () => {
 		expect(withoutModelWarnings(result.notes)).toEqual([]);
 		expect(result.sources.map((source) => source.name)).toEqual(["issues"]);
 		expect(typeof result.runner.run).toBe("function");
+		// The entry hands the home directory to the plane beside the paths it
+		// resolves itself: the field reads the process's own home.
+		expect(result.home).toBe(homedir());
 		expect(existsSync(statePath)).toBe(true);
 		result.state.close();
 	});

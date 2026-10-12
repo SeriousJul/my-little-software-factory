@@ -797,9 +797,9 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 			{
 				width: WIDTH,
 				height: 32,
-				// No initialTickets: the observation loop must poll herdr for the
-				// seat count's agent list, and it stands down on a test
-				// projection.
+				// The observation loop must poll herdr for the seat count's
+				// agent list, so the boot names the poll: the held policy would
+				// hold the poll, and the frame would stand on no agent list.
 				plane: planeRecord,
 				loopPolicy: { kind: "polled", intervalMs: 100 },
 			},

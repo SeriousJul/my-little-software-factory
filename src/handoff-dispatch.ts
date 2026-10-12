@@ -246,9 +246,9 @@ export interface HandoffDispatchReports {
 /**
  * The Message line one Handoff outcome leaves, and the channel it belongs on.
  *
- * One function owns the wording of a handoff's end, for both callers that
- * report one: the dispatch module, and the App's no-state test projection. A
- * failed outcome is an error; a clean one with something to say is a warning; a
+ * One function owns the wording of a handoff's end, for the callers that
+ * report one: the dispatch module, and its unit suite. A failed outcome is
+ * an error; a clean one with something to say is a warning; a
  * clean one with nothing to say leaves no line at all. The order the parts take
  * is the Consultation's own report's order too: `handoffReportLines` in
  * `src/handoff.ts` words it for both (ADR 0103).

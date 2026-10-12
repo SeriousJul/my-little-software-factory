@@ -409,10 +409,12 @@ export interface AppAggregates {
  * - `production` runs the plane's own loops: the refresh schedule the config
  *   names, and the observation poll the config's agent-poll-interval-seconds
  *   names.
- * - `held` starts no loop at all. A frame test wants the deterministic
- *   frame: nothing moves until a key press or a settle does.
- * - `polled` runs the observation loop on the named interval in
- *   milliseconds, a frame test that wants the poll itself.
+ * - `held` runs the one-shot boot read and starts no loop: no refresh
+ *   schedule stands, and the observation poll is held. A frame test wants
+ *   the deterministic frame: nothing moves until a key press or a settle
+ *   does.
+ * - `polled` runs the plane's own loops with the observation poll on the
+ *   named interval in milliseconds, a frame test that wants the poll itself.
  */
 export type AppLoopPolicy =
 	| { kind: "production" }
@@ -424,9 +426,8 @@ export type AppLoopPolicy =
  *
  * Every field is required, and the shell reads each one from the record it
  * was given: it holds no default of its own for a field it could have been
- * passed, and no state file it was not given. The production entry fills the
- * record from the startup decision, and the test harness fills it from the
- * Seeded plane the suite asked for.
+ * passed. The production entry fills the record from the startup decision,
+ * and the test harness fills it from the Seeded plane the suite asked for.
  */
 export interface AppProps {
 	/** The validated config. */
@@ -886,7 +887,6 @@ function useAppDispatches(prev: AppOpsFieldsStage) {
 	 * Close were refused beside a mode cell that still read auto.
 	 */
 	useEffect(() => {
-		if (handoffDispatch === undefined) return;
 		return () => handoffDispatch.stop();
 	}, [handoffDispatch]);
 	return { ...prev, requestModelList, choiceFor, consultationOperations, handoffDispatch };
@@ -1702,7 +1702,11 @@ function useAppCoordinator(props: AppProps, prev: AppCatalogStage) {
 			},
 		);
 		coordinatorRef.current = coordinator;
-		coordinator.start();
+		// The policy names the refresh schedule the plane starts (issue #366):
+		// held stands the one-shot boot read and no schedule, and the other
+		// policies run the plane's own schedule.
+		if (props.loopPolicy.kind === "held") coordinator.startOnce();
+		else coordinator.start();
 		return () => {
 			coordinator.stop();
 			coordinatorRef.current = undefined;
@@ -1715,6 +1719,7 @@ function useAppCoordinator(props: AppProps, prev: AppCatalogStage) {
 		clearWorkingMessage,
 		setFaultWarningMessage,
 		logger,
+		props.loopPolicy,
 		observationRef,
 		coordinatorRef,
 		manualRefreshPending,
@@ -5477,7 +5482,7 @@ function appConsultationSessionRefresh(f: AppConsultationSessionFields): (() => 
 /** The fields the observation coordinator effect reads and writes. */
 interface AppObservationFields {
 	state: AppAggregates;
-	handoffDispatch: HandoffDispatch | undefined;
+	handoffDispatch: HandoffDispatch;
 	loopPolicy: AppLoopPolicy;
 	commandRunner: CommandRunner;
 	configRef: RefObject<FactoryConfig>;
@@ -5609,11 +5614,14 @@ function observationCoordinatorFlows(
 /**
  * The observation loop, and the teardown handle every boot hands the owner.
  *
- * The loop runs on `production` and `polled` alone: `held` is the
- * deterministic frame, where nothing moves until a key press or a settle
+ * The observation loop runs on `production` and `polled` alone: `held` is
+ * the deterministic frame, where nothing moves until a key press or a settle
  * does, and a frame test must not race a poll. The poll interval stands
  * where the policy names one, and the config's agent-poll-interval-seconds
- * elsewhere, the way the base options state it.
+ * elsewhere, the way the base options state it. The refresh schedule keeps
+ * its own gate at the coordinator's start (issue #366): the policy names
+ * which loops the plane starts, and each loop reads the policy at its own
+ * seam.
  *
  * The teardown handle stands on every branch, the held one included: the
  * owner's shutdown ordering - stop before the state closes - is one rule,
@@ -5633,7 +5641,6 @@ function appObservationCoordinator(f: AppObservationFields): (() => void) | unde
 	});
 	if (f.loopPolicy.kind === "held") return undefined;
 	const dispatch = f.handoffDispatch;
-	if (dispatch === undefined) return undefined;
 	const state = f.state;
 	const coordinator = new ObservationCoordinator({
 		...observationCoordinatorBase(f, state, dispatch),
@@ -5796,11 +5803,11 @@ function appHandoffDispatchOptions(f: AppOpsFields, state: AppAggregates): Hando
 		// pickup crosses to the Consultation operations, which own the
 		// record's settings re-read, its seat move, and its opening. The
 		// module owns the seat and the queue's shared order. The `moved`
-		// fallback stands only where the operations are absent - the
-		// no-state test projection, where the module removes the item and
-		// the still-`queued` record loses its pointer, and a removal of the
-		// item through the module's seam moves the record to `unscheduled`
-		// the way the Main view's Delete does (issue #91).
+		// fallback stands only where the operations are absent: the module
+		// removes the item and the still-`queued` record loses its pointer,
+		// and a removal of the item through the module's seam moves the
+		// record to `unscheduled` the way the Main view's Delete does
+		// (issue #91).
 		pickupConsultation: (consultationId, mode) =>
 			f.consultationOperationsRef.current?.pickup(consultationId, mode) ??
 			Promise.resolve({ kind: "moved" } as const),
@@ -5921,14 +5928,12 @@ function appHandoffDispatches(f: AppOpsFields): {
  * own existing words for the same fact.
  */
 function appRunCloseCleanup(
-	f: AppOpsFields,
+	f: AppTicketOpsFields,
 	identity: string,
 	handoff: StoredHandoffFacts,
 	end: "closed" | "abandoned",
 ): void {
-	const dispatch = f.handoffDispatchRef.current?.dispatch;
-	if (dispatch === undefined) return;
-	void dispatch.closeCleanup(identity, handoff, end).then(
+	void f.handoffDispatch.closeCleanup(identity, handoff, end).then(
 		(failure) => {
 			if (failure !== undefined)
 				f.setFaultErrorMessage(`ticket ${identity} ${end}; the close cleanup failed: ${failure}`);
@@ -7521,8 +7526,8 @@ function useAppGroupingState(props: AppProps, prev: AppListViewsStage) {
 	 * default order.
 	 *
 	 * Each axis keeps its own order, so this value is the stored order of the
-	 * axis in effect alone; the orders of the other axes a plane with no state
-	 * file stands for the run keep in the run map below.
+	 * axis in effect alone; the orders of the other axes stand in the state
+	 * file, and the axis cycle reads the one it lands on.
 	 */
 	const [groupOrderList, setGroupOrderList] = useState<string[]>(() =>
 		groupingAxis !== "none" ? state.grouping.groupOrder(TICKET_GROUP_SECTION, groupingAxis) : [],

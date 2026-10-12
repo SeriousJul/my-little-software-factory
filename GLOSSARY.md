@@ -815,7 +815,7 @@ The production entry fills it from the startup module's result, and a test fills
 _Avoid_: app props, boot options, partial boot
 
 **Loop policy**:
-The fact of which background loops a run starts: production polls the Ticket sources and the Agent observation at the config's interval, a held run starts neither, and a polled run starts both at an interval the test rig names.
+The fact of which background loops a run starts: production polls the Ticket sources and the Agent observation at the config's interval, a held run runs the one-shot boot read and starts neither poll, and a polled run polls both, the observation's interval the one the test rig names.
 The policy stands in the Plane boot, so a run never settles its loops by which fields were left out.
 _Avoid_: poll interval flag, no-state mode, projection mode
 

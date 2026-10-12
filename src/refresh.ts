@@ -28,6 +28,12 @@ export class RefreshCoordinator {
 	/** The waiters on a source's in-flight fetch, by source name. */
 	private readonly settling = new Map<string, Set<() => void>>();
 	private stopped = false;
+	/**
+	 * Whether a settled fetch schedules the source's next round. `start`
+	 * runs the plane's own refresh schedule; `startOnce` runs the one-shot
+	 * boot read, and a settled fetch stands no timer behind it.
+	 */
+	private reschedules = false;
 	private readonly sources: readonly TicketSource[];
 	private readonly state: RefreshAggregates;
 	private readonly changed: (outcome?: FetchOutcome) => void;
@@ -54,6 +60,21 @@ export class RefreshCoordinator {
 	}
 
 	start(): void {
+		this.state.sourceFact.initializeSources(this.sources.map(sourceDefinition));
+		this.changed();
+		this.reschedules = true;
+		this.refreshAll();
+	}
+
+	/**
+	 * Run the one-shot boot read: the first read of every source runs now,
+	 * and no refresh schedule stands behind it. A settled fetch applies its
+	 * result and fires the callback, and a manual refresh runs one read, and
+	 * neither stands a next read on a timer. The plane's held loop policy
+	 * takes this start (issue #366): the plane stands on the boot read, and
+	 * no loop runs behind it.
+	 */
+	startOnce(): void {
 		this.state.sourceFact.initializeSources(this.sources.map(sourceDefinition));
 		this.changed();
 		this.refreshAll();
@@ -160,8 +181,10 @@ export class RefreshCoordinator {
 				if (this.stopped) return;
 				this.changed(outcome);
 				this.settled?.(source.name);
-				const timer = this.clock.setTimeout(() => this.refresh(source), source.refreshIntervalMs);
-				this.timers.set(source.name, timer);
+				if (this.reschedules) {
+					const timer = this.clock.setTimeout(() => this.refresh(source), source.refreshIntervalMs);
+					this.timers.set(source.name, timer);
+				}
 			});
 	}
 
