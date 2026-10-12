@@ -9,17 +9,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { FetchedTicket } from "../../src/domain/ticket.ts";
 import { withIssueReferences } from "../../src/domain/ticket.ts";
 import { openFactoryState, SCHEMA_VERSION } from "../../src/state.ts";
-import {
-	choice,
-	cleanup,
-	decide,
-	fetched,
-	seeded,
-	settle,
-	sourceA,
-	success,
-	turn,
-} from "./harness.ts";
+import { cleanup, decide, fetched, seeded, settle, sourceA, success, turn } from "./harness.ts";
 
 afterEach(cleanup);
 

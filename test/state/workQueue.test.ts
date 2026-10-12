@@ -35,7 +35,7 @@ describe("the workQueue aggregate", () => {
 				externalUpdatedAt: "2026-08-30T10:00:00Z",
 			},
 		];
-		const { state, path } = seeded({ file: true, tickets: firstTickets });
+		const { state } = seeded({ file: true, tickets: firstTickets });
 		const first = state.ticketWorkCycle.ticketListViews(named("one-name"), "implement").rows;
 		// The queue holds the first ticket's waiting start, so its order is the
 		// operator's, and a name change cannot move it.

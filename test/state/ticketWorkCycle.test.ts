@@ -28,6 +28,25 @@ import {
 	turn,
 } from "./harness.ts";
 
+/** One completion-trace row, as the columns the test selected it. */
+type TraceRow = {
+	work_cycle?: number | null;
+	cause?: string | null;
+	detail?: string | null;
+	decision?: string | null;
+	decided_at?: string | null;
+};
+
+/** The ticket's completion traces, in record order, read from the file. */
+function traceRows(path: string, identity: string, columns: string): Array<TraceRow> {
+	const db = new Database(path);
+	const rows = db
+		.prepare(`SELECT ${columns} FROM completion_traces WHERE ticket_identity = ? ORDER BY rowid`)
+		.all(identity) as Array<TraceRow>;
+	db.close();
+	return rows;
+}
+
 afterEach(cleanup);
 
 describe("the ticketWorkCycle aggregate", () => {
@@ -233,18 +252,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		// Ticket's turn decided it, at the moment it took it. The newest
 		// trace stays undecided: it is the turn the row shows, and the
 		// decision the operator still owes.
-		const db = new Database(path);
-		const traces = db
-			.prepare(
-				"SELECT cause, detail, decision, decided_at FROM completion_traces WHERE ticket_identity = ? ORDER BY rowid",
-			)
-			.all(identity) as Array<{
-			cause: string | null;
-			detail: string | null;
-			decision: string | null;
-			decided_at: string | null;
-		}>;
-		db.close();
+		const traces = traceRows(path, identity, "cause, detail, decision, decided_at");
 		expect(traces).toEqual([
 			{
 				cause: "failed",
@@ -282,13 +290,7 @@ describe("the ticketWorkCycle aggregate", () => {
 			completedAt: "2026-08-31T12:00:00Z",
 			cause: "completed",
 		});
-		const db = new Database(path);
-		const traces = db
-			.prepare(
-				"SELECT work_cycle, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY rowid",
-			)
-			.all(identity) as Array<{ work_cycle: number; decision: string | null }>;
-		db.close();
+		const traces = traceRows(path, identity, "work_cycle, decision");
 		expect(traces).toEqual([
 			{ work_cycle: 1, decision: "superseded" },
 			{ work_cycle: 2, decision: null },
@@ -324,13 +326,7 @@ describe("the ticketWorkCycle aggregate", () => {
 			completedAt: "2026-08-31T12:00:00Z",
 			cause: "completed",
 		});
-		const db = new Database(path);
-		const traces = db
-			.prepare(
-				"SELECT work_cycle, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY rowid",
-			)
-			.all(identity) as Array<{ work_cycle: number; decision: string | null }>;
-		db.close();
+		const traces = traceRows(path, identity, "work_cycle, decision");
 		// The record is not rewritten: a fact a decision already landed on
 		// keeps it, and only the undecided trace the settle supersedes moves.
 		expect(traces).toEqual([
@@ -340,7 +336,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		state.close();
 	});
 	test("a superseded trace is no longer a turn a reopen or a decision answers", () => {
-		const { state, path } = seeded({ file: true });
+		const { state } = seeded({ file: true });
 		const identity = "github:github.com:I_5";
 		const first = claim(state, identity);
 		settleAttempt(state, first);
@@ -394,13 +390,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		// The record closed the failure: the failed trace wears the superseded
 		// decision, and the completed turn the ticket is on stays undecided
 		// beside it.
-		const db = new Database(path);
-		const traces = db
-			.prepare(
-				"SELECT cause, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY rowid",
-			)
-			.all(identity) as Array<{ cause: string | null; decision: string | null }>;
-		db.close();
+		const traces = traceRows(path, identity, "cause, decision");
 		expect(traces).toEqual([
 			{ cause: "failed", decision: "superseded" },
 			{ cause: "completed", decision: null },
@@ -441,13 +431,7 @@ describe("the ticketWorkCycle aggregate", () => {
 		// The shared order names the failed trace the newest settled turn, so
 		// the settle supersedes the completed one instead: the failure stays
 		// undecided, and the completed trace wears the decision.
-		const db = new Database(path);
-		const traces = db
-			.prepare(
-				"SELECT cause, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY rowid",
-			)
-			.all(identity) as Array<{ cause: string | null; decision: string | null }>;
-		db.close();
+		const traces = traceRows(path, identity, "cause, decision");
 		expect(traces).toEqual([
 			{ cause: "failed", decision: null },
 			{ cause: "completed", decision: "superseded" },

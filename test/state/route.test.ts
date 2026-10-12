@@ -26,6 +26,39 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 		return { identity: ticket.identity, attemptId };
 	}
 
+	/** The settled turn ended by the handed-off decision the queue item stands on. */
+	function handedOffTurn(state: State) {
+		const { identity, attemptId } = settledTurn(state);
+		const decided = state.ticketWorkCycle.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: attemptId,
+			decision: "handed-off",
+			decidedAt: "2026-08-31T11:10:00Z",
+		});
+		return { identity, attemptId, decided };
+	}
+
+	/** The ticket's own open wait and the route's item, both enqueued. */
+	function queueBoth(state: State, identity: string) {
+		expect(
+			state.workQueue.enqueueWork({
+				ticketIdentity: identity,
+				origin: "open",
+				choice,
+				previousMessage: "asked by hand",
+			}),
+		).toEqual({ ok: true });
+		expect(
+			state.workQueue.enqueueWork({
+				ticketIdentity: "github:github.com:I_6",
+				routeFromIdentity: identity,
+				origin: "workflow",
+				choice,
+				previousMessage: "the route",
+			}),
+		).toEqual({ ok: true });
+	}
+
 	/** The settled turn's transition, routing to the named position. */
 	function routeOutcome(positionIdentity: string): TransitionOutcome {
 		return {
@@ -52,15 +85,8 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 
 	test("the route ask ends the cycle at the ask, and the re-confirm stands a no-op", () => {
 		const { state } = seeded({ file: true });
-		const { identity, attemptId } = settledTurn(state);
-		expect(
-			state.ticketWorkCycle.applyCompletionDecision({
-				ticketIdentity: identity,
-				handoffId: attemptId,
-				decision: "handed-off",
-				decidedAt: "2026-08-31T11:10:00Z",
-			}),
-		).toBe(true);
+		const { identity, attemptId, decided } = handedOffTurn(state);
+		expect(decided).toBe(true);
 		// The decision lands and the cycle ends in the same write: the
 		// ticket rests open with the cycle incremented, and the wait is the
 		// item's, not a ticket state (ADR 0072).
@@ -87,15 +113,8 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 			file: true,
 			tickets: [fetched("github:github.com:I_6"), fetched()],
 		});
-		const { identity, attemptId } = settledTurn(state);
-		expect(
-			state.ticketWorkCycle.applyCompletionDecision({
-				ticketIdentity: identity,
-				handoffId: attemptId,
-				decision: "handed-off",
-				decidedAt: "2026-08-31T11:10:00Z",
-			}),
-		).toBe(true);
+		const { identity, decided } = handedOffTurn(state);
+		expect(decided).toBe(true);
 		// The source ended its cycle at the ask and rests open behind the
 		// wait, so the start moves the started ticket alone.
 		expect(state.ticketWorkCycle.ticketState(identity)).toBe("open");
@@ -124,15 +143,8 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 
 	test("the same-position start hands the open ticket off in its next cycle", () => {
 		const { state } = seeded({ file: true });
-		const { identity, attemptId } = settledTurn(state);
-		expect(
-			state.ticketWorkCycle.applyCompletionDecision({
-				ticketIdentity: identity,
-				handoffId: attemptId,
-				decision: "handed-off",
-				decidedAt: "2026-08-31T11:10:00Z",
-			}),
-		).toBe(true);
+		const { identity, decided } = handedOffTurn(state);
+		expect(decided).toBe(true);
 		expect(state.ticketWorkCycle.ticketState(identity)).toBe("open");
 		// A route onto the ticket's own new position names itself, and the
 		// normalization leaves its item without a route from. The start is
@@ -166,15 +178,8 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 			file: true,
 			tickets: [fetched("github:github.com:I_6"), fetched()],
 		});
-		const { identity, attemptId } = settledTurn(state);
-		expect(
-			state.ticketWorkCycle.applyCompletionDecision({
-				ticketIdentity: identity,
-				handoffId: attemptId,
-				decision: "handed-off",
-				decidedAt: "2026-08-31T11:10:00Z",
-			}),
-		).toBe(true);
+		const { identity, decided } = handedOffTurn(state);
+		expect(decided).toBe(true);
 		expect(state.ticketWorkCycle.ticketState(identity)).toBe("open");
 		expect(
 			state.workQueue.enqueueWork({
@@ -215,33 +220,10 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 			file: true,
 			tickets: [fetched("github:github.com:I_6"), fetched()],
 		});
-		const { identity, attemptId } = settledTurn(state);
-		expect(
-			state.ticketWorkCycle.applyCompletionDecision({
-				ticketIdentity: identity,
-				handoffId: attemptId,
-				decision: "handed-off",
-				decidedAt: "2026-08-31T11:10:00Z",
-			}),
-		).toBe(true);
+		const { identity, decided } = handedOffTurn(state);
+		expect(decided).toBe(true);
 		// The ticket's own open-origin wait is not the route's item.
-		expect(
-			state.workQueue.enqueueWork({
-				ticketIdentity: identity,
-				origin: "open",
-				choice,
-				previousMessage: "asked by hand",
-			}),
-		).toEqual({ ok: true });
-		expect(
-			state.workQueue.enqueueWork({
-				ticketIdentity: "github:github.com:I_6",
-				routeFromIdentity: identity,
-				origin: "workflow",
-				choice,
-				previousMessage: "the route",
-			}),
-		).toEqual({ ok: true });
+		queueBoth(state, identity);
 		expect(state.workQueue.items()).toHaveLength(2);
 		expect(state.workQueue.removeWorkflowRouteItem(identity)).toBe(1);
 		expect(state.workQueue.items()).toHaveLength(1);
@@ -370,34 +352,11 @@ describe("the routed Ticket's wait (ADR 0072)", () => {
 			file: true,
 			tickets: [fetched("github:github.com:I_6"), fetched()],
 		});
-		const { identity, attemptId } = settledTurn(state);
-		expect(
-			state.ticketWorkCycle.applyCompletionDecision({
-				ticketIdentity: identity,
-				handoffId: attemptId,
-				decision: "handed-off",
-				decidedAt: "2026-08-31T11:10:00Z",
-			}),
-		).toBe(true);
+		const { identity, decided } = handedOffTurn(state);
+		expect(decided).toBe(true);
 		// The ticket's own open-origin wait stands beside the route's item
 		// under the ticket's own name.
-		expect(
-			state.workQueue.enqueueWork({
-				ticketIdentity: identity,
-				origin: "open",
-				choice,
-				previousMessage: "asked by hand",
-			}),
-		).toEqual({ ok: true });
-		expect(
-			state.workQueue.enqueueWork({
-				ticketIdentity: "github:github.com:I_6",
-				routeFromIdentity: identity,
-				origin: "workflow",
-				choice,
-				previousMessage: "the route",
-			}),
-		).toEqual({ ok: true });
+		queueBoth(state, identity);
 		// The operator removes the ticket's own wait: the row leaves, the
 		// route's item stands, and no mark is written: the row named no
 		// route, so the removal is the item's alone.

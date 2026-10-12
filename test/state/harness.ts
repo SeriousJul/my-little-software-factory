@@ -306,7 +306,12 @@ function dropPostV4(db: Database): void {
 	db.prepare("ALTER TABLE completion_traces DROP COLUMN detail").run();
 	db.prepare("ALTER TABLE consultation_turns DROP COLUMN cause").run();
 	db.prepare("ALTER TABLE consultation_turns DROP COLUMN detail").run();
-	// The v10 facts belong to the run after this record: a pre-v5 database
+	dropPostV10(db);
+}
+
+/** The v10 and later facts and tables a record before this version never held. */
+function dropPostV10(db: Database): void {
+	// The v10 facts belong to the run after this record: a pre-v10 database
 	// never stored a checkout's confirmed conflict set, and its Consultation
 	// never held the one-shot override column.
 	db.prepare(
@@ -314,12 +319,29 @@ function dropPostV4(db: Database): void {
 	).run();
 	db.exec("DROP TABLE checkout_conflict_confirmations;");
 	// The v13 mode, the v14 queue, and the v19 queue pause belong to the run
-	// after this record: a pre-v5 file stored no Auto-handoff mode, no Work
+	// after this record: a pre-v13 file stored no Auto-handoff mode, no Work
 	// queue, and no queue pause.
 	db.exec("DROP TABLE queue_pause; DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
-	// The v13 fact belongs to the run after this record: a pre-v5 trace never
+	// The v13 fact belongs to the run after this record: a pre-v13 trace never
 	// stored the transition outcome.
 	db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
+}
+
+/** The schema's indexes or tables and the stamp the file wears. */
+export function schemaObjects(
+	path: string,
+	kind: "index" | "table",
+): { names: string[]; version: number } {
+	const check = new Database(path, { readonly: true });
+	const names = (
+		check.prepare("SELECT name FROM sqlite_master WHERE type = ?").all(kind) as Array<{
+			name: string;
+		}>
+	).map((row) => row.name);
+	const version = (check.prepare("SELECT version FROM schema_version").get() as { version: number })
+		.version;
+	check.close();
+	return { names, version };
 }
 
 /** Downgrade the state file to the shape a v2 record held. */
@@ -392,12 +414,7 @@ export function downgradeToV7(path: string): void {
 	db.prepare("ALTER TABLE completion_traces DROP COLUMN detail").run();
 	db.prepare("ALTER TABLE consultation_turns DROP COLUMN cause").run();
 	db.prepare("ALTER TABLE consultation_turns DROP COLUMN detail").run();
-	db.prepare(
-		"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
-	).run();
-	db.exec("DROP TABLE checkout_conflict_confirmations;");
-	db.exec("DROP TABLE queue_pause; DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
-	db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
+	dropPostV10(db);
 	db.prepare("UPDATE schema_version SET version = 7").run();
 	db.prepare("UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')").run();
 	db.close();

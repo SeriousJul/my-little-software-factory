@@ -21,6 +21,7 @@ import {
 	HARNESS_AGENT_NAME,
 	labeled,
 	POSITION_STATES,
+	schemaObjects,
 	seeded,
 	settle,
 	settleAttempt,
@@ -676,7 +677,7 @@ describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
 			tickets: [fetched()],
 		});
 		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
-		const pending = claim(state, TICKET);
+		claim(state, TICKET);
 		expect(state.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(false);
 		expect(state.handoff.handoffInFlight(TICKET)).toBe(true);
 		state.close();
@@ -745,17 +746,9 @@ describe("the failed start's hold (ADR 0077, ADR 0101)", () => {
 		const reopened = openFactoryState(path, ATTEMPT_NOW);
 		expect(reopened.handoff.handoffBlockedUnrefreshed(TICKET)).toBe(true);
 		reopened.close();
-		const check = new Database(path, { readonly: true });
-		const indexes = (
-			check.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{
-				name: string;
-			}>
-		).map((row) => row.name);
-		expect(indexes).toContain("attempts_ticket_latest");
-		expect(
-			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
-		).toBe(SCHEMA_VERSION);
-		check.close();
+		const { names, version } = schemaObjects(path, "index");
+		expect(names).toContain("attempts_ticket_latest");
+		expect(version).toBe(SCHEMA_VERSION);
 	});
 });
 
@@ -845,18 +838,10 @@ describe("the run of failed Handoff starts (issue #298)", () => {
 		const reopened = openFactoryState(path, ATTEMPT_NOW);
 		expect(reopened.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(2);
 		reopened.close();
-		const check = new Database(path, { readonly: true });
-		const indexes = (
-			check.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{
-				name: string;
-			}>
-		).map((row) => row.name);
-		expect(indexes).toContain("attempts_ticket_failed");
-		expect(indexes).toContain("attempts_ticket_reached");
-		expect(
-			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
-		).toBe(SCHEMA_VERSION);
-		check.close();
+		const { names, version } = schemaObjects(path, "index");
+		expect(names).toContain("attempts_ticket_failed");
+		expect(names).toContain("attempts_ticket_reached");
+		expect(version).toBe(SCHEMA_VERSION);
 	});
 
 	test("a file that carries one of the two indexes gains the other (issue #298)", () => {
@@ -876,15 +861,9 @@ describe("the run of failed Handoff starts (issue #298)", () => {
 		const reopened = openFactoryState(path, ATTEMPT_NOW);
 		expect(reopened.handoff.failedStartStreaksFor([TICKET]).get(TICKET)).toBe(2);
 		reopened.close();
-		const check = new Database(path, { readonly: true });
-		const indexes = (
-			check.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{
-				name: string;
-			}>
-		).map((row) => row.name);
-		expect(indexes).toContain("attempts_ticket_failed");
-		expect(indexes).toContain("attempts_ticket_reached");
-		check.close();
+		const { names } = schemaObjects(path, "index");
+		expect(names).toContain("attempts_ticket_failed");
+		expect(names).toContain("attempts_ticket_reached");
 	});
 });
 
@@ -1158,16 +1137,8 @@ describe("the Agent name collision a refused start leaves (issue #299)", () => {
 			expect.objectContaining({ holderPaneId: "w13K:p1" }),
 		);
 		reopened.close();
-		const check = new Database(path, { readonly: true });
-		const tables = (
-			check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
-				name: string;
-			}>
-		).map((row) => row.name);
-		expect(tables).toContain("name_collisions");
-		expect(
-			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
-		).toBe(SCHEMA_VERSION);
-		check.close();
+		const { names, version } = schemaObjects(path, "table");
+		expect(names).toContain("name_collisions");
+		expect(version).toBe(SCHEMA_VERSION);
 	});
 });
