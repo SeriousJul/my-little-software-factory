@@ -1881,8 +1881,9 @@ always held it. A skipped required check is not a pass.
 
 ## The frame rig runs the controls, not the keys (issue #365, ADR 0128)
 
-Status: the automated checks pass for the rig and the two owned surfaces. The
-remaining frame surfaces migrate one at a time, and the owned list in the
+Status: the automated checks pass for the rig and the three owned surfaces: its
+own suite, the Message line, and the theme frame. The remaining frame surfaces
+migrate one at a time, and the owned list in the
 architecture check is the record of what has landed.
 
 What was measured: the frame rig in `test/app-harness.ts` now resolves a
@@ -1956,10 +1957,20 @@ keeps no private wait.
 The closed set is enforced in the rig, not in the test: an outcome field
 outside the set is a rig error, not a quiet no-op, and `opens` belongs to a
 press alone, which the rig's `waitFor` refuses. The escape list keeps the
-controls the bar never hints - the auto-handoff toggle, the quit and the
-emergency exit, the repository init, the field's own keys, and the form's
-type-ahead - on named rig operations, and `frameUntil` stands for a frame
-check no outcome names. A wait that still stands after the deadline names the
+input the bar does not advertise on named rig operations: the controls the
+bar never hints - the auto-handoff toggle, the quit and the emergency exit,
+the repository init, the field's own keys, and the form's type-ahead; the
+page and jump keys, which the bar's hint names nowhere (it states `↑↓/jk` and
+`j/k`, never PgUp, PgDn, Home, or End); and, through `guideKey`, the key the
+Key guide names but the bar paints nowhere in the frame - an alias the bar
+prints under one name only (F1 beside ?, F2 beside m), the primary key of a
+control whose hint the bar's own facts hold back (the Message view with
+nothing recorded), and a control the bar leaves off on this surface. The key
+`guideKey` sends is the catalogue's alias for the control, read from the same
+source the guide paints from, and a key the guide names nowhere for the
+control fails the press, naming the aliases the guide does name; the rig's
+suite pins both the escape on the empty-record Message press and that
+refusal. `frameUntil` stands for a frame check no outcome names. A wait that still stands after the deadline names the
 outcome it waited on and the press that sent it, and the rig's suite pins the
 message on a press that runs to the deadline. The close proof is the set of
 handler identities the opening recorded on the key bus: the closing press
@@ -2026,13 +2037,19 @@ documents each count: at the base head `a5a947dd` the 42 frame suites held
 935 press-family calls, 302 hand operations, 848 `awaitFrame` waits, 739
 inline containment predicates on the frame's own strings, and 449 direct
 reaches to the renderer's input, over 79 rig exports and 36 per-suite helper
-copies. At this head the walk spans 43 suites and the rig owns 103 exports,
-and the two owned surfaces press through it with none of the retired surface
+copies. At the head that lands the Message line (`8ee43d3f`) the walk spans
+43 suites, the 42 base suites plus the rig's own, and the rig owns 106
+exports: 888 press-family calls, 275 hand operations, 817 raw waits, 724
+inline containment predicates, 435 reaches to the renderer's input, and 36
+per-suite helper copies, down from the base head's 935, 302, 848, 739, 449,
+and 36. The three owned surfaces - the rig's own suite, the Message line, and
+the theme frame - press through the rig with none of the retired surface
 left: no hand-picked key, no hand operation, no raw wait, and no reach to
-the renderer's input, as the architecture check pins. The nine lines of
-inline containment the walk still counts on the owned surfaces all stand in
-the `theme-frame` suite: they are row probes - the border row and the
-marker row - that the rig leaves alone. The escape list's named `frameUntil`
+the renderer's input, as the architecture check pins, and the walk counts no
+inline containment on them. The Message line's walk stands at 16 named
+`frameUntil` checks, each named for the frame it waits for, and two helper
+copies under retired stems that are domain fixtures - the close-cleanup
+commands and the bar-word builder - not input the rig should own. The escape list's named `frameUntil`
 check, which the closed set of outcomes does not reach, is invisible to the
 walk's line-based metric: its arrow and its containment test stand on
 different lines. The test-tree duplication clone count, the Quality audit's
