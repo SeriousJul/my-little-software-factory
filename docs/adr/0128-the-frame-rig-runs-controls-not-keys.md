@@ -126,7 +126,17 @@ evidence.
 bar: the auto-handoff toggle, the quit and the emergency exit, and the
 repository init. The field's twelve editing rows are guide-only: a field's
 editing keys, which the plane dispatches nowhere. Those routes stay, as named
-rig operations for typing and for the form's slot walk. A static check refuses
+rig operations for typing and for the form's slot walk. The page and jump keys
+stand on the same list: the bar's hint names `↑↓/jk` and `j/k`, never PgUp,
+PgDn, Home, or End, so the named `pageKey` operation sends them. And where the
+bar paints no hint for a key the plane accepts, the named `guideKey`
+operation sends the key the Key guide names for the control: an alias the bar
+prints under one name only (F1 beside `?`, F2 beside `m`), the primary key of
+a control whose hint the bar's own facts hold back (the Message key while the
+record holds nothing), and a control the bar leaves off on the surface. The
+key `guideKey` sends is read from the catalogue, the source the guide paints
+from, so the catalogue stays the single owner of key meaning, and a key the
+guide names nowhere for the control fails the press. A static check refuses
 a frame test that reaches for a raw key outside the list, in the shape of the
 assertion-architecture check and the shared-control check.
 
