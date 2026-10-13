@@ -1988,6 +1988,15 @@ lands the rig's stale-line guard on the `refuses` outcome, whose effect
 stands on the rig's own suite, green at `da5fa356`, and no wait in either
 run reached the deadline. These are the waits the one deadline stands
 above at this head; a head that moves a surface slower re-records them here.
+At head `a794c129`, the head that lands the rework above, the rig's own
+suite ran its thirty-five tests in 34.9 seconds, 0 fail, load 3.3 at the
+run, and the timeout pin still stands the rig's deadline as the only wait
+that runs to it by design. The full suite ran its 3,404 tests in 65.7
+seconds, 0 fail, at that same head (this machine, load 3.3 at its run): the
+heads between `da5fa356` and it land the rig's surface read on the frame's
+own markers, the press guard on the shared hint, and the pins this rework
+adds on the response editor and the interaction input, and no wait in the
+run reached the deadline.
 
 The static architecture check, `test/frame-rig-architecture.test.ts`, owns the
 set of surfaces the rig drives and refuses the two ways a surface can opt out:
