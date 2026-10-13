@@ -2003,7 +2003,14 @@ seconds, 0 fail, at that same head (this machine, load 3.3 at its run): the
 heads between `da5fa356` and it land the rig's surface read on the frame's
 own markers, the press guard on the shared hint, and the pins this rework
 adds on the response editor and the interaction input, and no wait in the
-run reached the deadline.
+run reached the deadline. At head `f1870e82`, the head that lands the
+rework above, the rig's own suite ran its thirty-seven tests in 38.0
+seconds, 0 fail, at its run alone, and the full suite ran its 3,406 tests
+in 65.8 seconds, 0 fail, at that same head (this machine, load 4.5 at its
+run, with a concurrent mutation-testing run over a subset of the frame
+files): the guard it lands reads the sharing off the screen, the remove
+pair stands on the Consultations frames as the two-owner read of one
+painted cell, and no wait in the run reached the deadline.
 
 The static architecture check, `test/frame-rig-architecture.test.ts`, owns the
 set of surfaces the rig drives and refuses the two ways a surface can opt out:
