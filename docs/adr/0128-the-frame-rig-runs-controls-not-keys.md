@@ -232,3 +232,50 @@ painted hints each resolve to one owner, and the measurement stands frame by
 frame in the verification record. The guard's throw is pinned in the rig's
 own suite on the one collision the surface read cannot name: a frame with no
 marker, and a bar the permissive read leaves to two owners.
+
+## Addendum: the guard reads the sharing off the screen, and the remove pair stands as a measured read
+
+The guard above named the collision off the read: a painted hint the read
+left to two catalogue owners threw on every press of either, a press named
+with `via` included. That read sees no availability, and the queue's removal
+runs every base mode and carries no section marker, so on the Consultations
+surface it named the record removal's one painted Delete Remove cell for both
+catalogue controls, and a press of the on-bar owner threw the collision the
+bar never stood: the bar painted the hint once, and the plane dispatches the
+pressed key to the on-bar owner. The throw was the rig's false positive, and
+this addendum supersedes the guard's rule and the plane-wide claim it stood.
+
+The guard's superseding rule reads the sharing off the screen, where true
+sharing stands: the bar packs its hints without deduplicating, so it paints a
+hint's text once per on-bar owner, and two on-bar owners of the same hint
+stand as two painted cells of the same text. The catalogue's reachability
+keeps one control per contested key on the bar, so a key the state dispatches
+to one owner hides the other owner's hint, and a hint the bar paints once is
+a key the rig owns. A control off the bar owns no painted hint: a press that
+names it sends the key the one painted cell stands on, and the plane dispatches
+the key to the on-bar owner, so the suite gets the on-bar owner's act or the
+plane's own refusal, not a rig error. A hint the bar paints twice is not a key
+the rig can own: the plane dispatches the pressed key to one of the two
+on-bar owners, and the guard throws and names the co-owners it files on every
+press of the hint, a press named with `via` included. The closed walk's
+wording moved with the guard: it records the read's owners, one or more, per
+painted hint, and a read owner beyond the painted cells is off the bar.
+
+The plane-wide claim the guard above stood is scoped to the frames the rig's
+suite stands: on the Seeded plane, no bar the rig's suite stands paints a
+hint twice, so no press the rig sends reaches the guard's finding. The
+Consultations surface's remove pair stands the other shape, recorded in the
+verification record as a measured two-owner hint of the rig's read: on every
+Consultations frame the bar paints the hint for, the read names the one
+painted cell for both catalogue controls while the bar keeps the queue's
+removal off and paints the cell once. The rig's suite pins that shape on the
+list and the detail frame at 170 columns, thirteen past the cut of their
+thirteen-hint rows, and pins the plane's dispatch of the key to the on-bar
+owner: the press of the record removal runs it, and the removal panel opens.
+The guard's throw is pinned in the rig's own suite on the shape the Seeded
+plane stands not: a bar that paints a hint's text twice.
+
+The pull that lands this rule changes one line of production code: the export
+of `omitFromOtherSection` from the Control catalogue, the catalogue's own
+section-omission read the rig's read applies the way the Action bar does.
+Issue #387 closes with it.

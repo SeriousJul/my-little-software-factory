@@ -1913,10 +1913,15 @@ bar's own section labels - where a frame that names no surface resolves
 permissively, so a
 marker the plane rewords degrades the read to the permissive answer, which
 weakens the filter and never misresolves a control the bar names. A control
-off the bar owns no painted hint and fails the resolution, and the rig's
-suite pins the refusal where a key collides: the controls that answer to
-Enter fail on the bar's painted Decide hint, and the other sections'
-controls fail on the hints the frame's section paints for its own. A hint
+off the bar owns no painted cell and fails the resolution where the bar
+paints no hint it owns, reaching the rig's escape list instead of pressing a
+key the bar names for another control, and the rig's suite pins the refusal
+where a key collides: the controls that answer to Enter fail on the bar's
+painted Decide hint, and the other sections'
+controls fail on the hints the frame's section paints for its own. A control
+the read names beside the on-bar owner of a painted cell owns no cell of its
+own: the bar keeps it off, and a press that names it sends the key the one
+painted cell stands on, the plane dispatching the key to the on-bar owner. A hint
 the catalogue paints display-only - a label for a control that claims no
 key, the text row's Type and Backspace - is owned the same way and is
 keyless: the rig's parser reads the hint keyless instead of splitting the
@@ -1934,10 +1939,12 @@ outcomes, and keeps the controls the bar never hints on its escape list. The
 closed catalogue walk is non-circular: each hint the bar paints is owned by
 the catalogue - one or more controls can paint it on the frame's surface -
 and the walk records the hint's owners, asserts the catalogue owns the hint,
-and resolves every owner to a key the hint painted. A hint two owners share
-does not fail the walk: on a surface the rig names the read separates the
-owners, and on a surface it names not the bar's disagreement is the finding
-the rig's press guard files on the press of the hint it shares. The walk's ground
+and resolves every owner to a key the hint painted. A hint the read names
+for more owners than the bar painted does not fail the walk: the bar paints
+a hint's text once per on-bar owner, and the walk records the read's owners,
+one or more, and resolves each against the hint; the press guard owns the key
+the one painted cell stands on, and throws only on a hint the bar paints
+twice. The walk's ground
 truth is the bar the plane paints and the catalogue's facts, and the
 ownership it checks is the rig's own three reads applied per control, so the
 matcher is not its own ground truth: a drift between the bar and the
@@ -2046,20 +2053,28 @@ operation the escape list does not yet name is the next rig extension the
 migration needs. The collision families the rule stood in issue #387 - the
 modal Esc Cancel family, the scroll pair on a permissive frame, the
 cross-section pair on a detail-focused frame, and the identical Delete Remove
-pair at wide widths - stand measured on the Seeded plane at this head: the
+pair - stand measured on the Seeded plane at this head: the
 rig's suite stands each family's own frame - the three sections' base and
 detail frames, the Decision modal, the action panel, and the Message view for
 the modal family, the consultation's response editor and the Agent
 interaction input for the permissive and the shared-detail reads, and the
 detail frames of the consultation and the Work queue for the cross-section
-and the identical pairs - and walks each frame's bar: every painted hint
-resolves to one catalogue owner, named surface or permissive surface alike.
-No frame the plane paints on the Seeded plane stands a hint two catalogue
-controls can both paint, so no press the rig sends reaches the co-owner
-guard, and issue #387 closes with the pull that lands this rule. The guard's
-throw is pinned in the rig's own suite on the one collision the surface read
-cannot name: a frame with no marker, and a bar the permissive read leaves to
-two owners. The spec's test decision that a
+and the identical pairs - and walks each frame's bar: the walk
+records the read's owners, one or more, per painted hint. On the frames the
+rig's suite stands, no bar paints a hint's text twice, so no press the rig
+sends reaches the guard's finding, and issue #387 closes with the pull that
+lands this rule. The identical pair stands its second shape on the
+Consultations surface: the queue's removal runs every base mode and carries
+no section marker, and the read sees no availability, so on every
+Consultations frame the bar paints the hint for the read names the one
+painted Delete Remove cell for both catalogue controls while the bar keeps
+the queue's removal off and paints the cell once. The rig's suite pins that
+shape on the list and the detail frame at 170 columns, thirteen past the cut
+of their thirteen-hint rows (at the suite's 120 columns the rows pack the
+cell out), and pins the plane's dispatch of the key to the on-bar owner: the
+press of the record removal runs it, and the removal panel opens. The
+guard's throw is pinned in the rig's own suite on the shape the Seeded
+plane stands not: a bar that paints a hint's text twice. The spec's test decision that a
 control whose aliases match two painted hints fails and the failure names
 both stands with it: no owned surface can paint two hints to one control,
 the first frame that can stands on the wide Work queue bar, and the pin that

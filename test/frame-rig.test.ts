@@ -16,22 +16,26 @@
  * The rig's keys flow from the control catalogue and the painted bar, never
  * from a literal this suite picks.
  *
- * The rig's last pin is the issue's own: a painted hint one control paints
- * is owned by that control, and a hint two catalogue controls can both paint
- * is a finding about the bar the rig files instead of pressing through. The
- * surface read names the catalogue modes the frame stands on from the
- * frame's own markers, and on a named surface the hint's owners are the
- * controls the surface runs. The Seeded plane stands no frame that paints a
- * hint two catalogue controls can both paint - the measurement stands frame
- * by frame in the verification record - so no Seeded press reaches the
- * co-owner guard, and its throw is pinned here on the one collision the
- * surface read cannot name: a frame with no marker, and a bar the
- * permissive read leaves to two owners.
+ * The rig's last pin is the issue's own: the bar packs its hints without
+ * deduplicating, so it paints a hint's text once per on-bar owner. A painted
+ * hint one control paints is a key the rig owns, and a hint the bar paints
+ * twice is a finding about the bar the rig files instead of pressing
+ * through. The surface read names the catalogue modes the frame stands on
+ * from the frame's own markers, and the read names every catalogue control
+ * that could paint a hint on the surface: on the Consultations surface the
+ * remove pair stands as a hint the bar paints once and the read names for
+ * two owners - the queue's removal runs every base mode and carries no
+ * section marker - and the rig owns the key the one painted cell stands on,
+ * the plane dispatching the key to the on-bar owner. The guard's throw is
+ * pinned on the shape the Seeded plane stands not: a bar that paints a
+ * hint's text twice.
  */
 
 import { describe, expect, test } from "bun:test";
-import { createTestRenderer } from "@opentui/core/testing";
+import { createElement } from "@opentui/react";
+import { testRender } from "@opentui/react/test-utils";
 import { controlById } from "../src/components/controls.ts";
+import { controlInk } from "../src/components/shared/presentation.ts";
 import {
 	type AppSetup,
 	actionBarRowOf,
@@ -109,6 +113,12 @@ async function toSection(setup: AppSetup, section: SurfaceFamily): Promise<void>
 	expect(surfaceFamily(setup.captureCharFrame())).toBe(section);
 }
 
+/** Stand on the Consultations section, its closed record under the cursor. */
+async function toClosedConsultation(setup: AppSetup): Promise<void> {
+	await toSection(setup, "consultation");
+	await pressControl(setup, "history", { quiet: true });
+}
+
 /** The repository the consultation seeds name, one the plane can stand. */
 const REPO_BILLING = {
 	identity: "github.com/acme/billing",
@@ -135,6 +145,8 @@ const AWAITING_RECORD: ConsultationSeed = {
 };
 
 const WORKING_RECORD: ConsultationSeed = { ...REVIEW_RECORD, agent: true, state: "working" };
+
+const CLOSED_RECORD: ConsultationSeed = { ...REVIEW_RECORD, state: "closed" };
 
 const HANDOFF_ROW: WorkQueueSeed = {
 	kind: "handoff",
@@ -715,47 +727,139 @@ describe("the frame rig owns a painted hint one control paints (issue #387)", ()
 			{ standing: "open", consultations: [WORKING_RECORD] },
 		);
 	});
+
+	test("the Consultations remove pair: the bar paints the hint once, the read names both owners", async () => {
+		// The queue's removal runs every base mode and carries no section
+		// marker, and the read sees no availability: on the Consultations
+		// surface it names the record removal's hint for both catalogue
+		// controls, while the bar keeps the queue's removal off and paints the
+		// one cell the rig owns. The list's bar stands its thirteen hints, the
+		// Delete Remove cell among them, at 157 columns, the cut of its row,
+		// and the frame stands at 170, thirteen columns past the cut.
+		const planeRecord = await plane({ standing: "open", consultations: [CLOSED_RECORD] });
+		await withApp(
+			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await toClosedConsultation(setup);
+				const frame = setup.captureCharFrame();
+				expect(surfaceModes(frame)).toEqual(["consultation-list"]);
+				const painted = parseBarText(actionBarRowOf(frame), null).filter(
+					(hint) => hint.key === "Delete" && hint.label === "Remove",
+				);
+				expect(painted).toHaveLength(1);
+				expect(barHintOwners(setup).get("Delete Remove")).toEqual([
+					"queue-remove",
+					"consultation-delete",
+				]);
+				// The walk records the read's owners and resolves each against the hint.
+				barControlIds(setup);
+				// The rig owns the key the one painted cell stands on, and the plane
+				// runs the on-bar owner's act: the removal panel opens.
+				expect(resolveControl(setup, "consultation-delete").key).toBe("Delete");
+				await pressControl(setup, "consultation-delete", {
+					opens: "Delete Consultation",
+				});
+			},
+			{ width: 170, height: HEIGHT, plane: planeRecord },
+		);
+	});
+
+	test("the Consultations remove pair stands the same on the detail frame", async () => {
+		// The detail's bar stands the same thirteen hints, cutting at the same
+		// 157 columns, and the frame stands at the same 170: the read names
+		// the same pair for the one painted cell, and the rig owns the key.
+		const planeRecord = await plane({ standing: "open", consultations: [CLOSED_RECORD] });
+		await withApp(
+			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitSourceHealthy(planeRecord.state);
+				await toClosedConsultation(setup);
+				await pressControl(setup, "detail", { quiet: true });
+				const frame = setup.captureCharFrame();
+				expect(surfaceModes(frame)).toEqual(["consultation-detail", "consultation-interaction"]);
+				const painted = parseBarText(actionBarRowOf(frame), null).filter(
+					(hint) => hint.key === "Delete" && hint.label === "Remove",
+				);
+				expect(painted).toHaveLength(1);
+				expect(barHintOwners(setup).get("Delete Remove")).toEqual([
+					"queue-remove",
+					"consultation-delete",
+				]);
+				barControlIds(setup);
+				expect(resolveControl(setup, "consultation-delete").key).toBe("Delete");
+			},
+			{ width: 170, height: HEIGHT, plane: planeRecord },
+		);
+	});
 });
 
-describe("the frame rig cannot press a hint two controls own (issue #387)", () => {
-	test("a press of a hint two catalogue controls own throws the co-owner error", async () => {
-		// No Seeded frame stands the collision: every frame the plane paints
-		// either names a surface whose read separates the owners, or paints
-		// no hint two owners share (the measurement stands in the
-		// verification record). The guard's throw is pinned on the one
-		// collision the surface read cannot name: a frame with no marker, and
-		// a bar the permissive read leaves to the scroll pair, the two
-		// catalogue controls that both paint the hint's key and word.
-		const setup = await createTestRenderer({ width: WIDTH, height: HEIGHT, exitOnCtrlC: false });
+describe("the frame rig cannot press a hint the bar paints twice (issue #387)", () => {
+	test("a press of a hint the bar paints twice throws the co-owner error", async () => {
+		// True sharing is readable off the screen: the bar packs the hint's
+		// text once per on-bar owner without deduplicating, so the collision
+		// the guard files stands as two painted cells of the same text. The
+		// pin paints the text twice in the unavailable ink a hint a state
+		// cannot run wears, on a frame that names no surface: the permissive
+		// read names the scroll pair for the text, and the guard names the
+		// co-owner beside the count it read off the screen.
+		const setup = await testRender(
+			createElement(
+				"text",
+				{ x: 0, y: HEIGHT - 1, style: { width: "100%", height: 1 } },
+				createElement("span", { fg: controlInk().detail.fg ?? undefined }, "↑↓/jk Scroll"),
+				createElement("span", {}, "  "),
+				createElement("span", { fg: controlInk().detail.fg ?? undefined }, "↑↓/jk Scroll"),
+			),
+			{ width: WIDTH, height: HEIGHT },
+		);
 		try {
-			const modes = surfaceModes("an unnamed panel\n↑↓/jk Scroll");
+			await settle(setup);
+			const modes = surfaceModes(setup.captureCharFrame());
 			expect(modes).toBeNull();
-			const hint = parseBarText("↑↓/jk Scroll", null)[0];
-			// The press of either owner throws and names the other: the rig
-			// cannot own the key it would send while the co-owner's hint stands
-			// unread behind it, a press named with `via` included, because the
-			// guard reads the hint the press would send.
+			const hints = parseBarText(actionBarRowOf(setup.captureCharFrame()), null);
+			expect(hints.filter((hint) => hint.key === "↑↓/jk" && hint.label === "Scroll")).toHaveLength(
+				2,
+			);
+			// The press of either owner throws and names the other, a press
+			// named with `via` included, because the guard reads the hint the
+			// press would send, not the wording that chose it.
+			const hint = hints[0];
 			expect(() => sharedHintGuard(setup, controlById("scroll-detail"), hint, modes)).toThrow(
-				`cannot press "scroll-detail": the bar's painted hint "↑↓/jk Scroll" is owned by guide-scroll as well`,
+				`cannot press "scroll-detail": the bar paints the hint "↑↓/jk Scroll" 2 times`,
 			);
 			expect(() => sharedHintGuard(setup, controlById("guide-scroll"), hint, modes)).toThrow(
-				`cannot press "guide-scroll": the bar's painted hint "↑↓/jk Scroll" is owned by scroll-detail as well`,
+				`cannot press "guide-scroll": the bar paints the hint "↑↓/jk Scroll" 2 times`,
 			);
 		} finally {
 			await setup.renderer.destroy();
 		}
 	});
 
-	test("the guard passes a hint one control owns on the same frame", async () => {
-		// The same marker-less frame, the same permissive read: the guard
-		// files the shared hint and lets the single-owner hint stand, so the
-		// throw is the collision's and not the permissive read's.
-		const setup = await createTestRenderer({ width: WIDTH, height: HEIGHT, exitOnCtrlC: false });
+	test("the guard passes a hint the bar paints once, the read's second shape", async () => {
+		// The shape the Consultations remove pair stands on the Seeded plane:
+		// the bar paints the hint's text once, and the read names a second
+		// catalogue control the bar keeps off. The off-bar control owns no
+		// painted hint, so the guard passes and the press sends the key the
+		// on-bar owner runs.
+		const setup = await testRender(
+			createElement(
+				"text",
+				{ x: 0, y: HEIGHT - 1, style: { width: "100%", height: 1 } },
+				createElement("span", { fg: controlInk().detail.fg ?? undefined }, "↑↓/jk Scroll"),
+			),
+			{ width: WIDTH, height: HEIGHT },
+		);
 		try {
-			const modes = surfaceModes("an unnamed panel\nEsc Close");
+			await settle(setup);
+			const modes = surfaceModes(setup.captureCharFrame());
 			expect(modes).toBeNull();
-			const hint = parseBarText("Esc Close", null)[0];
-			expect(() => sharedHintGuard(setup, controlById("close-form"), hint, modes)).not.toThrow();
+			const hint = parseBarText(actionBarRowOf(setup.captureCharFrame()), null)[0];
+			expect(hint.label).toBe("Scroll");
+			// The permissive read names both scroll owners for the one painted
+			// cell, and the guard still passes: the count off the screen is one.
+			expect(() => sharedHintGuard(setup, controlById("scroll-detail"), hint, modes)).not.toThrow();
+			expect(() => sharedHintGuard(setup, controlById("guide-scroll"), hint, modes)).not.toThrow();
 		} finally {
 			await setup.renderer.destroy();
 		}
