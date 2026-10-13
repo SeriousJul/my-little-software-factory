@@ -1834,18 +1834,22 @@ function keyTokens(label: string): string[] {
  * display-only hints, the text row's Type and Backspace. A label stands in
  * the set only when every mode that paints it claims no key for it, so a
  * label the catalogue also paints beside a real key stays pressable, and the
- * bar and the catalogue cannot disagree on it (ADR 0128).
+ * bar and the catalogue cannot disagree on it (ADR 0128). The set derives
+ * once from the catalogue's standing facts and then answers the parser's
+ * per-hint read from that one derivation.
  */
+let displayOnlyKeyLabelSet: Set<string> | undefined;
 export function displayOnlyKeyLabels(): Set<string> {
-	let labels: Set<string> | undefined;
-	if (labels !== undefined) return labels;
+	if (displayOnlyKeyLabelSet !== undefined) return displayOnlyKeyLabelSet;
 	const byLabel = new Map<string, boolean>(); // label -> still keyless
 	for (const control of allControls()) {
 		if (!control.actionBar) continue; // a guide-only row the bar never paints
 		for (const mode of control.modes) noteDisplayLabel(byLabel, control, mode);
 	}
-	labels = new Set([...byLabel].filter(([, keyless]) => keyless).map(([label]) => label));
-	return labels;
+	displayOnlyKeyLabelSet = new Set(
+		[...byLabel].filter(([, keyless]) => keyless).map(([label]) => label),
+	);
+	return displayOnlyKeyLabelSet;
 }
 
 /** Note the label a control paints in one mode against the display-only set. */

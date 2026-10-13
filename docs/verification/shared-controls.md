@@ -2000,9 +2000,15 @@ reaches to the renderer's input, over 79 rig exports and 36 per-suite helper
 copies. At this head the walk spans 43 suites and the rig owns 103 exports,
 and the two owned surfaces press through it with none of the retired surface
 left: no hand-picked key, no hand operation, no raw wait, and no reach to
-the renderer's input, as the architecture check pins. The inline containment
-the owned surfaces still carry is the escape list's named `frameUntil`
-checks, which the closed set of outcomes does not reach. The counts in this
+the renderer's input, as the architecture check pins. The nine lines of
+inline containment the walk still counts on the owned surfaces all stand in
+the `theme-frame` suite: they are row probes - the border row and the
+marker row - that the rig leaves alone. The escape list's named `frameUntil`
+check, which the closed set of outcomes does not reach, is invisible to the
+walk's line-based metric: its arrow and its containment test stand on
+different lines. The test-tree duplication clone count, the Quality audit's
+own metric, stands at 204 at the base head and at this head, and the Quality
+baseline, which only shrinks, holds that count. The walk counts in this
 paragraph re-derive from the committed walk at the two named heads: the
 script run at either head prints them, and a head that moves the suites
 re-records them here from the same script.
@@ -2010,7 +2016,11 @@ re-records them here from the same script.
 What was not measured: the remaining frame surfaces have not been migrated, so
 the 935 press-family calls and 848 raw waits above stand in the suites that
 have not landed yet, and this change's effect on the whole plane is the two
-owned surfaces plus the rig, not the surfaces that follow. Two gaps the migration
+owned surfaces plus the rig, not the surfaces that follow. The closed walk
+stands on the bar of the frame it walks, and at this head that frame is the
+base frame: the walk walks the base bar only, and it does not boot the mode
+that owns each hinted catalogue id, the shape the spec's walk names. The
+other surfaces' bars walk as their migrations land. Two gaps the migration
 will meet are recorded now: the guide's scroll keys and the panes' focus moves
 are not on the bar and so are not resolvable by `pressControl`; their coverage
 belongs to the catalogue suite and the Key guide's own frames, and a focus

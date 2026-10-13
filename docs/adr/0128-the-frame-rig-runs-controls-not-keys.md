@@ -94,15 +94,18 @@ the plane advertises, which is the operator's path.
 
 **Naming is by Control catalogue id, not by hint wording.** Naming by wording
 was rejected: it re-couples the suite to a wording, and the quality gate already
-refuses restating a wording that has its own test. The refusal wording a test
-checks comes from the catalogue, not from a copy in the test.
+refuses restating a wording that has its own test. The `refuses` outcome takes
+the wording the test names, and the spec's story 7 - the outcome reading the
+catalogue's own words off the Message line - stands: the catalogue's interface
+does not expose the refusal words per control, so the test still names them.
 
 **A frame test names one outcome from a closed set, and the rig owns the wait.**
 
 - `opens` and `closes` - a surface appears or goes away, and its key ownership
   settles with it.
-- `refuses` - the Message line carries the catalogue's own refusal words for
-  that control.
+- `refuses` - the Message line carries the control's refusal, and the
+  outcome takes the wording the test names: the catalogue's interface does
+  not expose the refusal words per control, so the test still names them.
 - `shows` and `hides` - the screen text, for the facts that are not a control's
   effect.
 - `moved` - which pane or section holds the cursor.
@@ -119,12 +122,13 @@ takes a snapshot, because a caller no longer knows there is a bus.
 records the measured wait times at the head it measured them on, so the number is
 evidence.
 
-**The escape list is closed and named.** Five controls stand outside the Action
-bar, and three more are guide-only: a field's editing keys, which the plane
-dispatches nowhere. Those routes stay, as named rig operations for typing and for
-the form's slot walk. A static check refuses a frame test that reaches for a raw
-key outside the list, in the shape of the assertion-architecture check and the
-shared-control check.
+**The escape list is closed and named.** Four controls stand outside the Action
+bar: the auto-handoff toggle, the quit and the emergency exit, and the
+repository init. The field's twelve editing rows are guide-only: a field's
+editing keys, which the plane dispatches nowhere. Those routes stay, as named
+rig operations for typing and for the form's slot walk. A static check refuses
+a frame test that reaches for a raw key outside the list, in the shape of the
+assertion-architecture check and the shared-control check.
 
 **No production code changes.** No control moves, no key moves, no hint rewords,
 and no surface is touched. Where the rule cannot resolve a control through the
