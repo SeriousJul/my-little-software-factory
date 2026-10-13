@@ -1526,9 +1526,15 @@ export interface ControlOutcomeFields {
 	/**
 	 * The Message line states the catalogue's own refusal for the control.
 	 * The string form names the wording the line must carry; the boolean
-	 * form accepts the state word alone, and a test that refused twice in
-	 * a row should name the wording, because a line that was already
-	 * warning keeps standing when the control runs.
+	 * form accepts the state word alone. The line must differ from the one
+	 * that stood before the input: a warning that was already standing
+	 * keeps standing when the control runs, and a refusal that lands a line
+	 * word for word with the one already standing is indistinguishable from
+	 * that stale line, so the rig stands to the deadline on it. Beside the
+	 * line, a press whose inks resolve is refused at once when the bar
+	 * painted the hint available; where an ink resets, that check stands
+	 * down and the read stands on the Warning word and the changed line
+	 * alone.
 	 */
 	refuses?: boolean | string;
 	/** The frame paints this. */
@@ -2326,7 +2332,10 @@ async function runOutcomes(
 			(f) => {
 				const line = messageRowOf(f);
 				if (!line.startsWith("Warning:")) return false;
-				if (line === ctx.preLine && !ctx.preLine.startsWith("Warning:")) return false;
+				// A warning that stood before the input keeps standing when the
+				// control runs: only a line that differs from the one that stood
+				// before the input states a new refusal.
+				if (line === ctx.preLine) return false;
 				return target === undefined || line.includes(target);
 			},
 			named("the Message line to state the refusal"),

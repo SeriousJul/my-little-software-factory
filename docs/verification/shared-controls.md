@@ -1963,9 +1963,11 @@ alike, and twice the deadline is forty, so a test's waits fail on the rig's
 deadline, which dumps the last frame, before the runner's budget can end the
 test without one. That budget is also what the rig's own suite runs on: its
 timeout pin stands at the rig's deadline, above bun test's default
-five-second per-test timeout, so the suite is green only through `bun run
-test` or `bun run test:changed`, and a bare `bun test test/frame-rig.test.ts`
-reports the pin as a failure.
+five-second per-test timeout, so the suite is green through `bun run
+test` or `bun run test:changed`, or through the standalone form `bun
+test --timeout=60000 test/frame-rig.test.ts`, which stands the same
+budget on the file; a bare `bun test test/frame-rig.test.ts` without
+the flag reports the pin as a failure.
 
 Measured at head `d5c8e98d` on this machine (32 cores, 60 GB RAM, 11 GB
 available, load 1.2): the rig's own suite ran its twenty-two tests in
@@ -1996,12 +1998,10 @@ and the two owned surfaces press through it with none of the retired surface
 left: no hand-picked key, no hand operation, no raw wait, and no reach to
 the renderer's input, as the architecture check pins. The inline containment
 the owned surfaces still carry is the escape list's named `frameUntil`
-checks, which the closed set of outcomes does not reach. The first draft of
-this paragraph quoted a walk that was never committed, whose pattern choices
-could not be re-derived from the tree; the script's counts stand in its
-place, and they agree with it on the containment predicates and the raw
-waits, within five percent on the press family and the renderer reaches, and
-stand at 36 on the helper copies under the script's wider stem definition.
+checks, which the closed set of outcomes does not reach. The counts in this
+paragraph re-derive from the committed walk at the two named heads: the
+script run at either head prints them, and a head that moves the suites
+re-records them here from the same script.
 
 What was not measured: the remaining frame surfaces have not been migrated, so
 the 935 press-family calls and 848 raw waits above stand in the suites that
@@ -2022,5 +2022,10 @@ plane runs the control its mode owns. The spec's test decision that a
 control whose aliases match two painted hints fails and the failure names
 both stands with it: no owned surface can paint two hints to one control,
 the first frame that can stands on the wide Work queue bar, and the pin that
-names both lands with that surface's migration. The terminal walks and the screen-reader
+names both lands with that surface's migration. The hint parse groups the
+bar's spans on their gaps and assumes a runnable hint's key and label wear
+different inks: a theme that equates the two inks merges the gap into the
+label span, and the resolution fails loudly on the hint it cannot split. The
+plane's own themes keep the tested pairs, and the inherited-theme walks
+stand on that limit. The terminal walks and the screen-reader
 path stand as they do for the rest of this record: not walked, not verified.

@@ -552,8 +552,11 @@ Two sets sit beside the catalogue and stay on the rig:
 Running the rig's own suite needs the runner's own budget: its timeout pin
 stands at the rig's twenty-second deadline, above bun test's default
 five-second per-test timeout, so the suite runs through `bun run test` or
-`bun run test:changed`, which carry the test script's sixty-second timeout, and
-a bare `bun test test/frame-rig.test.ts` reports the pin as a failure.
+`bun run test:changed`, which carry the test script's sixty-second timeout,
+or through the standalone form `bun test --timeout=60000
+test/frame-rig.test.ts`, which stands the same sixty-second budget on the
+file. A bare `bun test test/frame-rig.test.ts` without the flag reports the
+pin as a failure.
 
 The migration moves a frame suite to the rig one surface at a time and adds
 it to the owned list in `test/frame-rig-architecture.test.ts`, which refuses a
