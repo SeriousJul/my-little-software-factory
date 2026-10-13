@@ -8092,6 +8092,8 @@ function useAppFactReads(prev: AppSeatTicketsStage) {
 			poll: pollRef.current,
 			claims: startingTicketsRef.current,
 			queue: workQueueRef.current,
+			now: Date.now(),
+			startupGraceMs: STARTUP_GRACE_MS,
 		}),
 		[configRef, pollRef, startingTicketsRef, workQueueRef],
 	);

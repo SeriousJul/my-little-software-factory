@@ -969,6 +969,7 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 				tabId: null,
 				workspaceId: null,
 				herdrName: "conflict-ticket",
+				startedAt: "2026-01-01T00:00:00Z",
 			},
 			workCycle: 1,
 			handoffCount: 1,

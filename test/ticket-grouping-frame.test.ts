@@ -280,6 +280,7 @@ function heldRowOf(ticket: FetchedTicket, hold: boolean): Ticket {
 			tabId: "tab-5",
 			workspaceId: "ws-5",
 			herdrName: null,
+			startedAt: "2026-01-01T00:00:00Z",
 		},
 		handoffCount: 1,
 		lastCompletion: {
@@ -1232,6 +1233,7 @@ describe("the Ticket section's Groups", () => {
 									tabId: "tab-2",
 									workspaceId: "ws-2",
 									herdrName: null,
+									startedAt: "2026-01-01T00:00:00Z",
 								},
 								handoffCount: 1,
 							},

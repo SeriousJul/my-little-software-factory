@@ -50,6 +50,7 @@ const recordedHandoff: Handoff = {
 	tabId: "tab-old-cycle",
 	workspaceId: "ws-old-cycle",
 	herdrName: "persist-source-facts",
+	startedAt: "2026-01-01T00:00:00Z",
 };
 
 /** The choice an open ticket's profile resolves to: pi, and nothing named. */

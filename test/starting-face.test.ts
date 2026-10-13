@@ -153,6 +153,7 @@ function rowOf(shape: "open" | "in-flight" | "awaiting", detail: SeedDetail = {}
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 			herdrName: AGENT_NAME,
+			startedAt: "2026-01-01T00:00:00Z",
 		},
 		handoffCount: 1,
 		...(shape === "awaiting"
@@ -339,6 +340,62 @@ describe("the Starting window's timeline", () => {
 				);
 				expect(face(running)).toBeNull();
 				expect(running).toContain("open: 0  running: 1  awaiting: 0");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: app,
+				loopPolicy: { kind: "polled", intervalMs: POLL_MS },
+			},
+		);
+	});
+
+	test("a handoff whose Agent herdr has not listed yet keeps the face across the poll that omits it (issue #379)", async () => {
+		// The stateful boot's poll, and every poll behind it, omits the Agent
+		// while herdr has not reported the pane. The start is inside the
+		// Startup grace, so the row's failure badge must hold the same rule
+		// the observation's missing path applies: herdr's list is not evidence
+		// a just-started Agent is dead (ADR 0021).
+		const { plane: app, gate } = await seededFace("open", {}, {}, (command) =>
+			command.includes("agent start"),
+		);
+		const src = app.sources[0] as FakeSource;
+		stubCheckout(app.fakeRunner, checkoutOf(app.config));
+		stubLiveHandoff(app.fakeRunner, checkoutOf(app.config));
+		// The Agent is not in the list: herdr has not reported its pane yet.
+		app.fakeRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		await withApp(
+			async (setup) => {
+				src.settle(success);
+				await waitSourceHealthy(app.state);
+				await press(
+					setup,
+					"return",
+					"the face on the keypress",
+					(f) => face(f) !== null && messageRowOf(f).includes("Working: handing off"),
+				);
+				// The start settles into `handed-off`, and the claim resolves.
+				await releaseHeld(gate);
+				// A poll lands that still omits the Agent...
+				await awaitFrame(
+					setup,
+					() => {
+						const commands = app.fakeRunner.commands();
+						const start = commands.findIndex((command) => command.includes("agent start"));
+						const polls = (list: string[]) =>
+							list.filter((command) => command === "herdr agent list").length;
+						return start >= 0 && polls(commands.slice(start)) > 0;
+					},
+					"the poll that omits the Agent",
+				);
+				// ...and the row keeps the face: no missing badge while the start
+				// stands inside its grace.
+				const frame = await settle(setup);
+				expect(face(frame)).not.toBeNull();
+				expect(badgeRow(frame)).not.toContain("missing");
+				// When herdr lists the Agent, the row steps to its own state.
+				app.fakeRunner.set("herdr", ["agent", "list"], { stdout: workingList() });
+				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
 			},
 			{
 				width: WIDTH,

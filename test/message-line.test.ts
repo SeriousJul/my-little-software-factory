@@ -150,6 +150,7 @@ function inFlightRow(fetched: FetchedTicket, environment: EnvironmentKind): Tick
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 			herdrName: null,
+			startedAt: "2026-01-01T00:00:00Z",
 		},
 		handoffCount: 1,
 	});

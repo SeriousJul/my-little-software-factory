@@ -1224,6 +1224,7 @@ describe("the control plane", () => {
 					tabId: "tab-1",
 					workspaceId: "w-1",
 					herdrName: "sample-agent",
+					startedAt: "2026-01-01T00:00:00Z",
 				},
 				handoffCount: 1,
 			},

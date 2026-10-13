@@ -372,7 +372,7 @@ The word the `handoff queued:` and `handoff started:` lines state beside the ori
 _Avoid_: manual row, auto row, source
 
 **Startup grace**:
-The window from a handoff during which the agent's idle report is its boot, not a turn end, and a pane herdr has not listed yet is its boot, not a Missing agent (ADR 0021).
+The window from a handoff during which the agent's idle report is its boot, not a turn end, and a pane herdr has not listed yet is its boot, not a Missing agent (ADR 0021). The row's `missing` marker reads the same grace (issue #379): while the window stands the row keeps its Starting face, and the marker appears when the start is old enough to read missing.
 The window holds until the agent's session record shows the turn ended: a working report marks the ticket running, but it does not end the window, because herdr's status is not evidence the turn ran (ADR 0017). Past the window, a turn the record does not show settles `no-turn` and holds.
 _Avoid_: boot delay, settle delay
 

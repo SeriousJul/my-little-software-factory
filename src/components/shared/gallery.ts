@@ -26,6 +26,7 @@ import {
 	ticketRowFacts,
 } from "../../domain/ticket-facts.ts";
 import type { HerdrAgent } from "../../herdr.ts";
+import { STARTUP_GRACE_MS } from "../../observation.ts";
 import { overParallelLimit } from "../../parallel.ts";
 import type { InitableRepository } from "../../repository-list.ts";
 import type { Consultation } from "../../state/consultation-record.ts";
@@ -532,6 +533,11 @@ function galleryFactInputs(extra: Partial<TicketFactInputs> = {}): TicketFactInp
 		poll: null,
 		claims: new Set<string>(),
 		queue: [],
+		// The gallery's own now, beside its 2026-02-17T10:00:00Z facts: the
+		// samples' starts stand an hour before it, so a sample's unlisted pane
+		// is past the Startup grace the row's missing badge reads.
+		now: Date.parse("2026-02-17T10:00:00Z"),
+		startupGraceMs: STARTUP_GRACE_MS,
 		...extra,
 	};
 }
@@ -638,6 +644,7 @@ function sampleHandoff(environment: "worktree" | "live-worktree"): NonNullable<T
 		tabId: "tab-ws-t",
 		workspaceId: "ws-t",
 		herdrName: "fix-the-layout-math",
+		startedAt: "2026-02-17T09:00:00Z",
 	};
 }
 

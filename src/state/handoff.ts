@@ -281,6 +281,7 @@ export function ticketHandoffFact(handoff: StoredHandoff | null): Ticket["handof
 		tabId: handoff.tabId,
 		workspaceId: handoff.workspaceId,
 		herdrName: handoff.herdrName,
+		startedAt: handoff.startedAt,
 	};
 }
 

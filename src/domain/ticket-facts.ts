@@ -68,6 +68,10 @@ export interface TicketFactInputs {
 	claims: ReadonlySet<string>;
 	/** The Work queue items. */
 	queue: readonly WorkQueueItem[];
+	/** The now the Startup grace reads against, in milliseconds. */
+	now: number;
+	/** The Startup grace, in milliseconds (issue #379). */
+	startupGraceMs: number;
 }
 
 /** The facts one Ticket's row wears. */
@@ -178,13 +182,27 @@ export function turnTaskType(ticket: Ticket, defaultTaskType: string): string {
  * landed: an unreadable herdr must not read as "every pane is missing", so the
  * fact answers null. The Missing agent rule is the domain's one function, read
  * the way the in-flight pass, the Restart walk, and the Parallel limit seat
- * count read it.
+ * count read it. The Startup grace reads beside the `missing` answer, the way
+ * the observation's missing pass reads it: a start inside the grace stands
+ * unproven, so herdr's list is not evidence a just-started Agent is dead
+ * (issue #379, ADR 0021). An unparseable start time stands past the grace, the
+ * way the observation reads it.
  */
-export function failureMarker(ticket: Ticket, poll: AgentPoll | null): TicketMarker | null {
+export function failureMarker(
+	ticket: Ticket,
+	poll: AgentPoll | null,
+	now: number,
+	startupGraceMs: number,
+): TicketMarker | null {
 	if (!inFlight(ticket)) return null;
-	const paneId = ticket.handoff?.paneId ?? null;
+	const handoff = ticket.handoff;
+	if (handoff === null) return null;
+	const paneId = handoff.paneId;
 	if (paneId === null || poll === null) return null;
-	if (agentInPane(poll, paneId, ticketAgentName(ticket)) === null) return "missing";
+	if (agentInPane(poll, paneId, ticketAgentName(ticket)) === null) {
+		if (now - Date.parse(handoff.startedAt) < startupGraceMs) return null;
+		return "missing";
+	}
 	const agent = poll.get(paneId);
 	return agent !== undefined && normalizeAgentStatus(agent.status) === "blocked" ? "blocked" : null;
 }
@@ -239,7 +257,7 @@ function wornFace(ticket: Ticket, failure: TicketMarker | null, claimHeld: boole
 
 /** The facts one Ticket wears, read through the fact module's rules. */
 function factsOf(ticket: Ticket, inputs: TicketFactInputs): TicketRowFacts {
-	const failure = failureMarker(ticket, inputs.poll);
+	const failure = failureMarker(ticket, inputs.poll, inputs.now, inputs.startupGraceMs);
 	return {
 		identity: ticket.identity,
 		ticket,

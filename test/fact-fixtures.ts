@@ -10,6 +10,7 @@ import type { Completion, Handoff, Ticket } from "../src/domain/ticket.ts";
 import type { TicketFactInputs } from "../src/domain/ticket-facts.ts";
 import type { HerdrAgent } from "../src/herdr.ts";
 import { agentNameFor } from "../src/naming.ts";
+import { STARTUP_GRACE_MS } from "../src/observation.ts";
 import type { WorkQueueHandoffItem, WorkQueueItem } from "../src/state/work-queue.ts";
 
 /** The name the sample handoff's Agent started under. */
@@ -24,6 +25,12 @@ export const STABLE_NAME = agentNameFor({
 	title: "Retry policy for webhooks",
 });
 
+/** The fixture's now, in milliseconds: twelve hours after the fixture's start. */
+export const FACT_NOW = Date.parse("2026-01-01T12:00:00Z");
+
+/** The fixture's start time, twelve hours before the fixture's now. */
+export const FACT_STARTED_AT = "2026-01-01T00:00:00Z";
+
 export function handoff(over: Partial<Handoff> = {}): Handoff {
 	return {
 		agentType: "pi",
@@ -37,6 +44,7 @@ export function handoff(over: Partial<Handoff> = {}): Handoff {
 		tabId: "tab-1",
 		workspaceId: "ws-1",
 		herdrName: OWN_NAME,
+		startedAt: FACT_STARTED_AT,
 		...over,
 	};
 }
@@ -121,6 +129,8 @@ export function factInputs(over: Partial<TicketFactInputs> = {}): TicketFactInpu
 		poll: null,
 		claims: new Set<string>(),
 		queue: [],
+		now: FACT_NOW,
+		startupGraceMs: STARTUP_GRACE_MS,
 		...over,
 	};
 }

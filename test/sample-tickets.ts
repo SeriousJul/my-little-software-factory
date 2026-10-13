@@ -17,6 +17,10 @@ function handoff(
 		tabId: `tab-${taskType}`,
 		workspaceId: `workspace-${taskType}`,
 		herdrName: "sample-agent",
+		// The gallery's fact rows read the Startup grace against its own now
+		// (2026-02-17T10:00:00Z): the sample's start stands an hour before it,
+		// so the sample's pane is past the grace the way a settled handoff's is.
+		startedAt: "2026-02-17T09:00:00Z",
 	};
 }
 
