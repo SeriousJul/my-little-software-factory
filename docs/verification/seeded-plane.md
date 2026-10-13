@@ -184,8 +184,9 @@ record states what the rig stands for and what it hides:
 ## The temporary directories
 
 At the head ADR 0131 measured, the suite held 119 temporary-directory
-creations across 40 files. At this change's head the test tree holds 97
-`mkdtemp` creations across 36 files and 68 `tmpdir` resolutions across 39
+creations across 40 files. At this change's head the test tree holds 62
+`mkdtemp` creations across 36 files, 61 of them the sync form and one the
+async form in the logging suite, and 68 `tmpdir` resolutions across 39
 files. The plane's cleanup stands for the frame suites' directories:
 the plane registers its close in the run's preload, and the preload's hook
 closes every plane every test of every file opens, however the test ends.
@@ -208,22 +209,33 @@ head it was measured on.
 The branch split from `origin/main` before the main test-dup campaign landed
 there. The branch's tree before the rework measured 263 at its own head,
 beside a 271 it read off `origin/main` at the split. The rebase moved the
-branch's tree onto the campaign's main, which carries the campaign's 211
-measured at its own head, and the rework on the merged tree stands the count
-the baseline now holds:
+branch's tree onto the campaign's main, which at the rebase carried the
+campaign's 203 measured at its own head, and the rework on the merged tree
+stands the count the baseline now holds:
 
 | Step on this branch | `test-dup` |
 | --- | --- |
 | `origin/main` at the split, before the campaign | 271 |
 | The branch's tree before the rework | 263 |
-| `origin/main` at the rebase, after the campaign | 211 |
-| This branch after the rebase and the rework, measured at its head | 205 |
+| `origin/main` at the rebase, after the campaign | 203 |
+| This branch after the rebase and the rework, measured at its head | 197 |
 
 The count moves up and down inside a step in general: a rig lands before
 the fixture it replaces is deleted, and a builder that retires leaves its
-clone behind for one measurement. The final tree stands at 205, below the
-211 of `origin/main` at the rebase, and the Quality audit passes it against
+clone behind for one measurement. The final tree stands at 197, below the
+203 of `origin/main` at the rebase, and the Quality audit passes it against
 the baseline beside the config.
+
+The rework reworded three assertions the unified default Ticket moved, and
+the rewordings track the ticket, not defects: the unified default Ticket is
+`github:github.com:I_9`, and the ticket-facts suite's line that an item for
+another Ticket is not this Ticket's wait now names `I_8` as the other, the
+identity it carried before the unification stood for the default. The
+decision-facts and ticket-facts suites read the `acme/factory` context line
+beside the `acme/billing` line the pre-unification default sample held, the
+repository the unified default Ticket stands in. Each reworded line is a fact
+the default Ticket's one row stands on, and the plane's suite reads the same
+row back through the state module.
 
 ## What is not measured
 
