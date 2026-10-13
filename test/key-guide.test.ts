@@ -246,7 +246,9 @@ describe("the in-app Key guide", () => {
 		// lists. The guide names the missing mode and holds its own
 		// controls in the current section, not the decision modal's.
 		{
-			const state = freshState();
+			// The recorded pane is a dead Agent, not a booting one: the clock
+			// sits past the startup grace, so the row reads missing at once.
+			const state = freshState("none", () => Date.now() - 60_000);
 			try {
 				const missingRunner = new FakeRunner();
 				missingRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });

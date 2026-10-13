@@ -1189,6 +1189,7 @@ describe("the override panel", () => {
 				tabId: "tab-old-cycle",
 				workspaceId: "ws-old-cycle",
 				herdrName: "old-cycle-agent",
+				startedAt: "2026-01-01T00:00:00Z",
 			},
 			handoffCount: 1,
 		};

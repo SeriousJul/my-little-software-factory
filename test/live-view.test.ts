@@ -220,6 +220,7 @@ async function seededPlane(extra: Partial<FactoryConfig> = {}): Promise<SeededPl
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 			herdrName: "persist-source-facts",
+			startedAt: "2026-01-01T00:00:00Z",
 		},
 	});
 	return await plane({

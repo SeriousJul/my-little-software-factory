@@ -720,7 +720,9 @@ describe("the obligation gate", () => {
 	});
 
 	test("the key refuses a missing Agent, and its row keeps the badge the choice lives on", async () => {
-		const state = openFactoryState(statePath());
+		// Pinned past the startup grace: the recorded pane is a dead Agent, not
+		// a booting one, so its missing badge stands on the first poll.
+		const state = openFactoryState(statePath(), () => Date.now() - 60_000);
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);
@@ -1183,7 +1185,9 @@ describe("the ignore and the machine", () => {
 	 * puts the Ticket back in the machine's way.
 	 */
 	test("an ignored Ticket whose Agent goes missing keeps its row and its flag", async () => {
-		const state = openFactoryState(statePath());
+		// Pinned past the startup grace: when herdr stops listing the Agent, the
+		// row reads missing at once, not after the grace a booting start holds.
+		const state = openFactoryState(statePath(), () => Date.now() - 60_000);
 		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
 		state.grouping.setGroupingAxis("tickets", "none");
 		const outcome = success([issueTicket(FIRST)]);

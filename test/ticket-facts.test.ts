@@ -9,8 +9,13 @@
  * test hands it inputs and reads its answer as a value.
  */
 import { describe, expect, test } from "bun:test";
-import { agentPoll } from "../src/domain/agent.ts";
-import type { AgentNameCollision, LeftoverEnvironment } from "../src/domain/ticket.ts";
+import { type AgentPoll, agentPoll } from "../src/domain/agent.ts";
+import type {
+	AgentNameCollision,
+	Handoff,
+	LeftoverEnvironment,
+	Ticket,
+} from "../src/domain/ticket.ts";
 import {
 	failureMarker,
 	inFlight,
@@ -22,8 +27,17 @@ import {
 	ticketRowFacts,
 	turnTaskType,
 } from "../src/domain/ticket-facts.ts";
+import { STARTUP_GRACE_MS } from "../src/observation.ts";
 import type { WorkQueueItem } from "../src/state/work-queue.ts";
-import { agent, completion, factInputs, handoff, queueItem, ticket } from "./fact-fixtures.ts";
+import {
+	agent,
+	completion,
+	FACT_NOW,
+	factInputs,
+	handoff,
+	queueItem,
+	ticket,
+} from "./fact-fixtures.ts";
 
 describe("the task type a row names", () => {
 	test("an open Ticket names its suggestion", () => {
@@ -98,40 +112,91 @@ describe("the task type the context lines name", () => {
 
 describe("the Missing agent rule", () => {
 	const inFlightTicket = ticket({ state: "running", handoff: handoff() });
+	// The fixture's start stands twelve hours before the fixture's now, so the
+	// handoff is past the Startup grace: the rule answers missing the way it
+	// did before the grace read beside it (issue #379).
+	const grace = (ticket: Ticket, poll: AgentPoll | null) =>
+		failureMarker(ticket, poll, FACT_NOW, STARTUP_GRACE_MS);
 
 	test("a pane the poll does not report holds no Agent of the Ticket's own", () => {
-		expect(failureMarker(inFlightTicket, agentPoll([agent({ paneId: "pane-2" })]))).toBe("missing");
+		expect(grace(inFlightTicket, agentPoll([agent({ paneId: "pane-2" })]))).toBe("missing");
 	});
 
 	test("a pane the poll reports under another Agent's name holds none of the Ticket's own", () => {
-		expect(failureMarker(inFlightTicket, agentPoll([agent({ name: "another-agent" })]))).toBe(
-			"missing",
-		);
+		expect(grace(inFlightTicket, agentPoll([agent({ name: "another-agent" })]))).toBe("missing");
 	});
 
 	test("the Ticket's own Agent in its pane is not missing", () => {
-		expect(failureMarker(inFlightTicket, agentPoll([agent()]))).toBeNull();
+		expect(grace(inFlightTicket, agentPoll([agent()]))).toBeNull();
 	});
 
 	test("the Ticket's own Agent reporting a block wears the blocked badge", () => {
-		expect(failureMarker(inFlightTicket, agentPoll([agent({ status: "Blocked" })]))).toBe(
-			"blocked",
-		);
+		expect(grace(inFlightTicket, agentPoll([agent({ status: "Blocked" })]))).toBe("blocked");
 	});
 
 	test("no poll that has landed answers no badge", () => {
 		// An unreadable herdr must not read as "every pane is missing".
-		expect(failureMarker(inFlightTicket, null)).toBeNull();
+		expect(grace(inFlightTicket, null)).toBeNull();
 	});
 
 	test("a Ticket that is not in flight wears no failure badge", () => {
 		const resting = ticket({ state: "awaiting", handoff: handoff() });
-		expect(failureMarker(resting, agentPoll([agent()]))).toBeNull();
+		expect(grace(resting, agentPoll([agent()]))).toBeNull();
 	});
 
 	test("a handoff with no recorded pane answers no badge", () => {
 		const legacy = ticket({ state: "running", handoff: handoff({ paneId: null }) });
-		expect(failureMarker(legacy, agentPoll([agent()]))).toBeNull();
+		expect(grace(legacy, agentPoll([agent()]))).toBeNull();
+	});
+});
+
+describe("the row's Startup grace (issue #379)", () => {
+	const startedSecondsAgo = (seconds: number): Handoff =>
+		handoff({ startedAt: new Date(FACT_NOW - seconds * 1000).toISOString() });
+
+	test("a start inside the grace is not missing on the row", () => {
+		const row = ticket({ state: "running", handoff: startedSecondsAgo(5) });
+		expect(
+			failureMarker(row, agentPoll([agent({ paneId: "pane-2" })]), FACT_NOW, STARTUP_GRACE_MS),
+		).toBeNull();
+	});
+
+	test("a start at the grace stands past it", () => {
+		const row = ticket({ state: "running", handoff: startedSecondsAgo(30) });
+		expect(
+			failureMarker(row, agentPoll([agent({ paneId: "pane-2" })]), FACT_NOW, STARTUP_GRACE_MS),
+		).toBe("missing");
+	});
+
+	test("a start past the grace is missing on the row", () => {
+		const row = ticket({ state: "running", handoff: startedSecondsAgo(31) });
+		expect(
+			failureMarker(row, agentPoll([agent({ paneId: "pane-2" })]), FACT_NOW, STARTUP_GRACE_MS),
+		).toBe("missing");
+	});
+
+	test("an unparseable start stands past the grace, the way the observation reads it", () => {
+		const row = ticket({ state: "running", handoff: handoff({ startedAt: "" }) });
+		expect(
+			failureMarker(row, agentPoll([agent({ paneId: "pane-2" })]), FACT_NOW, STARTUP_GRACE_MS),
+		).toBe("missing");
+	});
+
+	test("the grace holds the row's failure off, so the starting face stands", () => {
+		const row = ticket({ state: "handed-off", handoff: startedSecondsAgo(5) });
+		const facts = ticketFactsFor(
+			row,
+			factInputs({ poll: agentPoll([agent({ paneId: "pane-2" })]) }),
+		);
+		expect(facts.failure).toBeNull();
+		expect(facts.starting).toBe(true);
+	});
+
+	test("a listed Agent's block is not held by the grace", () => {
+		const row = ticket({ state: "running", handoff: startedSecondsAgo(5) });
+		expect(
+			failureMarker(row, agentPoll([agent({ status: "blocked" })]), FACT_NOW, STARTUP_GRACE_MS),
+		).toBe("blocked");
 	});
 });
 

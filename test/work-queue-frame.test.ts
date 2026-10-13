@@ -121,6 +121,7 @@ async function forcedFixture() {
 							tabId: "tab-1",
 							workspaceId: "ws-1",
 							herdrName: null,
+							startedAt: "2026-01-01T00:00:00Z",
 						},
 						handoffCount: 1,
 					}),
@@ -1399,6 +1400,7 @@ describe("the Work queue section", () => {
 								tabId: "tab-1",
 								workspaceId: "ws-1",
 								herdrName: null,
+								startedAt: "2026-01-01T00:00:00Z",
 							},
 							handoffCount: 1,
 							lastCompletion: {
@@ -1445,6 +1447,7 @@ describe("the Work queue section", () => {
 								tabId: "tab-9",
 								workspaceId: "ws-9",
 								herdrName: null,
+								startedAt: "2026-01-01T00:00:00Z",
 							},
 							handoffCount: 1,
 						}),

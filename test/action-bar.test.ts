@@ -126,6 +126,7 @@ function inFlightRow(fetched: FetchedTicket, environment: EnvironmentKind): Tick
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 			herdrName: null,
+			startedAt: "2026-01-01T00:00:00Z",
 		},
 		handoffCount: 1,
 	});
@@ -367,8 +368,10 @@ describe("the contextual Action bar", () => {
 
 	test("the missing modal states a refusal on its own Message line", async () => {
 		// herdr answers with an empty list: the in-flight Ticket's Agent is gone.
+		// The clock sits past the startup grace, so the start is old, not a boot.
 		const planeRecord = await plane({
 			groupingAxis: "none",
+			now: () => Date.now() - 60_000,
 			sources: [{ config: issueSource, tickets: [inFlightRow(issueTicket(), "live-worktree")] }],
 			repos: { "github.com/acme/factory": "src/factory" },
 		});

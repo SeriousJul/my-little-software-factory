@@ -242,6 +242,13 @@ export interface Handoff {
 	 * closed pane out again.
 	 */
 	herdrName: string | null;
+	/**
+	 * When the handoff's agent started, in ISO time. Empty for handoffs
+	 * predating the column. The Startup grace reads it beside the Missing
+	 * agent rule on the row's failure badge, the in-flight pass, and the seat
+	 * count alike, so a start inside the grace is not a missing Agent.
+	 */
+	startedAt: string;
 }
 
 /** A stable, host-qualified repository fact supplied by a ticket source. */

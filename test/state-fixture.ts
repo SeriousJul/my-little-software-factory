@@ -30,10 +30,10 @@ const paths: string[] = [];
  * wants that split names it, and the frames that assert the unsplit list
  * keep the axis they were written against.
  */
-export function freshState(axis: GroupingAxis = "none"): FactoryState {
+export function freshState(axis: GroupingAxis = "none", now?: () => number): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-fixture-state-"));
 	paths.push(dir);
-	const state = openFactoryState(join(dir, "state.sqlite"));
+	const state = openFactoryState(join(dir, "state.sqlite"), now);
 	state.grouping.setGroupingAxis("tickets", axis);
 	return state;
 }

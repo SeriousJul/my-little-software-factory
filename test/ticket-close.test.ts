@@ -39,6 +39,7 @@ function ticket(state: TicketState, environment: (typeof ENVIRONMENT_KINDS)[numb
 						tabId: "tab-1",
 						workspaceId: "ws-1",
 						herdrName: "persist-source-facts",
+						startedAt: "2026-01-01T00:00:00Z",
 					},
 		workCycle: 2,
 		handoffCount: 1,

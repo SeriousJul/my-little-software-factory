@@ -151,6 +151,7 @@ function awaitingRow(
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 			herdrName: null,
+			startedAt: "2026-01-01T00:00:00Z",
 		},
 		handoffCount: 1,
 		lastCompletion: {
@@ -190,6 +191,7 @@ function inFlightRow(
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 			herdrName: null,
+			startedAt: "2026-01-01T00:00:00Z",
 		},
 		handoffCount: 1,
 	});
@@ -289,6 +291,7 @@ describe("the route close moves no view", () => {
 									tabId: "tab-9",
 									workspaceId: "ws-9",
 									herdrName: null,
+									startedAt: "2026-01-01T00:00:00Z",
 								},
 								handoffCount: 1,
 							},
@@ -371,6 +374,8 @@ describe("the Close cleanup moves no view", () => {
 	test("the Close action on a worktree cycle removes the checkout and sends no focus", async () => {
 		const planeRecord = await plane({
 			groupingAxis: "none",
+			// The clock sits past the startup grace: the start is old, not a boot.
+			now: () => Date.now() - 60_000,
 			sources: [
 				{
 					config: issuesSourceConfig,
@@ -417,9 +422,11 @@ describe("the Close cleanup moves no view", () => {
 	test("a herdr refusal of the close reports on the line and records the leftover", async () => {
 		// Dropping the focus call costs no bookkeeping (story 9): a refusal is
 		// still one line on the Message line and a surviving environment on the
-		// ticket's facts.
+		// ticket's facts. The clock sits past the startup grace: the start is
+		// old, not a boot.
 		const planeRecord = await plane({
 			groupingAxis: "none",
+			now: () => Date.now() - 60_000,
 			sources: [
 				{
 					config: issuesSourceConfig,
