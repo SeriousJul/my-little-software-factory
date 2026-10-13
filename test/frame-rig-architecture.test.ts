@@ -29,6 +29,7 @@ import { existsSync, readFileSync } from "node:fs";
 const OWNED_SURFACES = [
 	"test/action-bar.test.ts",
 	"test/frame-rig.test.ts",
+	"test/key-guide.test.ts",
 	"test/message-line.test.ts",
 	"test/theme-frame.test.ts",
 	// The migration adds a surface here, one at a time, as its tests move to

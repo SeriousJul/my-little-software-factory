@@ -19,27 +19,24 @@ import { baseChoice } from "../src/handoff.ts";
 import type { Setup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
-	awaitFrame,
-	closeOverlay,
 	detailFocused,
-	focusDetail,
-	focusList,
+	frameUntil,
+	guideKey,
 	HEIGHT,
 	markerRowOf,
 	messageRowOf,
 	mouseClick,
-	openGuide,
-	openMessageView,
-	openPanel,
-	openSurface,
-	press,
+	pressControl,
+	quitApp,
 	rgb,
 	roleColor,
 	rowsOf,
 	settle,
 	spanColorAt,
 	stillFrame,
+	typeText,
 	WIDTH,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import { fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
@@ -58,8 +55,28 @@ function stubCheckout(runner: FakeRunner, home: string): void {
 
 /** Press a guide scroll key and wait for the new range in the guide's bar. */
 async function scrollGuide(setup: Setup, key: "j" | "k", range: string): Promise<string> {
-	setup.mockInput.pressKey(key);
-	return awaitFrame(setup, (f) => actionBarRowOf(f).includes(range), `the guide range ${range}`);
+	return guideKey(setup, "guide-scroll", key, { shows: range });
+}
+
+/**
+ * Step the guide with its scroll key while the frame stays without the
+ * target row: a row past the first fold is a walk, and the rig sends every
+ * step as a press of the key the guide owns. The row's key column is padded,
+ * so the check reads the row with its spacing collapsed, and a walk that
+ * finishes its steps without a match lands where the last step landed.
+ */
+async function stepGuideUntil(
+	setup: Setup,
+	via: "j" | "k",
+	steps: number,
+	isThere: (row: string) => boolean,
+): Promise<string> {
+	let frame = await settle(setup);
+	for (let step = 0; step < steps; step += 1) {
+		frame = await guideKey(setup, "guide-scroll", via, { quiet: true });
+		if (rowsOf(frame).some(isThere)) break;
+	}
+	return frame;
 }
 
 /** The value the panel's selected Model row shows, or "" when it is not on screen. */
@@ -121,8 +138,7 @@ async function allGuideRows(setup: Setup): Promise<string[]> {
 	for (let step = 0; step < 300; step += 1) {
 		const range = guideRangeOf(frame);
 		if (range === undefined || range.top <= 1) break;
-		setup.mockInput.pressKey("k");
-		frame = await settle(setup);
+		frame = await guideKey(setup, "guide-scroll", "k", { quiet: true });
 	}
 	const seen: string[] = [];
 	for (let step = 0; step < 400; step += 1) {
@@ -135,8 +151,7 @@ async function allGuideRows(setup: Setup): Promise<string[]> {
 		}
 		// One step down; at the bottom the range holds, so the walk ends.
 		const before = guideRangeOf(frame);
-		setup.mockInput.pressKey("j");
-		frame = await settle(setup);
+		frame = await guideKey(setup, "guide-scroll", "j", { quiet: true });
 		const after = guideRangeOf(frame);
 		if (before === undefined || after === undefined || after.top <= before.top) break;
 	}
@@ -151,12 +166,15 @@ describe("the in-app Key guide", () => {
 			async (setup) => {
 				expect(await settle(setup)).not.toContain("Key guide");
 
-				await openGuide(setup, "?");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				expect(setup.captureCharFrame()).toContain("Key guide - Ticket list");
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
 
-				await openGuide(setup, "F1");
-				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
+				// The bar's Help hint names ? alone in the base modes, so F1
+				// rides the alias the guide names for the control.
+				await guideKey(setup, "help", "F1", { opens: "Key guide" });
+				expect(setup.captureCharFrame()).toContain("Key guide - Ticket list");
+				await pressControl(setup, "guide-close", { via: "F1", closes: "Key guide" });
 			},
 			{
 				width: WIDTH,
@@ -176,50 +194,44 @@ describe("the in-app Key guide", () => {
 				// the boot fetch settles first.
 				planeRecord.settleFirstFetch();
 				// Ticket list.
-				await openGuide(setup, "?", "Key guide - Ticket list");
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide - Ticket list" });
+				await pressControl(setup, "guide-close", { closes: "Key guide - Ticket list" });
 				// Ticket detail.
-				await focusDetail(setup);
-				await openGuide(setup, "?", "Key guide - Ticket detail");
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "detail", { via: "l", moved: "detail" });
+				await pressControl(setup, "help", { via: "?", opens: "Key guide - Ticket detail" });
+				await pressControl(setup, "guide-close", { closes: "Key guide - Ticket detail" });
 				// Override list row: the override stands on an open ticket, so
 				// walk the selection down from the awaiting one that boots.
-				await focusList(setup);
-				await press(setup, "j", "the selection past the running ticket", (f) =>
-					rowsOf(f)[markerRowOf(f)].includes("Migrat"),
-				);
-				await press(setup, "j", "the selection past the starting ticket", (f) =>
-					rowsOf(f)[markerRowOf(f)].includes("Fix pan drift"),
-				);
-				await press(setup, "j", "the selection onto the open ticket", (f) =>
-					rowsOf(f)[markerRowOf(f)].includes("Retry polic"),
-				);
-				await openPanel(setup);
-				await openGuide(setup, "?", "Key guide - Override list row");
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "tickets", { via: "h", moved: "tickets" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Fix pan drift" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Retry policy" });
+				await pressControl(setup, "override", { opens: "Override" });
+				// The override panel's bar names F1 for Help, ? for no reason:
+				// the panel's ? is a printable character for its text row, so the
+				// bar keeps the F1 alias.
+				await pressControl(setup, "help", { via: "F1", opens: "Key guide - Override list row" });
+				await pressControl(setup, "guide-close", { closes: "Key guide - Override list row" });
 				// Override text row.
-				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
-				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
-				await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
-				await openGuide(setup, "F1", "Key guide - Override text row");
-				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
+				await pressControl(setup, "move-list", { via: "j", moved: "Environment" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Task type" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Model" });
+				await pressControl(setup, "help", { via: "F1", opens: "Key guide - Override text row" });
+				await pressControl(setup, "guide-close", {
+					via: "F1",
+					closes: "Key guide - Override text row",
+				});
 				// The bar keeps the e Override hint forever, so the panel's box
 				// title is the close signal.
-				await closeOverlay(setup, "┌─Override", "the panel to close");
+				await pressControl(setup, "cancel", { closes: "Override" });
 				// Decision modal: walk back up to the awaiting ticket. The list
 				// truncates titles, so the checks use short stable prefixes.
-				await press(setup, "k", "the starting ticket", (f) =>
-					rowsOf(f)[markerRowOf(f)].includes("Fix pan drift"),
-				);
-				await press(setup, "k", "the running ticket", (f) =>
-					rowsOf(f)[markerRowOf(f)].includes("Migrate scheduler"),
-				);
-				await press(setup, "k", "the awaiting ticket", (f) =>
-					rowsOf(f)[markerRowOf(f)].includes("Drop the legacy"),
-				);
-				await openSurface(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
-				await openGuide(setup, "?", "Key guide - Decision modal");
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "move-list", { via: "k", moved: "Fix pan drift" });
+				await pressControl(setup, "move-list", { via: "k", moved: "Migrate scheduler" });
+				await pressControl(setup, "move-list", { via: "k", moved: "Drop the legacy" });
+				await pressControl(setup, "decide-completion", { opens: "Decision:" });
+				await pressControl(setup, "help", { via: "?", opens: "Key guide - Decision modal" });
+				await pressControl(setup, "guide-close", { closes: "Key guide - Decision modal" });
 				// The panel survived the guide.
 				expect(setup.captureCharFrame()).toContain("Decision:");
 			},
@@ -273,13 +285,13 @@ describe("the in-app Key guide", () => {
 				await withApp(
 					async (setup) => {
 						(planeRecord.sources[0] as FakeSource).settle(fetchSuccess([issueTicket()]));
-						await awaitFrame(
-							setup,
-							(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
-							"the missing badge",
+						await frameUntil(setup, "the missing badge", (f) =>
+							rowsOf(f)[markerRowOf(f)].includes("missing"),
 						);
-						await openSurface(setup, "return", "the missing modal", (f) => f.includes("Missing:"));
-						const rows = rowsOf(await openGuide(setup, "?", "Key guide - Missing modal"));
+						await pressControl(setup, "live-view", { opens: "Missing:" });
+						const rows = rowsOf(
+							await pressControl(setup, "help", { via: "?", opens: "Key guide - Missing modal" }),
+						);
 						const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
 						const between = (top: number, bottom: number) =>
 							rows.slice(top + 1, bottom).map(contentOf);
@@ -293,7 +305,7 @@ describe("the in-app Key guide", () => {
 							"Enter Confirm action",
 							"Esc Cancel",
 						]);
-						await closeOverlay(setup, "Key guide", "the guide to close");
+						await pressControl(setup, "guide-close", { closes: "Key guide - Missing modal" });
 						// The panel survived the guide.
 						expect(setup.captureCharFrame()).toContain("Missing:");
 					},
@@ -353,13 +365,13 @@ describe("the in-app Key guide", () => {
 					// The Work header stands with its count; it starts expanded (ADR 0049).
 					// Wait for the source's title to reach the queue row as well: the
 					// row holds the raw ticket identity until the first source poll.
-					const header = await awaitFrame(
+					const header = await frameUntil(
 						setup,
+						"the Work header",
 						(f) =>
 							f.includes("▾ Work") &&
 							f.includes("waiting: 1") &&
 							f.includes("Add a webhook retry policy"),
-						"the Work header",
 					);
 					expect(header).toContain("▾ Work");
 					// The section is already expanded; the click lands the cursor on
@@ -377,17 +389,19 @@ describe("the in-app Key guide", () => {
 						workHeaderRow +
 						1;
 					await mouseClick(setup, 2, workRow);
-					const list = await awaitFrame(
+					const list = await frameUntil(
 						setup,
-						(f) => f.includes("▾ Work") && f.includes("Add a webhook retry policy 1"),
 						"the Work queue item row",
+						(f) => f.includes("▾ Work") && f.includes("Add a webhook retry policy 1"),
 					);
 					expect(list).toMatch(/implement\s+Add a webhook retry policy/);
 
 					// The list-mode guide holds the queue's keys and none of the
 					// Ticket section's: the reorder pair and the cancel stand in the
 					// current mode, and no Hand off or Decide row reaches it.
-					const listGuide = rowsOf(await openGuide(setup, "?", "Key guide - Work queue list"));
+					const listGuide = rowsOf(
+						await pressControl(setup, "help", { via: "?", opens: "Key guide - Work queue list" }),
+					);
 					const listIndexOf = (needle: string) =>
 						listGuide.findIndex((row) => norm(row).includes(needle));
 					const listBetween = (top: number, bottom: number) =>
@@ -440,13 +454,18 @@ describe("the in-app Key guide", () => {
 						listCurrent.some((row) => row.includes("removes a closed or unscheduled record")),
 					).toBe(false);
 					expect(listCurrent.some((row) => row.startsWith("f History"))).toBe(false);
-					await closeOverlay(setup, "Key guide", "the guide to close");
+					await pressControl(setup, "guide-close", { closes: "Key guide - Work queue list" });
 
 					// The detail-mode guide: the queue's scroll carries its own
 					// reason, the pane return is named for the queue, and the
 					// list-mode keys (reorder, cancel) leave this mode's section.
-					setup.mockInput.pressKey("l");
-					const detailGuide = rowsOf(await openGuide(setup, "?", "Key guide - Work queue detail"));
+					await guideKey(setup, "detail", "l", { quiet: true });
+					const detailGuide = rowsOf(
+						await pressControl(setup, "help", {
+							via: "?",
+							opens: "Key guide - Work queue detail",
+						}),
+					);
 					const detailIndexOf = (needle: string) =>
 						detailGuide.findIndex((row) => norm(row).includes(needle));
 					const detailCurrent = detailGuide
@@ -471,7 +490,7 @@ describe("the in-app Key guide", () => {
 						detailCurrent.some((row) => row.includes("removes a closed or unscheduled record")),
 					).toBe(false);
 					expect(detailCurrent.some((row) => row.startsWith("f History"))).toBe(false);
-					await closeOverlay(setup, "Key guide", "the guide to close");
+					await pressControl(setup, "guide-close", { closes: "Key guide - Work queue detail" });
 				},
 				{
 					width: WIDTH,
@@ -490,7 +509,7 @@ describe("the in-app Key guide", () => {
 		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
-				await openGuide(setup, "?");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				const rows = rowsOf(await settle(setup));
 				const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
 
@@ -689,7 +708,7 @@ describe("the in-app Key guide", () => {
 			await withApp(
 				async (setup) => {
 					setup.resize(width, height);
-					await openGuide(setup, "?");
+					await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 					const reasons = [
 						// The longest reason in the catalogue.
 						"no Consultation types configured; add [consultation-types.<name>] to the config file",
@@ -713,17 +732,13 @@ describe("the in-app Key guide", () => {
 					// size, where the flowed reasons run the guide past a hundred
 					// rows (issue #104).
 					const stepDown = async (from: { top: number; total: number }): Promise<string> => {
-						setup.mockInput.pressKey("j");
-						return await awaitFrame(
-							setup,
-							(f) => {
-								const range = rangeOf(f);
-								return (
-									range !== undefined && range.top === from.top + 1 && range.total === from.total
-								);
-							},
-							`the guide range to advance to ${from.top + 1}`,
-						);
+						await guideKey(setup, "guide-scroll", "j", { quiet: true });
+						return frameUntil(setup, `the guide range to advance to ${from.top + 1}`, (f) => {
+							const range = rangeOf(f);
+							return (
+								range !== undefined && range.top === from.top + 1 && range.total === from.total
+							);
+						});
 					};
 					// Walk the whole list once from the top, the place the guide
 					// opens at: a reason can sit below the fold, so every window
@@ -743,7 +758,7 @@ describe("the in-app Key guide", () => {
 					}
 					// No row of the guide is wider than the terminal.
 					for (const row of rowsOf(await settle(setup))) expect(widthOf(row)).toBe(width);
-					await closeOverlay(setup, "Key guide", "the guide closed");
+					await pressControl(setup, "guide-close", { closes: "Key guide" });
 				},
 				{
 					width: width,
@@ -765,16 +780,16 @@ describe("the in-app Key guide", () => {
 
 				// Walk to the open Ticket: the selection boots on the awaiting
 				// one, and the first part reads the open Ticket's meanings.
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "j", "the open ticket", (f) => markerRowOf(f) === 6);
+				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Fix pan drift" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Retry policy" });
 
 				// The selected Ticket is open, so Enter hands it off. The bar
 				// names that meaning alone: a hint whose key runs the other one
 				// would point at the wrong control. The guide still lists Live view
 				// and Decide and says why this Ticket cannot use them (user
 				// stories 12, 16).
-				await openGuide(setup, "?");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				let rows = rowsOf(await settle(setup));
 				expect(rowOf(rows, "Enter Live view")).toContain(
 					"only an in-flight Ticket has a Live view",
@@ -789,7 +804,7 @@ describe("the in-app Key guide", () => {
 						"Decide",
 					),
 				).toEqual(rgb(roleColor("subtext0")));
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
 				let bar = actionBarRowOf(setup.captureCharFrame());
 				expect(bar).toContain("Enter Hand off");
 				expect(bar).not.toContain("Live view");
@@ -799,10 +814,10 @@ describe("the in-app Key guide", () => {
 				// keeps Hand off in its current section with the settled fact, so
 				// the operator reading the catalog is never asked to guess what
 				// Enter does there.
-				await press(setup, "k", "the starting ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "k", "the running ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "k", "the awaiting ticket", (f) => markerRowOf(f) === 3);
-				await openGuide(setup, "?");
+				await pressControl(setup, "move-list", { via: "k", moved: "Fix pan drift" });
+				await pressControl(setup, "move-list", { via: "k", moved: "Migrate scheduler" });
+				await pressControl(setup, "move-list", { via: "k", moved: "Drop the legacy" });
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				rows = rowsOf(await settle(setup));
 				expect(rowOf(rows, "Enter Hand off")).toContain("only an open Ticket can be handed off");
 				expect(rowOf(rows, "Enter Live view")).toContain(
@@ -811,7 +826,7 @@ describe("the in-app Key guide", () => {
 				expect(rowOf(rows, "Enter Decide")).toContain("opens the decision on a settled Ticket");
 				const decideRow = rows.findIndex((r) => norm(r).includes("Enter Decide"));
 				expect(spanColorAt(setup, decideRow, "Decide")).toEqual(rgb(roleColor("text")));
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
 				bar = actionBarRowOf(setup.captureCharFrame());
 				expect(bar).toContain("Enter Decide");
 				expect(bar).not.toContain("Hand off");
@@ -820,8 +835,8 @@ describe("the in-app Key guide", () => {
 				// The running Ticket answers for one meaning, and the guide says
 				// the rest rather than dropping a row: every key carries its own
 				// reason or note, and the bar states the one Enter runs.
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
-				await openGuide(setup, "?");
+				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				rows = rowsOf(await settle(setup));
 				expect(rowOf(rows, "Enter Hand off")).toContain("only an open Ticket can be handed off");
 				expect(rowOf(rows, "Enter Live view")).toContain(
@@ -837,7 +852,7 @@ describe("the in-app Key guide", () => {
 				expect(rowOf(rows, "Enter Decide")).toContain(
 					"the selected Ticket has no completion to decide",
 				);
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
 				bar = actionBarRowOf(setup.captureCharFrame());
 				expect(bar).toContain("Enter Live view");
 				expect(bar).not.toContain("Hand off");
@@ -859,8 +874,8 @@ describe("the in-app Key guide", () => {
 			async (setup) => {
 				// The selection stands on the awaiting Ticket at boot: the
 				// decision opens straight from it.
-				await openSurface(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
-				await openGuide(setup, "?", "Key guide - Decision modal");
+				await pressControl(setup, "decide-completion", { opens: "Decision:" });
+				await pressControl(setup, "help", { via: "?", opens: "Key guide - Decision modal" });
 				const rows = rowsOf(await settle(setup));
 				const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
 				const between = (top: number, bottom: number) => rows.slice(top + 1, bottom).map(contentOf);
@@ -889,7 +904,7 @@ describe("the in-app Key guide", () => {
 		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
-				await openGuide(setup, "?");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				// The Emergency row and the Other-mode rows sit below the first
 				// fold, so the checks walk the whole catalogue.
 				const rows = await allGuideRows(setup);
@@ -937,9 +952,8 @@ describe("the in-app Key guide", () => {
 		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
-				await openGuide(setup, "?");
-				await settle(setup);
-				let rows = rowsOf(setup.captureCharFrame());
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
+				let rows = rowsOf(await settle(setup));
 				const rowOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
 
 				// Available: the key wears the focus color, the label the text
@@ -950,11 +964,9 @@ describe("the in-app Key guide", () => {
 				// The mute and the move rows pushed Refresh below the opening
 				// window: step the guide down until its row is on screen, then
 				// read it.
-				for (let step = 0; step < 12; step += 1) {
-					setup.mockInput.pressKey("j");
-					if ((await settle(setup)).includes("r Refresh")) break;
-				}
-				rows = rowsOf(setup.captureCharFrame());
+				rows = rowsOf(
+					await stepGuideUntil(setup, "j", 12, (row) => norm(row).includes("r Refresh")),
+				);
 				// Unavailable: the key and the label are dim, the reason dim.
 				const refreshRow = rowOf("r Refresh");
 				expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("subtext0")));
@@ -965,11 +977,9 @@ describe("the in-app Key guide", () => {
 
 				// The Global section sits below the first fold: step the guide
 				// down until its rows can be color-checked.
-				for (let step = 0; step < 20; step += 1) {
-					setup.mockInput.pressKey("j");
-					if ((await settle(setup)).includes("Emergency exit")) break;
-				}
-				rows = rowsOf(setup.captureCharFrame());
+				rows = rowsOf(
+					await stepGuideUntil(setup, "j", 20, (row) => row.includes("Emergency exit")),
+				);
 				// Emergency exit is available: the recovery note does not dim
 				// the key.
 				const exitRow = rowOf("Ctrl+C");
@@ -1001,17 +1011,16 @@ describe("the in-app Key guide", () => {
 				async (setup) => {
 					// While the first fetch runs, every source is refreshing:
 					// the current Refresh row carries the reason, dim.
-					await awaitFrame(setup, (f) => f.includes("loading tickets..."), "loading");
-					await openGuide(setup, "?");
-					await settle(setup);
+					await frameUntil(setup, "the first fetch in flight", (f) =>
+						f.includes("loading tickets..."),
+					);
+					await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 					// The queue's removal row beside the section toggle and the
 					// mute and the move rows push Refresh below the opening window
 					// (ADR 0122): step the guide down until its row is on screen.
-					for (let step = 0; step < 5; step += 1) {
-						setup.mockInput.pressKey("j");
-						if ((await settle(setup)).includes("r Refresh")) break;
-					}
-					let rows = rowsOf(setup.captureCharFrame());
+					let rows = rowsOf(
+						await stepGuideUntil(setup, "j", 5, (row) => norm(row).includes("r Refresh")),
+					);
 					let refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
 					expect(rows[refreshRow]).toContain("every Ticket source is already refreshing");
 					expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("subtext0")));
@@ -1019,16 +1028,16 @@ describe("the in-app Key guide", () => {
 					// The fetch settles while the guide is open: the reason
 					// leaves and the key takes the focus color, live.
 					(planeRecord.sources[0] as FakeSource).settle(fetchSuccess([issueTicket()]));
-					await awaitFrame(
+					await frameUntil(
 						setup,
+						"the refresh row to clear",
 						(f) =>
 							!rowsOf(f)
 								.map(norm)
 								.find((row) => row.includes("r Refresh"))
 								?.includes("already refreshing"),
-						"the refresh row to clear",
 					);
-					rows = rowsOf(setup.captureCharFrame());
+					rows = rowsOf(await settle(setup));
 					refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
 					expect(rows[refreshRow]).not.toContain(" - ");
 					expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("accent")));
@@ -1037,8 +1046,7 @@ describe("the in-app Key guide", () => {
 					// The queue's removal row now stands below the section toggle
 					// (ADR 0122), so one step back reads Hand off beside the
 					// refresh's own row.
-					setup.mockInput.pressKey("k");
-					rows = rowsOf(await settle(setup));
+					rows = rowsOf(await guideKey(setup, "guide-scroll", "k", { quiet: true }));
 					expect(rows.find((row) => norm(row).includes("Enter Hand off"))).not.toContain(
 						"no Ticket is selected",
 					);
@@ -1055,7 +1063,7 @@ describe("the in-app Key guide", () => {
 		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
-				await openGuide(setup, "?");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				expect(actionBarRowOf(await settle(setup))).toContain("1-19/68");
 
 				await scrollGuide(setup, "j", "2-20/68");
@@ -1063,16 +1071,16 @@ describe("the in-app Key guide", () => {
 				await scrollGuide(setup, "k", "2-20/68");
 				await scrollGuide(setup, "k", "1-19/68");
 				// Top boundary: k holds the range.
-				setup.mockInput.pressKey("k");
-				expect(await settle(setup, 500)).toContain("1-19/68");
+				await guideKey(setup, "guide-scroll", "k", { quiet: true });
+				expect(actionBarRowOf(setup.captureCharFrame())).toContain("1-19/68");
 				// Walk to the bottom, one step per frame.
 				const ladder = Array.from({ length: 49 }, (_, step) => step + 2).map(
 					(row) => `${row}-${row + 18}/68`,
 				);
 				for (const range of ladder) await scrollGuide(setup, "j", range);
 				// Bottom boundary: j holds the range.
-				setup.mockInput.pressKey("j");
-				expect(await settle(setup, 500)).toContain("50-68/68");
+				await guideKey(setup, "guide-scroll", "j", { quiet: true });
+				expect(actionBarRowOf(setup.captureCharFrame())).toContain("50-68/68");
 			},
 			{
 				width: WIDTH,
@@ -1092,12 +1100,12 @@ describe("the in-app Key guide", () => {
 				// fetch settles first.
 				planeRecord.settleFirstFetch();
 				// The selection.
-				await press(setup, "j", "the selection to move on", (f) => markerRowOf(f) === 4);
+				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
 				const selectedBefore = rowsOf(setup.captureCharFrame())[
 					markerRowOf(setup.captureCharFrame())
 				];
-				await openGuide(setup, "?");
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
 				let frame = await settle(setup);
 				expect(stillFrame(rowsOf(frame)[markerRowOf(frame)])).toBe(stillFrame(selectedBefore));
 
@@ -1107,26 +1115,20 @@ describe("the in-app Key guide", () => {
 				// pane's rows. The list keeps the focus through the resize, and the
 				// probe reads the pane's raw column, so a scroll that only swaps a
 				// blank padding row still shows.
-				await focusDetail(setup);
+				await pressControl(setup, "detail", { via: "l", moved: "detail" });
 				setup.resize(60, 27);
 				await settle(setup);
-				setup.mockInput.pressKey("l");
-				await settle(setup);
+				await guideKey(setup, "detail", "l", { quiet: true });
 				const detailCol = (f: string): string =>
 					rowsOf(f)
 						.map((row) => row.slice(32, 58))
 						.join("\n");
 				const detailTop = detailCol(setup.captureCharFrame());
-				await press(
-					setup,
-					"j",
-					"the detail to scroll",
-					(f) => stillFrame(detailCol(f)) !== stillFrame(detailTop),
-				);
+				await pressControl(setup, "scroll-detail", { via: "j", quiet: true });
 				const detailBefore = detailCol(setup.captureCharFrame());
 				expect(stillFrame(detailBefore)).not.toBe(stillFrame(detailTop));
-				await openGuide(setup, "?");
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
 				frame = await settle(setup);
 				expect(detailFocused(frame)).toBe(true);
 				expect(stillFrame(detailCol(frame))).toBe(stillFrame(detailBefore));
@@ -1137,17 +1139,22 @@ describe("the in-app Key guide", () => {
 				// focus through the guide, so the list takes it back first. The
 				// selection sits on the running ticket, which refuses an
 				// override: walk to the open one.
-				await focusList(setup);
-				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "j", "the open ticket", (f) => markerRowOf(f) === 6);
-				await openPanel(setup);
-				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
-				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
-				await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
-				await press(setup, "a", "the text to type", (f) => modelValueOf(f) === "a");
-				await press(setup, "b", "the text to type", (f) => modelValueOf(f) === "ab");
-				await openGuide(setup, "F1", "Key guide - Override text row");
-				await press(setup, "?", "the guide to close", (f) => !f.includes("Key guide"));
+				await pressControl(setup, "tickets", { via: "h", moved: "tickets" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Fix pan drift" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Retry policy" });
+				await pressControl(setup, "override", { opens: "Override" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Environment" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Task type" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Model" });
+				await typeText(setup, "a");
+				expect(modelValueOf(await waitFor(setup, { quiet: true }))).toBe("a");
+				await typeText(setup, "b");
+				expect(modelValueOf(await waitFor(setup, { quiet: true }))).toBe("ab");
+				await pressControl(setup, "help", { via: "F1", opens: "Key guide - Override text row" });
+				await pressControl(setup, "guide-close", {
+					via: "?",
+					closes: "Key guide - Override text row",
+				});
 				frame = await settle(setup);
 				expect(modelValueOf(frame)).toBe("ab");
 			},
@@ -1165,11 +1172,11 @@ describe("the in-app Key guide", () => {
 		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
-				await openGuide(setup, "?");
-				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
+				await pressControl(setup, "guide-close", { via: "F1", closes: "Key guide" });
 
-				await openGuide(setup, "?");
-				await press(setup, "?", "the guide to close", (f) => !f.includes("Key guide"));
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
+				await pressControl(setup, "guide-close", { via: "?", closes: "Key guide" });
 			},
 			{
 				width: WIDTH,
@@ -1188,27 +1195,23 @@ describe("the in-app Key guide", () => {
 				const before = await settle(setup);
 				const markerBefore = markerRowOf(before);
 
-				await openGuide(setup, "?");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				// j scrolls the guide, not the list.
-				setup.mockInput.pressKey("j");
-				await awaitFrame(
-					setup,
-					(f) => actionBarRowOf(f).includes("2-20/68"),
-					"the guide to scroll",
-				);
+				await guideKey(setup, "guide-scroll", "j", { shows: "2-20/68" });
 				// e opens no panel, r warns no refresh, q quits nothing,
 				// Enter starts no handoff. The guide stays the owner of the
-				// keys through all of it.
-				setup.mockInput.pressKey("e");
-				setup.mockInput.pressKey("r");
-				setup.mockInput.pressKey("q");
-				setup.mockInput.pressEnter();
+				// keys through all of it: the rig sends every key as a press of
+				// the control it names, through the guide's own catalog rows.
+				await guideKey(setup, "override", "e", { quiet: true });
+				await guideKey(setup, "refresh", "r", { quiet: true });
+				await quitApp(setup, { quiet: true });
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
 				await settle(setup);
 				expect(setup.captureCharFrame()).toContain("Key guide");
 
 				// The base is exactly where it was. While the guide is open the
 				// base is behind the overlay, so the checks run on close.
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
 				const frame = await settle(setup);
 				expect(frame).not.toContain("❯ Agent");
 				expect(markerRowOf(frame)).toBe(markerBefore);
@@ -1233,22 +1236,27 @@ describe("the in-app Key guide", () => {
 				// fetch settles, and the selection walks down from the awaiting
 				// one that boots.
 				planeRecord.settleFirstFetch();
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "j", "the open ticket", (f) => markerRowOf(f) === 6);
-				await openPanel(setup);
-				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
-				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
-				await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
+				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Fix pan drift" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Retry policy" });
+				await pressControl(setup, "override", { opens: "Override" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Environment" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Task type" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Model" });
 				// ? is a printable character here: it types, it does not help.
-				await press(setup, "?", "the question mark to type", (f) => modelValueOf(f) === "?");
+				await typeText(setup, "?");
+				expect(modelValueOf(await waitFor(setup, { quiet: true }))).toBe("?");
 				// q is printable here too: it types, it does not quit.
-				await press(setup, "q", "the letter to type", (f) => modelValueOf(f) === "?q");
+				await typeText(setup, "q");
+				expect(modelValueOf(await waitFor(setup, { quiet: true }))).toBe("?q");
 				expect(setup.captureCharFrame()).not.toContain("Key guide");
 				// F1 is the help alias in the text row.
-				await openGuide(setup, "F1", "Key guide - Override text row");
+				await pressControl(setup, "help", { via: "F1", opens: "Key guide - Override text row" });
 				// ? closes the guide from any mode. The typed characters stay.
-				await press(setup, "?", "the guide to close", (f) => !f.includes("Key guide"));
+				await pressControl(setup, "guide-close", {
+					via: "?",
+					closes: "Key guide - Override text row",
+				});
 				const frame = await settle(setup);
 				expect(modelValueOf(frame)).toBe("?q");
 			},
@@ -1282,40 +1290,35 @@ describe("the in-app Key guide", () => {
 				// the boot fetch settles, and the selection walks to an open
 				// one from the awaiting ticket that boots.
 				planeRecord.settleFirstFetch();
-				const selectedRow = (f: string) => rowsOf(f).find((row) => row.startsWith("│ ❯")) ?? "";
-				await press(setup, "j", "the selection past the running ticket", (f) =>
-					selectedRow(f).includes("Migrat"),
-				);
-				await press(setup, "j", "the selection past the Starting window", (f) =>
-					selectedRow(f).includes("Fix pan"),
-				);
-				await press(setup, "j", "the selection onto the open ticket", (f) =>
-					selectedRow(f).includes("Retry polic"),
-				);
+				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Fix pan drift" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Retry policy" });
 				// The attempt rides the queue and fails on the refused daemon:
 				// the truncated warning stands on the Message line, and the bar
 				// offers m Message.
-				await press(setup, "return", "the failure to land", (f) =>
-					messageRowOf(f).includes("was not run: error: the daemon refused"),
-				);
+				await pressControl(setup, "handoff", { shows: "was not run: error: the daemon refused" });
 				expect(actionBarRowOf(setup.captureCharFrame())).toContain("m Message");
 
 				// The guide over the error: the Message row loses its reason,
-				// and F2 hands the keys to the Message view.
-				await openGuide(setup, "?");
+				// and F2 hands the keys to the Message view. The guide's own
+				// bar names no Message hint, so F2 rides the guide row the
+				// catalogue paints for it.
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				const guideFrame = await settle(setup);
 				expect(guideFrame).not.toContain("no message has been recorded yet");
 				expect(actionBarRowOf(guideFrame)).toContain("F2 Message");
-				const viewFrame = await openMessageView(setup, "F2", "Message view");
+				const viewFrame = await guideKey(setup, "message", "F2", { opens: "Message view" });
 				expect(viewFrame).not.toContain("Key guide");
 				expect(viewFrame).toContain("the daemon refused the request");
 
-				// F1 hands the keys back to the guide, over the same mode.
-				const backFrame = await openGuide(setup, "F1", "Key guide - Ticket list");
+				// F1 hands the keys back to the guide, over the same mode. The
+				// view's bar names no Help hint either, so F1 rides the guide's
+				// row again.
+				const backFrame = await guideKey(setup, "help", "F1", { opens: "Key guide - Ticket list" });
 				expect(backFrame).not.toContain("Message view");
 
 				// Closing both leaves the error on the Message line.
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "guide-close", { closes: "Key guide - Ticket list" });
 				const closed = await settle(setup);
 				expect(messageRowOf(closed)).toContain("the daemon refused the request");
 			},
@@ -1335,7 +1338,7 @@ describe("the in-app Key guide", () => {
 			async (setup) => {
 				// The message fits: the bar names Scroll and Close only. F1
 				// and ? close the guide here, so a Help hint would lie.
-				await openGuide(setup, "?");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
 				expect(bar).toContain("1-19/68");
@@ -1357,7 +1360,7 @@ describe("the in-app Key guide", () => {
 		const planeRecord = await plane({ runner: () => runner });
 		await withApp(
 			async (setup) => {
-				await openGuide(setup, "?");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				expect(actionBarRowOf(await settle(setup))).toContain("1-19/68");
 
 				// A short, wide terminal: four visible rows, the full title
