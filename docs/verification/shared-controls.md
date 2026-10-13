@@ -321,7 +321,7 @@ surface - the base panes included - paints from the shared Theme module (ADR
 above), the terminal walks have not been re-run on the theme-inherited paint
 (see the inherited-Theme record above), inherited herdr theme pairs are not
 contrast-checked (limit recorded there), and the frame suites' move to the
-rig's named controls and outcomes lands one surface at a time - two are owned
+rig's named controls and outcomes lands one surface at a time - five are owned
 now, the rest still run the retired surface - as the frame-rig record below
 measures.
 
@@ -1881,10 +1881,10 @@ always held it. A skipped required check is not a pass.
 
 ## The frame rig runs the controls, not the keys (issue #365, ADR 0128)
 
-Status: the automated checks pass for the rig and the four owned surfaces: its
-own suite, the Action bar, the Message line, and the theme frame. The remaining
-frame surfaces migrate one at a time, and the owned list in the
-architecture check is the record of what has landed.
+Status: the automated checks pass for the rig and the five owned surfaces: its
+own suite, the Action bar, the Key guide, the Message line, and the theme
+frame. The remaining frame surfaces migrate one at a time, and the owned list
+in the architecture check is the record of what has landed.
 
 What was measured: the frame rig in `test/app-harness.ts` now resolves a
 control to the key the Action bar painted for it and owns the input end to
@@ -2021,7 +2021,17 @@ in 65.8 seconds, 0 fail, at that same head (this machine, load 4.5 at its
 run, with a concurrent mutation-testing run over a subset of the frame
 files): the guard it lands reads the sharing off the screen, the remove
 pair stands on the Consultations frames as the two-owner read of one
-painted cell, and no wait in the run reached the deadline.
+painted cell, and no wait in the run reached the deadline. At head
+`987677f2`, the head that lands the Key guide migration and the rebase's
+import order, the Key guide's suite ran its twenty-one tests in 68.6
+seconds, 0 fail, at its run alone, and the full suite ran its 3,409 tests
+in 71.0 seconds, 0 fail, at that same head (this machine, load 5.2 at the
+run, with the same concurrent mutation-testing run): a first full run at
+the head reported one fail over its 3,409 tests, and the re-run at the same
+head reports none, so the first run's fail stands as a recorded load flake;
+the failing test's name did not survive the first run, whose output was cut
+to its tail, and the re-run is the measured pass. No wait in either run's
+passes reached the deadline, which a wait that stands past it would fail.
 
 The static architecture check, `test/frame-rig-architecture.test.ts`, owns the
 set of surfaces the rig drives and refuses the two ways a surface can opt out:
@@ -2050,7 +2060,15 @@ helper copies: the Action bar's suite presses through the rig with none of
 the retired input left, and its remaining containment is the nine named
 `frameUntil` checks it keeps - the renderer's destroyed frame, the missing
 badge row, the handoff's settle - beside the Message line's sixteen and the
-theme frame's nine row probes. The four owned surfaces press through the rig
+theme frame's nine row probes. At the head that lands the Key guide
+(`22df2fe1`), one step further, the walk stands at 782 press-family calls,
+191 hand operations, 790 raw waits, 678 inline containment predicates, 409
+reaches to the renderer's input, and 36 helper copies: the Key guide's suite
+presses through the rig with none of the retired input left, and its remaining
+containment is the fourteen named `frameUntil` and row probes it keeps beside
+the `scrollGuide` range-wording fixture, which rides the rig's `guideKey` and
+is a domain fixture, not input the rig should own. The five owned surfaces
+press through the rig
 with none of the retired surface left: no hand-picked key, no hand operation,
 no raw wait, and no reach to the renderer's input, as the architecture check
 pins. The Message line's walk stands at 16 named `frameUntil` checks, each
@@ -2067,8 +2085,8 @@ script run at either head prints them, and a head that moves the suites
 re-records them here from the same script.
 
 What was not measured: the remaining frame surfaces have not been migrated, so
-the 822 press-family calls and 797 raw waits above stand in the suites that
-have not landed yet, and this change's effect on the whole plane is the four
+the 782 press-family calls and 790 raw waits above stand in the suites that
+have not landed yet, and this change's effect on the whole plane is the five
 owned surfaces plus the rig, not the surfaces that follow. The closed walk
 stands on the bar of the frame it walks, and at this head the rig's suite
 walks the base bar and the bars of the detail frames of the three sections,
@@ -2082,7 +2100,9 @@ Detail hint and the list's Move keys), and the keys the bar paints nowhere,
 the guide's scroll keys among them, reach through `guideKey` - the Action
 bar's migration read its guide keys for the close beside the packed width,
 the launch and the section keys the Consultations bar packs past, and the
-consultation's Close on the opening Consultation. A painted hint two
+consultation's Close on the opening Consultation, and the Key guide's
+migration read its own scroll aliases beside the bar's painted key and the
+base keys that idle while the guide holds the frame. A painted hint two
 catalogue controls can both paint - the
 modal Esc Cancel family, the scroll pair on a permissive frame, the
 cross-section pair on a detail-focused frame, and the identical Delete Remove
