@@ -310,6 +310,13 @@ export interface StubHerdrWorld extends CommandRunner {
 	 * on that Agent, the way the real block ends on its state match.
 	 */
 	setAgentStatus(name: string, status: string, sessionId?: string): void;
+	/**
+	 * Stop holding one Agent the world holds: the next `agent list` no longer
+	 * reports it, the way the real list stops when the Agent's process dies.
+	 * The pane it stood in remains. A name the world does not hold is a
+	 * refusal, not a quiet no-op.
+	 */
+	removeAgent(name: string): void;
 	/** The text chunks a `pane send-text` reached one pane, in send order. */
 	sentTextFor(paneId: string): string[];
 	/** The keys a `pane send-keys` reached one pane, in send order. */
@@ -365,6 +372,30 @@ function buildCheckout(item: WorldCheckoutDescription): WorldCheckout {
 	return checkout;
 }
 
+/** Bind each described worktree workspace to the described worktree herdr opened it from: the binding a `worktree remove` over the workspace reaches for, so the standing's dirty or clean state answers the removal. */
+function bindWorktreeWorkspaces(
+	checkouts: Map<string, WorldCheckout>,
+	workspaces: Map<string, WorldWorkspace>,
+): void {
+	for (const workspace of workspaces.values()) {
+		if (!workspace.isWorktree) continue;
+		for (const checkout of checkouts.values()) {
+			const worktree = checkout.worktrees.find((item) => item.path === workspace.checkoutPath);
+			if (worktree !== undefined) worktree.openWorkspaceId = workspace.id;
+		}
+	}
+}
+
+/** The next free id number past the highest the world holds, so a create never collides with a handle the world already holds. */
+function nextFreeNumber(prefix: string, held: Iterable<string>): number {
+	let highest = 0;
+	for (const id of held) {
+		const match = new RegExp(`^${prefix}-(\\d+)$`).exec(id);
+		if (match !== null) highest = Math.max(highest, Number(match[1]));
+	}
+	return highest + 1;
+}
+
 /** Build one Stub herdr world on the standing the description names. */
 export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWorld {
 	const checkouts = new Map<string, WorldCheckout>();
@@ -405,20 +436,11 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 			sessionId: item.sessionId,
 		});
 	}
+	bindWorktreeWorkspaces(checkouts, workspaces);
 
-	// The id counters continue past the standing the description names, so a
-	// create never collides with a handle the world already holds.
-	const nextNumber = (prefix: string, held: Iterable<string>): number => {
-		let highest = 0;
-		for (const id of held) {
-			const match = new RegExp(`^${prefix}-(\\d+)$`).exec(id);
-			if (match !== null) highest = Math.max(highest, Number(match[1]));
-		}
-		return highest + 1;
-	};
-	let nextWs = nextNumber("ws", workspaces.keys());
-	let nextTab = nextNumber("tab", tabs.keys());
-	let nextPane = nextNumber("pane", panes.keys());
+	let nextWs = nextFreeNumber("ws", workspaces.keys());
+	let nextTab = nextFreeNumber("tab", tabs.keys());
+	let nextPane = nextFreeNumber("pane", panes.keys());
 	let shaCounter = 100;
 	/** The tree sha each commit this world made carries, by its sha. */
 	const commits = new Map<string, string>();
@@ -1553,6 +1575,10 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 			agent.sessionId = sessionId;
 			if (isSettleState(status)) releaseHeldWaits(name);
 		},
+		removeAgent(name: string): void {
+			if (!agents.has(name)) throw new Error(`the world holds no agent named ${name}`);
+			agents.delete(name);
+		},
 		sentTextFor(paneId: string): string[] {
 			return [...(sentText.get(paneId) ?? [])];
 		},
@@ -1561,6 +1587,81 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 		},
 	};
 	return world;
+}
+
+/**
+ * The plane's egress onto one world: the herdr side and the git side answer
+ * from the world, and every other command - the GitHub side the world does
+ * not hold, and the desktop notifications - falls through to the runner the
+ * caller keeps beside the world. One runner carries both sides, and its
+ * command record merges the two in the order the calls run, so a test reads
+ * the egress the way it read the one runner before the move.
+ *
+ * The world's own record (its `calls`, its herdr-and-git-only
+ * `peakConcurrency`) stands beside the egress's merged record for a test that
+ * reads one side only.
+ */
+export interface WorldEgress extends CommandRunner {
+	/** The commands recorded so far, in call order, both sides merged. */
+	commands(): string[];
+	/** The commands that answered, in the order they answered. */
+	settledCommands(): string[];
+	/** The largest number of commands that ran at the same time, both sides. */
+	peakConcurrency(): number;
+}
+
+export function worldEgress(world: CommandRunner, fallback: CommandRunner): WorldEgress {
+	interface EgressCall {
+		command: string;
+		args: string[];
+		settled: boolean;
+	}
+	const calls: EgressCall[] = [];
+	let running = 0;
+	let peak = 0;
+	const record = (
+		command: string,
+		args: readonly string[],
+		answer: () => Promise<CommandResult>,
+	): Promise<CommandResult> => {
+		const call: EgressCall = { command, args: [...args], settled: false };
+		calls.push(call);
+		running += 1;
+		if (running > peak) peak = running;
+		return answer().then(
+			(result: CommandResult) => {
+				call.settled = true;
+				running -= 1;
+				return result;
+			},
+			(error: unknown) => {
+				call.settled = true;
+				running -= 1;
+				throw error;
+			},
+		);
+	};
+	const egress: WorldEgress = {
+		run(command: string, args: readonly string[], options?: CommandOptions) {
+			const target = command === "herdr" || command === "git" ? world : fallback;
+			return record(command, args, () => target.run(command, args, options));
+		},
+		listModels(kind: string): Promise<ModelListResult> {
+			return world.listModels(kind);
+		},
+		commands(): string[] {
+			return calls.map((call) => `${call.command} ${call.args.join(" ")}`.trim());
+		},
+		settledCommands(): string[] {
+			return calls
+				.filter((call) => call.settled)
+				.map((call) => `${call.command} ${call.args.join(" ")}`.trim());
+		},
+		peakConcurrency(): number {
+			return peak;
+		},
+	};
+	return egress;
 }
 
 /** Read the value of one flag out of an argv. */
