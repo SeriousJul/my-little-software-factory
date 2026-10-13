@@ -1317,64 +1317,93 @@ export async function openConsultationPanel(
 	await awaitNewKeyHandler(setup, before, "the confirmation panel to take the keys");
 }
 /**
- * Walk the unified cursor into the Consultation list, and wait for it there.
+ * Walk the unified cursor across the section boundary, and wait for it on
+ * the other side.
  *
  * The Main view is one visible flow: the Ticket rows, then the Consultation
- * rows. `j` from the last visible Ticket crosses the boundary and lands on
- * the first Consultation row (ADR 0019). The walk presses `j` until the
- * Consultation list shows the focus marker, so a test states that it is
- * across instead of counting the Ticket rows it crossed.
+ * rows, then the Work queue's. A step past the last row of a section lands
+ * on the first row of the next (ADR 0019), so the walk steps the list's own
+ * Move key until the target list shows the focus marker, and the test states
+ * the section it walks to instead of counting the rows it crossed.
+ *
+ * The walk keys go out straight after the frame they answer from. A settle
+ * before a key gives the plane the pass that commits the detail pane's
+ * identity reset before the cross's unmount saves the pane's offset, and a
+ * round trip through the other section loses the offset the operator left
+ * behind; the walk's one settle stands after each key, where it only waits
+ * for the step's own frame. The rig owns that order, and the test names the
+ * section it walks to.
  */
-export async function crossToConsultations(setup: Setup, maxSteps = 30): Promise<string> {
+/**
+ * The detail holds the cursor: bring it back to the list the detail belongs
+ * to, so the walk crosses from there. The back hint's word names the
+ * section the detail belongs to.
+ */
+async function returnCursorToItsList(setup: Setup, frame: string): Promise<void> {
+	if (frame.includes("❯ Agent view"))
+		await pressControl(setup, "consultation-list", { via: "h", moved: "consultations" });
+	else if (actionBarRowOf(frame).includes("←/h Tickets"))
+		await pressControl(setup, "tickets", { via: "h", moved: "tickets" });
+	else await pressControl(setup, "queue-list", { via: "h", moved: "queue" });
+}
+
+export async function crossCursor(
+	setup: Setup,
+	target: "tickets" | "consultations",
+	maxSteps = 30,
+): Promise<string> {
+	// The walk steps the move control's letter alias for its direction; the
+	// catalogue names it in every list mode the walk crosses, or the walk
+	// cannot run.
+	const letter = target === "consultations" ? "j" : "k";
+	for (const mode of ["ticket-list", "consultation-list", "work-queue-list"] as const) {
+		if (!controlById("move-list").keys(mode, DUMMY_FACTS).includes(letter))
+			throw new Error(
+				`the frame rig cannot walk the cursor to the ${target} list: the catalogue names no ${letter} key for the move control in ${mode}`,
+			);
+	}
 	// The frame marks each list's retained row at once, so the cursor is on
-	// the Consultation list only while the Consultation box title carries the
-	// focus marker, and on the Ticket list only while its box title does.
-	const onConsultations = (frame: string) =>
-		frame.includes("┌─❯ Consultations") && !frame.includes("┌─❯ Tickets");
-	if (!onConsultations(setup.captureCharFrame())) {
-		// The detail holds the cursor: bring it back to the Ticket list first.
-		if (!setup.captureCharFrame().includes("┌─❯ Tickets"))
-			await press(setup, "h", "the list to take focus", (f) => f.includes("┌─❯ Tickets"));
+	// the target list only while the target box title carries the focus
+	// marker and the other section's does not.
+	const onTarget =
+		target === "consultations"
+			? (frame: string) => frame.includes("┌─❯ Consultations") && !frame.includes("┌─❯ Tickets")
+			: (frame: string) => frame.includes("┌─❯ Tickets") && !frame.includes("┌─❯ Consultations");
+	if (!onTarget(setup.captureCharFrame())) {
+		const frame = setup.captureCharFrame();
+		if (!frame.includes("┌─❯ Tickets") && !frame.includes("┌─❯ Consultations"))
+			await returnCursorToItsList(setup, frame);
 	}
 	for (let step = 0; step < maxSteps; step += 1) {
 		const frame = setup.captureCharFrame();
-		if (onConsultations(frame)) return frame;
-		setup.mockInput.pressKey("j");
+		if (onTarget(frame)) return frame;
+		sendKey(setup, letter);
 		await settle(setup, 200);
 	}
 	throw new Error(
-		`the cursor never crossed to the Consultation list\nlast frame:\n${setup.captureCharFrame()}`,
+		`the cursor never crossed to the ${target === "consultations" ? "Consultation" : "Ticket"} list\nlast frame:\n${setup.captureCharFrame()}`,
 	);
+}
+
+/**
+ * Walk the unified cursor into the Consultation list, and wait for it there.
+ *
+ * The retired spelling of `crossCursor(setup, "consultations")`: the suites
+ * the rig owns walk with the named section, and the rest of the frame suites
+ * ride this name until they migrate.
+ */
+export async function crossToConsultations(setup: Setup, maxSteps = 30): Promise<string> {
+	return crossCursor(setup, "consultations", maxSteps);
 }
 /**
  * Walk the unified cursor back to the Ticket list, and wait for it there.
  *
- * `k` from the first visible Consultation crosses the boundary to the last
- * Ticket row, the same walk in reverse (ADR 0019).
- *
- * The frame shows the marker on two boxes at once: the Ticket box while the
- * cursor holds the Consultation list (its retained row), and the
- * Consultation box while it holds the Ticket list. The cursor is on the
- * Ticket list once the Consultation marker row holds no Consultation row of
- * its own, that is, once the Consultation box title carries no focus marker.
+ * The retired spelling of `crossCursor(setup, "tickets")`: the suites the rig
+ * owns walk with the named section, and the rest of the frame suites ride
+ * this name until they migrate.
  */
 export async function crossToTickets(setup: Setup, maxSteps = 30): Promise<string> {
-	const onTickets = (frame: string) =>
-		frame.includes("┌─❯ Tickets") && !frame.includes("┌─❯ Consultations");
-	if (!onTickets(setup.captureCharFrame())) {
-		// The detail holds the cursor: bring it back to the Consultation list first.
-		if (!setup.captureCharFrame().includes("┌─❯ Consultations"))
-			await press(setup, "h", "the list to take focus", (f) => f.includes("┌─❯ Consultations"));
-	}
-	for (let step = 0; step < maxSteps; step += 1) {
-		const frame = setup.captureCharFrame();
-		if (onTickets(frame)) return frame;
-		setup.mockInput.pressKey("k");
-		await settle(setup, 200);
-	}
-	throw new Error(
-		`the cursor never crossed back to the Ticket list\nlast frame:\n${setup.captureCharFrame()}`,
-	);
+	return crossCursor(setup, "tickets", maxSteps);
 }
 
 /**

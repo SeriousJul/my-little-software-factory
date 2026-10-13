@@ -43,6 +43,7 @@ import {
 	BAR_LABEL_WORDINGS,
 	barControlIds,
 	barHintOwners,
+	crossCursor,
 	displayOnlyKeyLabels,
 	frameText,
 	guideKey,
@@ -435,6 +436,20 @@ describe("the frame rig's escape list", () => {
 			await settle(setup);
 			await expect(guideKey(setup, "help", "z")).rejects.toThrow(/the guide names F1, \? for it/);
 		});
+	});
+});
+
+describe("the frame rig's section walk", () => {
+	test("crosses the cursor across the section boundary, and back", async () => {
+		await withSeededPlane(
+			async (setup) => {
+				const across = await crossCursor(setup, "consultations");
+				expect(frameText(across)).toContain("❯ Consultations");
+				const back = await crossCursor(setup, "tickets");
+				expect(frameText(back)).toContain("❯ Tickets");
+			},
+			{ standing: "open", consultations: [REVIEW_RECORD] },
+		);
 	});
 });
 
