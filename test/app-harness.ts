@@ -1619,8 +1619,13 @@ function planeOf(setup: Setup): SeededPlane | undefined {
  * The modes the catalogue runs, the rig's own copy: the permissive surface
  * family and the closed walk union the controls of every mode to reach the
  * whole catalogue without a production export the plane does not make.
+ *
+ * The list keeps its literal mode names - `as const`, no annotation over it
+ * - so the coverage check below compares the catalogue's mode union against
+ * the literals it holds: an annotated copy would widen the literals to the
+ * whole union and the check would pass for itself.
  */
-const ALL_MODES: InteractionMode[] = [
+const ALL_MODES = [
 	"ticket-list",
 	"ticket-detail",
 	"consultation-list",
@@ -1641,7 +1646,7 @@ const ALL_MODES: InteractionMode[] = [
 	"key-guide",
 	"message-view",
 	"consultation-interaction",
-];
+] as const;
 
 /**
  * The catalogue's mode union, checked against the rig's copy: a mode added
@@ -1792,6 +1797,12 @@ interface BarHint {
 	label: string;
 	/** The foreground the key part paints in. */
 	keyFg: [number, number, number] | null;
+	/**
+	 * Whether the hint's key label claims no key: the catalogue paints it for
+	 * a control that owns none, and the focused field owns the key the label
+	 * names, so the rig reads the hint and never sends it (ADR 0128).
+	 */
+	keyless: boolean;
 }
 
 /** The named key tokens a key label can carry whole, the rest runs of single keys. */
@@ -1810,6 +1821,46 @@ function keyTokens(label: string): string[] {
 		for (const key of group) tokens.push(key);
 	}
 	return tokens;
+}
+
+/**
+ * The key labels the catalogue paints for a control that claims no key: the
+ * display-only hints, the text row's Type and Backspace. A label stands in
+ * the set only when every mode that paints it claims no key for it, so a
+ * label the catalogue also paints beside a real key stays pressable, and the
+ * bar and the catalogue cannot disagree on it (ADR 0128).
+ */
+export function displayOnlyKeyLabels(): Set<string> {
+	let labels: Set<string> | undefined;
+	if (labels !== undefined) return labels;
+	const byLabel = new Map<string, boolean>(); // label -> still keyless
+	for (const control of allControls()) {
+		if (!control.actionBar) continue; // a guide-only row the bar never paints
+		for (const mode of control.modes) noteDisplayLabel(byLabel, control, mode);
+	}
+	labels = new Set([...byLabel].filter(([, keyless]) => keyless).map(([label]) => label));
+	return labels;
+}
+
+/** Note the label a control paints in one mode against the display-only set. */
+function noteDisplayLabel(
+	byLabel: Map<string, boolean>,
+	control: ControlDefinition,
+	mode: InteractionMode,
+): void {
+	let label: string;
+	try {
+		label = keyLabelFor(mode, control, DUMMY_FACTS);
+	} catch {
+		return;
+	}
+	if (label === "") return;
+	try {
+		if (control.keys(mode, DUMMY_FACTS).length > 0) byLabel.set(label, false);
+		else byLabel.set(label, byLabel.get(label) ?? true);
+	} catch {
+		// A read the dummy facts cannot answer keeps the label as it stood.
+	}
 }
 
 /**
@@ -1852,16 +1903,25 @@ function pushGroupHint(
 	if (group.length === 1) {
 		const text = group[0].text;
 		const cut = text.indexOf(" ");
-		const key = cut === -1 ? "" : text.slice(0, cut);
-		const tokens = keyTokens(key);
-		if (tokens.length === 0) return;
-		hints.push({ key, tokens, label: text.slice(cut + 1).trimEnd(), keyFg: group[0].fg });
+		if (cut === -1) return;
+		const key = text.slice(0, cut);
+		const keyless = displayOnlyKeyLabels().has(key);
+		const tokens = keyless ? [] : keyTokens(key);
+		if (!keyless && tokens.length === 0) return;
+		hints.push({
+			key,
+			tokens,
+			label: text.slice(cut + 1).trimEnd(),
+			keyFg: group[0].fg,
+			keyless,
+		});
 		return;
 	}
 	if (!group[0].text.endsWith(" ")) return;
 	const key = group[0].text.slice(0, -1);
-	const tokens = keyTokens(key);
-	if (tokens.length === 0) return;
+	const keyless = displayOnlyKeyLabels().has(key);
+	const tokens = keyless ? [] : keyTokens(key);
+	if (!keyless && tokens.length === 0) return;
 	hints.push({
 		key,
 		tokens,
@@ -1870,19 +1930,28 @@ function pushGroupHint(
 			.map((member) => member.text)
 			.join(""),
 		keyFg: group[0].fg,
+		keyless,
 	});
 }
 
 /** The hints one ink-less (or compact) row states, divided on the bar's gaps. */
-function parseBarText(text: string, fg: [number, number, number] | null): BarHint[] {
+export function parseBarText(text: string, fg: [number, number, number] | null): BarHint[] {
 	const hints: BarHint[] = [];
 	for (const segment of text.split(/ {2,}/)) {
 		if (segment === "") continue;
 		const cut = segment.indexOf(" ");
-		const key = cut === -1 ? segment : segment.slice(0, cut);
-		const tokens = keyTokens(key);
-		if (cut === -1 || cut === 0 || tokens.length === 0) continue;
-		hints.push({ key, tokens, label: segment.slice(cut + 1).trimEnd(), keyFg: fg });
+		if (cut === -1 || cut === 0) continue;
+		const key = segment.slice(0, cut);
+		const keyless = displayOnlyKeyLabels().has(key);
+		const tokens = keyless ? [] : keyTokens(key);
+		if (!keyless && tokens.length === 0) continue;
+		hints.push({
+			key,
+			tokens,
+			label: segment.slice(cut + 1).trimEnd(),
+			keyFg: fg,
+			keyless,
+		});
 	}
 	return hints;
 }
@@ -1900,11 +1969,15 @@ export interface ControlResolution {
  * the control paints with, its word is one of the control's label wordings,
  * and the control runs on the frame's surface (ADR 0128): a control off the
  * bar owns no painted hint and fails here, reaching the rig's escape list
- * instead of pressing a key the bar names for another control. When `via` is
- * named, it must be one of the hint's tokens, and a `via` two hints name
- * fails instead of taking the first. The rig throws when the bar paints no
- * hint the control owns, when several painted hints do, or when `via` is not
- * among the hint's tokens.
+ * instead of pressing a key the bar names for another control. A hint the
+ * catalogue paints display-only - a label for a control that claims no key,
+ * the text row's Type and Backspace - is owned the same way and is keyless:
+ * the rig fails a press that names it, because the field it names owns its
+ * own keys. When `via` is named, it must be one of the hint's tokens, and a
+ * `via` two hints name fails instead of taking the first. The rig throws
+ * when the bar paints no hint the control owns, when every hint it owns is
+ * keyless, when several painted hints do, or when `via` is not among the
+ * hint's tokens.
  */
 export function resolveControl(setup: Setup, controlId: string, via?: string): ControlResolution {
 	const control = catalogueControl(controlId);
@@ -1930,11 +2003,16 @@ export function resolveControl(setup: Setup, controlId: string, via?: string): C
 			);
 		return { key: via, label: chosen[0].label };
 	}
-	if (hints.length > 1)
+	const pressable = hints.filter((hint) => !hint.keyless);
+	if (pressable.length === 0)
 		throw new Error(
-			`the frame rig cannot press "${controlId}": ${hints.length} bar hints belong to it (${hints.map((h) => h.key).join(" | ")}); name the key with \`via\``,
+			`the frame rig cannot press "${controlId}": the bar paints its hint display-only (${hints.map((h) => `${h.key} ${h.label}`).join(" | ")}); the hint claims no key, and the field it names owns its own keys`,
 		);
-	return { key: hints[0].tokens[0], label: hints[0].label };
+	if (pressable.length > 1)
+		throw new Error(
+			`the frame rig cannot press "${controlId}": ${pressable.length} bar hints belong to it (${pressable.map((h) => `${h.key} ${h.label}`).join(" | ")}); name the key with \`via\``,
+		);
+	return { key: pressable[0].tokens[0], label: pressable[0].label };
 }
 
 const ARROW_BY_TOKEN: Record<string, "up" | "down" | "left" | "right"> = {
@@ -1947,13 +2025,16 @@ const ARROW_BY_TOKEN: Record<string, "up" | "down" | "left" | "right"> = {
 /**
  * The catalogue controls the current bar paints a hint for: the closed set a
  * press can resolve from this frame. Each painted hint is owned by the
- * catalogue - exactly one control whose key label and label wordings can
- * paint it on the frame's surface - and the set is those owners, walked in
- * the bar's own order. The set derives from the frame the plane painted and
- * the catalogue, never from the rig's own matcher, so the closed walk the
- * rig's suite runs against it cannot assert the matcher against itself: a
- * painted hint the catalogue owns twice, or owns not at all, fails the walk
- * as a disagreement between the bar and the catalogue (ADR 0128).
+ * catalogue - exactly one control can paint it on the frame's surface - and
+ * the set is those owners, walked in the bar's own order. The walk's ground
+ * truth is the frame the plane painted and the catalogue's facts, and the
+ * ownership it checks is the rig's own three reads applied per control: it
+ * asserts the catalogue owns each hint on exactly one control, and the rig
+ * resolves that owner to a key the hint painted, so the matcher is not its
+ * own ground truth, and a painted hint the catalogue owns twice, or owns not
+ * at all, fails the walk as a disagreement between the bar and the catalogue
+ * (ADR 0128). A keyless hint owns its owner the same way and skips the key
+ * check, because it painted no key.
  */
 export function barControlIds(setup: Setup): string[] {
 	const family = surfaceFamily(setup.captureCharFrame());
@@ -1968,11 +2049,13 @@ export function barControlIds(setup: Setup): string[] {
 					: `the frame rig's walk breaks on the bar's painted hint "${hint.key} ${hint.label}": ${owners.map((o) => o.id).join(", ")} can each paint it on this surface, so the bar and the catalogue disagree`,
 			);
 		const owner = owners[0];
-		const resolution = resolveControl(setup, owner.id);
-		if (!hint.tokens.includes(resolution.key))
-			throw new Error(
-				`the frame rig's walk breaks on the bar's painted hint "${hint.key} ${hint.label}": the rig resolves ${owner.id} to "${resolution.key}", a key the hint did not paint`,
-			);
+		if (!hint.keyless) {
+			const resolution = resolveControl(setup, owner.id);
+			if (!hint.tokens.includes(resolution.key))
+				throw new Error(
+					`the frame rig's walk breaks on the bar's painted hint "${hint.key} ${hint.label}": the rig resolves ${owner.id} to "${resolution.key}", a key the hint did not paint`,
+				);
+		}
 		ids.push(owner.id);
 	}
 	return ids;
@@ -2294,15 +2377,16 @@ export async function waitFor(setup: Setup, fields: ControlOutcomeFields): Promi
 
 /**
  * The escape hatch for a frame check no named outcome names: wait for the
- * frame to satisfy `check`, named for what it waits for, until the deadline.
+ * frame to satisfy `check`, named for what it waits for, until the rig's
+ * one deadline, `FRAME_DEADLINE_MS`. A check that still stands after the
+ * deadline is a slow plane, and the deadline names it.
  */
 export async function frameUntil(
 	setup: Setup,
 	what: string,
 	check: (frame: string) => boolean,
-	deadlineMs: number = FRAME_DEADLINE_MS,
 ): Promise<string> {
-	return awaitFrame(setup, check, what, deadlineMs);
+	return awaitFrame(setup, check, what);
 }
 
 /** Type characters into the focused field: the field owns its characters. */

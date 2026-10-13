@@ -25,11 +25,13 @@ import {
 	allControls,
 	BAR_LABEL_WORDINGS,
 	barControlIds,
+	displayOnlyKeyLabels,
 	frameText,
 	HEIGHT,
 	hintWordings,
 	messageRowOf,
 	namedWhat,
+	parseBarText,
 	pressControl,
 	resolveControl,
 	settle,
@@ -362,6 +364,29 @@ describe("the frame rig's bar wordings", () => {
 				).toBe(true);
 			}
 		}
+	});
+});
+
+describe("the frame rig's keyless hints", () => {
+	test("a display-only hint parses keyless, and a key label parses its tokens", () => {
+		// The text row's display-only hints claim no key: the focused field owns
+		// the key the label names. The rig reads the hint and carries no tokens
+		// for it, instead of splitting the label's letters into keys.
+		const hints = parseBarText("Type Edit  Backspace Delete  Del Close", null);
+		expect(hints.map((h) => [h.key, h.label, h.keyless, h.tokens])).toEqual([
+			["Type", "Edit", true, []],
+			["Backspace", "Delete", true, []],
+			["Del", "Close", false, ["Del"]],
+		]);
+	});
+
+	test("the rig's keyless labels are the catalogue's display-only labels", () => {
+		// The set is closed on the catalogue's own fact: a bar control that
+		// claims no key in every mode it paints in. The catalogue's display-only
+		// bar hints today are the text row's Type and Backspace; a display-only
+		// label the catalogue adds lands in the set, and a label it also paints
+		// beside a real key never does.
+		expect([...displayOnlyKeyLabels()].sort()).toEqual(["Backspace", "Type"]);
 	});
 });
 

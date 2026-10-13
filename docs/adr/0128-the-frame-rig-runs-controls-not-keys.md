@@ -72,13 +72,20 @@ and never misresolves a control the bar names. Exactly one owned hint sends
 its first painted key, or a named `via` token if the press names one. No
 owned hint fails, naming the control and the hints the bar paints, and stating
 that the bar paints no hint the control owns. More than one owned hint fails
-and names every match. The closed walk is the same rule turned around:
-each painted hint is owned by the catalogue - exactly one control can paint
-it on the frame's surface - and the rig's resolution of that owner is
-asserted against the hint, so the walk reads the bar and the catalogue and
-never the rig's own matcher. A painted hint two catalogue controls can both
-paint stands in issue #387, filed under the rule below: a finding about the
-bar, not a rig workaround.
+and names every match, key and label, so a pair that paints the same key
+twice still names both. A hint the catalogue paints display-only - a label
+for a control that claims no key, the text row's Type and Backspace - is
+owned the same way and is keyless: the rig owns it to its control and fails
+a press that names it, because the field the hint names owns its own keys.
+The closed walk is the same rule turned around: each painted hint is owned
+by the catalogue - exactly one control can paint it on the frame's surface -
+and the walk asserts the catalogue owns the hint on exactly one control and
+the rig resolves that owner to a key the hint painted. Its ground truth is
+the painted frame and the catalogue's facts, and the ownership it checks is
+the rig's own three reads applied per control, so the matcher is not its own
+ground truth: a drift between the bar and the catalogue fails the walk. A
+painted hint two catalogue controls can both paint stands in issue #387,
+filed under the rule below: a finding about the bar, not a rig workaround.
 
 The rule leans on the catalogue's standing guarantee that the bar never shows a
 hint whose keys do something else in the current mode. That guarantee is what

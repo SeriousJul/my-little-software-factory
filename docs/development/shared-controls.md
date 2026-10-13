@@ -538,6 +538,9 @@ Two sets sit beside the catalogue and stay on the rig:
 
 - The **closed outcome set** is enforced in the rig. A field outside the set is
   a rig error, and `opens` belongs to a press alone, which `waitFor` refuses.
+  `closes` proves the surface it names gave back the keys it took and
+  settled; it does not prove the surface left the frame, so a test that needs
+  the frame fact pairs `closes` with `hides`.
 - The **escape list** holds the controls the bar never hints, on named rig
   operations: the auto-handoff toggle, the quit and the emergency exit, the
   repository init, the field's own keys, and the form's type-ahead.
@@ -545,6 +548,12 @@ Two sets sit beside the catalogue and stay on the rig:
   keys and the panes' focus moves are not on the bar and so are not on this
   list; their coverage belongs to the catalogue suite and the Key guide's own
   frames.
+
+Running the rig's own suite needs the runner's own budget: its timeout pin
+stands at the rig's twenty-second deadline, above bun test's default
+five-second per-test timeout, so the suite runs through `bun run test` or
+`bun run test:changed`, which carry the test script's sixty-second timeout, and
+a bare `bun test test/frame-rig.test.ts` reports the pin as a failure.
 
 The migration moves a frame suite to the rig one surface at a time and adds
 it to the owned list in `test/frame-rig-architecture.test.ts`, which refuses a

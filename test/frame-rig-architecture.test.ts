@@ -83,13 +83,15 @@ describe("the frame rig owns the frame suites' input", () => {
 	});
 
 	test("an owned surface reaches no renderer input by hand", () => {
-		// `mockInput` and `mockMouse` are the renderer's raw feeders. A surface
-		// that names one sends a key the rig did not resolve, or moves the mouse
-		// outside the rig's helpers, and the bar the key came from is the
-		// surface's, not the plane's.
+		// `mockInput` and `mockMouse` are the renderer's raw feeders, reached as
+		// a property on the setup. A surface that reaches one sends a key the
+		// rig did not resolve, or moves the mouse outside the rig's helpers, and
+		// the bar the key came from is the surface's, not the plane's. The rule
+		// matches the reach, the way the retired list matches calls: a comment
+		// that spells the name does not offend.
 		const offenders: string[] = [];
 		for (const file of OWNED_SURFACES) {
-			if (/\bmockInput\b|\bmockMouse\b/u.test(readFileSync(file, "utf8"))) offenders.push(file);
+			if (/\.[m]ockInput\b|\.[m]ockMouse\b/u.test(readFileSync(file, "utf8"))) offenders.push(file);
 		}
 		expect(offenders).toEqual([]);
 	});
