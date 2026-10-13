@@ -9,7 +9,11 @@
  * renamed. A check cannot read whether a sentence describes the right module -
  * that is the doc-claim rule on the quality gate page, and a review measures it.
  * What a check can hold is the shape of the claim: a path the map prints either
- * exists or it does not.
+ * exists or it does not. One path the tree keeps out on purpose: the
+ * campaign's sandbox copies the tree minus `stryker.config.mjs`'s
+ * `ignorePatterns`, and the check reads that list from the tree it runs in,
+ * so a claim to an excluded path is owed by the real tree but not by the
+ * campaign's sandbox.
  *
  * Both probes below assert that the text they edit actually changed, because a
  * probe that matches nothing proves nothing: an early version of this file
@@ -27,6 +31,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import campaign from "../stryker.config.mjs";
 
 const repo = join(import.meta.dir, "..");
 const docPath = "docs/agents/shape.md";
@@ -70,6 +75,20 @@ function tokens(body: string): string[] {
 	return out;
 }
 
+/**
+ * The paths the tree's own campaign config excludes from its sandbox copy
+ * (the `ignorePatterns` in `stryker.config.mjs`): the two suites that count
+ * the shapes instrumentation rewrites, and the directories the campaign never
+ * reads. A claim to one of these names a path the tree keeps out on purpose,
+ * so a tree that stands without it - the campaign's sandbox - does not owe
+ * the claim, and the check leaves it alone.
+ */
+function campaignExcludes(path: string): boolean {
+	return campaign.ignorePatterns.some(
+		(pattern) => path === pattern || path.startsWith(`${pattern}/`),
+	);
+}
+
 /** Returns whether a bare file name stands anywhere under a directory. */
 function standsUnder(dir: string, name: string): boolean {
 	for (const entry of readdirSync(dir)) {
@@ -103,7 +122,7 @@ function missingPathClaims(doc: string): string[] {
 function missingPathClaim(entry: { root: string; body: string }, token: string): string | null {
 	if (token.includes("/")) {
 		const target = join(repo, token.replace(/\/$/, ""));
-		if (!existsSync(target)) {
+		if (!existsSync(target) && !campaignExcludes(token.replace(/\/$/, ""))) {
 			return `${token} (entry ${entry.root}) names no file or directory`;
 		}
 		return null;
@@ -113,7 +132,17 @@ function missingPathClaim(entry: { root: string; body: string }, token: string):
 			? join(repo, entry.root)
 			: join(repo, "src");
 	if (!standsUnder(scope, token)) {
-		return `${token} (entry ${entry.root}) stands nowhere under ${scope.replace(`${repo}/`, "")}`;
+		// The excluded file the claim might name, resolved against the scope:
+		// an exclusion that stands under this scope owes the bare name too.
+		const scopeRel = scope.replace(`${repo}/`, "");
+		const excludedUnderScope = campaign.ignorePatterns.some(
+			(pattern) =>
+				pattern.endsWith(`/${token}`) &&
+				(pattern === scopeRel || pattern.startsWith(`${scopeRel}/`)),
+		);
+		if (!excludedUnderScope) {
+			return `${token} (entry ${entry.root}) stands nowhere under ${scope.replace(`${repo}/`, "")}`;
+		}
 	}
 	return null;
 }

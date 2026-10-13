@@ -174,6 +174,32 @@ if [ ! -f "$STRYKER_BIN" ]; then
 	exit 1
 fi
 
+# The typescript the Stryker host resolves for its ts-config preprocessor.
+# Core 10.0.0 imports the bare specifier `typescript` from its own package and
+# reads `parseConfigFileTextToJson` from it (sandbox/ts-config-preprocessor.js).
+# The typescript 7.0.2 this repository declares at its top level - the native
+# compiler line `bun run typecheck` and the quality audit run - exposes no such
+# function, and the preprocessor runs before the campaign's scope is applied, so
+# a host that resolves the top-level package dies at its first step with
+# `ts.parseConfigFileTextToJson is not a function`, and no campaign, scoped or
+# full, can start (issue #377). The declared line does not move: the host gets
+# its own copy instead. The shim this checkout vendors at
+# scripts/stryker-host-typescript is staged under core's own node_modules, where
+# the import finds it before the top-level 7.0.2, and resolution being per
+# package, the instrumenter and the Bun runner plugin keep the top-level line.
+# `bun install` can prune a staged copy, so the entry point re-stages before
+# every run: what it stages is what the host resolves.
+host_ts_dir="$repo_root/node_modules/@stryker-mutator/core/node_modules/typescript"
+host_ts_shim="$repo_root/scripts/stryker-host-typescript"
+if [ ! -f "$host_ts_shim/package.json" ] || [ ! -f "$host_ts_shim/index.cjs" ]; then
+	echo "mutate: the Stryker host's typescript shim is missing from scripts/stryker-host-typescript." >&2
+	echo "mutate: without it the host resolves the top-level typescript 7.0.2, and the campaign's ts-config preprocessor crashes at start." >&2
+	exit 1
+fi
+mkdir -p "$(dirname "$host_ts_dir")"
+rm -rf "$host_ts_dir"
+cp -R "$host_ts_shim" "$host_ts_dir"
+
 bash "$repo_root/scripts/crash-guard.sh" bun "$STRYKER_BIN" run "${args[@]}"
 status=$?
 if [ "$keep_temp" -eq 1 ]; then

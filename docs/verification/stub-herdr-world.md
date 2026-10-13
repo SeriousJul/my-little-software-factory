@@ -17,7 +17,12 @@ frame, the Key guide, the Live view, the Message line, and the Starting face
   pins again. The Consultation operations and the Agent input queue stand on
   the world: their launch, send, conflict, and failure flows all run over it,
   and their move onto the world is complete (issue #374). The seven
-  suites' move onto the world is recorded as incomplete below. The
+  suites' move onto the world is recorded as incomplete below. The scoped
+  Stryker campaign over the Handoff dispatch and the observation has run on
+  this branch (issue #377): the campaign's host resolves the vendored
+typescript shim
+  ([ADR 0137](../adr/0137-the-mutation-campaign-host-runs-the-vendored-typescript-shim.md)),
+  and the two modules' mutation score stands measured. The
 tracing of every answer shape to a recorded real herdr answer is recorded as
 incomplete below: the shapes are derived from the plane's own readers and
 herdr's documented CLI behavior, and none has yet been checked against a
@@ -37,6 +42,7 @@ module.
 | Test layer | `bun test` on the unit layer: an in-memory world, the real production readers (the handoff, the observation, the consultation operations) driven over the world, and no desktop control |
 | World module | [test/herdr-world.ts](../../test/herdr-world.ts), one `stubHerdrWorld` factory and its `StubHerdrWorld` surface |
 | Herdr version the shapes name | 0.8.2, the version the plane's readers were written against |
+| The Stryker host of the scoped campaign | Stryker core 10.0.0 on Bun 1.4.2, resolving the vendored typescript shim staged under its own `node_modules` before the run ([ADR 0137](../adr/0137-the-mutation-campaign-host-runs-the-vendored-typescript-shim.md)); the typescript 7.0.2 this repository declares stands untouched |
 
 ## What was verified
 
@@ -52,6 +58,7 @@ module.
 | The gate and delay wrappers compose over the world | the wrappers take a `CommandRunner`, and the world satisfies it; the suites that gate and delay a handoff run over the world without change | Passed |
 | The checkout verification moves off the local builder | the eight files that held a local `stubCheckout` (the Action bar, the Consultation frame, the Consultation operations, the Handoff frame, the Key guide, the Live view, the Message line, and the Starting face) now state the checkout as a world and their local builders are deleted | Passed |
 | The Agent interaction's text and key sends are answered by the world | the Agent input queue's send tests and the Consultation frame's interaction test stand the world's own pane: the sends reach it, and the tests read them from `sentTextFor` and `sentKeysFor` instead of the recorded commands | Passed |
+| The mutation score of the Handoff dispatch and the observation stands measured | The scoped Stryker campaign over `src/handoff.ts`, `src/handoff-dispatch.ts`, and `src/observation.ts` ran on 2026-10-13 on this branch's head, and re-ran on the head rebased onto the Seeded plane (#378), on the campaign's host resolving the vendored typescript shim ([ADR 0137](../adr/0137-the-mutation-campaign-host-runs-the-vendored-typescript-shim.md)) that issue #377's fix stages under the Stryker core's own `node_modules`. The crash that blocked the campaign stands recorded here: Stryker core 10.0.0's TypeScript preprocessor reads `parseConfigFileTextToJson` from the `typescript` package, and the typescript 7.0.2 this repository declares does not expose it, so the host died at the campaign's first step with `ts.parseConfigFileTextToJson is not a function`, before a mutant was measured; scoping the campaign to `src/handoff.ts` did not avoid it, because the preprocessor runs before the scope is applied, and no campaign, scoped or full, could start | 76.73 percent on the head the campaign measured (the pushed head adds #391's frame-rig rework, which changes the suite the campaign runs): of 4,835 mutants, 3,701 killed, 8 timed out, 1 runtime error counted with the killed, 919 survived, and 206 with no coverage, so 3,710 of 4,835; per file, `handoff.ts` 80.97 percent, `handoff-dispatch.ts` 76.96 percent, and `observation.ts` 72.19 percent. On the tree before the rebase the same scope read 76.69 percent; the [mutation-testing record](mutation-testing.md) holds the full breakdown |
 
 ## The answer-shape tracing (incomplete)
 
@@ -102,8 +109,7 @@ verification's change.
 | Check | Why it could not run | Recorded as |
 | --- | --- | --- |
 | The answer-shape tracing to a recorded herdr 0.8.2 answer | it needs a live herdr binary to record the real answers; the contributor instructions keep the automated suite at the unit layer | Incomplete, with the shape table above as the acceptance target |
-| A scoped Stryker campaign over the Handoff dispatch and the observation | Stryker's TypeScript preprocessor crashes before a mutant is measured: Stryker core 10.0.0 reads `parseConfigFileTextToJson` from the `typescript` package, and the typescript 7.0.2 this repository declares does not expose it (measured: the function is `undefined` at that version), so no campaign - scoped or full - can start here; scoping to `src/handoff.ts` does not avoid it | Incomplete, with the crash recorded as the blocker and [#377](https://github.com/SeriousJul/my-little-software-factory/issues/377) as its owner |
 | The auto-mode suite's move onto the world | its pinned flows need a per-test rework that is its own step | Incomplete, recorded in the migration table above |
 | The seven frame suites' move onto the world | the plane-boot migration (#366) re-landed them on the pin table; their herdr and git answers stand on the fake command runner's pins again, and their move onto the world needs a per-test rework of their standings, its own step | Incomplete, recorded in the migration table above |
 | The screen-reader path of the surfaces the suites touch | not verified in this branch's scope | Incomplete |
-| The machine state beside the full suite | the full `bun run test` ran on the merged tree with the plane's own processes live | The gate run for this change passed with no red case: 3321 pass, 0 fail, 151 files, on a machine with 32 cores, a load of 1.45, and no other test process running. The run before it stood red on one case this change itself made: the dotfiles test recorded the old test-dup baseline, and the baseline rewrite moved it. The test now records the rewritten value, and the rerun beside it stood green |
+| The machine state beside the full suite | the full `bun run test` ran on this branch's heads with the plane's own processes live | The gate run for this change passed with no red case on the head rebased onto the Seeded plane (#378): 3415 pass, 0 fail, 155 files, in 65.67 seconds with `bun run test`; the pushed head, which adds #391's frame-rig rework, passed its gate beside it: 3428 pass, 0 fail, 155 files, in 65.62 seconds, on a machine with 32 cores and no other test process running. The run before both, on the tree before the rebase, stood red on one case this change itself made: the dotfiles test recorded the old test-dup baseline, and the baseline rewrite moved it. The test now records the rewritten value, and the rerun beside it stood green |

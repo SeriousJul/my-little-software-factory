@@ -50,10 +50,11 @@ const FRAME_POLL_MS = 10;
  * slow plane, and the deadline names it instead of a tuned constant.
  *
  * The runner's own budget stays above the sum of two of the rig's deadline
- * waits: the test script's `--timeout` is sixty seconds, local and CI alike,
- * and twice the deadline is forty, so a test's waits fail on the rig's
- * deadline, which dumps the last frame, before the runner's budget can
- * end the test without one (ADR 0128).
+ * waits: the test script's `--timeout` is sixty seconds, local and CI alike
+ * (the campaign's test children take the same budget through
+ * `stryker.config.mjs`'s `bun.bunArgs`), and twice the deadline is forty, so
+ * a test's waits fail on the rig's deadline, which dumps the last frame,
+ * before the runner's budget can end the test without one (ADR 0128).
  */
 export const FRAME_DEADLINE_MS = 20000;
 /** The dispatch grace `settle` waits out before trusting stability. */
