@@ -1513,6 +1513,9 @@ export function spanColorAt(
 //   initRepository / toggleAutoHandoff   hints: the quit key, the emergency
 //                                     exit, the repository-init key, and the
 //                                     auto-handoff toggle (F5 in a field)
+//   pageKey                           the page and jump keys: the bar's hint
+//     names `↑↓/jk` and `j/k`, never PgUp, PgDn, Home, or End, so the list's
+//     and the body's page and jump keys stand here too
 //   frameUntil                        a custom frame check, named for what it
 //                                     waits for, where no named outcome fits
 //
@@ -2754,5 +2757,31 @@ export async function toggleAutoHandoff(
 		preFrame,
 		preLine: messageRowOf(preFrame),
 		press: "the auto-handoff toggle",
+	});
+}
+
+/** The page and jump keys the bar's hint names nowhere: the list's and the body's. */
+export type PageKey = "pageup" | "pagedown" | "home" | "end";
+
+/**
+ * Send a page or jump key to the focused scrollable surface, and wait for the
+ * outcome the test names. The bar's hint names `↑↓/jk` and `j/k`, never the
+ * page or jump keys, so they resolve off the bar: the rig sends the terminal
+ * sequence the plane parses for the key, after the pre-press settle, on the
+ * rig's one deadline. The plane routes the key to whatever scroll surface the
+ * frame focuses: the list, the detail, the body, or the guide's rows.
+ */
+export async function pageKey(
+	setup: Setup,
+	key: PageKey,
+	fields: ControlOutcomeFields = {},
+): Promise<string> {
+	checkOutcomeFields(fields, false);
+	const preFrame = await settle(setup);
+	sendKey(setup, displayKey(key));
+	return runOutcomes(setup, fields, {
+		preFrame,
+		preLine: messageRowOf(preFrame),
+		press: `the ${displayKey(key)} key`,
 	});
 }

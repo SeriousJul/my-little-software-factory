@@ -49,6 +49,7 @@ import {
 	hintWordings,
 	messageRowOf,
 	namedWhat,
+	pageKey,
 	parseBarText,
 	pressControl,
 	resolveControl,
@@ -396,6 +397,16 @@ describe("the frame rig's escape list", () => {
 			await expect(pressControl(setup, "auto-handoff")).rejects.toThrow(
 				/the bar paints no hint that belongs to it/,
 			);
+		}, toOpenTicket);
+	});
+
+	test("sends the page and jump keys the bar's hint names nowhere", async () => {
+		await withHealthyPlane(async (setup) => {
+			// The bar's hint names `↑↓/jk`, never the page or jump keys: they stand
+			// on the escape list, and the key moves the cursor like the walk's do.
+			await pageKey(setup, "end", { moved: "Ticket id in the a" });
+			const frame = await pageKey(setup, "home", { moved: "Drop the legacy auth" });
+			expect(frameText(frame)).toContain("Drop the legacy auth");
 		}, toOpenTicket);
 	});
 });
