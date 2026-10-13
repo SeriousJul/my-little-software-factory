@@ -15,6 +15,14 @@
  *
  * The rig's keys flow from the control catalogue and the painted bar, never
  * from a literal this suite picks.
+ *
+ * The rig's last pin is the issue's own: a painted hint one control paints
+ * is owned by that control, and a hint two catalogue controls can both paint
+ * is a finding about the bar the rig files instead of pressing through. The
+ * surface read names the catalogue modes the frame stands on from the
+ * frame's own markers, and on a named surface the hint's owners are the
+ * controls the surface runs: one owner lets the rig own the key, and two
+ * owners are the collision pinned where this suite meets them.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -25,6 +33,7 @@ import {
 	allControls,
 	BAR_LABEL_WORDINGS,
 	barControlIds,
+	barHintOwners,
 	displayOnlyKeyLabels,
 	frameText,
 	HEIGHT,
@@ -34,15 +43,17 @@ import {
 	parseBarText,
 	pressControl,
 	resolveControl,
+	type SurfaceFamily,
 	settle,
 	surfaceFamily,
+	surfaceModes,
 	toggleAutoHandoff,
 	WIDTH,
 	waitFor,
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
-import { plane } from "./plane.ts";
+import { type ConsultationSeed, plane, type WorkQueueSeed } from "./plane.ts";
 
 /** Boot a plane whose source stands healthy, so the bar paints its full hints. */
 async function withHealthyPlane(
@@ -67,6 +78,64 @@ async function toOpenTicket(setup: AppSetup): Promise<void> {
 		await pressControl(setup, "move-list", { via: "j", quiet: true });
 	}
 }
+
+/** Boot a plane with the standing it names, and the source standing healthy. */
+async function withSeededPlane(
+	body: (setup: AppSetup) => Promise<void>,
+	standing: Parameters<typeof plane>[0],
+): Promise<void> {
+	const planeRecord = await plane(standing);
+	await withApp(
+		async (setup) => {
+			planeRecord.settleFirstFetch();
+			await waitSourceHealthy(planeRecord.state);
+			await body(setup);
+		},
+		{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+	);
+}
+
+/** Walk the list from the top to the section that holds the focus marker. */
+async function toSection(setup: AppSetup, section: SurfaceFamily): Promise<void> {
+	for (let step = 0; step < 40 && surfaceFamily(setup.captureCharFrame()) !== section; step += 1) {
+		await pressControl(setup, "move-list", { via: "j", quiet: true });
+	}
+	expect(surfaceFamily(setup.captureCharFrame())).toBe(section);
+}
+
+/** The repository the consultation seeds name, one the plane can stand. */
+const REPO_BILLING = {
+	identity: "github.com/acme/billing",
+	displayName: "acme/billing",
+	cloneUrl: "https://github.com/acme/billing.git",
+	path: "/tmp/billing",
+};
+
+const REVIEW_RECORD: ConsultationSeed = {
+	typeName: "review",
+	agentType: "pi",
+	environment: "live-worktree",
+	template: "plan",
+	initialInput: "Check the billing service for the auth shim removal.",
+	renderedOpeningPrompt: "Review the billing service.",
+	repository: REPO_BILLING,
+	agentName: "sample-agent",
+};
+
+const HANDOFF_ROW: WorkQueueSeed = {
+	kind: "handoff",
+	ticketIdentity: "github:github.com:I_9",
+	origin: "workflow",
+	previousMessage: "End the work cycle",
+	choice: {
+		agentType: "pi",
+		environment: "live-worktree",
+		taskType: "review",
+		model: "",
+		thinking: "",
+		contextWindow: "",
+	},
+};
 
 describe("the frame rig's resolution", () => {
 	test("resolves the base bar's controls to the keys it painted", async () => {
@@ -382,6 +451,207 @@ describe("the frame rig's keyless hints", () => {
 		// label the catalogue adds lands in the set, and a label it also paints
 		// beside a real key never does.
 		expect([...displayOnlyKeyLabels()].sort()).toEqual(["Backspace", "Type"]);
+	});
+});
+
+describe("the frame rig owns a painted hint one control paints (issue #387)", () => {
+	test("the surface read names the catalogue modes from the frame's own markers", () => {
+		const titled = (title: string, bar = ""): string => `┌─${title}─┐\n${bar}`;
+		expect(surfaceModes(titled("Key guide"))).toEqual(["key-guide"]);
+		expect(surfaceModes(titled("Message view", "j/k Scroll body  Esc/F2 Close"))).toEqual([
+			"message-view",
+		]);
+		expect(
+			surfaceModes(
+				titled("Decision: any panel", "↑↓ Select action  Enter Confirm action  Esc Cancel"),
+			),
+		).toEqual(["decision-modal"]);
+		expect(surfaceModes(titled("Live: any ticket"))).toEqual(["live-view"]);
+		expect(surfaceModes(titled("Missing: any ticket", "j/k Scroll message  Esc Cancel"))).toEqual([
+			"missing-modal",
+		]);
+		expect(
+			surfaceModes(
+				titled("Close: any ticket", "↑↓ Select action  Enter Confirm action  Esc Cancel"),
+			),
+		).toEqual(["action-panel"]);
+		expect(
+			surfaceModes(titled("Init a repository", "↑↓/jk Move  Enter Select  Esc Cancel")),
+		).toEqual(["repository-select"]);
+		expect(
+			surfaceModes(
+				titled("Init a repository", "↑↓ Select action  Enter Confirm action  Esc Cancel"),
+			),
+		).toEqual(["action-panel"]);
+		expect(surfaceModes(titled("Consultation launcher"))).toEqual([
+			"form-field",
+			"form-selector",
+			"form-action",
+		]);
+		expect(surfaceModes("┌─❯ Tickets\n↑↓/jk Move")).toEqual(["ticket-list"]);
+		expect(surfaceModes("┌─❯ Consultations\n↑↓/jk Move")).toEqual(["consultation-list"]);
+		expect(surfaceModes("┌─❯ Work queue\n↑↓/jk Move")).toEqual(["work-queue-list"]);
+		expect(surfaceModes("┌─❯ Detail\n↑↓/jk Scroll  ←/h Tickets")).toEqual(["ticket-detail"]);
+		expect(
+			surfaceModes("┌─❯ Agent view\n↑↓/jk Scroll  + Promote  - Demote  Delete Remove"),
+		).toEqual(["work-queue-detail"]);
+		expect(surfaceModes("┌─❯ Session view\n↑↓/jk Scroll  f History  Delete Close")).toEqual([
+			"consultation-detail",
+			"consultation-interaction",
+		]);
+		expect(surfaceModes("┌─❯ Agent view\nj/k Scroll body  Esc Cancel")).toEqual([
+			"consultation-detail",
+			"consultation-interaction",
+			"work-queue-detail",
+		]);
+		expect(surfaceModes("┌─Override\nType Edit")).toEqual([
+			"override-list",
+			"override-model",
+			"override-text",
+		]);
+		// A panel that names no mode is split on the one hint only its mode paints.
+		expect(
+			surfaceModes("an unnamed panel\n↑↓ Select action  Enter Confirm action  Esc Cancel"),
+		).toEqual(["action-panel"]);
+		// A frame the rig names not stands for no modes: the read is permissive.
+		expect(surfaceModes("an unnamed panel\nType Edit  Enter Submit")).toBeNull();
+	});
+
+	test("a Decision modal's bar is owned by the modal's controls alone", async () => {
+		await withSeededPlane(
+			async (setup) => {
+				await pressControl(setup, "decide-completion", { opens: "Decision:" });
+				expect(surfaceModes(setup.captureCharFrame())).toEqual(["decision-modal"]);
+				const owners = barHintOwners(setup);
+				expect(owners.get("↑↓ Select action")).toEqual(["select-action"]);
+				expect(owners.get("Enter Confirm action")).toEqual(["confirm-action"]);
+				expect(owners.get("Esc Cancel")).toEqual(["cancel-action"]);
+				expect(owners.get("j/k Scroll body")).toEqual(["scroll-body"]);
+				expect(owners.get("e Edit handoff")).toEqual(["edit-action"]);
+				// The closed walk passes on the modal's own bar.
+				barControlIds(setup);
+				// The surfaces the modal's bar borrows wordings from own no hint on it: the
+				// collision the permissive read measured is gone once the surface is named.
+				for (const id of ["cancel", "close-form", "scroll-message", "guide-close"]) {
+					expect(() => resolveControl(setup, id)).toThrow(/the bar paints no hint/);
+				}
+			},
+			{ standing: "awaiting" },
+		);
+	});
+
+	test("a focused ticket detail is owned by the ticket section's controls", async () => {
+		await withSeededPlane(
+			async (setup) => {
+				await pressControl(setup, "detail", { moved: "detail" });
+				expect(surfaceModes(setup.captureCharFrame())).toEqual(["ticket-detail"]);
+				const owners = barHintOwners(setup);
+				expect(owners.get("↑↓/jk Scroll")).toEqual(["scroll-detail"]);
+				expect(owners.get("←/h Tickets")).toEqual(["tickets"]);
+				expect(owners.get("g Goto")).toEqual(["ticket-goto"]);
+				expect(owners.get("Delete Close")).toEqual(["ticket-close"]);
+				barControlIds(setup);
+				// The consultation section's controls run no mode the detail stands on.
+				expect(() => resolveControl(setup, "consultation-goto")).toThrow(/the bar paints no hint/);
+				expect(() => resolveControl(setup, "consultation-close")).toThrow(/the bar paints no hint/);
+			},
+			{ standing: "in-flight" },
+		);
+	});
+
+	test("a focused consultation detail is owned by the consultation section's controls", async () => {
+		await withSeededPlane(
+			async (setup) => {
+				await toSection(setup, "consultation");
+				await pressControl(setup, "detail", { quiet: true });
+				expect(surfaceModes(setup.captureCharFrame())).toEqual([
+					"consultation-detail",
+					"consultation-interaction",
+				]);
+				const owners = barHintOwners(setup);
+				expect(owners.get("↑↓/jk Scroll")).toEqual(["scroll-detail"]);
+				expect(owners.get("←/h List")).toEqual(["consultation-list"]);
+				expect(owners.get("f History")).toEqual(["history"]);
+				expect(owners.get("Delete Close")).toEqual(["consultation-close"]);
+				expect(owners.get("g Goto")).toEqual(["consultation-goto"]);
+				barControlIds(setup);
+				// The ticket and the queue sections' controls own no hint of this bar.
+				expect(() => resolveControl(setup, "ticket-goto")).toThrow(/the bar paints no hint/);
+				expect(() => resolveControl(setup, "ticket-close")).toThrow(/the bar paints no hint/);
+				expect(() => resolveControl(setup, "queue-remove")).toThrow(/the bar paints no hint/);
+			},
+			{ standing: "open", consultations: [REVIEW_RECORD] },
+		);
+	});
+
+	test("a focused work queue detail is owned by the queue section's controls", async () => {
+		await withSeededPlane(
+			async (setup) => {
+				await toSection(setup, "queue");
+				await pressControl(setup, "detail", { quiet: true });
+				expect(surfaceModes(setup.captureCharFrame())).toEqual(["work-queue-detail"]);
+				const owners = barHintOwners(setup);
+				expect(owners.get("↑↓/jk Scroll")).toEqual(["scroll-detail"]);
+				expect(owners.get("←/h List")).toEqual(["queue-list"]);
+				expect(owners.get("+ Promote")).toEqual(["queue-promote"]);
+				expect(owners.get("- Demote")).toEqual(["queue-demote"]);
+				// The hint the wide queue bar shared with the consultation section's removal:
+				// the surface read lets the queue's removal own it alone.
+				expect(owners.get("Delete Remove")).toEqual(["queue-remove"]);
+				expect(owners.get("c Launch")).toEqual(["launch"]);
+				barControlIds(setup);
+				expect(() => resolveControl(setup, "consultation-delete")).toThrow(
+					/the bar paints no hint/,
+				);
+				expect(() => resolveControl(setup, "consultation-close")).toThrow(/the bar paints no hint/);
+			},
+			{ standing: "open", queue: [HANDOFF_ROW] },
+		);
+	});
+
+	test("an action panel's bar is owned by the panel's controls alone", async () => {
+		await withSeededPlane(
+			async (setup) => {
+				// The selected ticket holds work in flight: the close is available, and it
+				// opens the panel that asks for the decision.
+				await pressControl(setup, "ticket-close", { opens: "Close:" });
+				expect(surfaceModes(setup.captureCharFrame())).toEqual(["action-panel"]);
+				const owners = barHintOwners(setup);
+				expect(owners.get("↑↓ Select action")).toEqual(["select-action"]);
+				expect(owners.get("j/k Scroll message")).toEqual(["scroll-message"]);
+				expect(owners.get("Enter Confirm action")).toEqual(["confirm-action"]);
+				expect(owners.get("Esc Cancel")).toEqual(["cancel-action"]);
+				barControlIds(setup);
+				// The modal and the form surfaces share the panel's wordings and own no hint on it.
+				for (const id of ["cancel", "close-form", "scroll-body", "guide-close"]) {
+					expect(() => resolveControl(setup, id)).toThrow(/the bar paints no hint/);
+				}
+			},
+			{ standing: "awaiting" },
+		);
+	});
+
+	test("the Message view's bar is owned by the view's controls alone", async () => {
+		await withSeededPlane(
+			async (setup) => {
+				// Record a message the view can show: the close on the open ticket is refused,
+				// and the refusal stands on the Message line for the view to read.
+				await toOpenTicket(setup);
+				await pressControl(setup, "ticket-close", {
+					refuses: "no work is in flight to close",
+				});
+				await pressControl(setup, "message", { opens: "Message view", via: "m" });
+				expect(surfaceModes(setup.captureCharFrame())).toEqual(["message-view"]);
+				const owners = barHintOwners(setup);
+				expect(owners.get("j/k Scroll body")).toEqual(["scroll-body"]);
+				expect(owners.get("Esc/F2 Close")).toEqual(["message-close"]);
+				barControlIds(setup);
+				// The guide's close and the form's close share the view's wordings and own no hint on it.
+				expect(() => resolveControl(setup, "guide-close")).toThrow(/the bar paints no hint/);
+				expect(() => resolveControl(setup, "close-form")).toThrow(/the bar paints no hint/);
+			},
+			{ standing: "open" },
+		);
 	});
 });
 

@@ -2906,7 +2906,7 @@ function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boole
  * two places at once (ADR 0034 widened the base modes with the Work queue's
  * two).
  */
-function omitFromOtherSection(mode: InteractionMode, control: ControlDefinition): boolean {
+export function omitFromOtherSection(mode: InteractionMode, control: ControlDefinition): boolean {
 	return (
 		(otherSectionMode(mode) && control.consultationSectionOnly === true) ||
 		(!workQueueMode(mode) && control.queueSectionOnly === true) ||
