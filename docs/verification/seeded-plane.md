@@ -61,9 +61,13 @@ standing's sources, the settlement the source doubles run on, the named
 source lists and their null entries, the factory-state fields, and the runner
 and command fields. The plane suite holds a case for every field the
 interface admits, beside the table above, and reads each one back through the
-state module's own interface. One field stands apart from the depth rule the
-ADR names, and the record states the reason the plane keeps it: `prepare`
-names a step of the build, the preparation of the home once it exists. Three
+state module's own interface. Four fields stand apart from the depth rule the ADR names, and the ADR states the bend beside the
+rule: the case's own home (`home`), the case's own state file's path (`statePath`), the state file
+the case already holds open (`existing`), and the preparation of the plane's home once it exists
+(`prepare`). Each names a path or a state the case owns, or a step of the build the case must run
+before its standing can name itself, and none names a fact the plane itself holds. The record
+states the reason the plane keeps the step among them: `prepare` names the preparation of the home
+once it exists. Three
 suites stand facts that depend on the home's own paths before the standing can
 name them - the checkout directories the case's command answers pass through,
 the config file text the case writes verbatim, the source doubles the case
@@ -90,7 +94,10 @@ quoted word among it, and the frame suites compose their pins from the fact
 module's one copy of the title. The sample's other ticket, the one whose
 title carries the default's words before more of its own, keeps its own
 title beside it: the rule takes the title as one word, not as a run of
-letters.
+letters. The word's end stands at a quote or other mark, at a line end, or at
+the end of the text, and each of the three is a spelling the guard takes;
+the one continuation the guard lets pass is a word or a hyphen on the
+sample title's own line.
 
 ## The flat axis the plane settles
 

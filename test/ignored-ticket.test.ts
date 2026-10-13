@@ -717,7 +717,9 @@ describe("the obligation gate", () => {
 	});
 
 	test("the key refuses a missing Agent, and its row keeps the badge the choice lives on", async () => {
-		const state = reopenState(statePath());
+		// Pinned past the startup grace: the recorded pane is a dead Agent, not
+		// a booting one, so its missing badge stands on the first poll.
+		const state = reopenState(statePath(), () => Date.now() - 60_000);
 		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
@@ -1175,7 +1177,9 @@ describe("the ignore and the machine", () => {
 	 * puts the Ticket back in the machine's way.
 	 */
 	test("an ignored Ticket whose Agent goes missing keeps its row and its flag", async () => {
-		const state = reopenState(statePath());
+		// Pinned past the startup grace: when herdr stops listing the Agent, the
+		// row reads missing at once, not after the grace a booting start holds.
+		const state = reopenState(statePath(), () => Date.now() - 60_000);
 		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
 		// Auto mode from the boot: the Restart is the machine's own move, and the

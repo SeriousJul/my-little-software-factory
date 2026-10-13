@@ -445,11 +445,12 @@ export const sleep = (ms: number): Promise<void> =>
  * The wrapper settles the flat axis on the file it opens, the list the
  * frame tests read: the stored axis stands through every boot that wraps
  * the state, and the plane's own settle settles the same list on the fresh
- * file it opens.
+ * file it opens. The clock beside the axis stands the state's own time:
+ * a case that stands the dead Agent past the startup grace names the pin.
  */
-export function wrappedState(axis: GroupingAxis = "none"): FactoryState {
+export function wrappedState(axis: GroupingAxis = "none", now?: () => number): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-plane-state-"));
-	const state = openFactoryState(join(dir, "state.sqlite"), () => Date.now());
+	const state = openFactoryState(join(dir, "state.sqlite"), now ?? (() => Date.now()));
 	state.grouping.setGroupingAxis("tickets", axis);
 	holdPlaneClose(() => {
 		state.close();

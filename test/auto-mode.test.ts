@@ -895,6 +895,8 @@ describe("the failure markers", () => {
 				message: "",
 				model: "gpt-5.6",
 				thinking: "high",
+				// The agent ran a while before it died: past the startup grace.
+				stateNow: () => Date.now() - 600_000,
 			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -936,7 +938,10 @@ describe("the failure markers", () => {
 	});
 
 	test("abandon in the Missing modal closes the cycle and increments its durable number", async () => {
-		const { app, planeRecord } = await bootedApp("in-flight");
+		const { app, planeRecord } = await bootedApp("in-flight", {
+			// The agent ran a while before it died: past the startup grace.
+			detail: { stateNow: () => Date.now() - 600_000 },
+		});
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1031,7 +1036,10 @@ describe("the failure markers", () => {
 	});
 
 	test("esc on the missing modal closes it and leaves the ticket in flight", async () => {
-		const { app, planeRecord } = await bootedApp("in-flight");
+		const { app, planeRecord } = await bootedApp("in-flight", {
+			// The agent ran a while before it died: past the startup grace.
+			detail: { stateNow: () => Date.now() - 600_000 },
+		});
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1054,6 +1062,8 @@ describe("the failure markers", () => {
 	test("a ticket at the handoff limit wears the trailing marker on its row", async () => {
 		const { app, planeRecord } = await bootedApp("in-flight", {
 			extra: { maxHandoffsPerTicket: 1 },
+			// The agent ran a while before it died: past the startup grace.
+			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 		await withApp(
 			async (setup) => {
@@ -1120,6 +1130,8 @@ describe("the Ticket Close key", () => {
 			extra: {},
 			outcome: success,
 			environment: "worktree",
+			// The agent ran a while before it died: past the startup grace.
+			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 		await withApp(
 			async (setup) => {
@@ -1179,6 +1191,8 @@ describe("the Ticket Close key", () => {
 			extra: {},
 			outcome: success,
 			environment: "worktree",
+			// The agent ran a while before it died: past the startup grace.
+			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 		await withApp(
 			async (setup) => {
@@ -1202,7 +1216,10 @@ describe("the Ticket Close key", () => {
 	});
 
 	test("the confirmation names the live-worktree tab, not the worktree checkout", async () => {
-		const { app, planeRecord } = await bootedApp("in-flight");
+		const { app, planeRecord } = await bootedApp("in-flight", {
+			// The agent ran a while before it died: past the startup grace.
+			detail: { stateNow: () => Date.now() - 600_000 },
+		});
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -1344,6 +1361,8 @@ describe("the Ticket Close key", () => {
 			extra: {},
 			outcome: success,
 			environment: "worktree",
+			// The agent ran a while before it died: past the startup grace.
+			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 		await withApp(
 			async (setup) => {
@@ -1381,7 +1400,13 @@ describe("the Ticket Close key", () => {
 	});
 
 	test("an in-flight close herdr refuses records the leftover fact", async () => {
-		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
+		const app = seededApp("in-flight", {
+			extra: {},
+			outcome: success,
+			environment: "worktree",
+			// The agent ran a while before it died: past the startup grace.
+			detail: { stateNow: () => Date.now() - 600_000 },
+		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
 
@@ -2927,6 +2952,8 @@ describe("the Close cleanup", () => {
 			extra: {},
 			outcome: success,
 			environment: "worktree",
+			// The agent ran a while before it died: past the startup grace.
+			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 		await withApp(
 			async (setup) => {
@@ -2953,7 +2980,10 @@ describe("the Close cleanup", () => {
 	});
 
 	test("abandon on a live worktree handoff closes only the tab it made", async () => {
-		const { app, planeRecord } = await bootedApp("in-flight");
+		const { app, planeRecord } = await bootedApp("in-flight", {
+			// The agent ran a while before it died: past the startup grace.
+			detail: { stateNow: () => Date.now() - 600_000 },
+		});
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
@@ -3144,7 +3174,13 @@ describe("the leftover environment", () => {
 		// The Abandon row of the missing panel ends the cycle, and its Close
 		// cleanup is the same cleanup the automatic end runs: a checkout herdr
 		// will not remove lands as the ticket's fact.
-		const app = seededApp("in-flight", { extra: {}, outcome: success, environment: "worktree" });
+		const app = seededApp("in-flight", {
+			extra: {},
+			outcome: success,
+			environment: "worktree",
+			// The agent ran a while before it died: past the startup grace.
+			detail: { stateNow: () => Date.now() - 600_000 },
+		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
 
@@ -3611,15 +3647,17 @@ describe("the auto dispatch", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("○ auto 1/2") && ticketRow(f).includes("missing"),
+					(f) => f.includes("○ auto 1/2") && ticketRow(f).includes("starting"),
 					"the dispatch",
 				);
-				// The new agent's pane is not in the faked list: the row wears
-				// the missing badge, and the detail pane shows the handoff.
-				// The mode cell holds the booting seat: a started agent inside
-				// its startup grace counts against the parallel limit, from the
-				// same shared seat count the gates read.
-				expect(ticketRow(frame)).toContain("missing");
+				// The new agent's pane is not in the faked list yet, and the
+				// start is inside its startup grace: the row keeps the
+				// Starting face instead of reading missing (issue #379), and the
+				// detail pane shows the handoff. The mode cell holds the booting
+				// seat: a started agent inside its startup grace counts against
+				// the parallel limit, from the same shared seat count the gates
+				// read.
+				expect(ticketRow(frame)).not.toContain("missing");
 				const commands = app.runner.commands();
 				expect(commands).toContain(`herdr workspace create --cwd ${path} --no-focus`);
 				expect(commands.some((c) => c.startsWith("herdr agent prompt"))).toBe(true);
@@ -3716,13 +3754,15 @@ describe("the auto dispatch", () => {
 				// 0051): the first cycle starts the first ticket in list order,
 				// and the second cycle, the queue drained, starts the second.
 				// Both started agents are inside their startup grace, so the
-				// mode cell holds both booting seats against the cap.
+				// mode cell holds both booting seats against the cap, and each
+				// row keeps the Starting face instead of reading missing
+				// (issue #379).
 				await awaitFrame(
 					setup,
 					(f) =>
 						f.includes("○ auto 2/2") &&
-						ticketRow(f).includes("missing") &&
-						ticketRow(f, "Watch agent turns").includes("missing"),
+						ticketRow(f).includes("starting") &&
+						ticketRow(f, "Watch agent turns").includes("starting"),
 					"both dispatches",
 				);
 				// One herdr agent start per ticket, under the ticket's own
@@ -3809,7 +3849,7 @@ describe("the auto dispatch", () => {
 				await awaitFrame(
 					setup,
 					(f) =>
-						f.includes("\u25cb auto 2/2") && ticketRow(f, "Watch agent turns").includes("missing"),
+						f.includes("\u25cb auto 2/2") && ticketRow(f, "Watch agent turns").includes("starting"),
 					"both dispatches after the mapping write-back",
 				);
 				clearInterval(pump);
@@ -3861,13 +3901,15 @@ describe("the auto dispatch", () => {
 				// cycle, and the pair takes the dispatch. The finished ticket
 				// rests open, waiting on the re-read its close provoked.
 				// The finished ticket holds no seat; the pair's started agent
-				// is inside its startup grace, so the mode cell holds one seat.
+				// is inside its startup grace, so the mode cell holds one seat,
+				// and the pair's row keeps the Starting face instead of reading
+				// missing (issue #379).
 				await awaitFrame(
 					setup,
 					(f) =>
 						f.includes("○ auto 1/2") &&
 						ticketRow(f).includes("[open]") &&
-						ticketRow(f, "Watch agent turns").includes("missing"),
+						ticketRow(f, "Watch agent turns").includes("starting"),
 					"the auto close and the pair dispatch",
 				);
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
@@ -4804,6 +4846,8 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 			environment: "live-worktree",
 			detail: {
 				taskType: "analyze",
+				// The agent ran a while before it died: past the startup grace.
+				stateNow: () => Date.now() - 600_000,
 			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -4871,7 +4915,9 @@ describe("the handoff queue", () => {
 				{ ...fetched(6, "Watch agent turns"), externalUpdatedAt: "2026-08-31T10:05:00Z" },
 			],
 		};
-		const state = reopenState(join(dir, "state.sqlite"));
+		// Pinned past the startup grace: the seeded handoff is a dead Agent,
+		// not a booting one, so its missing badge stands on the first poll.
+		const state = reopenState(join(dir, "state.sqlite"), () => Date.now() - 600_000);
 		state.sourceFact.initializeSources([source]);
 		state.sourceFact.applyFetch(source, pairMoved);
 		// The second ticket starts in flight, with the stored herdr handles.
@@ -5307,7 +5353,7 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 					setup,
 					(f) =>
 						f.includes("○ auto 1/2") &&
-						ticketRow(f, "Persist source facts in state").includes("missing"),
+						ticketRow(f, "Persist source facts in state").includes("starting"),
 					"the review route on the pull request",
 				);
 				const commands = app.runner.commands();

@@ -1625,8 +1625,8 @@ function displayKey(raw: string): string {
 }
 
 /** The plane under the test, where the test booted one. */
-function planeOf(setup: Setup): SeededPlane | undefined {
-	return "plane" in setup ? (setup as { plane: SeededPlane }).plane : undefined;
+function planeOf(setup: Setup): Plane | undefined {
+	return "plane" in setup ? (setup as { plane: Plane }).plane : undefined;
 }
 
 /**

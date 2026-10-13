@@ -120,8 +120,9 @@ describe("the control plane", () => {
 		// The reported symptom: herdr handed the id of the ticket's closed pane
 		// out again, and a Consultation's agent works in it now. The ticket's
 		// stored handle still names that id, so the pane reads as missing - the
-		// row wears the failure badge, and Goto focuses nothing.
-		const state = reopenState(":memory:");
+		// row wears the failure badge, and Goto focuses nothing. The clock sits
+		// past the startup grace: the Agent is gone, not booting.
+		const state = reopenState(":memory:", () => Date.now() - 60_000);
 		const runner = new FakeRunner();
 		const source = { name: "issues", kind: "github-issues" as const };
 		const sourceConfig = {
@@ -466,7 +467,7 @@ describe("the control plane", () => {
 		// Abandon ends the cycle of a ticket whose agent herdr no longer
 		// lists, and the draft the ticket still wears is read off its factory
 		// branch and closed, the way the decided cycle's Close does.
-		const state = reopenState(":memory:");
+		const state = reopenState(":memory:", () => Date.now() - 60_000);
 		const runner = new FakeRunner();
 		const sourceConfig = {
 			name: "issues",
@@ -1191,6 +1192,7 @@ describe("the control plane", () => {
 					tabId: "tab-1",
 					workspaceId: "w-1",
 					herdrName: "sample-agent",
+					startedAt: "2026-01-01T00:00:00Z",
 				},
 				handoffCount: 1,
 			},

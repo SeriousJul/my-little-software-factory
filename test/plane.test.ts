@@ -10,7 +10,7 @@
  * interface, so a standing the module builds wrong fails the reads.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,17 +32,6 @@ import { FakeRunner } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
 import { type Plane, plane, reopenState, withPlane } from "./plane.ts";
 
-const openPlanes: Plane[] = [];
-afterEach(() => {
-	for (const p of openPlanes.splice(0)) p.close();
-});
-
-/** Open a plane and hold it for the afterEach close. */
-function hold(p: Plane): Plane {
-	openPlanes.push(p);
-	return p;
-}
-
 /** The standing's rows, by identity, read through the state module's list rule. */
 function viewsOf(p: Plane) {
 	return p.state.ticketWorkCycle.ticketListViews(
@@ -54,7 +43,7 @@ function viewsOf(p: Plane) {
 
 describe("the default standing", () => {
 	test("the list the plane stands on is the state module's own rule over the sample rows", async () => {
-		const p = hold(await plane());
+		const p = await plane();
 		const views = viewsOf(p);
 		// The flat axis is the default, and the rule orders the sample rows:
 		// the live bands first - awaiting, running, handed-off - and the open
@@ -76,7 +65,7 @@ describe("the default standing", () => {
 	});
 
 	test("the live rows stand on their stored handoffs", async () => {
-		const p = hold(await plane());
+		const p = await plane();
 		const views = viewsOf(p);
 		const handedOff = views.rows.find((row) => row.identity === "github:github.com:I_2");
 		expect(handedOff?.state).toBe("handed-off");
@@ -90,7 +79,7 @@ describe("the default standing", () => {
 	});
 
 	test("the awaiting row stands on its settled turn, named by the handoff that settled it", async () => {
-		const p = hold(await plane());
+		const p = await plane();
 		const views = viewsOf(p);
 		const awaiting = views.rows.find((row) => row.identity === "github:github.com:I_4");
 		expect(awaiting?.state).toBe("awaiting");
@@ -102,7 +91,7 @@ describe("the default standing", () => {
 	});
 
 	test("the config file on disk carries the plane's config", async () => {
-		const p = hold(await plane());
+		const p = await plane();
 		expect(existsSync(p.configPath)).toBe(true);
 		const loaded = await loadConfigFile(p.configPath);
 		expect(loaded.config).toEqual(p.config);
@@ -118,12 +107,12 @@ describe("the default standing", () => {
 	});
 
 	test("the plane settles the flat axis on every fresh file it opens", async () => {
-		const bare = hold(await plane());
+		const bare = await plane();
 		expect(bare.state.grouping.groupingAxis("tickets")).toBe("none");
 		// The rule keys on the file the plane opens, not on the sources the
 		// standing names: a standing that names no source settles the flat
 		// axis on its fresh file the same way.
-		const noSources = hold(await plane({ sources: [] }));
+		const noSources = await plane({ sources: [] });
 		expect(noSources.state.grouping.groupingAxis("tickets")).toBe("none");
 	});
 });
@@ -261,7 +250,7 @@ describe("the seeded plane's facts", () => {
 	});
 
 	test("the grouping axis field names the axis the plane stands", async () => {
-		const p = hold(await plane({ groupingAxis: "repository" }));
+		const p = await plane({ groupingAxis: "repository" });
 		expect(p.state.grouping.groupingAxis("tickets")).toBe("repository");
 	});
 
@@ -280,23 +269,23 @@ describe("the seeded plane's facts", () => {
 	});
 
 	test("the checkout standing stands the checkout on disk", async () => {
-		const none = hold(await plane({ checkout: "none" }));
+		const none = await plane({ checkout: "none" });
 		expect(none.checkout).toBeNull();
 		expect(Object.keys(none.config.repos)).toEqual([]);
 
-		const bare = hold(await plane({}));
+		const bare = await plane({});
 		// The plane's own mapping stands when the case names the checkout
 		// standing; a case that names no standing maps nothing, the list the
 		// frame suites read on.
 		expect(Object.keys(bare.config.repos)).toEqual([]);
 
-		const empty = hold(await plane({ checkout: "empty" }));
+		const empty = await plane({ checkout: "empty" });
 		const emptyPath = empty.checkout;
 		if (emptyPath === null) throw new Error("the empty checkout is missing");
 		expect(existsSync(emptyPath)).toBe(true);
 		expect(empty.config.repos[DEFAULT_REPOSITORY.identity]).toBe(emptyPath);
 
-		const healthy = hold(await plane({ checkout: "healthy" }));
+		const healthy = await plane({ checkout: "healthy" });
 		const healthyPath = healthy.checkout;
 		if (healthyPath === null) throw new Error("the healthy checkout is missing");
 		const gitDir = await healthy.runner.run("git", ["-C", healthyPath, "rev-parse", "--git-dir"]);
@@ -453,8 +442,8 @@ describe("the seeded plane's facts", () => {
 	});
 
 	test("the auto settlement stamps a settled read from the plane's clock", async () => {
-		const manual = hold(await plane({ now: () => 1_000_000 }));
-		const auto = hold(await plane({ now: () => 1_000_000, sourceSettlement: "auto" }));
+		const manual = await plane({ now: () => 1_000_000 });
+		const auto = await plane({ now: () => 1_000_000, sourceSettlement: "auto" });
 		for (const [p, stamp] of [
 			[manual, "2026-01-01T00:01:00Z"],
 			[auto, new Date(1_005_000).toISOString()],
@@ -518,13 +507,13 @@ describe("the seeded plane's facts", () => {
 
 describe("the named standings of the factory", () => {
 	test("an empty standing names no tickets and no sources", async () => {
-		const p = hold(await plane({ sources: [] }));
+		const p = await plane({ sources: [] });
 		expect(p.sources).toHaveLength(0);
 		expect(viewsOf(p).rows).toHaveLength(0);
 	});
 
 	test("a muted source stands in the muted view, and its resting rows leave the list", async () => {
-		const p = hold(await plane({ mutedSources: ["issues"] }));
+		const p = await plane({ mutedSources: ["issues"] });
 		const views = viewsOf(p);
 		// The muted view is the ledger of the source act: every ticket of the
 		// muted source, live and resting alike.
@@ -539,7 +528,7 @@ describe("the named standings of the factory", () => {
 	});
 
 	test("an ignored ticket stands in the ignored view", async () => {
-		const p = hold(
+		const p = 
 			await plane({
 				sources: [
 					{
@@ -553,15 +542,14 @@ describe("the named standings of the factory", () => {
 						tickets: [{ ...SAMPLE_TICKETS[0], ignored: true }],
 					},
 				],
-			}),
-		);
+			});
 		const views = viewsOf(p);
 		expect(views.rows).toHaveLength(0);
 		expect(views.ignored).toHaveLength(1);
 	});
 
 	test("the ignoredTickets field stands the named tickets in the ignored view", async () => {
-		const p = hold(await plane({ ignoredTickets: ["github:github.com:I_1"] }));
+		const p = await plane({ ignoredTickets: ["github:github.com:I_1"] });
 		const views = viewsOf(p);
 		expect(views.ignored).toHaveLength(1);
 		expect(views.active.map((ticket) => ticket.identity)).not.toContain("github:github.com:I_1");
@@ -573,7 +561,7 @@ describe("the named standings of the factory", () => {
 			handoff: SAMPLE_TICKETS[1].handoff,
 			handoffCount: 1,
 		};
-		const p = hold(
+		const p = 
 			await plane({
 				sources: [
 					{
@@ -587,8 +575,7 @@ describe("the named standings of the factory", () => {
 						tickets: [resting],
 					},
 				],
-			}),
-		);
+			});
 		const views = viewsOf(p);
 		const row = views.rows[0];
 		expect(row?.state).toBe("open");
@@ -597,7 +584,7 @@ describe("the named standings of the factory", () => {
 	});
 
 	test("a Consultation standing stands in the record the plane's own read reports", async () => {
-		const p = hold(
+		const p = 
 			await plane({
 				config: {
 					consultationTypes: {
@@ -624,15 +611,14 @@ describe("the named standings of the factory", () => {
 						state: "working",
 					},
 				],
-			}),
-		);
+			});
 		const record = p.state.consultationRecord.consultation("c-1");
 		expect(record?.state).toBe("working");
 		expect(record?.agentName).toBe("consultation-c-1");
 	});
 
 	test("a queue standing stands in the queue the plane's own read reports", async () => {
-		const p = hold(
+		const p = 
 			await plane({
 				queue: [
 					{
@@ -650,15 +636,14 @@ describe("the named standings of the factory", () => {
 						previousMessage: "",
 					},
 				],
-			}),
-		);
+			});
 		const items = p.state.workQueue.items();
 		expect(items).toHaveLength(1);
 		expect(workQueueIdentityOf(items[0])).toBe("github:github.com:I_1");
 	});
 
 	test("the repository inits standing stands the init facts the plane reports", async () => {
-		const p = hold(
+		const p = 
 			await plane({
 				sources: [
 					{
@@ -675,8 +660,7 @@ describe("the named standings of the factory", () => {
 				repositoryInits: {
 					"github.com/acme/factory": "settings-hash-1",
 				},
-			}),
-		);
+			});
 		const init = p.state.repositoryInit.repositoryInitFact("github.com/acme/factory");
 		expect(init?.settingsHash).toBe("settings-hash-1");
 		expect(init?.pushedCommit).toBe("init-commit");

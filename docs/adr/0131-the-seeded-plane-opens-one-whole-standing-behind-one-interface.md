@@ -78,6 +78,13 @@ the rule the two existing shared fixtures failed at. A field that names an aggre
 directory, or a step of the build is refused at review. Where building a standing needs a rule the
 plane owns - the naming rule, the work-cycle rule, the Transition fire - the module calls the module
 that owns it rather than reproducing it, so no test can pass because a fixture restated a rule.
+The rule bends at exactly four fields, and the bend is stated here rather than left to review: the
+case's own home directory (`home`), the case's own state file's path (`statePath`), the state file
+the case already holds open (`existing`), and the preparation of the plane's home once it exists
+(`prepare`). Each names a path or a state the case owns, or a step the case must run before it can
+name its standing, and none names a fact the plane itself holds. The
+[verification record](../verification/seeded-plane.md) states the reason the plane keeps each one,
+and the plane's own suite holds a case for each.
 
 **One default Ticket, one Repository, one derived herdr Agent name.** A shared fact module holds the
 fetched Ticket, the fetch outcome, the Handoff choice, the Repository reference, and the workflow

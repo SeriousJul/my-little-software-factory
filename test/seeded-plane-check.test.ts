@@ -34,13 +34,20 @@ import { readFileSync } from "node:fs";
 import { DEFAULT_TICKET_TITLE } from "./fact-fixtures.ts";
 import { sourceFiles } from "./static-checks.ts";
 
+/**
+ * The app harness import at any relative depth: a suite nested in a
+ * subdirectory of the test directory reaches the harness through `../` and
+ * deeper, and the frame suites stand at every depth the tree holds, so the
+ * match takes the relative path, not its length.
+ */
+const HARNESS_IMPORT = /from\s+"(?:\.\.?\/)+app-harness\.ts"/u;
+
 const frameSuites = sourceFiles(
 	"test",
 	(file) =>
 		file.endsWith(".test.ts") &&
 		file !== "test/seeded-plane-check.test.ts" &&
-		(readFileSync(file, "utf8").includes('from "./app-harness.ts"') ||
-			readFileSync(file, "utf8").includes('from "../app-harness.ts"')),
+		HARNESS_IMPORT.test(readFileSync(file, "utf8")),
 );
 
 /** A state opener a frame suite must not reach for: the plane owns the opening. */
@@ -55,13 +62,16 @@ const QUOTED_TITLE = '"Persist source ' + 'facts"';
  * A frame file that holds the title's text anywhere, a pin's quoted word
  * among it, builds or reads the default Ticket outside the plane's one copy
  * of it. The guard is what follows the text: a pin ends the title at a quote
- * or other mark, while the sample's other ticket, the one whose title carries
- * this one's words before more of its own, keeps them running on, so the rule
- * takes the title as one word, not as a run of letters.
+ * or other mark, and the sample's other ticket, the one whose title carries
+ * this one's words before more of its own, keeps them running on the same
+ * line. The rule takes the title as one word, not as a run of letters, and
+ * the gap the first draft left is closed: a title that ends at a line end
+ * or at the end of the text stands finished, the way a pin's does, and the
+ * continuation that passes is a word or a hyphen on the title's own line.
  */
 const SPELLS_DEFAULT_TITLE = (source: string): boolean =>
 	new RegExp(
-		DEFAULT_TICKET_TITLE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![\\s\\w-])",
+		DEFAULT_TICKET_TITLE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?!(?:[ \\t]*[\\w-]))",
 		"u",
 	).test(source);
 
@@ -81,6 +91,12 @@ describe("the frame suites open state through the Seeded plane", () => {
 		// walked set cannot be empty while the tree holds those files.
 		expect(frameSuites.length).toBeGreaterThan(10);
 		expect(frameSuites).toContain("test/app.test.ts");
+		// The harness import match holds at any relative depth, a nested
+		// suite's `../` among them.
+		expect(HARNESS_IMPORT.test('import { settle } from "./app-harness.ts";')).toBe(true);
+		expect(HARNESS_IMPORT.test('import { settle } from "../app-harness.ts";')).toBe(true);
+		expect(HARNESS_IMPORT.test('import { settle } from "../../app-harness.ts";')).toBe(true);
+		expect(HARNESS_IMPORT.test('import { settle } from "app-harness.ts";')).toBe(false);
 		// The default title stands in the fact module, the one owner of it.
 		expect(readFileSync("test/fact-fixtures.ts", "utf8")).toContain(QUOTED_TITLE);
 	});
@@ -97,9 +113,13 @@ describe("the frame suites open state through the Seeded plane", () => {
 		expect(OPENS_STATE.test("const state = openFactoryState(path);")).toBe(true);
 		expect(SPELLS_DEFAULT_TITLE('title: "Persist source facts"')).toBe(true);
 		expect(SPELLS_DEFAULT_TITLE('f.includes("Close: Persist source facts")')).toBe(true);
-		// The sample's other ticket keeps the title's words running on, and the
-		// guard lets its pin stand.
+		// The sample's other ticket keeps the title's words running on the
+		// same line, and the guard lets its pin stand.
 		expect(SPELLS_DEFAULT_TITLE('title: "Persist source facts in state"')).toBe(false);
 		expect(SPELLS_DEFAULT_TITLE("title: DEFAULT_TICKET_TITLE")).toBe(false);
+		// The line-end gap is closed: a title that stands finished at a line
+		// end or at the end of the text is a spelling, and the guard takes it.
+		expect(SPELLS_DEFAULT_TITLE('title: "Persist source facts"\n')).toBe(true);
+		expect(SPELLS_DEFAULT_TITLE('"Persist source facts"')).toBe(true);
 	});
 });
