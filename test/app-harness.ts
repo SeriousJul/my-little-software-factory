@@ -1335,16 +1335,19 @@ export async function openConsultationPanel(
  * section it walks to.
  */
 /**
- * The detail holds the cursor: bring it back to the list the detail belongs
- * to, so the walk crosses from there. The back hint's word names the
- * section the detail belongs to.
+ * The walk's starting box holds no focus marker: the cursor stands where the
+ * walk cannot reach it - a detail, a section the walk steps away from, or a
+ * section the frame's markers stand not on at all. The back key goes out
+ * blind, and the wait stands on the walk's starting marker: a frame the
+ * section markers name nowhere answers the back key to the section it
+ * leaves, and the cursor lands where the walk starts from.
  */
-async function returnCursorToItsList(setup: Setup, frame: string): Promise<void> {
-	if (frame.includes("❯ Agent view"))
-		await pressControl(setup, "consultation-list", { via: "h", moved: "consultations" });
-	else if (actionBarRowOf(frame).includes("←/h Tickets"))
-		await pressControl(setup, "tickets", { via: "h", moved: "tickets" });
-	else await pressControl(setup, "queue-list", { via: "h", moved: "queue" });
+async function returnCursorToItsList(
+	setup: Setup,
+	target: "tickets" | "consultations",
+): Promise<void> {
+	const marker = target === "consultations" ? "┌─❯ Tickets" : "┌─❯ Consultations";
+	await press(setup, "h", "the list to take focus", (f) => f.includes(marker));
 }
 
 export async function crossCursor(
@@ -1370,9 +1373,12 @@ export async function crossCursor(
 			? (frame: string) => frame.includes("┌─❯ Consultations") && !frame.includes("┌─❯ Tickets")
 			: (frame: string) => frame.includes("┌─❯ Tickets") && !frame.includes("┌─❯ Consultations");
 	if (!onTarget(setup.captureCharFrame())) {
-		const frame = setup.captureCharFrame();
-		if (!frame.includes("┌─❯ Tickets") && !frame.includes("┌─❯ Consultations"))
-			await returnCursorToItsList(setup, frame);
+		// The walk starts from the section it steps across: `j` crosses from
+		// the Ticket list, `k` crosses from the Consultation list. The cursor
+		// stands elsewhere when that box holds no focus marker, and the back
+		// key brings it to the box the walk starts from.
+		const startingBox = target === "consultations" ? "┌─❯ Tickets" : "┌─❯ Consultations";
+		if (!setup.captureCharFrame().includes(startingBox)) await returnCursorToItsList(setup, target);
 	}
 	for (let step = 0; step < maxSteps; step += 1) {
 		const frame = setup.captureCharFrame();
