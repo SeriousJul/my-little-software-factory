@@ -19,34 +19,28 @@ import type { EnvironmentKind, FetchedTicket, Ticket } from "../src/domain/ticke
 import type { CommandRunner } from "../src/runner.ts";
 import {
 	actionBarRowOf,
-	awaitFrame,
-	closeOverlay,
+	fieldKey,
 	frameText,
+	frameUntil,
+	guideKey,
 	HEIGHT,
 	markerRowOf,
 	messageRowOf,
-	openGuide,
-	openLauncher,
-	openMessageView,
-	press,
-	pressArrow,
+	pageKey,
+	pressControl,
 	rgb,
 	roleColor,
 	rowsOf,
-	settle,
 	spanColorAt,
+	tabUntilSlot,
+	toggleAutoHandoff,
+	typeText,
 	WIDTH,
+	waitFor,
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
-import {
-	fetchRateLimited,
-	fetchSuccess,
-	issueTicket,
-	SAMPLE_TICKETS,
-	ticketOf,
-} from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -54,7 +48,13 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-
+import {
+	fetchRateLimited,
+	fetchSuccess,
+	issueTicket,
+	SAMPLE_TICKETS,
+	ticketOf,
+} from "./fact-fixtures.ts";
 import {
 	callsReached,
 	issuesSourceConfig,
@@ -217,13 +217,11 @@ describe("the permanent Message line", () => {
 		const planeRecord = await plane({ runner: () => fake, sources: [], groupingAxis: "none" });
 		await withApp(
 			async (setup) => {
-				const before = await settle(setup);
+				const before = await waitFor(setup, { quiet: true });
 				expect(actionBarRowOf(before)).not.toContain("m Message");
 				// An unavailable refresh explains itself on the line.
-				await press(setup, "r", "the warning", (f) =>
-					messageRowOf(f).includes("no Ticket sources exist"),
-				);
-				const frame = await settle(setup);
+				await pressControl(setup, "refresh", { quiet: true });
+				const frame = await waitFor(setup, { quiet: true });
 				// The fact is recorded, so the Message hint lands on the row the bar
 				// always wears: the layout never shifts for or against the line, and
 				// the marker never moves for the hint or the fact it names.
@@ -232,8 +230,10 @@ describe("the permanent Message line", () => {
 				expect(messageRowOf(frame).trim()).toBe("Warning: no Ticket sources exist");
 				// Changing auto-handoff is not an operation. It must not clear the
 				// durable warning that the rejected refresh produced.
-				setup.mockInput.pressKey("a");
-				expect(messageRowOf(await settle(setup)).trim()).toBe("Warning: no Ticket sources exist");
+				await toggleAutoHandoff(setup, { quiet: true });
+				expect(messageRowOf(await waitFor(setup, { quiet: true })).trim()).toBe(
+					"Warning: no Ticket sources exist",
+				);
 			},
 			{
 				width: WIDTH,
@@ -250,8 +250,7 @@ describe("the permanent Message line", () => {
 		const planeRecord = await plane({ runner: () => fake, sources: [], groupingAxis: "none" });
 		await withApp(
 			async (setup) => {
-				await press(setup, "r", "the warning", (f) => messageRowOf(f).startsWith("Warning: "));
-				const frame = await settle(setup);
+				const frame = await pressControl(setup, "refresh", { refuses: true });
 				const row = rowsOf(frame).length - 2;
 				expect(messageRowOf(frame).trim()).toBe("Warning: no Ticket sources exist");
 				expect(spanColorAt(setup, row, "Warning:")).toEqual(rgb(roleColor("yellow")));
@@ -273,10 +272,9 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				// While the first fetch runs, a refresh is refused on the line.
-				await press(setup, "r", "the refusal", (f) =>
-					messageRowOf(f).includes("every Ticket source is already refreshing"),
-				);
-				const frame = await settle(setup);
+				const frame = await pressControl(setup, "refresh", {
+					refuses: "every Ticket source is already refreshing",
+				});
 				expect(messageRowOf(frame).trim()).toBe(
 					"Warning: every Ticket source is already refreshing",
 				);
@@ -299,17 +297,15 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+				await frameUntil(setup, "the ticket", (f) => f.includes("Add a webhook retry policy"));
 				// A manual refresh shows its working, and settles back to clear.
-				await press(setup, "r", "the working", (f) =>
-					messageRowOf(f).includes("refreshing 1 sources"),
-				);
-				const frame = await settle(setup);
+				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
+				const frame = await waitFor(setup, { quiet: true });
 				const row = rowsOf(frame).length - 2;
 				expect(messageRowOf(frame).trim()).toBe("Working: refreshing 1 sources");
 				expect(spanColorAt(setup, row, "Working:")).toEqual(rgb(roleColor("blue")));
 				source.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the working to clear");
+				await waitFor(setup, { hides: "refreshing 1 sources" });
 			},
 			{
 				width: WIDTH,
@@ -335,15 +331,11 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				errorSource.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(setup, (f) => f.includes("missing"), "the in-flight ticket");
-				await press(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Add a webhook retry policy"),
-				);
-				await press(setup, "return", "the close to run", (f) => !f.includes("Close:"));
-				const frame = await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).startsWith("Error: "),
-					"the error",
+				await frameUntil(setup, "the in-flight ticket", (f) => f.includes("missing"));
+				await pressControl(setup, "ticket-close", { opens: "Close: Add a webhook retry policy" });
+				await pressControl(setup, "confirm-action", { hides: "Close:" });
+				const frame = await frameUntil(setup, "the error", (f) =>
+					messageRowOf(f).startsWith("Error: "),
 				);
 				const row = rowsOf(frame).length - 2;
 				expect(messageRowOf(frame).trim()).toBe(
@@ -371,18 +363,11 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
-				await press(setup, "return", "the working", (f) =>
-					messageRowOf(f).startsWith("Working: handing off"),
-				);
+				await pressControl(setup, "handoff", { shows: "Working: handing off" });
 				// The failure lands after the delay: the error covers the working,
 				// and the fault stands on the queued start's warning (ADR 0118's
 				// split) beside the error the record holds.
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).startsWith("Warning: queued handoff"),
-					"the fault",
-					8000,
-				);
+				await waitFor(setup, { refuses: "queued handoff" });
 				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe(
 					faultLine("Retry policy for webhooks", "error: the daemon is down"),
 				);
@@ -405,27 +390,17 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+				await frameUntil(setup, "the ticket", (f) => f.includes("Add a webhook retry policy"));
 				// A failed refresh leaves the source stale: the line warns.
-				setup.mockInput.pressKey("r");
+				await pressControl(setup, "refresh", { quiet: true });
 				await callsReached(source, 2);
 				source.settle(fetchRateLimited);
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
-					"the stale warning",
-				);
+				await waitFor(setup, { refuses: "issues: stale - GitHub rate limit exceeded" });
 				// A new refresh covers the warning with its working.
-				await press(setup, "r", "the working", (f) =>
-					messageRowOf(f).includes("refreshing 1 sources"),
-				);
+				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
 				await callsReached(source, 3);
 				source.settle(fetchRateLimited);
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
-					"the warning to return",
-				);
+				await waitFor(setup, { refuses: "issues: stale - GitHub rate limit exceeded" });
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "production" } },
 		);
@@ -459,10 +434,10 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				// The first refresh settles cleanly.
 				source.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+				await frameUntil(setup, "the ticket", (f) => f.includes("Add a webhook retry policy"));
 				// The next refresh absorbs one feed's failure: the source still
 				// succeeds, and its one warning line surfaces on the line.
-				setup.mockInput.pressKey("r");
+				await pressControl(setup, "refresh", { quiet: true });
 				await callsReached(source, 2);
 				const disabled = "Dependabot alerts are disabled for acme/factory";
 				source.settle({
@@ -471,11 +446,7 @@ describe("the permanent Message line", () => {
 					tickets: [issueTicket()],
 					warnings: [disabled],
 				});
-				const frame = await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("Dependabot alerts are disabled for"),
-					"the warning",
-				);
+				const frame = await waitFor(setup, { refuses: "Dependabot alerts are disabled for" });
 				expect(messageRowOf(frame).trim()).toBe(`Warning: ${disabled}`);
 				source.settle(fetchSuccess([issueTicket()]));
 			},
@@ -495,40 +466,26 @@ describe("the permanent Message line", () => {
 				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				// The in-flight handoff's working.
-				await press(setup, "return", "the handoff working", (f) =>
-					messageRowOf(f).startsWith("Working: handing off"),
-				);
+				await pressControl(setup, "handoff", { shows: "Working: handing off" });
 				// Its pickup fails: the item drops with the warning that names
 				// the operation and the reason (ADR 0049), covering the working.
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).startsWith("Warning: queued handoff"),
-					"the handoff drop warning",
-					15000,
-				);
+				await waitFor(setup, { refuses: "queued handoff" });
 				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe(
 					faultLine("Retry policy for webhooks", "error: the daemon is down"),
 				);
 				// A new operation replaces the error with its own working.
-				await press(setup, "r", "the refresh working", (f) =>
-					messageRowOf(f).includes("refreshing 1 sources"),
-				);
+				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
 				await callsReached(source, 2);
 				source.settle(fetchRateLimited);
 				// The refresh working cleared: the stale source's warning returns.
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
-					"the source-health warning",
-				);
+				await waitFor(setup, { refuses: "issues: stale - GitHub rate limit exceeded" });
 				// A second refresh: its working covers the stale health.
-				await press(setup, "r", "the second refresh", (f) =>
-					messageRowOf(f).includes("refreshing 1 sources"),
-				);
+				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
 				// A refused refresh while that one runs: the refusal is an
 				// operation Warning, and active progress outranks it
 				// (user story 51), so the Working line stays.
-				await press(setup, "r", "the refused refresh", (f) => {
+				await pressControl(setup, "refresh", { quiet: true });
+				await frameUntil(setup, "the refused refresh", (f) => {
 					const row = messageRowOf(f);
 					return row.includes("already refreshing") || row.includes("refreshing 1 sources");
 				});
@@ -537,11 +494,7 @@ describe("the permanent Message line", () => {
 				source.settle(fetchRateLimited);
 				// The progress clears with the refresh: the refusal returns,
 				// and it outranks the source-health warning (story 52).
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).trim() === "Warning: every Ticket source is already refreshing",
-					"the refusal after the refresh",
-				);
+				await waitFor(setup, { refuses: "every Ticket source is already refreshing" });
 			},
 			{
 				width: WIDTH,
@@ -585,24 +538,20 @@ describe("the permanent Message line", () => {
 				// The boot fetch has to land before the test asks for its own.
 				await callsReached(source, 1);
 				source.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(setup, (f) => f.includes("[awaiting]"), "the awaiting ticket");
-				await settle(setup);
+				await frameUntil(setup, "the awaiting ticket", (f) => f.includes("[awaiting]"));
+				await waitFor(setup, { quiet: true });
 				// A manual refresh is in flight, and its progress owns the line.
-				await press(setup, "r", "the working", (f) =>
-					messageRowOf(f).includes("refreshing 1 sources"),
-				);
+				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
 				// Close ends the decision's outcome. It writes no progress line of
 				// its own, so it clears nothing another operation still runs.
-				await press(setup, "return", "the decision", (f) => f.includes("Decision:"));
-				await press(setup, "return", "the Close to run", (f) => !f.includes("Decision:"));
-				expect(messageRowOf(await settle(setup)).trim()).toBe("Working: refreshing 1 sources");
+				await pressControl(setup, "decide-completion", { shows: "Decision:" });
+				await pressControl(setup, "confirm-action", { hides: "Decision:" });
+				expect(messageRowOf(await waitFor(setup, { quiet: true })).trim()).toBe(
+					"Working: refreshing 1 sources",
+				);
 				// The refresh settles, and only then does its line clear.
 				source.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(
-					setup,
-					(f) => !messageRowOf(f).includes("refreshing 1 sources"),
-					"the working to clear",
-				);
+				await waitFor(setup, { hides: "refreshing 1 sources" });
 			},
 			{
 				width: WIDTH,
@@ -621,10 +570,8 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
-				await press(setup, "return", "the fault", (f) =>
-					messageRowOf(f).includes("the daemon refused"),
-				);
-				const frame = await settle(setup);
+				await pressControl(setup, "handoff", { shows: "the daemon refused" });
+				const frame = await waitFor(setup, { quiet: true });
 				const expected = padToWidth(
 					truncateToWidth(faultLine("Retry policy for webhooks", LONG_LINE), WIDTH),
 					WIDTH,
@@ -633,7 +580,7 @@ describe("the permanent Message line", () => {
 				expect(actionBarRowOf(frame)).toContain("m Message");
 				// The view holds the whole fact the line cut: the entry wraps the
 				// text, and it leads with its datetime and its chip.
-				const view = await openMessageView(setup, "m", "Message view");
+				const view = await pressControl(setup, "message", { opens: "Message view" });
 				expect(view).toContain("the daemon refused the request after the outage");
 				expect(view).toContain("ERROR");
 			},
@@ -651,11 +598,9 @@ describe("the permanent Message line", () => {
 		const fitPlane = await plane({ runner: () => fitFake, sources: [], groupingAxis: "none" });
 		await withApp(
 			async (setup) => {
-				await press(setup, "r", "the warning", (f) =>
-					messageRowOf(f).includes("no Ticket sources exist"),
-				);
-				expect(actionBarRowOf(await settle(setup))).toContain("m Message");
-				const view = await openMessageView(setup, "m", "Message view");
+				await pressControl(setup, "refresh", { quiet: true });
+				expect(actionBarRowOf(await waitFor(setup, { quiet: true }))).toContain("m Message");
+				const view = await pressControl(setup, "message", { opens: "Message view" });
 				expect(view).toContain("WARN");
 				expect(view).toContain("no Ticket sources exist");
 			},
@@ -673,12 +618,9 @@ describe("the permanent Message line", () => {
 		const emptyPlane = await plane({ runner: () => emptyFake, sources: [], groupingAxis: "none" });
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("m");
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).trim() === "Warning: no message has been recorded yet",
-					"the refusal on the line",
-				);
+				await guideKey(setup, "message", "m", {
+					refuses: "no message has been recorded yet",
+				});
 			},
 			{
 				width: WIDTH,
@@ -704,31 +646,23 @@ describe("the permanent Message line", () => {
 				// A truncated fault on the line: the view has text to hold.
 				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
-				await press(setup, "return", "the fault", (f) =>
-					messageRowOf(f).includes("the daemon refused"),
-				);
+				await pressControl(setup, "handoff", { shows: "the daemon refused" });
 				// The launcher's Draft field holds the keys, and F2 is the field mode's
 				// own alias: the view opens from inside the field, not only from the
 				// base panes.
-				await openLauncher(setup);
-				setup.mockInput.pressTab();
-				setup.mockInput.pressTab();
-				await awaitFrame(setup, (f) => f.includes("❯ Initial input"), "the draft field");
-				await setup.mockInput.typeText("draft before the view");
-				setup.mockInput.pressKey("HOME");
-				setup.mockInput.pressArrow("right", { shift: true });
-				setup.mockInput.pressArrow("right", { shift: true });
-				const view = await openMessageView(setup, "F2", "Message view");
+				await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+				await tabUntilSlot(setup, "❯ Initial input");
+				await typeText(setup, "draft before the view");
+				fieldKey(setup, "home");
+				fieldKey(setup, "shift+right");
+				fieldKey(setup, "shift+right");
+				const view = await pressControl(setup, "message", { via: "F2", opens: "Message view" });
 				expect(view).toContain("the daemon refused the request after the outage");
-				await closeOverlay(setup, "Message view", "the view to close");
+				await pressControl(setup, "message-close", { closes: "Message view" });
 				// The field kept the text, the caret, and the selection: asking to read
 				// a Message changed nothing about the operator's work.
-				setup.mockInput.pressKey("q");
-				await awaitFrame(
-					setup,
-					(f) => f.includes("qaft before the view"),
-					"the typed character to replace the selection",
-				);
+				typeText(setup, "q");
+				await waitFor(setup, { shows: "qaft before the view" });
 			},
 			{
 				width: WIDTH,
@@ -776,25 +710,15 @@ describe("the permanent Message line", () => {
 				// while it runs, so the refusal to open is the fact the record
 				// gains in that window, and it waits behind the working line,
 				// where a refusal ranks.
-				setup.mockInput.pressKey("m");
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).trim().startsWith("Warning: no message has been recorded"),
-					"the refusal",
-				);
-				await press(setup, "return", "the working", (f) =>
-					messageRowOf(f).startsWith("Working: handing off"),
-				);
+				await guideKey(setup, "message", "m", {
+					refuses: "no message has been recorded",
+				});
+				await pressControl(setup, "handoff", { shows: "Working: handing off" });
 				// The fault settles behind the working and takes the line from it.
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).startsWith("Warning: queued handoff"),
-					"the fault to take the line",
-					8000,
-				);
+				await waitFor(setup, { refuses: "queued handoff" });
 				// The record holds the refusal, the error, and the drop warning,
 				// and no Working line of the handoff: progress was never a fact.
-				const view = await openMessageView(setup, "m", "Message view");
+				const view = await pressControl(setup, "message", { opens: "Message view" });
 				expect(view).toContain("no message has been recorded yet");
 				expect(view).toContain("the daemon is down");
 				expect(view).not.toContain("handing off");
@@ -811,8 +735,10 @@ describe("the permanent Message line", () => {
 				// long title - the way every surface's line does.
 				expect(view).toContain("Warning: queued handoff");
 				// And the base frame behind it says the same.
-				await closeOverlay(setup, "Message view", "the view to close");
-				expect(messageRowOf(await settle(setup)).trim()).toContain("Warning: queued handoff");
+				await pressControl(setup, "message-close", { closes: "Message view" });
+				expect(messageRowOf(await waitFor(setup, { quiet: true })).trim()).toContain(
+					"Warning: queued handoff",
+				);
 			},
 			{
 				width: WIDTH,
@@ -837,15 +763,14 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				// The mode is factory state, not a config default (ADR 0036): the
 				// operator's `a` key is the only way onto it.
-				setup.mockInput.pressKey("a");
-				await settle(setup);
-				// Enter on the settled turn belongs to the factory in auto mode. The
+				await toggleAutoHandoff(setup, { quiet: true });
+				await waitFor(setup, { quiet: true }); // Enter on the settled turn belongs to the factory in auto mode. The
 				// fact says so with the plain info the record wears: no operation
 				// failed, so the line carries no warning's word.
-				await press(setup, "return", "the notice", (f) =>
-					messageRowOf(f).includes("the factory decides this ticket"),
-				);
-				const notice = await settle(setup);
+				await pressControl(setup, "decide-completion", {
+					shows: "the factory decides this ticket",
+				});
+				const notice = await waitFor(setup, { quiet: true });
 				expect(messageRowOf(notice).trim()).toBe(
 					"Info: auto-handoff is on: the factory decides this ticket",
 				);
@@ -855,7 +780,7 @@ describe("the permanent Message line", () => {
 				);
 				// The notice is a fact the record holds: the view shows it, beside
 				// its chip.
-				const view = await openMessageView(setup, "F2", "Message view");
+				const view = await pressControl(setup, "message", { opens: "Message view" });
 				expect(view).toContain("INFO");
 				expect(view).toContain("the factory decides this ticket");
 				// The row wears the roles decision 10 names (issue #331): the chip
@@ -868,16 +793,13 @@ describe("the permanent Message line", () => {
 				expect(spanColorAt(setup, infoRow, historyTimeOf(rows[infoRow]))).toEqual(
 					rgb(roleColor("subtext0")),
 				);
-				await closeOverlay(setup, "Message view", "the view to close");
+				await pressControl(setup, "message-close", { closes: "Message view" });
 				// The notice must not pin the line: the boot read is still in
 				// flight, so the refused refresh takes the line back, the way
 				// every operation fact outranks a notice.
-				setup.mockInput.pressKey("r");
-				const refused = await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("every Ticket source is already refreshing"),
-					"the refusal to take the line back",
-				);
+				const refused = await pressControl(setup, "refresh", {
+					refuses: "every Ticket source is already refreshing",
+				});
 				expect(refused).not.toContain("auto-handoff is on");
 				source.settle(fetchSuccess([issueTicket()]));
 			},
@@ -903,10 +825,8 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
-				await press(setup, "return", "the fault", (f) =>
-					messageRowOf(f).includes("the daemon refused"),
-				);
-				const frame = await openMessageView(setup, "F2", "Message view");
+				await pressControl(setup, "handoff", { shows: "the daemon refused" });
+				const frame = await pressControl(setup, "message", { opens: "Message view" });
 				// The entry wraps to more rows than the pane shows: the bar's range
 				// says so, and the view opens pinned to the newest row of the
 				// record, the bottom of the record's one entry.
@@ -931,14 +851,13 @@ describe("the permanent Message line", () => {
 				expect(thumb + track).toBe(visible);
 				expect(thumb).toBeGreaterThanOrEqual(1);
 				// k steps up one row of the record, and j returns to the bottom.
-				await press(setup, "k", "the scroll up", (f) =>
-					f.includes(`${top - 1}-${bottom - 1}/${total}`),
-				);
-				await press(setup, "j", "the scroll down", (f) => f.includes(`${top}-${bottom}/${total}`));
+				await pressControl(setup, "scroll-body", {
+					via: "k",
+					shows: `${top - 1}-${bottom - 1}/${total}`,
+				});
+				await pressControl(setup, "scroll-body", { via: "j", shows: `${top}-${bottom}/${total}` });
 				// home takes the record's first row.
-				const topFrame = await press(setup, "home", "the jump to the top", (f) =>
-					f.includes(`1-${visible}/${total}`),
-				);
+				const topFrame = await pageKey(setup, "home", { shows: `1-${visible}/${total}` });
 				// The fault's entry leads with its chip where the record shows it:
 				// the enqueue's notice leads the record, and the ERROR chip wears
 				// the error's red beside the time's subtext0, the roles decision
@@ -951,11 +870,11 @@ describe("the permanent Message line", () => {
 					rgb(roleColor("subtext0")),
 				);
 				// Esc closes; the error is back on the base line.
-				await closeOverlay(setup, "Message view", "the view to close");
-				expect(messageRowOf(await settle(setup))).toContain("the daemon refused");
+				await pressControl(setup, "message-close", { closes: "Message view" });
+				expect(messageRowOf(await waitFor(setup, { quiet: true }))).toContain("the daemon refused");
 				// F2 closes too.
-				await openMessageView(setup, "F2", "Message view");
-				await closeOverlay(setup, "Message view", "the view to close", "F2");
+				await pressControl(setup, "message", { opens: "Message view" });
+				await pressControl(setup, "message-close", { via: "F2", closes: "Message view" });
 				expect(messageRowOf(setup.captureCharFrame())).toContain("the daemon refused");
 			},
 			{
@@ -982,10 +901,8 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
-				await press(setup, "return", "the fault", (f) =>
-					messageRowOf(f).includes("the daemon refused"),
-				);
-				await openMessageView(setup, "F2", "Message view");
+				await pressControl(setup, "handoff", { shows: "the daemon refused" });
+				await pressControl(setup, "message", { opens: "Message view" });
 				// The view's Close owns the row's end cells, so a frame that
 				// cannot hold the hint states one whole key instead. It never
 				// states part of a key, and only falls silent where no key of
@@ -996,7 +913,7 @@ describe("the permanent Message line", () => {
 					rows.find((row) => /Esc|F2|Close/.test(row))?.trim() ?? "";
 				for (let width = 20; width >= 1; width -= 1) {
 					setup.resize(width, 8);
-					const rows = rowsOf(await settle(setup));
+					const rows = rowsOf(await waitFor(setup, { quiet: true }));
 					for (const row of rows) expect(widthOf(row)).toBe(width);
 					const bar = barRowOf(rows);
 					const word = closeBarWord(width);
@@ -1005,13 +922,11 @@ describe("the permanent Message line", () => {
 				}
 				// The row is the surface's own again at a usable width.
 				setup.resize(30, 8);
-				await awaitFrame(
-					setup,
-					(f) => barRowOf(rowsOf(f)).includes("Esc/F2 Close"),
-					"the view's full Close hint",
+				await frameUntil(setup, "the view's full Close hint", (f) =>
+					barRowOf(rowsOf(f)).includes("Esc/F2 Close"),
 				);
-				await closeOverlay(setup, "Message view", "the view to close");
-				expect(actionBarRowOf(await settle(setup))).toContain("Help");
+				await pressControl(setup, "message-close", { closes: "Message view" });
+				expect(actionBarRowOf(await waitFor(setup, { quiet: true }))).toContain("Help");
 			},
 			{
 				width: WIDTH,
@@ -1030,15 +945,13 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
-				await press(setup, "return", "the fault", (f) =>
-					messageRowOf(f).includes("the daemon refused"),
-				);
-				await openMessageView(setup, "m", "Message view");
-				await openGuide(setup, "F1", "Key guide - Ticket list");
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "handoff", { shows: "the daemon refused" });
+				await pressControl(setup, "message", { opens: "Message view" });
+				await guideKey(setup, "help", "F1", { opens: "Key guide - Ticket list" });
+				await pressControl(setup, "guide-close", { closes: "Key guide - Ticket list" });
 				// The view closed with the guide: the base holds the truncated
 				// fault line.
-				expect(messageRowOf(await settle(setup)).trim()).toBe(
+				expect(messageRowOf(await waitFor(setup, { quiet: true })).trim()).toBe(
 					truncateToWidth(faultLine("Retry policy for webhooks", LONG_LINE), WIDTH),
 				);
 			},
@@ -1057,12 +970,10 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				guideSource.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(guidePlane.state);
-				await press(setup, "return", "the fault", (f) =>
-					messageRowOf(f).includes("the daemon refused"),
-				);
-				await openMessageView(setup, "m", "Message view");
-				await openGuide(setup, "?", "Key guide - Ticket list");
-				await closeOverlay(setup, "Key guide", "the guide to close");
+				await pressControl(setup, "handoff", { shows: "the daemon refused" });
+				await pressControl(setup, "message", { opens: "Message view" });
+				await pressControl(setup, "help", { via: "?", opens: "Key guide - Ticket list" });
+				await pressControl(setup, "guide-close", { closes: "Key guide - Ticket list" });
 				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe(
 					truncateToWidth(faultLine("Retry policy for webhooks", LONG_LINE), WIDTH),
 				);
@@ -1093,14 +1004,12 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				errorSource.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(setup, (f) => f.includes("missing"), "the in-flight ticket");
-				await press(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Add a webhook retry policy"),
-				);
-				await press(setup, "return", "the close to run", (f) => !f.includes("Close:"));
-				await awaitFrame(setup, (f) => messageRowOf(f).startsWith("Error: "), "the error");
+				await frameUntil(setup, "the in-flight ticket", (f) => f.includes("missing"));
+				await pressControl(setup, "ticket-close", { opens: "Close: Add a webhook retry policy" });
+				await pressControl(setup, "confirm-action", { hides: "Close:" });
+				await frameUntil(setup, "the error", (f) => messageRowOf(f).startsWith("Error: "));
 				setup.resize(25, 10);
-				const rows = rowsOf(await settle(setup));
+				const rows = rowsOf(await waitFor(setup, { quiet: true }));
 				expect(rows[1]).toContain("Terminal too small");
 				expect(rows[2].trim()).toBe(truncateToWidth(errorLine, 23));
 				expect(rows[8]).toBe(padToWidth(truncateToWidth(errorLine, 25), 25));
@@ -1120,11 +1029,9 @@ describe("the permanent Message line", () => {
 		const warnPlane = await plane({ runner: () => warnFake, sources: [], groupingAxis: "none" });
 		await withApp(
 			async (setup) => {
-				await press(setup, "r", "the warning", (f) =>
-					messageRowOf(f).includes("no Ticket sources exist"),
-				);
+				await pressControl(setup, "refresh", { quiet: true });
 				setup.resize(25, 10);
-				const rows = rowsOf(await settle(setup));
+				const rows = rowsOf(await waitFor(setup, { quiet: true }));
 				expect(rows[1]).toContain("Terminal too small");
 				expect(rows[2].trim()).toBe("");
 				expect(rows[8]).toBe(
@@ -1146,15 +1053,15 @@ describe("the permanent Message line", () => {
 		const planeRecord = await plane({ runner: () => fake, sources: [], groupingAxis: "none" });
 		await withApp(
 			async (setup) => {
-				await press(setup, "r", "the warning", (f) =>
-					messageRowOf(f).includes("no Ticket sources exist"),
-				);
+				await pressControl(setup, "refresh", { quiet: true });
 				setup.resize(30, 10);
-				expect(messageRowOf(await settle(setup))).toBe(
+				expect(messageRowOf(await waitFor(setup, { quiet: true }))).toBe(
 					padToWidth(truncateToWidth("Warning: no Ticket sources exist", 30), 30),
 				);
 				setup.resize(WIDTH, HEIGHT);
-				expect(messageRowOf(await settle(setup))).toContain("no Ticket sources exist");
+				expect(messageRowOf(await waitFor(setup, { quiet: true }))).toContain(
+					"no Ticket sources exist",
+				);
 			},
 			{
 				width: WIDTH,
@@ -1174,15 +1081,13 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				errSource.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(errPlane.state);
-				await press(setup, "return", "the fault", (f) =>
-					messageRowOf(f).includes("the daemon refused"),
-				);
+				await pressControl(setup, "handoff", { shows: "the daemon refused" });
 				setup.resize(30, 10);
-				expect(messageRowOf(await settle(setup))).toBe(
+				expect(messageRowOf(await waitFor(setup, { quiet: true }))).toBe(
 					padToWidth(truncateToWidth(errLine, 30), 30),
 				);
 				setup.resize(WIDTH, HEIGHT);
-				const frame = await settle(setup);
+				const frame = await waitFor(setup, { quiet: true });
 				expect(messageRowOf(frame)).toBe(padToWidth(truncateToWidth(errLine, WIDTH), WIDTH));
 				expect(actionBarRowOf(frame)).toContain("m Message");
 			},
@@ -1224,32 +1129,23 @@ describe("the permanent Message line", () => {
 					title: "Keep tickets across starts",
 				});
 				source.settle(fetchSuccess([issueTicket(), secondTicket]));
-				await awaitFrame(
-					setup,
-					(f) => rowsOf(f).some((row) => row.includes("Keep tickets acro")),
-					"the second ticket",
-				);
-				await press(setup, "return", "the first start", (f) =>
-					messageRowOf(f).includes("started from the Work queue"),
-				);
-				// The queue takes the second start while the seat stays
-				// full, and its notice stands on the line.
-				await pressArrow(setup, "down", "the cursor to the second ticket", (f) =>
+				await frameUntil(setup, "the second ticket", (f) =>
 					rowsOf(f).some((row) => row.includes("Keep tickets acro")),
 				);
-				const queued = await press(setup, "return", "the second start", (f) =>
-					messageRowOf(f).includes("is in the Work queue; it starts when a seat frees"),
-				);
+				await pressControl(setup, "handoff", { shows: "started from the Work queue" });
+				// The queue takes the second start while the seat stays
+				// full, and its notice stands on the line.
+				await pressControl(setup, "move-list", { via: "↓", shows: "Keep tickets acro" });
+				const queued = await pressControl(setup, "handoff", {
+					shows: "is in the Work queue; it starts when a seat frees",
+				});
 				expect(frameText(queued)).toContain("waiting: 1");
 				// The queue's Delete removes the item, and its own words
 				// stand on the line.
-				await press(setup, "return", "the queue-jump to the item", (f) =>
-					f.includes("┌─❯ Work queue"),
-				);
-				await press(setup, "delete", "the item removed", (f) =>
-					messageRowOf(f).includes("was removed"),
-				);
-				const frame = await settle(setup);
+				await pressControl(setup, "queue-jump", { quiet: true });
+				await frameUntil(setup, "the queue-jump to the item", (f) => f.includes("┌─❯ Work queue"));
+				await guideKey(setup, "queue-remove", "Delete", { shows: "was removed" });
+				const frame = await waitFor(setup, { quiet: true });
 				expect(messageRowOf(frame)).toContain(
 					`the waiting start for "Keep tickets across starts" was removed`,
 				);
@@ -1280,47 +1176,39 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				// The boot's own refresh settles clean.
 				source.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+				await frameUntil(setup, "the ticket", (f) => f.includes("Add a webhook retry policy"));
 				// A source that goes stale lands one warning entry and one
 				// notification, at the change.
-				await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
+				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
 				await callsReached(source, 2);
 				source.settle(fetchRateLimited);
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
-					"the stale warning",
-				);
+				await waitFor(setup, { refuses: "issues: stale - GitHub rate limit exceeded" });
 				const sent = notificationCalls(runner);
 				expect(sent).toHaveLength(1);
 				expect(sent[0]).toContain("issues: stale - GitHub rate limit exceeded");
-				const changed = await openMessageView(setup, "m", "Message view");
+				const changed = await pressControl(setup, "message", { opens: "Message view" });
 				expect(historyEntries(changed, "WARN")).toBe(1);
 				expect(historyEntries(changed, "INFO")).toBe(0);
-				await closeOverlay(setup, "Message view", "the view to close");
+				await pressControl(setup, "message-close", { closes: "Message view" });
 				// The next refresh fails on the same standing fact: the source
 				// stays stale, so no second entry and no second send.
-				await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
+				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
 				await callsReached(source, 3);
 				source.settle(fetchRateLimited);
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
-					"the standing stale warning",
-				);
+				await waitFor(setup, { refuses: "issues: stale - GitHub rate limit exceeded" });
 				expect(notificationCalls(runner)).toHaveLength(1);
-				const standing = await openMessageView(setup, "m", "Message view");
+				const standing = await pressControl(setup, "message", { opens: "Message view" });
 				expect(historyEntries(standing, "WARN")).toBe(1);
 				expect(historyEntries(standing, "INFO")).toBe(0);
-				await closeOverlay(setup, "Message view", "the view to close");
+				await pressControl(setup, "message-close", { closes: "Message view" });
 				// A clean refresh recovers the source: one info entry names
 				// the recovery, and the info fact sends no notification.
-				await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
+				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
 				await callsReached(source, 4);
 				source.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the line to clear");
+				await waitFor(setup, { hides: "issues: stale" });
 				expect(notificationCalls(runner)).toHaveLength(1);
-				const healed = await openMessageView(setup, "m", "Message view");
+				const healed = await pressControl(setup, "message", { opens: "Message view" });
 				expect(historyEntries(healed, "WARN")).toBe(1);
 				expect(historyEntries(healed, "INFO")).toBe(1);
 				expect(healed).toContain("issues: recovered");
@@ -1358,22 +1246,16 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				// The scheduled fetch runs silent: the list loads, the line stays clear.
-				await awaitFrame(setup, (f) => f.includes("loading tickets..."), "the loading list");
+				await frameUntil(setup, "the loading list", (f) => f.includes("loading tickets..."));
 				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe("");
 				// A failed fetch warns in the source's own words.
 				source.settle(fetchRateLimited);
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
-					"the stale warning",
-				);
+				await waitFor(setup, { refuses: "issues: stale - GitHub rate limit exceeded" });
 				// A successful refresh heals the source and clears the line.
-				await press(setup, "r", "the working", (f) =>
-					messageRowOf(f).includes("refreshing 1 sources"),
-				);
+				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
 				await callsReached(source, 2);
 				source.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the line to clear");
+				await waitFor(setup, { hides: "issues: stale" });
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "production" } },
 		);
@@ -1390,8 +1272,8 @@ describe("the permanent Message line", () => {
 			await withApp(
 				async (setup) => {
 					// A refused refresh records its warning, and the view shows it.
-					await press(setup, "r", "the warning", (f) => messageRowOf(f).startsWith("Warning: "));
-					const view = await openMessageView(setup, "F2", "Message view");
+					await pressControl(setup, "refresh", { quiet: true });
+					const view = await pressControl(setup, "message", { opens: "Message view" });
 					const rows = rowsOf(view);
 					const row = rows.findIndex((row) => row.includes("no Ticket sources"));
 					expect(row).toBeGreaterThan(-1);

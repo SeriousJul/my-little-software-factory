@@ -45,6 +45,7 @@ import {
 	barHintOwners,
 	displayOnlyKeyLabels,
 	frameText,
+	guideKey,
 	HEIGHT,
 	hintWordings,
 	messageRowOf,
@@ -408,6 +409,32 @@ describe("the frame rig's escape list", () => {
 			const frame = await pageKey(setup, "home", { moved: "Drop the legacy auth" });
 			expect(frameText(frame)).toContain("Drop the legacy auth");
 		}, toOpenTicket);
+	});
+
+	test("reaches the key the guide names where the bar paints none", async () => {
+		const planeRecord = await plane({ runner: (fake) => fake, sources: [], groupingAxis: "none" });
+		await withApp(
+			async (setup) => {
+				// The record is empty, so the bar leaves the Message hint off:
+				// the guide still names m, and the catalogue's own key sends it.
+				await guideKey(setup, "message", "m", {
+					refuses: "no message has been recorded",
+				});
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
+		);
+	});
+
+	test("guideKey refuses a key the guide names nowhere for the control", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			await expect(guideKey(setup, "help", "z")).rejects.toThrow(/the guide names F1, \? for it/);
+		});
 	});
 });
 

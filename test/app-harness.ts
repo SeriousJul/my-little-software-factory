@@ -1516,6 +1516,12 @@ export function spanColorAt(
 //   pageKey                           the page and jump keys: the bar's hint
 //     names `↑↓/jk` and `j/k`, never PgUp, PgDn, Home, or End, so the list's
 //     and the body's page and jump keys stand here too
+//   guideKey                          the key the Key guide names but the bar
+//     paints nowhere in the frame: an alias the bar prints under one name
+//     only (F1 beside ?, F2 beside m), the primary key of a control whose
+//     hint the bar's own facts hold back (Message with nothing recorded), or
+//     a control the bar leaves off on this surface. The key is read from the
+//     catalogue, the guide's own source, never picked by the test
 //   frameUntil                        a custom frame check, named for what it
 //                                     waits for, where no named outcome fits
 //
@@ -2784,4 +2790,57 @@ export async function pageKey(
 		preLine: messageRowOf(preFrame),
 		press: `the ${displayKey(key)} key`,
 	});
+}
+
+/**
+ * Send a control the key the Key guide names for it where the Action bar
+ * paints none in this frame: an alias the bar prints under one name only
+ * (F1 beside the painted ?, F2 beside the painted m), the primary key of a
+ * control whose hint the bar's own facts hold back (the Message view with
+ * nothing recorded), or a control the bar leaves off on this surface.
+ *
+ * The bar stays the first place a press reads its key from. The guide is the
+ * operator's second, and both read the one catalogue, so the key sent here
+ * is the control's own alias in the mode it runs in: the test names the
+ * control and the key as the guide names it, and never a character the plane
+ * might no longer accept. A key the guide names nowhere for the control fails
+ * the press, naming the aliases the guide does name (ADR 0128, addendum).
+ */
+export async function guideKey(
+	setup: Setup,
+	controlId: string,
+	key: string,
+	fields: ControlOutcomeFields = {},
+): Promise<string> {
+	const control = catalogueControl(controlId);
+	checkOutcomeFields(fields, false);
+	const effective: ControlOutcomeFields =
+		Object.keys(fields).length === 0 ? { ...fields, quiet: true } : fields;
+	const preFrame = await settle(setup);
+	const aliases = new Set<string>();
+	for (const mode of control.modes) {
+		try {
+			for (const raw of control.keys(mode, DUMMY_FACTS)) aliases.add(displayKey(raw));
+		} catch {
+			// A keys rule that reads facts the dummy carries none of states its
+			// aliases in no mode; the guide names that control's label alone.
+		}
+	}
+	if (!aliases.has(key))
+		throw new Error(
+			`the frame rig cannot send "${key}" to "${control.id}": the guide names ${[...aliases].join(", ") || "no key"} for it`,
+		);
+	const holding = effective.opens !== undefined ? startHolding(setup, effective.opens) : undefined;
+	sendKey(setup, key);
+	try {
+		return await runOutcomes(setup, effective, {
+			preFrame,
+			preLine: messageRowOf(preFrame),
+			holding,
+			press: `the ${key} key of the control "${control.id}"`,
+		});
+	} catch (error) {
+		holding?.stop();
+		throw error;
+	}
 }
