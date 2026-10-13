@@ -326,6 +326,8 @@ describe("the permanent Message line", () => {
 		const errorPlane = await plane({
 			groupingAxis: "none",
 			sources: [{ config: issueSource, tickets: [inFlightRow(issueTicket(), "worktree")] }],
+			// The clock sits past the startup grace, so the start is old, not a boot.
+			now: () => Date.now() - 60_000,
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake) => closeCleanupCommands(fake, "error: the daemon is down\n"),
 		});
@@ -1082,6 +1084,8 @@ describe("the permanent Message line", () => {
 		const errorPlane = await plane({
 			groupingAxis: "none",
 			sources: [{ config: issueSource, tickets: [inFlightRow(issueTicket(), "worktree")] }],
+			// The clock sits past the startup grace, so the start is old, not a boot.
+			now: () => Date.now() - 60_000,
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake) => closeCleanupCommands(fake, `${LONG_LINE}\n`),
 		});
