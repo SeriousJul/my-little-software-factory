@@ -1948,15 +1948,15 @@ alike, and twice the deadline is forty, so a test's waits fail on the rig's
 deadline, which dumps the last frame, before the runner's budget can end the
 test without one.
 
-Measured at head `__HEAD__` on this machine (32 cores, 60 GB RAM): the rig's
-own suite ran its twenty-two tests in __RIG_SUITE_S__ seconds, and the longest
-waits inside it were the two that run to the deadline by design, the timeout
-pin at __TIMEOUT_PIN_MS__ and the guide's open-close round trip at
-__GUIDE_MS__; every other outcome wait in the suite stood under one second at
-the poll's interval. The full suite ran its 33__FULL__ tests in __FULL_S__
-seconds, 0 fail, and no wait in it reached the deadline. These are the waits
-the one deadline stands above at this head; a head that moves a surface slower
-re-records them here.
+Measured at head `d5c8e98d` on this machine (32 cores, 60 GB RAM, 11 GB
+available, load 1.2): the rig's own suite ran its twenty-two tests in
+29.2 seconds, of which the timeout pin stands 20.45 seconds at the rig's
+deadline, the only wait in the suite that runs to it by design; the longest
+wait that settles before the deadline was the guide's open-close round trip
+at 646 ms, and every other wait stood under one second at the poll's
+interval. The full suite ran its 3,346 tests in 65.3 seconds, 0 fail, and no
+wait in it reached the deadline. These are the waits the one deadline stands
+above at this head; a head that moves a surface slower re-records them here.
 
 The static architecture check, `test/frame-rig-architecture.test.ts`, owns the
 set of surfaces the rig drives and refuses the two ways a surface can opt out:
