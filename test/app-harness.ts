@@ -20,6 +20,7 @@ import {
 	controlsForMode,
 	type InteractionMode,
 	keyLabelFor,
+	omitFromOtherSection,
 } from "../src/components/controls.ts";
 import { controlInk } from "../src/components/shared/presentation.ts";
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
@@ -1665,7 +1666,7 @@ const ALL_MODES = [
 /**
  * The catalogue's mode union, checked against the rig's copy: a mode added
  * to the union without the copy fails this line at the type check, so the
- * permissive family and the closed walk cannot go blind to a new mode's
+ * permissive read and the closed walk cannot go blind to a new mode's
  * controls until the copy is updated.
  */
 const ALL_MODES_COVERS_THE_CATALOGUE: [InteractionMode] extends [(typeof ALL_MODES)[number]]
@@ -1737,67 +1738,126 @@ export function hintWordings(control: ControlDefinition): string[] {
 }
 
 /**
- * The surface the frame stands on, read off the frame's own markers: the
- * Section box titles carry the focus marker on the section the cursor holds,
- * and the full-screen surfaces state their own titles. A frame that shows
- * none of the markers - a detail with the focus, a modal over a section,
- * the Message or the Live view, a surface the rig does not name - stands
- * for no section, where the rig resolves permissively: no control is
- * filtered by the surface. A marker the plane rewords fails the read to
- * that permissive answer, which weakens the filter and never misresolves a
- * control the bar names, because the bar paints only its own mode's
- * controls and the key label and the wording still stand against the
- * catalogue (ADR 0128).
+ * The catalogue modes the frame stands on, read off the frame's own markers
+ * (ADR 0128): the full-screen surfaces state their own titles, the modal and
+ * panel titles carry a stable prefix beside the variable part, the section
+ * boxes and the detail panes carry the focus marker on the pane the cursor
+ * holds, and a panel title that names a panel, not a mode, is split on the
+ * bar's own hints. A frame that shows no marker the rig names - a surface
+ * the rig does not name, or a marker the plane rewords - stands for no
+ * modes, and the rig reads it permissively: no control is filtered out by
+ * the surface. A reworded marker fails the read to that permissive answer,
+ * which weakens the filter and never misresolves a control the bar names,
+ * because the bar paints only its own mode's controls and the key label and
+ * the wording still stand against the catalogue.
  */
+export function surfaceModes(frame: string): InteractionMode[] | null {
+	const barLabels = parseBarText(actionBarRowOf(frame), null).map((hint) => hint.label);
+	const titled = titledSurfaceModes(frame, barLabels);
+	if (titled !== null) return titled;
+	return sectionSurfaceModes(frame, barLabels);
+}
+
+/**
+ * The surfaces that name themselves by title: the utility overlays, the
+ * modals, and the panels. The modal and panel titles carry a stable prefix
+ * beside the variable part the plane paints in them.
+ */
+function titledSurfaceModes(frame: string, barLabels: string[]): InteractionMode[] | null {
+	// The full-screen utility surfaces state their own titles.
+	if (frame.includes("Key guide")) return ["key-guide"];
+	if (frame.includes("Message view")) return ["message-view"];
+	if (frame.includes("┌─Decision: ")) return ["decision-modal"];
+	if (frame.includes("┌─Live: ")) return ["live-view"];
+	if (frame.includes("┌─Missing: ")) return ["missing-modal"];
+	if (frame.includes("┌─Close: ")) return ["action-panel"];
+	// Two panels share the Init a repository title: the repository-select
+	// panel and the repository-init panel. The bar's hints split them.
+	if (frame.includes("┌─Init a repository"))
+		return barLabels.includes("Select") ? ["repository-select"] : ["action-panel"];
+	// The launcher is the one shared form surface: its frame stands on the
+	// form's three slot modes at once, the slot the focus holds naming one.
+	if (frame.includes("┌─Consultation launcher"))
+		return ["form-field", "form-selector", "form-action"];
+	return null;
+}
+
+/** The surfaces the section boxes and the detail panes name, and the bar's last-resort read. */
+function sectionSurfaceModes(frame: string, barLabels: string[]): InteractionMode[] | null {
+	// The section boxes and the detail panes carry the focus marker on the
+	// pane the cursor holds.
+	if (frame.includes("┌─❯ Tickets")) return ["ticket-list"];
+	if (frame.includes("┌─❯ Consultations")) return ["consultation-list"];
+	if (frame.includes("┌─❯ Work queue")) return ["work-queue-list"];
+	if (frame.includes("┌─❯ Detail")) return ["ticket-detail"];
+	if (frame.includes("┌─❯ Agent view") || frame.includes("┌─❯ Session view"))
+		return sharedDetailModes(barLabels);
+	if (frame.includes("┌─Override")) return ["override-list", "override-model", "override-text"];
+	// The action panels whose titles vary stand on the one hint only their
+	// mode paints beside a modal's: the Decision and the Missing modals are
+	// named by title above, so a Select action hint is an action panel's.
+	if (barLabels.includes("Select action")) return ["action-panel"];
+	return null;
+}
+
+/**
+ * The consultation and the Work queue detail panes share their body titles:
+ * the bar's section-owned hints name the section, and a bar that names
+ * neither section stands on both at once.
+ */
+function sharedDetailModes(barLabels: string[]): InteractionMode[] {
+	const queue = barLabels.includes("Promote") || barLabels.includes("Demote");
+	const consultation = barLabels.includes("History") || barLabels.includes("Schedule");
+	if (queue && !consultation) return ["work-queue-detail"];
+	if (consultation && !queue) return ["consultation-detail", "consultation-interaction"];
+	return ["consultation-detail", "consultation-interaction", "work-queue-detail"];
+}
+
 export type SurfaceFamily = "ticket" | "consultation" | "queue" | "override" | "guide" | "other";
 
+/**
+ * The section family the frame's surface modes stand on: the rig's legacy
+ * read, kept for the suites that name the section instead of the modes.
+ */
 export function surfaceFamily(frame: string): SurfaceFamily {
-	const ticket = frame.includes("┌─❯ Tickets");
-	const consultation = frame.includes("┌─❯ Consultations");
-	const queue = frame.includes("┌─❯ Work queue");
-	const marked = [ticket, consultation, queue].filter(Boolean).length;
-	if (marked === 1) {
-		if (ticket) return "ticket";
-		if (consultation) return "consultation";
-		return "queue";
-	}
-	if (frame.includes("┌─Override")) return "override";
-	if (frame.includes("Key guide")) return "guide";
+	const modes = surfaceModes(frame);
+	if (modes === null) return "other";
+	if (modes.includes("key-guide")) return "guide";
+	if (modes.some((mode) => mode.startsWith("override-"))) return "override";
+	if (modes.some((mode) => mode.startsWith("ticket-"))) return "ticket";
+	if (modes.some((mode) => mode.startsWith("consultation-"))) return "consultation";
+	if (modes.some((mode) => mode.startsWith("work-queue-"))) return "queue";
 	return "other";
 }
 
 /**
- * The modes each surface family runs: a control is compatible with the
- * family when one of its modes runs there. The permissive family runs the
- * catalogue's whole mode union, so on a frame that names no surface no
- * control is filtered out.
- */
-const FAMILY_MODES: Record<SurfaceFamily, readonly InteractionMode[]> = {
-	ticket: ["ticket-list", "ticket-detail"],
-	consultation: ["consultation-list", "consultation-detail", "consultation-interaction"],
-	queue: ["work-queue-list", "work-queue-detail"],
-	override: ["override-list", "override-model", "override-text"],
-	guide: ["key-guide"],
-	other: ALL_MODES,
-};
-
-/**
- * Whether a painted hint belongs to the control on the frame's surface:
+ * Whether the control could paint the bar's hint on the frame's surface:
  * the hint's key label is one the control paints with, the hint's word is
- * one of the control's label wordings, and the control runs a mode of the
- * surface. The three reads together are what "the bar names this control
- * for this key" means (ADR 0128): a control off the bar owns no painted
- * hint and fails, a hint two sections share is owned by the section the
- * frame stands on, and a control the surface never runs owns no hint there.
+ * one of the control's label wordings, and the control runs a mode the
+ * surface stands on - the catalogue's own section omission keeping a
+ * section's controls off the other sections' bars, the way the Action bar
+ * applies it. The surface stands for no modes when the rig names it not: the
+ * permissive read filters no control out.
+ *
+ * The read names the catalogue controls that could paint the hint; it does
+ * not see which of them the bar packed in, and it sees no availability
+ * (ADR 0128). The bar paints the hint's text once per on-bar owner, and the
+ * press guard reads that count off the screen: a control the read names that
+ * the bar keeps off owns no painted hint, and a control the surface never
+ * runs owns no hint there.
  */
 function hintOwnedBy(
 	setup: Setup,
 	control: ControlDefinition,
 	hint: BarHint,
-	family: SurfaceFamily,
+	modes: InteractionMode[] | null,
 ): boolean {
-	const modes = FAMILY_MODES[family];
-	if (!control.modes.some((mode) => modes.includes(mode))) return false;
+	if (modes !== null) {
+		const runs = control.modes.some(
+			(mode) => modes.includes(mode) && !omitFromOtherSection(mode, control),
+		);
+		if (!runs) return false;
+	}
 	if (!paintedKeyLabels(setup, control).has(hint.key)) return false;
 	return hintWordings(control).some((wording) => hint.label.startsWith(wording));
 }
@@ -1994,14 +2054,46 @@ export interface ControlResolution {
  * own keys. When `via` is named, it must be one of the hint's tokens, and a
  * `via` two hints name fails instead of taking the first. The rig throws
  * when the bar paints no hint the control owns, when every hint it owns is
- * keyless, when several painted hints do, or when `via` is not among the
- * hint's tokens.
+ * keyless, when several painted hints do, when `via` is not among the
+ * hint's tokens, and when the bar paints the hint the press would send
+ * twice: two on-bar controls can both paint it, and the plane would
+ * dispatch the key to one of them (issue #387). A hint the bar paints once
+ * is a key the rig owns even when the read names a second catalogue control
+ * the bar keeps off: the plane dispatches the key to the on-bar owner, and
+ * a press that names the off-bar control gets the on-bar owner's act or the
+ * plane's own refusal.
  */
 export function resolveControl(setup: Setup, controlId: string, via?: string): ControlResolution {
+	const modes = surfaceModes(setup.captureCharFrame());
+	const resolution = resolutionFor(setup, controlId, modes, via);
+	sharedHintGuard(setup, resolution.control, resolution.hint, modes);
+	return { key: resolution.key, label: resolution.label };
+}
+
+/** The resolved press: the control, the painted hint it sends, and its key. */
+interface OwnedResolution {
+	control: ControlDefinition;
+	hint: BarHint;
+	key: string;
+	label: string;
+}
+
+/**
+ * The resolution a press or the closed walk shares: the control's painted
+ * hint on the surface, and the key it sends. The walk calls it without the
+ * shared-hint guard, because a hint the read names for more owners than the
+ * bar painted is a finding the walk records per hint, not a failure of
+ * either owner's own resolution.
+ */
+function resolutionFor(
+	setup: Setup,
+	controlId: string,
+	modes: InteractionMode[] | null,
+	via?: string,
+): OwnedResolution {
 	const control = catalogueControl(controlId);
-	const family = surfaceFamily(setup.captureCharFrame());
 	const all = barHints(setup);
-	const hints = all.filter((hint) => hintOwnedBy(setup, control, hint, family));
+	const hints = all.filter((hint) => hintOwnedBy(setup, control, hint, modes));
 	const paint = all
 		.map((hint) => (hint.label === "" ? hint.key : `${hint.key} ${hint.label}`))
 		.join("  ");
@@ -2019,7 +2111,7 @@ export function resolveControl(setup: Setup, controlId: string, via?: string): C
 			throw new Error(
 				`the frame rig cannot press "${controlId}" via "${via}": ${chosen.length} bar hints name it (${chosen.map((h) => `${h.key} ${h.label}`).join(" | ")}); name the hint the press means`,
 			);
-		return { key: via, label: chosen[0].label };
+		return { control, hint: chosen[0], key: via, label: chosen[0].label };
 	}
 	const pressable = hints.filter((hint) => !hint.keyless);
 	if (pressable.length === 0)
@@ -2030,7 +2122,47 @@ export function resolveControl(setup: Setup, controlId: string, via?: string): C
 		throw new Error(
 			`the frame rig cannot press "${controlId}": ${pressable.length} bar hints belong to it (${pressable.map((h) => `${h.key} ${h.label}`).join(" | ")}); name the key with \`via\``,
 		);
-	return { key: pressable[0].tokens[0], label: pressable[0].label };
+	return { control, hint: pressable[0], key: pressable[0].tokens[0], label: pressable[0].label };
+}
+
+/**
+ * The bar packs its hints without deduplicating, so it paints a hint's text
+ * once per on-bar owner: two on-bar owners of the same hint stand as two
+ * painted cells of the same text, and one on-bar owner paints it once
+ * (issue #387). True sharing is readable off the screen, and the guard reads
+ * it off the screen instead of off the read: the read names every catalogue
+ * control that could paint the hint on the surface and sees no
+ * availability, so on the Consultations surface it names the queue's
+ * removal beside the record removal for the one painted cell the bar keeps
+ * to its on-bar owner. A control off the bar owns no painted hint: a hint
+ * the bar paints once is a key the rig owns, the plane dispatches the key
+ * to the on-bar owner, and a press that names the off-bar control gets the
+ * on-bar owner's act or the plane's own refusal. A hint the bar paints
+ * twice is not a key the rig can own: the plane dispatches the pressed key
+ * to one of the two on-bar owners, and the guard throws and names the
+ * co-owners it files on every press of the hint, a press named with `via`
+ * included, because it reads the hint the press would send, not the wording
+ * that chose it. A suite that meets the collision stands the frame where the
+ * bar paints the hint once, or it walks the bar and records the hint's
+ * owners instead of pressing the hint it shares.
+ */
+export function sharedHintGuard(
+	setup: Setup,
+	control: ControlDefinition,
+	hint: BarHint,
+	modes: InteractionMode[] | null,
+): void {
+	const painted = barHints(setup).filter(
+		(cell) => cell.key === hint.key && cell.label === hint.label,
+	);
+	if (painted.length < 2) return;
+	const coOwners = allControls()
+		.filter((def) => def.id !== control.id && hintOwnedBy(setup, def, hint, modes))
+		.map((def) => def.id);
+	const named = coOwners.length > 0 ? ` (the read names ${coOwners.join(", ")})` : "";
+	throw new Error(
+		`the frame rig cannot press "${control.id}": the bar paints the hint "${hint.key} ${hint.label}" ${painted.length} times${named}, so two on-bar controls can both paint it and the rig cannot own the key it would send`,
+	);
 }
 
 const ARROW_BY_TOKEN: Record<string, "up" | "down" | "left" | "right"> = {
@@ -2043,40 +2175,71 @@ const ARROW_BY_TOKEN: Record<string, "up" | "down" | "left" | "right"> = {
 /**
  * The catalogue controls the current bar paints a hint for: the closed set a
  * press can resolve from this frame. Each painted hint is owned by the
- * catalogue - exactly one control can paint it on the frame's surface - and
- * the set is those owners, walked in the bar's own order. The walk's ground
- * truth is the frame the plane painted and the catalogue's facts, and the
- * ownership it checks is the rig's own three reads applied per control: it
- * asserts the catalogue owns each hint on exactly one control, and the rig
- * resolves that owner to a key the hint painted, so the matcher is not its
- * own ground truth, and a painted hint the catalogue owns twice, or owns not
- * at all, fails the walk as a disagreement between the bar and the catalogue
- * (ADR 0128). A keyless hint owns its owner the same way and skips the key
+ * catalogue - one or more controls can paint it on the frame's surface - and
+ * the set is those owners, walked in the bar's own order, de-duplicated on
+ * the control's id. The walk's ground truth is the frame the plane painted
+ * and the catalogue's facts, and the ownership it checks is the rig's own
+ * three reads applied per control: it asserts the catalogue owns each hint,
+ * and the rig resolves each owner to a key the hint painted, so the matcher
+ * is not its own ground truth, and a painted hint the catalogue owns not at
+ * all fails the walk as a disagreement between the bar and the catalogue
+ * (ADR 0128). A hint the read names for more owners than the bar painted
+ * does not fail the walk: the bar paints the hint's text once per on-bar
+ * owner, and the walk records the read's owners and resolves each against
+ * the hint; a read owner beyond the painted cells is off the bar, owns no
+ * painted hint, and the press guard owns the key the one painted cell
+ * stands on. A keyless hint owns its owners the same way and skips the key
  * check, because it painted no key.
  */
 export function barControlIds(setup: Setup): string[] {
-	const family = surfaceFamily(setup.captureCharFrame());
+	const modes = surfaceModes(setup.captureCharFrame());
 	const hints = barHints(setup);
 	const ids: string[] = [];
 	for (const hint of hints) {
-		const owners = allControls().filter((def) => hintOwnedBy(setup, def, hint, family));
-		if (owners.length !== 1)
+		const owners = allControls().filter((def) => hintOwnedBy(setup, def, hint, modes));
+		if (owners.length === 0)
 			throw new Error(
-				owners.length === 0
-					? `the frame rig's walk breaks on the bar's painted hint "${hint.key} ${hint.label}": no catalogue control can paint it on this surface`
-					: `the frame rig's walk breaks on the bar's painted hint "${hint.key} ${hint.label}": ${owners.map((o) => o.id).join(", ")} can each paint it on this surface, so the bar and the catalogue disagree`,
+				`the frame rig's walk breaks on the bar's painted hint "${hint.key} ${hint.label}": no catalogue control can paint it on this surface`,
 			);
-		const owner = owners[0];
-		if (!hint.keyless) {
-			const resolution = resolveControl(setup, owner.id);
-			if (!hint.tokens.includes(resolution.key))
-				throw new Error(
-					`the frame rig's walk breaks on the bar's painted hint "${hint.key} ${hint.label}": the rig resolves ${owner.id} to "${resolution.key}", a key the hint did not paint`,
-				);
+		for (const owner of owners) {
+			if (!hint.keyless) {
+				const resolution = resolutionFor(setup, owner.id, modes);
+				if (!hint.tokens.includes(resolution.key))
+					throw new Error(
+						`the frame rig's walk breaks on the bar's painted hint "${hint.key} ${hint.label}": the rig resolves ${owner.id} to "${resolution.key}", a key the hint did not paint`,
+					);
+			}
+			if (!ids.includes(owner.id)) ids.push(owner.id);
 		}
-		ids.push(owner.id);
 	}
 	return ids;
+}
+
+/**
+ * The catalogue owners of each painted hint on the current bar, keyed by the
+ * hint's written text: the read applied per hint. The data a suite pins the
+ * rig's read against (issue #387): the bar paints the hint's text once per
+ * on-bar owner, so a hint the read names for one owner is a key the rig
+ * owns, and a hint it names for two is the key the rig owns only while the
+ * bar paints the text once - the second owner off the bar owns no painted
+ * hint. The Consultations surface's remove pair stands that shape on the
+ * Seeded plane: the queue's removal runs every base mode and carries no
+ * section marker, so the read names it beside the record removal on every
+ * Consultations frame the bar paints the hint for.
+ */
+export function barHintOwners(setup: Setup): Map<string, string[]> {
+	const modes = surfaceModes(setup.captureCharFrame());
+	const owners = new Map<string, string[]>();
+	for (const hint of barHints(setup)) {
+		const name = hint.label === "" ? hint.key : `${hint.key} ${hint.label}`;
+		owners.set(
+			name,
+			allControls()
+				.filter((def) => hintOwnedBy(setup, def, hint, modes))
+				.map((def) => def.id),
+		);
+	}
+	return owners;
 }
 
 /** Send one painted key token through the app's own input parser. */
