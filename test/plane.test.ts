@@ -528,21 +528,20 @@ describe("the named standings of the factory", () => {
 	});
 
 	test("an ignored ticket stands in the ignored view", async () => {
-		const p = 
-			await plane({
-				sources: [
-					{
-						config: {
-							name: "issues",
-							kind: "github-issues",
-							refreshIntervalSeconds: 60,
-							repositories: ["acme/billing"],
-							host: "github.com",
-						},
-						tickets: [{ ...SAMPLE_TICKETS[0], ignored: true }],
+		const p = await plane({
+			sources: [
+				{
+					config: {
+						name: "issues",
+						kind: "github-issues",
+						refreshIntervalSeconds: 60,
+						repositories: ["acme/billing"],
+						host: "github.com",
 					},
-				],
-			});
+					tickets: [{ ...SAMPLE_TICKETS[0], ignored: true }],
+				},
+			],
+		});
 		const views = viewsOf(p);
 		expect(views.rows).toHaveLength(0);
 		expect(views.ignored).toHaveLength(1);
@@ -561,21 +560,20 @@ describe("the named standings of the factory", () => {
 			handoff: SAMPLE_TICKETS[1].handoff,
 			handoffCount: 1,
 		};
-		const p = 
-			await plane({
-				sources: [
-					{
-						config: {
-							name: "issues",
-							kind: "github-issues",
-							refreshIntervalSeconds: 60,
-							repositories: ["acme/portal"],
-							host: "github.com",
-						},
-						tickets: [resting],
+		const p = await plane({
+			sources: [
+				{
+					config: {
+						name: "issues",
+						kind: "github-issues",
+						refreshIntervalSeconds: 60,
+						repositories: ["acme/portal"],
+						host: "github.com",
 					},
-				],
-			});
+					tickets: [resting],
+				},
+			],
+		});
 		const views = viewsOf(p);
 		const row = views.rows[0];
 		expect(row?.state).toBe("open");
@@ -584,83 +582,80 @@ describe("the named standings of the factory", () => {
 	});
 
 	test("a Consultation standing stands in the record the plane's own read reports", async () => {
-		const p = 
-			await plane({
-				config: {
-					consultationTypes: {
-						grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
-					},
+		const p = await plane({
+			config: {
+				consultationTypes: {
+					grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
 				},
-				consultations: [
-					{
-						id: "c-1",
-						typeName: "grill",
-						agentType: "pi",
-						environment: "worktree",
-						template: "/grill {input}",
-						initialInput: "review auth",
-						renderedOpeningPrompt: "/grill review auth",
-						repository: {
-							identity: "github.com/acme/factory",
-							displayName: "acme/factory",
-							cloneUrl: "https://github.com/acme/factory.git",
-							path: "/checkout",
-						},
-						agentName: "consultation-c-1",
-						agent: true,
-						state: "working",
+			},
+			consultations: [
+				{
+					id: "c-1",
+					typeName: "grill",
+					agentType: "pi",
+					environment: "worktree",
+					template: "/grill {input}",
+					initialInput: "review auth",
+					renderedOpeningPrompt: "/grill review auth",
+					repository: {
+						identity: "github.com/acme/factory",
+						displayName: "acme/factory",
+						cloneUrl: "https://github.com/acme/factory.git",
+						path: "/checkout",
 					},
-				],
-			});
+					agentName: "consultation-c-1",
+					agent: true,
+					state: "working",
+				},
+			],
+		});
 		const record = p.state.consultationRecord.consultation("c-1");
 		expect(record?.state).toBe("working");
 		expect(record?.agentName).toBe("consultation-c-1");
 	});
 
 	test("a queue standing stands in the queue the plane's own read reports", async () => {
-		const p = 
-			await plane({
-				queue: [
-					{
-						kind: "handoff",
-						ticketIdentity: "github:github.com:I_1",
-						origin: "open",
-						choice: {
-							agentType: "pi",
-							environment: "worktree",
-							taskType: "implement",
-							model: "",
-							thinking: "",
-							contextWindow: "",
-						},
-						previousMessage: "",
+		const p = await plane({
+			queue: [
+				{
+					kind: "handoff",
+					ticketIdentity: "github:github.com:I_1",
+					origin: "open",
+					choice: {
+						agentType: "pi",
+						environment: "worktree",
+						taskType: "implement",
+						model: "",
+						thinking: "",
+						contextWindow: "",
 					},
-				],
-			});
+					previousMessage: "",
+				},
+			],
+		});
 		const items = p.state.workQueue.items();
 		expect(items).toHaveLength(1);
 		expect(workQueueIdentityOf(items[0])).toBe("github:github.com:I_1");
 	});
 
 	test("the repository inits standing stands the init facts the plane reports", async () => {
-		const p = 
-			await plane({
-				sources: [
-					{
-						config: {
-							name: "issues",
-							kind: "github-issues",
-							refreshIntervalSeconds: 60,
-							repositories: ["acme/factory"],
-							host: "github.com",
-						},
-						tickets: [SAMPLE_TICKETS[0]],
+		const p = await plane({
+			sources: [
+				{
+					config: {
+						name: "issues",
+						kind: "github-issues",
+						refreshIntervalSeconds: 60,
+						repositories: ["acme/factory"],
+						host: "github.com",
 					},
-				],
-				repositoryInits: {
-					"github.com/acme/factory": "settings-hash-1",
+					tickets: [SAMPLE_TICKETS[0]],
 				},
-			});
+			],
+			repositoryInits: {
+				"github.com/acme/factory": "settings-hash-1",
+			},
+		});
 		const init = p.state.repositoryInit.repositoryInitFact("github.com/acme/factory");
 		expect(init?.settingsHash).toBe("settings-hash-1");
 		expect(init?.pushedCommit).toBe("init-commit");
