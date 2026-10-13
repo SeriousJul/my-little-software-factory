@@ -10,18 +10,18 @@ import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	agentRowOf,
 	announceFramePass,
-	awaitFrame,
 	cellColors,
 	detailFocused,
-	focusDetail,
+	frameUntil,
+	guideKey,
 	listFocused,
 	markerRowOf,
 	mouseClick,
 	mouseDrag,
 	mouseWheel,
+	pageKey,
 	paneRow,
-	press,
-	pressArrow,
+	pressControl,
 	type RenderAskWitness,
 	rgb,
 	roleColor,
@@ -36,7 +36,7 @@ import {
 import { BASE_CONFIG } from "./base-config.ts";
 import { SAMPLE_TICKETS } from "./fact-fixtures.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { issuesSourceConfig, plane, reopenState } from "./plane.ts";
+import { callsReached, issuesSourceConfig, plane, reopenState } from "./plane.ts";
 
 const SCROLL_WIDTH = 60;
 // The minimum terminal that holds the dual-list frame (ADR 0019): the scroll
@@ -170,16 +170,16 @@ describe("native Ticket detail viewport", () => {
 				expect(cellColors(setup, GUTTER_X, detailRow(2)).bg).toEqual(rgb(roleColor("subtext0")));
 
 				await mouseClick(setup, 45, detailRow(3));
-				await awaitFrame(setup, detailFocused, "the detail to take click focus");
+				await frameUntil(setup, "the detail to take click focus", detailFocused);
 				expect(cellColors(setup, GUTTER_X, thumb[0]).fg).toEqual(rgb(roleColor("accent")));
 
 				// The track spans the pane's inner rows. The thumb marks the
 				// offset, so the end click lands on the track below it.
 				await mouseClick(setup, GUTTER_X, detailRow(11));
-				const end = await awaitFrame(
+				const end = await frameUntil(
 					setup,
-					(frame) => frame !== initial && !frame.includes("Drop the legacy auth shim"),
 					"the scrollbar thumb to move to its lower proportional position",
+					(frame) => frame !== initial && !frame.includes("Drop the legacy auth shim"),
 				);
 				const endThumb = thumbRows(end);
 				expect(endThumb.at(-1)).toBeGreaterThan(thumb[0]);
@@ -199,42 +199,38 @@ describe("native Ticket detail viewport", () => {
 			async (setup) => {
 				const initial = setup.captureCharFrame();
 				await mouseClick(setup, GUTTER_X, detailRow(11));
-				const end = await awaitFrame(
+				const end = await frameUntil(
 					setup,
-					(frame) => detailFocused(frame) && frame !== initial,
 					"the end track click",
+					(frame) => detailFocused(frame) && frame !== initial,
 				);
 				expect(end).not.toContain("Drop the legacy auth shim");
 
 				await mouseClick(setup, GUTTER_X, detailRow(1));
-				const start = await awaitFrame(
-					setup,
-					(frame) => frame.includes("Drop the legacy auth shim"),
-					"the start track click",
+				const start = await frameUntil(setup, "the start track click", (frame) =>
+					frame.includes("Drop the legacy auth shim"),
 				);
 				expect(start).not.toContain("its feature flag.");
 
 				await mouseClick(setup, GUTTER_X, detailRow(6));
-				const middle = await awaitFrame(
+				const middle = await frameUntil(
 					setup,
-					(frame) => frame !== start && frame !== end,
 					"the middle track click",
+					(frame) => frame !== start && frame !== end,
 				);
 				expect(detailFocused(middle)).toBe(true);
 
 				await mouseClick(setup, GUTTER_X, detailRow(1));
 				await mouseDrag(setup, [GUTTER_X, detailRow(1)], [GUTTER_X, detailRow(11)]);
-				const draggedDown = await awaitFrame(
+				const draggedDown = await frameUntil(
 					setup,
-					(frame) => frame !== start && !frame.includes("Drop the legacy auth shim"),
 					"a thumb drag toward the end",
+					(frame) => frame !== start && !frame.includes("Drop the legacy auth shim"),
 				);
 				expect(thumbRows(draggedDown).at(-1)).toBeGreaterThan(detailRow(1));
 				await mouseDrag(setup, [GUTTER_X, detailRow(11)], [GUTTER_X, detailRow(1)]);
-				await awaitFrame(
-					setup,
-					(frame) => frame.includes("Drop the legacy auth shim"),
-					"a thumb drag toward the start",
+				await frameUntil(setup, "a thumb drag toward the start", (frame) =>
+					frame.includes("Drop the legacy auth shim"),
 				);
 			},
 			{
@@ -258,10 +254,10 @@ describe("native Ticket detail viewport", () => {
 				async (setup) => {
 					const before = setup.captureCharFrame();
 					await mouseWheel(setup, { x: x, y: y, direction: "down" });
-					const moved = await awaitFrame(
+					const moved = await frameUntil(
 						setup,
-						(frame) => detailFocused(frame) && stillFrame(frame) !== stillFrame(before),
 						`a detail wheel event over its ${name}`,
+						(frame) => detailFocused(frame) && stillFrame(frame) !== stillFrame(before),
 					);
 					expect(markerRowOf(moved)).toBe(3);
 				},
@@ -275,16 +271,16 @@ describe("native Ticket detail viewport", () => {
 		}
 	});
 
-	test("keeps an immediate page key with the pane that the prior focus key selected", async () => {
+	test("keeps a page key with the pane that the prior focus key selected", async () => {
 		const planeRecord = await plane();
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("l");
-				setup.mockInput.pressKey("\u001b[6~");
-				const page = await awaitFrame(
+				await pressControl(setup, "detail", { via: "l", quiet: true });
+				await pageKey(setup, "end", { quiet: true });
+				const page = await frameUntil(
 					setup,
+					"the End key to move the detail the focus key just took",
 					(frame) => detailFocused(frame) && !frame.includes("Drop the legacy auth shim"),
-					"a PageDown immediately after detail focus to move the detail",
 				);
 				expect(markerRowOf(page)).toBe(3);
 			},
@@ -301,37 +297,26 @@ describe("native Ticket detail viewport", () => {
 		const planeRecord = await plane();
 		await withApp(
 			async (setup) => {
-				await focusDetail(setup);
+				await pressControl(setup, "detail", { via: "l", moved: "detail" });
 				const initial = agentRowOf(setup.captureCharFrame());
-				const down = await pressArrow(
+				await pressControl(setup, "scroll-detail", { via: "↓", quiet: true });
+				const down = await frameUntil(
 					setup,
-					"down",
-					"Down to move the detail one row",
+					"the detail to move one row down",
 					(frame) => agentRowOf(frame) === initial - 1,
 				);
-				await pressArrow(
+				await pressControl(setup, "scroll-detail", { via: "↑", quiet: true });
+				await frameUntil(
 					setup,
-					"up",
-					"Up to move the detail one row back",
+					"the detail to move one row back",
 					(frame) => agentRowOf(frame) === agentRowOf(down) + 1,
 				);
-				await press(
-					setup,
-					"pagedown",
-					"PageDown to move the detail viewport",
-					(frame) => !frame.includes("Drop the legacy auth shim"),
-				);
-				await press(setup, "pageup", "PageUp to return through the detail viewport", (frame) =>
-					frame.includes("Drop the legacy auth shim"),
-				);
-				await press(setup, "end", "End to move the detail to its edge", (frame) =>
-					frame.includes("its feature flag."),
-				);
-				const home = await press(setup, "home", "Home to return to the detail start", (frame) =>
-					frame.includes("Drop the legacy auth shim"),
-				);
-				setup.mockInput.pressKey("HOME");
-				expect(stillFrame(await settle(setup))).toBe(stillFrame(home));
+				await pageKey(setup, "pagedown", { hides: "Drop the legacy auth shim" });
+				await pageKey(setup, "pageup", { shows: "Drop the legacy auth shim" });
+				await pageKey(setup, "end", { shows: "its feature flag." });
+				const home = await pageKey(setup, "home", { shows: "Drop the legacy auth shim" });
+				const again = await pageKey(setup, "home", { quiet: true });
+				expect(stillFrame(again)).toBe(stillFrame(home));
 			},
 			{
 				width: SCROLL_WIDTH,
@@ -350,27 +335,27 @@ describe("native Ticket detail viewport", () => {
 				await mouseWheel(setup, { x: 4, y: paneRow(2), direction: "up" });
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(top));
 
-				await pressArrow(setup, "down", "Down to select the second Ticket", (frame) =>
-					selectedRow(frame).includes("[running]"),
-				);
-				await pressArrow(setup, "up", "Up to select the first Ticket", (frame) =>
-					selectedRow(frame).includes("[awaiting]"),
-				);
+				await pressControl(setup, "move-list", { via: "↓", moved: "[running]" });
+				await pressControl(setup, "move-list", { via: "↑", moved: "[awaiting]" });
 				// The list window holds six rows at this size, so a page from
 				// the first ticket lands on the seventh.
-				await press(setup, "pagedown", "PageDown to select one list page", (frame) =>
+				await pageKey(setup, "pagedown", { quiet: true });
+				await frameUntil(setup, "the list page to land on its seventh Ticket", (frame) =>
 					selectedRow(frame).includes("Run the con"),
 				);
-				await press(setup, "pageup", "PageUp to return one list page", (frame) =>
+				await pageKey(setup, "pageup", { quiet: true });
+				await frameUntil(setup, "the list to return one page", (frame) =>
 					selectedRow(frame).includes("[awaiting]"),
 				);
-				await press(setup, "end", "End to select the final Ticket", (frame) =>
+				await pageKey(setup, "end", { quiet: true });
+				await frameUntil(setup, "the list to select its final Ticket", (frame) =>
 					selectedRow(frame).includes("Ticket id"),
 				);
 				const bottom = setup.captureCharFrame();
 				await mouseWheel(setup, { x: 4, y: paneRow(3), direction: "down" });
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(bottom));
-				await press(setup, "home", "Home to select the first Ticket", (frame) =>
+				await pageKey(setup, "home", { quiet: true });
+				await frameUntil(setup, "the list to select its first Ticket", (frame) =>
 					selectedRow(frame).includes("[awaiting]"),
 				);
 
@@ -384,13 +369,13 @@ describe("native Ticket detail viewport", () => {
 				];
 				for (const [index, pick] of picks.entries()) {
 					await mouseClick(setup, 4, paneRow(index + 2));
-					const selected = await awaitFrame(
+					const selected = await frameUntil(
 						setup,
+						`visible Ticket row ${index + 1} to select its Ticket`,
 						(frame) =>
 							listFocused(frame) &&
 							selectedRow(frame).includes(pick.row) &&
 							frame.includes(pick.title),
-						`visible Ticket row ${index + 1} to select its Ticket`,
 					);
 					expect(selectedRow(selected)).toContain(pick.row);
 				}
@@ -410,16 +395,16 @@ describe("native Ticket detail viewport", () => {
 			async (setup) => {
 				const start = agentRowOf(setup.captureCharFrame());
 				await wheelAt(setup, 1_000, "down");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === start - 1,
 					"the first base wheel step",
+					(frame) => agentRowOf(frame) === start - 1,
 				);
 				await wheelAt(setup, 1_200, "down");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === start - 2,
 					"a slow base wheel step",
+					(frame) => agentRowOf(frame) === start - 2,
 				);
 			},
 			{
@@ -439,16 +424,16 @@ describe("native Ticket detail viewport", () => {
 			async (setup) => {
 				const start = agentRowOf(setup.captureCharFrame());
 				await wheelAt(setup, 1_000, "down");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === start - 1,
 					"the cap burst base step",
+					(frame) => agentRowOf(frame) === start - 1,
 				);
 				await wheelAt(setup, 1_001, "down");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === start - 4,
 					"the maximum-speed cap",
+					(frame) => agentRowOf(frame) === start - 4,
 				);
 			},
 			{
@@ -468,22 +453,22 @@ describe("native Ticket detail viewport", () => {
 			async (setup) => {
 				const start = agentRowOf(setup.captureCharFrame());
 				await wheelAt(setup, 1_000, "down");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === start - 1,
 					"the reset burst base step",
+					(frame) => agentRowOf(frame) === start - 1,
 				);
 				await wheelAt(setup, 1_001, "down");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === start - 3,
 					"the accelerated reset burst step",
+					(frame) => agentRowOf(frame) === start - 3,
 				);
 				await wheelAt(setup, 1_200, "down");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === start - 4,
 					"the 150 ms reset step",
+					(frame) => agentRowOf(frame) === start - 4,
 				);
 			},
 			{
@@ -498,22 +483,22 @@ describe("native Ticket detail viewport", () => {
 			async (setup) => {
 				const start = agentRowOf(setup.captureCharFrame());
 				await wheelAt(setup, 1_000, "down");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === start - 1,
 					"the reversal burst base step",
+					(frame) => agentRowOf(frame) === start - 1,
 				);
 				await wheelAt(setup, 1_001, "down");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === start - 3,
 					"the reversal burst acceleration",
+					(frame) => agentRowOf(frame) === start - 3,
 				);
 				await wheelAt(setup, 1_002, "up");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === start - 2,
 					"the reversed base step",
+					(frame) => agentRowOf(frame) === start - 2,
 				);
 			},
 			{
@@ -533,30 +518,28 @@ describe("native Ticket detail viewport", () => {
 		const planeRecord = await plane({ config });
 		await withApp(
 			async (setup) => {
-				await focusDetail(setup);
+				await pressControl(setup, "detail", { via: "l", moved: "detail" });
 				const top = setup.captureCharFrame();
 				await wheelAt(setup, 1_000, "up");
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(top));
 				const initialAgent = agentRowOf(top);
 				await wheelAt(setup, 1_001, "down");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === initialAgent - 1,
 					"the precise first step away from the top edge",
+					(frame) => agentRowOf(frame) === initialAgent - 1,
 				);
 
-				await press(setup, "end", "the detail to reach the lower edge", (frame) =>
-					frame.includes("its feature flag."),
-				);
+				await pageKey(setup, "end", { shows: "its feature flag." });
 				const bottom = setup.captureCharFrame();
 				const bottomDescription = lastDescriptionRow(bottom);
 				await wheelAt(setup, 1_002, "down");
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(bottom));
 				await wheelAt(setup, 1_003, "up");
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => lastDescriptionRow(frame) === bottomDescription + 1,
 					"the precise first step away from the lower edge",
+					(frame) => lastDescriptionRow(frame) === bottomDescription + 1,
 				);
 			},
 			{
@@ -591,15 +574,11 @@ describe("native Ticket detail viewport", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(sourceSuccess([longTicket]));
-				await awaitFrame(setup, (f) => f.includes("Keep detail offset"), "the source Ticket");
-				await focusDetail(setup);
+				await frameUntil(setup, "the source Ticket", (f) => f.includes("Keep detail offset"));
+				await pressControl(setup, "detail", { via: "l", moved: "detail" });
 				reference.push(setup.captureCharFrame());
 				for (let step = 1; step <= 10; step += 1) {
-					const before = reference.at(-1) ?? "";
-					setup.mockInput.pressKey("j");
-					reference.push(
-						await awaitFrame(setup, (frame) => frame !== before, `reference detail step ${step}`),
-					);
+					reference.push(await pressControl(setup, "scroll-detail", { via: "j", quiet: true }));
 				}
 			},
 			{
@@ -615,7 +594,7 @@ describe("native Ticket detail viewport", () => {
 				// The remounted app starts its own fetch of the same ticket;
 				// settle it so the burst scrolls the settled detail.
 				source.settle(sourceSuccess([longTicket]));
-				await awaitFrame(setup, (f) => f.includes("Keep detail offset"), "the source Ticket");
+				await frameUntil(setup, "the source Ticket", (f) => f.includes("Keep detail offset"));
 				const frames: string[] = [];
 				const record = () => frames.push(setup.captureCharFrame());
 				setup.renderer.on(CliRenderEvents.FRAME, record);
@@ -623,10 +602,10 @@ describe("native Ticket detail viewport", () => {
 					for (let event = 0; event < 10; event += 1) {
 						await mouseWheel(setup, { x: 45, y: detailRow(3), direction: "down" });
 					}
-					const final = await awaitFrame(
+					const final = await frameUntil(
 						setup,
-						(frame) => frame === reference[10],
 						"the rapid burst to apply all accepted events",
+						(frame) => frame === reference[10],
 					);
 					frames.push(final);
 				} finally {
@@ -659,8 +638,9 @@ describe("native Ticket detail viewport", () => {
 		await withApp(
 			async (setup) => {
 				setup.resize(73, 27);
-				const frame = await awaitFrame(
+				const frame = await frameUntil(
 					setup,
+					"the panes to stay above the live mode cell after a resize",
 					(candidate) => {
 						const rows = rowsOf(candidate);
 						// One frame: the body with its three sections, then the
@@ -673,7 +653,6 @@ describe("native Ticket detail viewport", () => {
 							rows.at(-3)?.includes("└") === true
 						);
 					},
-					"the panes to stay above the live mode cell after a resize",
 				);
 				expect(rowsOf(frame).at(-2)).not.toContain("manual");
 			},
@@ -685,16 +664,14 @@ describe("native Ticket detail viewport", () => {
 		const planeRecord = await plane();
 		await withApp(
 			async (setup) => {
-				await focusDetail(setup);
-				await press(setup, "end", "the first detail to reach its end", (frame) =>
-					frame.includes("its feature flag."),
-				);
-				await press(setup, "h", "the list to take focus", listFocused);
+				await pressControl(setup, "detail", { via: "l", moved: "detail" });
+				await pageKey(setup, "end", { shows: "its feature flag." });
+				await pressControl(setup, "tickets", { via: "h", moved: "tickets" });
 				await mouseClick(setup, 4, paneRow(3));
-				const nextTicket = await awaitFrame(
+				const nextTicket = await frameUntil(
 					setup,
-					(frame) => frame.includes("Migrate scheduler"),
 					"a different Ticket to start at its detail top",
+					(frame) => frame.includes("Migrate scheduler"),
 				);
 				expect(nextTicket).toContain("Migrate scheduler");
 			},
@@ -719,48 +696,41 @@ describe("native Ticket detail viewport", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(sourceSuccess([sourceTicket(longDescription)]));
-				await awaitFrame(
-					setup,
-					(frame) => frame.includes("Keep detail offset"),
-					"the source Ticket",
+				await frameUntil(setup, "the source Ticket", (frame) =>
+					frame.includes("Keep detail offset"),
 				);
-				await focusDetail(setup);
+				await pressControl(setup, "detail", { via: "l", moved: "detail" });
 				for (let step = 0; step < 4; step += 1) {
-					setup.mockInput.pressKey("j");
-					await settle(setup);
+					await pressControl(setup, "scroll-detail", { via: "j", quiet: true });
 				}
 				const beforeRefresh = agentRowOf(setup.captureCharFrame());
-				setup.mockInput.pressKey("r");
-				await awaitFrame(setup, () => source.calls >= 2, "the second source refresh to start");
+				await guideKey(setup, "refresh", "r", { quiet: true });
+				await callsReached(source, 2);
 				source.settle(sourceSuccess([sourceTicket(longDescription, "closed", "#11-refresh")]));
 				// The source field is below this small viewport at the preserved
 				// offset. Grow the terminal only to observe that refresh, then
 				// return to the original viewport to verify the native offset.
 				setup.resize(SCROLL_WIDTH, SCROLL_HEIGHT + 3);
-				await awaitFrame(
-					setup,
-					(frame) => frame.includes("External key: #11-refresh"),
-					"the same Ticket refresh",
+				await frameUntil(setup, "the same Ticket refresh", (frame) =>
+					frame.includes("External key: #11-refresh"),
 				);
 				setup.resize(SCROLL_WIDTH, SCROLL_HEIGHT);
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === beforeRefresh,
 					"the restored viewport to keep its Ticket offset",
+					(frame) => agentRowOf(frame) === beforeRefresh,
 				);
 
-				await press(setup, "end", "the refreshed detail to reach its end", (frame) =>
-					frame.includes("their retries."),
-				);
-				setup.mockInput.pressKey("r");
-				await awaitFrame(setup, () => source.calls >= 3, "the clamping refresh to start");
+				await pageKey(setup, "end", { shows: "their retries." });
+				await guideKey(setup, "refresh", "r", { quiet: true });
+				await callsReached(source, 3);
 				source.settle(
 					sourceSuccess([sourceTicket("Short refreshed detail.", "closed", "#11-short")]),
 				);
-				const clamped = await awaitFrame(
+				const clamped = await frameUntil(
 					setup,
-					(frame) => frame.includes("Short refreshed detail."),
 					"the shortened same Ticket detail to clamp",
+					(frame) => frame.includes("Short refreshed detail."),
 				);
 				expect(clamped).toContain("Detail");
 			},
@@ -780,41 +750,41 @@ describe("native Ticket detail viewport", () => {
 				const initial = setup.captureCharFrame();
 				expectGrid(initial, 80, SCROLL_HEIGHT);
 				setup.resize(75, SCROLL_HEIGHT);
-				const oddStart = await awaitFrame(
+				const oddStart = await frameUntil(
 					setup,
-					(frame) => rowsOf(frame).every((row) => row.length === 75) && frame.includes("Detail"),
 					"an odd-width resize at the detail start",
+					(frame) => rowsOf(frame).every((row) => row.length === 75) && frame.includes("Detail"),
 				);
 				expect(oddStart).toContain("Drop the legacy auth shim");
 
-				await focusDetail(setup);
-				for (let step = 0; step < 8; step += 1) setup.mockInput.pressKey("j");
-				const middle = await awaitFrame(
+				await pressControl(setup, "detail", { via: "l", moved: "detail" });
+				for (let step = 0; step < 8; step += 1) {
+					await pressControl(setup, "scroll-detail", { via: "j", quiet: true });
+				}
+				const middle = await frameUntil(
 					setup,
-					(frame) => !frame.includes("Drop the legacy auth shim"),
 					"a middle detail offset",
+					(frame) => !frame.includes("Drop the legacy auth shim"),
 				);
 				setup.resize(40, SCROLL_HEIGHT);
-				const narrowMiddle = await awaitFrame(
+				const narrowMiddle = await frameUntil(
 					setup,
-					(frame) => rowsOf(frame).every((row) => row.length === 40) && frame.includes("Detail"),
 					"a narrow resize at the middle detail offset",
+					(frame) => rowsOf(frame).every((row) => row.length === 40) && frame.includes("Detail"),
 				);
 				expect(narrowMiddle).not.toBe(middle);
 
 				// The phrase wraps at this width, so the end is read on the
 				// tail that one line still holds whole.
-				await press(setup, "end", "the narrow detail to reach its end", (frame) =>
-					frame.includes("feature flag."),
-				);
+				await pageKey(setup, "end", { shows: "feature flag." });
 				setup.resize(8, 8);
-				const tinyEnd = await awaitFrame(
+				const tinyEnd = await frameUntil(
 					setup,
+					"a tiny resize to the compact frame",
 					(frame) =>
 						rowsOf(frame).length === 8 &&
 						rowsOf(frame).every((row) => row.length === 8) &&
 						frame.includes("Termin"),
-					"a tiny resize to the compact frame",
 				);
 				expect(tinyEnd).not.toMatch(/[▀▄█]/);
 
@@ -823,13 +793,13 @@ describe("native Ticket detail viewport", () => {
 				// wider viewport, instead of restarting at the top. The tail
 				// wraps here, so the end is read on its last word.
 				setup.resize(80, SCROLL_HEIGHT);
-				await awaitFrame(
+				await frameUntil(
 					setup,
+					"the normal width with the restored detail offset",
 					(frame) =>
 						rowsOf(frame).every((row) => row.length === 80) &&
 						frame.includes("flag.") &&
 						frame.match(/[▀▄█]/) !== null,
-					"the normal width with the restored detail offset",
 				);
 			},
 			{ width: 80, height: SCROLL_HEIGHT, plane: planeRecord3, loopPolicy: { kind: "held" } },
@@ -844,29 +814,26 @@ describe("native Ticket detail viewport", () => {
 	 * saved held in the pane's slot.
 	 */
 	async function scrollOffTheTitleAndDropBelowTheMinimum(setup: Setup): Promise<void> {
-		await focusDetail(setup);
+		await pressControl(setup, "detail", { via: "l", moved: "detail" });
 		// Scroll to a middle offset: the detail title leaves the viewport.
 		let frame = setup.captureCharFrame();
 		for (let step = 0; step < 20 && frame.includes("Drop the legacy auth shim"); step += 1) {
-			setup.mockInput.pressKey("j");
-			frame = await settle(setup);
+			frame = await pressControl(setup, "scroll-detail", { via: "j", quiet: true });
 		}
-		const middle = await awaitFrame(
+		const middle = await frameUntil(
 			setup,
-			(f) => f.includes("Detail") && !f.includes("Drop the legacy auth shim"),
 			"a middle detail offset with the title out of view",
+			(f) => f.includes("Detail") && !f.includes("Drop the legacy auth shim"),
 		);
 		expect(middle).toMatch(/[▀▄█]/);
 
 		// Below the minimum size the compact frame unmounts the panes.
 		setup.resize(39, 12);
-		const compact = await awaitFrame(
-			setup,
-			(f) => f.includes("Terminal too small"),
-			"the compact frame",
+		const compact = await frameUntil(setup, "the compact frame", (f) =>
+			f.includes("Terminal too small"),
 		);
 		expect(compact).not.toMatch(/[▀▄█]/);
-		await setup.flush();
+		await settle(setup);
 	}
 
 	/**
@@ -929,14 +896,14 @@ describe("native Ticket detail viewport", () => {
 		setup.resize(80, SCROLL_HEIGHT);
 		let witness: RenderAskWitness | null = null;
 		try {
-			await awaitFrame(
+			await frameUntil(
 				setup,
+				"the detail offset to resume below the title",
 				(f) =>
 					rowsOf(f).every((row) => row.length === 80) &&
 					f.includes("Detail") &&
 					f.match(/[▀▄█]/) !== null &&
 					!f.includes("Drop the legacy auth shim"),
-				"the detail offset to resume below the title",
 			);
 		} finally {
 			if (handAsksBack !== null) witness = handAsksBack();

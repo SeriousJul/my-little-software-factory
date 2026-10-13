@@ -31,6 +31,7 @@ const OWNED_SURFACES = [
 	"test/frame-rig.test.ts",
 	"test/key-guide.test.ts",
 	"test/message-line.test.ts",
+	"test/ticket-scroll-frame.test.ts",
 	"test/theme-frame.test.ts",
 	// The migration adds a surface here, one at a time, as its tests move to
 	// `pressControl` and the closed set of outcomes.
