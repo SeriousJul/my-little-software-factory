@@ -1881,9 +1881,9 @@ always held it. A skipped required check is not a pass.
 
 ## The frame rig runs the controls, not the keys (issue #365, ADR 0128)
 
-Status: the automated checks pass for the rig and the three owned surfaces: its
-own suite, the Message line, and the theme frame. The remaining frame surfaces
-migrate one at a time, and the owned list in the
+Status: the automated checks pass for the rig and the four owned surfaces: its
+own suite, the Action bar, the Message line, and the theme frame. The remaining
+frame surfaces migrate one at a time, and the owned list in the
 architecture check is the record of what has landed.
 
 What was measured: the frame rig in `test/app-harness.ts` now resolves a
@@ -2042,14 +2042,20 @@ copies. At the head that lands the Message line (`8ee43d3f`) the walk spans
 exports: 888 press-family calls, 275 hand operations, 817 raw waits, 724
 inline containment predicates, 435 reaches to the renderer's input, and 36
 per-suite helper copies, down from the base head's 935, 302, 848, 739, 449,
-and 36. The three owned surfaces - the rig's own suite, the Message line, and
-the theme frame - press through the rig with none of the retired surface
-left: no hand-picked key, no hand operation, no raw wait, and no reach to
-the renderer's input, as the architecture check pins, and the walk counts no
-inline containment on them. The Message line's walk stands at 16 named
-`frameUntil` checks, each named for the frame it waits for, and two helper
-copies under retired stems that are domain fixtures - the close-cleanup
-commands and the bar-word builder - not input the rig should own. The escape list's named `frameUntil`
+and 36. At the head that lands the Action bar, one step further, the walk
+stands at 822 press-family calls, 253 hand operations, 797 raw waits, 704
+inline containment predicates, 426 reaches to the renderer's input, and 36
+helper copies: the Action bar's suite presses through the rig with none of
+the retired input left, and its remaining containment is the nine named
+`frameUntil` checks it keeps - the renderer's destroyed frame, the missing
+badge row, the handoff's settle - beside the Message line's sixteen and the
+theme frame's nine row probes. The four owned surfaces press through the rig
+with none of the retired surface left: no hand-picked key, no hand operation,
+no raw wait, and no reach to the renderer's input, as the architecture check
+pins. The Message line's walk stands at 16 named `frameUntil` checks, each
+named for the frame it waits for, and two helper copies under retired stems
+that are domain fixtures - the close-cleanup commands and the bar-word
+builder - not input the rig should own. The escape list's named `frameUntil`
 check, which the closed set of outcomes does not reach, is invisible to the
 walk's line-based metric: its arrow and its containment test stand on
 different lines. The test-tree duplication clone count, the Quality audit's
@@ -2060,8 +2066,8 @@ script run at either head prints them, and a head that moves the suites
 re-records them here from the same script.
 
 What was not measured: the remaining frame surfaces have not been migrated, so
-the 935 press-family calls and 848 raw waits above stand in the suites that
-have not landed yet, and this change's effect on the whole plane is the two
+the 822 press-family calls and 797 raw waits above stand in the suites that
+have not landed yet, and this change's effect on the whole plane is the four
 owned surfaces plus the rig, not the surfaces that follow. The closed walk
 stands on the bar of the frame it walks, and at this head the rig's suite
 walks the base bar and the bars of the detail frames of the three sections,
@@ -2069,12 +2075,14 @@ the response editor, the Agent interaction input, the Decision modal, the
 action panel, and the Message view: each walk boots the frame the bar stands
 on. The walk still does not boot the mode that owns each hinted catalogue id,
 the shape the spec's walk names. The remaining surfaces' bars walk as their
-migrations land. Two gaps the migration
-will meet are recorded now: the guide's scroll keys and the panes' focus moves
-are not on the bar and so are not resolvable by `pressControl`; their coverage
-belongs to the catalogue suite and the Key guide's own frames, and a focus
-operation the escape list does not yet name is the next rig extension the
-migration needs. The collision families the rule stood in issue #387 - the
+migrations land. Two gaps the migration met are now closed: the panes' focus
+moves stand in the catalogue as the pane's own controls the bar hints (the
+Detail hint and the list's Move keys), and the keys the bar paints nowhere,
+the guide's scroll keys among them, reach through `guideKey` - the Action
+bar's migration read its guide keys for the close beside the packed width,
+the launch and the section keys the Consultations bar packs past, and the
+consultation's Close on the opening Consultation. A painted hint two
+catalogue controls can both paint - the
 modal Esc Cancel family, the scroll pair on a permissive frame, the
 cross-section pair on a detail-focused frame, and the identical Delete Remove
 pair - stand measured on the Seeded plane at this head: the
