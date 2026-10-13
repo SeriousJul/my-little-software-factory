@@ -1969,14 +1969,18 @@ test --timeout=60000 test/frame-rig.test.ts`, which stands the same
 budget on the file; a bare `bun test test/frame-rig.test.ts` without
 the flag reports the pin as a failure.
 
-Measured at head `d5c8e98d` on this machine (32 cores, 60 GB RAM, 11 GB
-available, load 1.2): the rig's own suite ran its twenty-two tests in
-29.2 seconds, of which the timeout pin stands 20.45 seconds at the rig's
+Measured at head `da5fa356` on this machine (32 cores, 60 GB RAM, 11 GB
+available, load 1.1): the rig's own suite ran its twenty-four tests in
+29.4 seconds, of which the timeout pin stands 20.46 seconds at the rig's
 deadline, the only wait in the suite that runs to it by design; the longest
 wait that settles before the deadline was the guide's open-close round trip
-at 646 ms, and every other wait stood under one second at the poll's
-interval. The full suite ran its 3,346 tests in 65.3 seconds, 0 fail, and no
-wait in it reached the deadline. These are the waits the one deadline stands
+at 243 ms, measured on the suite's own flow run standalone, and every other
+wait stood under one second at the poll's interval. The full suite ran its
+3,348 tests in 65.2 seconds, 0 fail, at head `275058db` (this machine,
+load 1.6 at its run), one commit behind `da5fa356`: the commit between them
+lands the rig's stale-line guard on the `refuses` outcome, whose effect
+stands on the rig's own suite, green at `da5fa356`, and no wait in either
+run reached the deadline. These are the waits the one deadline stands
 above at this head; a head that moves a surface slower re-records them here.
 
 The static architecture check, `test/frame-rig-architecture.test.ts`, owns the
