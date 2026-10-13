@@ -18,6 +18,7 @@ import {
 	type NextStepGate,
 } from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { fetchedTicket } from "./fact-fixtures.ts";
 
 const source = { name: "issues", kind: "github-issues" };
 const position = "github:github.com:I_5";
@@ -57,23 +58,7 @@ function fetched(
 	identity = position,
 	labels: readonly string[] = ["ready-for-review"],
 ): FetchedTicket {
-	return {
-		identity,
-		sourceKind: "github-issue",
-		externalKey: `#${identity.split("I_")[1]}`,
-		sourceState: "open",
-		url: `https://github.com/acme/factory/issues/${identity.split("I_")[1]}`,
-		title: "Persist source facts",
-		description: "Keep state independent from GitHub.",
-		labels: [...labels],
-		externalUpdatedAt: "2026-08-31T10:00:00Z",
-		repository: {
-			identity: "github.com/acme/factory",
-			displayName: "acme/factory",
-			cloneUrl: "https://github.com/acme/factory.git",
-		},
-		attributes: {},
-	};
+	return fetchedTicket({ identity, labels: [...labels] });
 }
 
 function stateWith(...tickets: FetchedTicket[]): FactoryState {

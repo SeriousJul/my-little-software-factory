@@ -27,8 +27,9 @@ import {
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
+import { fetchedTicket, ticketOf } from "./fact-fixtures.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
+import { type Plane, plane } from "./plane.ts";
 import "./theme-isolation.ts";
 
 const repoIdentity = "github.com/acme/factory";
@@ -42,23 +43,7 @@ const source: TicketSourceConfig = {
 };
 
 function fetched(): FetchedTicket {
-	return {
-		identity,
-		sourceKind: "github-issue",
-		externalKey: "#5",
-		sourceState: "open",
-		url: `https://github.com/acme/factory/issues/5`,
-		title: "Persist source facts",
-		description: "Keep state independent from GitHub.",
-		labels: ["ready-for-agent"],
-		externalUpdatedAt: "2026-08-31T10:00:00Z",
-		repository: {
-			identity: repoIdentity,
-			displayName: "acme/factory",
-			cloneUrl: `https://${repoIdentity}.git`,
-		},
-		attributes: {},
-	};
+	return fetchedTicket({ identity });
 }
 
 const success: FetchOutcome = {
@@ -86,7 +71,7 @@ const issueMachine: WorkflowState[] = [
 ];
 
 interface Seeded {
-	plane: SeededPlane;
+	plane: Plane;
 	src: FakeSource;
 }
 

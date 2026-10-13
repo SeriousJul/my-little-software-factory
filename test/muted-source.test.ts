@@ -29,10 +29,10 @@ import {
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
+import { fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
 import { agentListJson, type FakeRunner } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
-import { issueTicket, success } from "./state-fixture.ts";
+import { type Plane, plane } from "./plane.ts";
 
 const FIRST = "github:github.com:I_5";
 const SECOND = "github:github.com:I_6";
@@ -89,7 +89,7 @@ function restingRows(liveFirst: boolean): readonly Ticket[] {
 }
 
 interface Rig {
-	plane: SeededPlane;
+	plane: Plane;
 	state: FactoryState;
 	src: FakeSource;
 	runner: FakeRunner;
@@ -146,7 +146,7 @@ async function listed(
 	src: FakeSource,
 	lead = FIRST_LEAD,
 ): Promise<string> {
-	src.settle(success(twoTickets()));
+	src.settle(fetchSuccess(twoTickets()));
 	// The settle lands on a later frame; wait for the health to stand, so a
 	// key that asks for an actionable row reads the settle, not the loading.
 	await waitSourceHealthy(setup.plane.state);
@@ -157,7 +157,7 @@ async function listed(
 async function refreshed(
 	setup: Parameters<Parameters<typeof withApp>[0]>[0],
 	src: FakeSource,
-	outcome = success(twoTickets()),
+	outcome = fetchSuccess(twoTickets()),
 ): Promise<void> {
 	// The refresh control reaches the source on the next frame, and the fake
 	// holds that fetch until this test settles it.
@@ -359,7 +359,7 @@ describe("the mute key", () => {
 		const { plane, state, src } = await rig({ live: true });
 		await withApp(
 			async (setup) => {
-				src.settle(success(twoTickets()));
+				src.settle(fetchSuccess(twoTickets()));
 				const frame = await awaitFrame(
 					setup,
 					(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("[running]")),

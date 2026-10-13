@@ -23,8 +23,8 @@ import {
 	sleep,
 	withApp,
 } from "./app-harness.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-import { plane } from "./seeded-plane.ts";
+import { SAMPLE_TICKETS } from "./fact-fixtures.ts";
+import { plane } from "./plane.ts";
 
 const WIDTH = 120;
 // The box at this height: nine box rows hold the context row, the pane's

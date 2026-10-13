@@ -20,7 +20,6 @@ import type { FactoryConfig, TicketSourceConfig, WorkflowState } from "../src/co
 import type { Ticket } from "../src/domain/ticket.ts";
 import { renderPrompt } from "../src/handoff.ts";
 import { agentNameFor } from "../src/naming.ts";
-import type { CommandResult, CommandRunner, ModelListResult } from "../src/runner.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -48,6 +47,8 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
+import { DelayedRunner } from "./delayed-runner.ts";
+import { SAMPLE_TICKETS } from "./fact-fixtures.ts";
 import {
 	type FakeRunner,
 	tabCreateJson,
@@ -55,8 +56,7 @@ import {
 	workspaceListJson,
 	worktreeCreateJson,
 } from "./fake-runner.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-import { plane } from "./seeded-plane.ts";
+import { plane } from "./plane.ts";
 
 /**
  * The runner's commands with the desktop notification's of one standing
@@ -206,30 +206,6 @@ function stubBillingCheckout(fake: FakeRunner, home: string): string {
 function liveBillingCheckout(fake: FakeRunner, home: string): void {
 	const path = stubBillingCheckout(fake, home);
 	stubLiveHandoff(fake, path);
-}
-
-/** A runner that delays its first calls, so the in-flight state is visible. */
-class DelayedRunner implements CommandRunner {
-	private remaining: number;
-	private inner: FakeRunner;
-	private delayMs: number;
-	constructor(inner: FakeRunner, delayMs: number, callsToDelay = 1) {
-		this.inner = inner;
-		this.delayMs = delayMs;
-		this.remaining = callsToDelay;
-	}
-	run(command: string, args: string[]): Promise<CommandResult> {
-		if (this.remaining <= 0) {
-			return this.inner.run(command, args);
-		}
-		this.remaining -= 1;
-		return new Promise((resolve) =>
-			setTimeout(() => resolve(this.inner.run(command, args)), this.delayMs),
-		);
-	}
-	listModels(kind: string): Promise<ModelListResult> {
-		return this.inner.listModels(kind);
-	}
 }
 
 /**

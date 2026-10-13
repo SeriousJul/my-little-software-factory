@@ -18,7 +18,7 @@ import {
 } from "../src/domain/decision-facts.ts";
 import type { PlaneActionAttempt } from "../src/state/plane-action.ts";
 import type { WorkQueueItem } from "../src/state/work-queue.ts";
-import { completion, handoff, queueItem, ticket } from "./fact-fixtures.ts";
+import { completion, DEFAULT_IDENTITY, handoff, queueItem, ticket } from "./fact-fixtures.ts";
 
 const outcome = (over: Partial<TransitionOutcome> = {}): TransitionOutcome => ({
 	fired: true,
@@ -32,7 +32,7 @@ const outcome = (over: Partial<TransitionOutcome> = {}): TransitionOutcome => ({
 	pullRequestKey: null,
 	writeFailure: "",
 	positionTaskType: "review",
-	positionTicketIdentity: "github:github.com:I_1",
+	positionTicketIdentity: DEFAULT_IDENTITY,
 	...over,
 });
 
@@ -67,7 +67,7 @@ const decisionInputs = (over: Partial<DecisionFactInputs> = {}): DecisionFactInp
 describe("the Decision region's facts", () => {
 	test("the context line names the repository, the turn's task type, the agent, and the time", () => {
 		const facts = decisionFacts(decisionInputs());
-		expect(facts.contextLine).toBe("acme/billing · review · pi · 2026-01-01 12:00");
+		expect(facts.contextLine).toBe("acme/factory · review · pi · 2026-01-01 12:00");
 	});
 
 	test("the fact lines state what the fire wrote", () => {

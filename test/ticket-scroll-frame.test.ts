@@ -5,7 +5,7 @@ import { CliRenderEvents } from "@opentui/core";
 
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	agentRowOf,
@@ -34,10 +34,9 @@ import {
 	withholdRenderAsksButThePlanesOwn,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { SAMPLE_TICKETS } from "./fact-fixtures.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-import { plane } from "./seeded-plane.ts";
-import { issuesSourceConfig } from "./state-fixture.ts";
+import { issuesSourceConfig, plane, reopenState } from "./plane.ts";
 
 const SCROLL_WIDTH = 60;
 // The minimum terminal that holds the dual-list frame (ADR 0019): the scroll
@@ -580,14 +579,13 @@ describe("native Ticket detail viewport", () => {
 			`${SAMPLE_TICKETS[0].description} ${SAMPLE_TICKETS[0].description} ${SAMPLE_TICKETS[0].description}`,
 		);
 		const reference: string[] = [];
-		const state = openFactoryState(":memory:");
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
+		const state = reopenState(":memory:");
 		const planeRecord = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: linear,
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -656,10 +654,8 @@ describe("native Ticket detail viewport", () => {
 	});
 
 	test("spends no terminal row on the mode cell through a resize", async () => {
-		const state = openFactoryState(":memory:");
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
-		const planeRecord = await plane({ existing: state, sources: [] });
+		const state = reopenState(":memory:");
+		const planeRecord = await plane({ existing: state, groupingAxis: "none", sources: [] });
 		await withApp(
 			async (setup) => {
 				setup.resize(73, 27);
@@ -710,15 +706,14 @@ describe("native Ticket detail viewport", () => {
 			},
 		);
 
-		const state = openFactoryState(":memory:");
-		// Hold the flat axis: the frames read the unsplit list (ADR 0066).
-		state.grouping.setGroupingAxis("tickets", "none");
+		const state = reopenState(":memory:");
 		const longDescription = `${SAMPLE_TICKETS[0].description} ${SAMPLE_TICKETS[0].description}`;
 		const planeRecord2 = await plane({
 			existing: state,
+			groupingAxis: "none",
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: sourceConfig,
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord2.sources[0] as FakeSource;
 		await withApp(
@@ -779,7 +774,6 @@ describe("native Ticket detail viewport", () => {
 
 		const planeRecord3 = await plane({
 			sources: [{ config: overflowSource, tickets: OVERFLOW_TICKETS }],
-			groupingAxis: "none",
 		});
 		await withApp(
 			async (setup) => {
@@ -958,7 +952,6 @@ describe("native Ticket detail viewport", () => {
 	test("restores the detail offset across a round-trip resize below the minimum size", async () => {
 		const planeRecord = await plane({
 			sources: [{ config: overflowSource, tickets: OVERFLOW_TICKETS }],
-			groupingAxis: "none",
 		});
 		await withApp(
 			async (setup) => {
@@ -971,7 +964,6 @@ describe("native Ticket detail viewport", () => {
 	test("restores the detail offset across a below-minimum resize on its own render ask alone", async () => {
 		const planeRecord = await plane({
 			sources: [{ config: overflowSource, tickets: OVERFLOW_TICKETS }],
-			groupingAxis: "none",
 		});
 		await withApp(
 			async (setup) => {
@@ -984,7 +976,6 @@ describe("native Ticket detail viewport", () => {
 	test("the Ticket detail asks for one pass and stops when its box never lays out", async () => {
 		const planeRecord = await plane({
 			sources: [{ config: overflowSource, tickets: OVERFLOW_TICKETS }],
-			groupingAxis: "none",
 		});
 		await withApp(
 			async (setup) => {

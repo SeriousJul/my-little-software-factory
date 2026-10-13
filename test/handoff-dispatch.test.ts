@@ -1,20 +1,18 @@
-import { openFactoryState } from "../src/state.ts";
 /**
  * The Handoff dispatch module tests: the seat, the queues, the durable
  * settle, the Starting report, the Close cleanup, and the name fact, all
  * through the module interface.
  *
- * Every test drives `createHandoffDispatch` with the fake runner, an in-memory
- * state database, and a gate that holds one herdr command until the test lets
- * it go, so the seat holds while the next work queues behind it. No test mounts
- * a terminal or reads a frame. The assertions read the facts that stand outside
- * the seam: what the module reported and returned, and what the durable state
- * holds afterwards.
+ * Every test drives `createHandoffDispatch` with the fake runner, the Seeded
+ * plane's state file, and a gate that holds one herdr command until the test
+ * lets it go, so the seat holds while the next work queues behind it. No test
+ * mounts a terminal or reads a frame. The assertions read the facts that stand
+ * outside the seam: what the module reported and returned, and what the
+ * durable state holds afterwards.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
@@ -38,6 +36,7 @@ import { workQueueIdentityOf } from "../src/state/work-queue.ts";
 import type { FactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
+import { DEFAULT_TICKET_TITLE } from "./fact-fixtures.ts";
 import {
 	FakeRunner,
 	herdrFocusCommands,
@@ -49,6 +48,7 @@ import {
 	worktreeOpenJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
+import { type Plane, plane, planeIssuesSource } from "./plane.ts";
 import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
 
 const source = { name: "issues", kind: "github-issues" } as const;
@@ -66,8 +66,8 @@ interface Seed {
 
 const FIRST: Seed = {
 	identity: "github:github.com:I_5",
-	title: "Add a webhook retry policy",
-	name: agentNameFor({ identity: "github:github.com:I_5", title: "Add a webhook retry policy" }),
+	title: DEFAULT_TICKET_TITLE,
+	name: agentNameFor({ identity: "github:github.com:I_5", title: DEFAULT_TICKET_TITLE }),
 	paneId: "pane-1",
 	tabId: "tab-1",
 	workspaceId: "ws-1",
@@ -267,49 +267,47 @@ function recorder(events: string[]): HandoffDispatchReports {
 	};
 }
 
-const openStates: FactoryState[] = [];
-const homes: string[] = [];
+const openPlanes: Plane[] = [];
 
 afterEach(() => {
-	for (const state of openStates.splice(0)) state.close();
-	for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+	for (const p of openPlanes.splice(0)) p.close();
 });
 
 /**
- * One module, one in-memory state, and the tickets named in `seeds`.
+ * One module on the Seeded plane, with the tickets named in `seeds` on the
+ * plane's one source.
  *
  * The runner answers a live-worktree handoff out of the box: no workspace holds
  * the checkout yet, so the handoff builds one and adds a tab inside it. The
  * agent start and the prompt answer with the fake's clean default, and the
  * gate holds nothing until a test asks for a command by prefix.
  */
-function rig(seeds: readonly Seed[] = [FIRST], now: () => number = () => Date.now()): Rig {
-	const home = mkdtempSync(join(tmpdir(), "factory-handoff-dispatch-"));
-	homes.push(home);
+async function rig(
+	seeds: readonly Seed[] = [FIRST],
+	now: () => number = () => Date.now(),
+): Promise<Rig> {
+	const runner = new FakeRunner();
+	const p = await plane({
+		checkout: "none",
+		runner: () => runner,
+		now,
+		sourceTickets: { issues: [] },
+	});
+	openPlanes.push(p);
+	const home = p.home;
 	const checkout = join(home, "src", "factory");
 	mkdirSync(checkout, { recursive: true });
-	const runner = new FakeRunner();
 	runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
 	runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
 		stdout: "https://github.com/acme/factory.git\n",
 	});
 	runner.set("git", ["-C", checkout, "rev-parse", "HEAD"], { stdout: "abcdef\n" });
 	const config: FactoryConfig = {
-		...BASE_CONFIG,
-		sources: [
-			{
-				name: "issues",
-				kind: "github-issues",
-				refreshIntervalSeconds: 60,
-				repositories: ["acme/factory"],
-				host: "github.com",
-			},
-		],
+		...p.config,
+		sources: [planeIssuesSource],
 		repos: { "github.com/acme/factory": checkout },
 	};
-	const state = openFactoryState(":memory:", now);
-	openStates.push(state);
-	state.sourceFact.initializeSources([source]);
+	const state = p.state;
 	state.sourceFact.applyFetch(source, {
 		status: "success",
 		fetchedAt: "2026-09-01T00:00:00Z",
@@ -606,7 +604,7 @@ function herdrWithItsOwnNameSpace(
 
 describe("the seat", () => {
 	test("one handoff holds the seat, and the next waits behind it", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		rigRef.hold("herdr agent start");
 		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		expect(rigRef.dispatch.handoffActive()).toBe(true);
@@ -623,7 +621,7 @@ describe("the seat", () => {
 	});
 
 	test("a Close cleanup queues behind the handoff in flight", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const stored = seedClosedHandoff(rigRef, SECOND);
 		rigRef.hold("herdr workspace list");
 		const started = start(rigRef, FIRST, { origin: "open" });
@@ -645,7 +643,7 @@ describe("the seat", () => {
 	});
 
 	test("a handoff queues behind a queued Close cleanup", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const stored = seedClosedHandoff(rigRef, SECOND);
 		rigRef.hold("herdr tab close");
 		const cleanup = rigRef.dispatch.closeCleanup(SECOND.identity, stored, "closed");
@@ -666,7 +664,7 @@ describe("the seat", () => {
 	});
 
 	test("Close cleanups run one at a time behind each other", async () => {
-		const rigRef = rig([FIRST, SECOND, THIRD]);
+		const rigRef = await rig([FIRST, SECOND, THIRD]);
 		const first = seedHandoff(rigRef, FIRST);
 		const second = seedHandoff(rigRef, SECOND);
 		const third = seedHandoff(rigRef, THIRD);
@@ -697,7 +695,7 @@ describe("the seat", () => {
 	});
 
 	test("two handoffs wait behind the one in flight, and take the seat one at a time", async () => {
-		const rigRef = rig([FIRST, SECOND, THIRD]);
+		const rigRef = await rig([FIRST, SECOND, THIRD]);
 		rigRef.hold("herdr agent start");
 		await start(rigRef, FIRST, { origin: "open" });
 		await start(rigRef, SECOND, { origin: "open" });
@@ -718,7 +716,7 @@ describe("the seat", () => {
 	});
 
 	test("a cleanup's answer reaches its caller before the next handoff writes its line", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const stored = seedClosedHandoff(rigRef, SECOND);
 		rigRef.runner.set("herdr", ["tab", "close", SECOND.tabId], { code: 1, stderr: "tab is busy" });
 		rigRef.hold("herdr tab close");
@@ -744,7 +742,7 @@ describe("the seat", () => {
 
 describe("the queue drain", () => {
 	test("a queued handoff whose ticket moved on fails, and the queue keeps draining", async () => {
-		const rigRef = rig([FIRST, SECOND, THIRD]);
+		const rigRef = await rig([FIRST, SECOND, THIRD]);
 		const second = seedHandoff(rigRef, SECOND);
 		settleTurn(rigRef, SECOND, second.handoffId);
 		const secondStarted: DispatchResult[] = [];
@@ -783,7 +781,7 @@ describe("the queue drain", () => {
 	});
 
 	test("a queued handoff runs on the ticket the state holds when its turn comes", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		rigRef.hold("herdr agent start");
 		await start(rigRef, FIRST, { origin: "open" });
 		await start(rigRef, SECOND, { origin: "open" });
@@ -802,7 +800,7 @@ describe("the queue drain", () => {
 	});
 
 	test("a queued workflow handoff runs while its ticket still awaits its route", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const second = seedHandoff(rigRef, SECOND);
 		settleTurn(rigRef, SECOND, second.handoffId);
 		rigRef.hold("herdr agent start");
@@ -815,7 +813,7 @@ describe("the queue drain", () => {
 	});
 
 	test("a queued restart runs while its ticket is still in flight", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const second = seedHandoff(rigRef, SECOND);
 		const started: DispatchResult[] = [];
 		rigRef.hold("herdr agent start");
@@ -833,7 +831,7 @@ describe("the queue drain", () => {
 	});
 
 	test("a queued restart runs while its agent works", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		seedHandoff(rigRef, SECOND);
 		// The observation corrected the ticket to running: a restart waits on the
 		// seat like any other handoff, and the seat still answers for it.
@@ -849,7 +847,7 @@ describe("the queue drain", () => {
 	});
 
 	test("a queued restart of a ticket whose cycle closed while it waited fails", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const second = seedHandoff(rigRef, SECOND);
 		rigRef.hold("herdr agent start");
 		await start(rigRef, FIRST, { origin: "open" });
@@ -869,7 +867,7 @@ describe("the queue drain", () => {
 
 describe("the starting report", () => {
 	test("a claim adds the ticket to the set, and the settle removes it", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		// The add is the claim's fact: it lands before the work starts to build.
 		expect(rigRef.events.indexOf(`starting:${FIRST.identity}:on`)).toBeLessThan(
@@ -884,7 +882,7 @@ describe("the starting report", () => {
 	});
 
 	test("a failed settle removes the ticket the same way", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		rigRef.runner.set("herdr", ["workspace", "list"], { code: 1, stderr: "herdr is unavailable" });
 		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({ ok: true });
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
@@ -896,7 +894,7 @@ describe("the starting report", () => {
 	});
 
 	test("a hand-off queued behind the in-flight seat is in the set while it is queued", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		rigRef.hold("herdr agent start");
 		await start(rigRef, FIRST, { origin: "open" });
 		await start(rigRef, SECOND, { origin: "open" });
@@ -914,7 +912,7 @@ describe("the starting report", () => {
 	});
 
 	test("a queued handoff the drain does not run removes the ticket it added", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const second = seedHandoff(rigRef, SECOND);
 		settleTurn(rigRef, SECOND, second.handoffId);
 		rigRef.hold("herdr agent start");
@@ -934,7 +932,7 @@ describe("the starting report", () => {
 	});
 
 	test("after a restart the set is empty: a crash remnant is not in it", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		rigRef.hold("herdr agent start");
 		await start(rigRef, FIRST, { origin: "open" });
 		await rigRef.waitForArrivals(1);
@@ -972,7 +970,7 @@ describe("the starting report", () => {
 	});
 
 	test("a stopped module reports into nothing while the app tears down", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		rigRef.hold("herdr agent start");
 		await start(rigRef, FIRST, { origin: "open" });
 		await rigRef.waitForArrivals(1);
@@ -989,7 +987,7 @@ describe("the starting report", () => {
 
 describe("the claim, the settle, and every origin", () => {
 	test("an open handoff settles the attempt, and its start report fires once and last", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const started: DispatchResult[] = [];
 		await expect(
 			start(rigRef, FIRST, {
@@ -1010,7 +1008,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("an open handoff herdr refuses settles as failed and releases the seat", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		rigRef.runner.set("herdr", ["workspace", "list"], { code: 1, stderr: "herdr is unavailable" });
 		const started: DispatchResult[] = [];
 		await expect(
@@ -1029,7 +1027,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("the operator's handoff passes the failed start's hold the auto top-up obeys", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		// The factory's own start ran and never reached its Agent: the attempt
 		// stands `failed`, unrefreshed, and that is the fact the top-up's hold
 		// reads (ADR 0101, issue #217).
@@ -1058,7 +1056,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("the operator's handoff passes the Failed-start park the auto top-up holds", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		// Five starts that reached no Agent: the park's count at this Ticket's Handoff
 		// limit of 10 (ADR 0106), and the run the row's marker reads off the ledger.
 		for (let i = 0; i < 5; i += 1) {
@@ -1102,7 +1100,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("a failed operator start sets the hold the automatic walks obey", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		// No automatic ask ever touched this Ticket: the start that failed is the
 		// operator's own confirm. The hold reads the Ticket's newest attempt and its
 		// outcome, not who asked for that start (ADR 0101): the cause of a start
@@ -1124,7 +1122,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("a workflow handoff settles the agent it started in the stored workspace", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = await handOff(rigRef, FIRST);
 		settleTurn(rigRef, FIRST, stored.handoffId);
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("awaiting");
@@ -1154,7 +1152,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("a workflow handoff that never started settles as failed", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedHandoff(rigRef, FIRST);
 		settleTurn(rigRef, FIRST, stored.handoffId);
 		rigRef.runner.set("herdr", ["workspace", "list"], { code: 1, stderr: "herdr is gone" });
@@ -1179,7 +1177,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("a restart settles the agent it started", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		await handOff(rigRef, FIRST);
 		rigRef.runner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: FIRST.workspaceId, checkoutPath: rigRef.checkout }]),
@@ -1202,12 +1200,12 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("a restart of a worktree cycle reopens the ticket's own branch", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		seedHandoff(rigRef, FIRST, worktreeChoice);
 		// herdr no longer holds the stored workspace: the restart takes the
 		// ticket's branch, not a fresh environment built at the checkout.
 		rigRef.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		const branch = "factory/5-add-a-webhook-retry-policy";
+		const branch = "factory/5-persist-source-facts";
 		const worktreePath = join(rigRef.checkout, "wt");
 		rigRef.runner.set(
 			"herdr",
@@ -1246,7 +1244,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("a restart herdr refuses settles as failed and releases the seat", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		await handOff(rigRef, FIRST);
 		rigRef.runner.set("herdr", ["workspace", "list"], {
 			code: 1,
@@ -1269,7 +1267,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("a claim herdr refuses starts nothing and answers with the claim's reason", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		await handOff(rigRef, FIRST);
 		await expect(start(rigRef, FIRST, { origin: "open" })).resolves.toEqual({
 			ok: false,
@@ -1279,7 +1277,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("a handoff of a ticket the state no longer holds is refused", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		rigRef.state.sourceFact.applyFetch(source, {
 			status: "success",
 			fetchedAt: "2026-09-02T00:00:00Z",
@@ -1293,7 +1291,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("handoff work that raises settles as failed and gives the seat back", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		// The raise is outside every outcome herdr can write: the Agent start call
 		// itself breaks on the way to the pane.
 		let broken = false;
@@ -1347,7 +1345,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("a raise at the prompt settles the ticket handed off, not as a start that never ran", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		// The Agent is already in its pane when the prompt call breaks. A started
 		// Agent is never rolled back, so the raise is the prompt that never landed.
 		let broken = false;
@@ -1377,7 +1375,7 @@ describe("the claim, the settle, and every origin", () => {
 	});
 
 	test("a throwing Working report cannot lose the queued handoff", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		// The first handoff settles, then its drain reaches the second claim. The
 		// renderer disappears while the second Working line is reported. Reporting
 		// is best effort, so the queued durable claim must still settle.
@@ -1646,7 +1644,7 @@ describe("the Close cleanup", () => {
 	// settled, writes no completion trace, and stops the Agent through the same
 	// cleanup every other close path runs.
 	test("the in-flight Close ends the cycle, writes no trace, and closes the environment", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedHandoff(rigRef, FIRST);
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
 
@@ -1670,7 +1668,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("the in-flight Close queues behind a Handoff of the same ticket", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const hung = seedHandoff(rigRef, FIRST);
 		// A restart of the same ticket is building its agent when the operator
 		// asks for the close: the close waits, and a hung start still ends in it.
@@ -1693,7 +1691,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("the in-flight Close meets a ticket that settled first and runs nothing", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedHandoff(rigRef, FIRST);
 		// The turn settles while the close waits over the seat: the cycle is the
 		// settled turn's to decide now, and this move changes nothing.
@@ -1710,7 +1708,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("a cleanup herdr refuses records the leftover fact the ticket carries", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedClosedHandoff(rigRef, FIRST);
 		rigRef.runner.set("herdr", ["tab", "close", FIRST.tabId], {
 			code: 1,
@@ -1728,7 +1726,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("a cleanup that never ran records a readable failure of its own", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedClosedHandoff(rigRef, FIRST);
 		const broken: CommandRunner = {
 			run: (command, args, options) =>
@@ -1749,7 +1747,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("a tab herdr already lost is a success that clears the fact", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedClosedHandoff(rigRef, FIRST);
 		rigRef.runner.set("herdr", ["tab", "close", FIRST.tabId], { code: 1, stderr: "busy" });
 		await expect(rigRef.dispatch.closeCleanup(FIRST.identity, stored, "closed")).resolves.toBe(
@@ -1769,7 +1767,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("a workspace herdr already lost is a success that clears the fact", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedClosedHandoff(rigRef, FIRST, worktreeChoice);
 		rigRef.runner.set("herdr", ["worktree", "remove", "--workspace", FIRST.workspaceId], {
 			code: 1,
@@ -1785,7 +1783,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("a successful workspace removal clears every fact that named it", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const worktree = seedClosedHandoff(rigRef, FIRST, worktreeChoice);
 		rigRef.state.handoff.recordLeftoverEnvironment({
 			ticketIdentity: FIRST.identity,
@@ -1800,7 +1798,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("a workspace removal clears every fact that names the workspace it closed", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const first = seedClosedHandoff(rigRef, FIRST, worktreeChoice, {
 			tabId: "tab-a",
 			workspaceId: "ws-shared",
@@ -1825,7 +1823,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("a tab close clears every fact that names the tab it closed", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const first = seedClosedHandoff(rigRef, FIRST, liveChoice, {
 			tabId: "tab-shared",
 			workspaceId: "ws-a",
@@ -1847,7 +1845,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("a cleanup that broke on its way out still releases the seat", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const stored = seedClosedHandoff(rigRef, SECOND);
 		// The projection refresh the cleanup ends with is the thing that breaks:
 		// the answer to the caller must still settle, and the seat must still
@@ -1865,7 +1863,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("a cleanup reaches only the environments its own removal names", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const worktree = seedClosedHandoff(rigRef, FIRST, worktreeChoice);
 		const beside = seedClosedHandoff(rigRef, FIRST, liveChoice, {
 			tabId: "tab-beside",
@@ -1888,7 +1886,7 @@ describe("the Close cleanup", () => {
 	});
 
 	test("a cleanup moves herdr's view nowhere: it sends no focus command", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedClosedHandoff(rigRef, FIRST, worktreeChoice);
 		await expect(
 			rigRef.dispatch.closeCleanup(FIRST.identity, stored, "closed"),
@@ -1903,7 +1901,7 @@ describe("the Close cleanup", () => {
 
 describe("the name fact", () => {
 	test("a handoff beside the ticket's own leftover records the fact and starts anyway", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const previous = seedClosedHandoff(rigRef, FIRST);
 		// A second closed cycle of the same ticket: the newest row is not the
 		// one whose agent holds the name, and the fact knows the difference.
@@ -1954,7 +1952,7 @@ describe("the name fact", () => {
 	});
 
 	test("the ticket's own leftover fact makes a holder it never saw its own", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const previous = seedClosedHandoff(rigRef, FIRST);
 		// The control plane still carries the fact of a leftover environment of
 		// this ticket, and herdr refuses the name without naming who holds it:
@@ -1990,7 +1988,7 @@ describe("the name fact", () => {
 	});
 
 	test("a name another ticket's agent holds fails the handoff and records the collision, not a leftover", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		// The ticket has a closed cycle of its own, so a record that should not
 		// happen would land on its latest handoff.
 		seedClosedHandoff(rigRef, FIRST);
@@ -2036,7 +2034,7 @@ describe("the name fact", () => {
 	});
 
 	test("two Tickets that share a title each start under a name of their own (issue #216)", async () => {
-		const rigRef = rig([SHARED_A, SHARED_B]);
+		const rigRef = await rig([SHARED_A, SHARED_B]);
 		// herdr holds one agent name space across every Ticket it knows, so the
 		// fake holds one too: the name the first Ticket's agent took is refused
 		// for the next ask, with the holder named. That refusal is issue #216.
@@ -2092,7 +2090,7 @@ describe("the name fact", () => {
 	});
 
 	test("a refusal that names no holder is no agent of this ticket, and records the collision with no handles", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		seedClosedHandoff(rigRef, FIRST);
 		rigRef.runner.set(
 			"herdr",
@@ -2128,7 +2126,7 @@ describe("the name fact", () => {
 	});
 
 	test("a route treats the settled ticket's held name as its own, and starts beside it", async () => {
-		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const rigRef = await rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		settleRoutePair(rigRef);
 		const started = await routeDispatch(rigRef.dispatch);
 		expect(started).toEqual({ ok: true });
@@ -2151,7 +2149,7 @@ describe("the name fact", () => {
 	});
 
 	test("a route still fails on a name a stranger holds, and records the collision on its own Ticket", async () => {
-		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const rigRef = await rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		// The holder the refusal names is no agent of either ticket of the route.
 		settleRoutePair(rigRef, [{ paneId: "pane-stranger", workspaceId: "ws-stranger" }]);
 		const started = await routeDispatch(rigRef.dispatch);
@@ -2178,7 +2176,7 @@ describe("the name fact", () => {
 	});
 
 	test("the operator's own Handoff that takes the name clears the collision (issue #299)", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		// herdr holds the Ticket's name in a pane the plane never made, so the first
 		// ask is refused and the fact lands on the Ticket.
 		const held = new Map<string, { paneId: string; workspaceId: string }>([
@@ -2213,7 +2211,7 @@ describe("the name fact", () => {
 	});
 
 	test("a start that fails for another reason leaves the collision standing (issue #299)", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		rigRef.runner.set(
 			"herdr",
 			["agent", "start", FIRST.name, "--kind", "pi", "--pane", "pane-agent"],
@@ -2247,7 +2245,7 @@ describe("the name fact", () => {
 		// The two facts never stand for one another (issue #299, ADR 0107): the holder
 		// this Ticket's own handoff recorded is its own, and the Handoff takes its
 		// cycle name beside it (ADR 0012, ADR 0098).
-		const rigRef = rig();
+		const rigRef = await rig();
 		const previous = seedClosedHandoff(rigRef, FIRST);
 		rigRef.runner.set(
 			"herdr",
@@ -2267,7 +2265,7 @@ describe("the name fact", () => {
 	});
 
 	test("a stranger that holds the cycle name is named by the cycle name, not the stable one (issue #299)", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		// The stable name belongs to this Ticket's own Leftover environment, so the
 		// search moves on to its cycle name - and there a pane the plane never made
 		// stands in the way (ADR 0098, ADR 0107).
@@ -2321,7 +2319,7 @@ describe("the Parallel limit and the Work queue", () => {
 	}
 
 	test("a manual start at the cap waits in the queue with its origin and choice, and the ticket keeps its state", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		// Every seat is held: the cap is full.
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
@@ -2355,7 +2353,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a queued route keeps the settled ticket it continues, and the pickup starts it beside its leftover", async () => {
-		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const rigRef = await rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		settleRoutePair(rigRef);
 		// Every seat is held: the route waits in the Work queue.
 		const capped = withRunner(rigRef, rigRef.runner, {
@@ -2402,7 +2400,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a close on the source after the ask moves nothing, and the pickup starts the route (ADR 0072)", async () => {
-		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const rigRef = await rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		const settled = settleRoutePair(rigRef);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
@@ -2447,7 +2445,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("the operator's route records handed-off on the settled turn at the ask (ADR 0064)", async () => {
-		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const rigRef = await rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		const settled = settleRoutePair(rigRef);
 		// Every seat is held: the route waits in the Work queue, and its
 		// decision lands at the ask - the settled turn is decided before any
@@ -2502,7 +2500,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("the factory's route records auto-handed-off on the settled turn at the ask (ADR 0064)", async () => {
-		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const rigRef = await rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		const settled = settleRoutePair(rigRef);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
@@ -2550,7 +2548,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a route the one-item-per-ticket rule refuses records nothing (ADR 0064)", async () => {
-		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const rigRef = await rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		settleRoutePair(rigRef);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
@@ -2582,7 +2580,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a second enqueue for a waiting ticket is refused, and the first item keeps its place", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
@@ -2617,7 +2615,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("an unlimited cap picks up the whole waiting queue", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
@@ -2652,7 +2650,7 @@ describe("the Parallel limit and the Work queue", () => {
 	 * on the item's own ticket, and the pickup still claims the seat and starts.
 	 */
 	test("a pickup runs with the Dispatch pause armed and the Same-type hold on", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		// The Same-type hold on FIRST: its newest cycle ended on a completed
 		// turn of the task type the ticket still suggests (ADR 0026).
 		const closed = await handOff(rigRef, FIRST);
@@ -2725,7 +2723,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a free seat picks up the queue's head, and the start names the queue", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
@@ -2750,7 +2748,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a pickup whose ticket gained an open fixing pull request removes the item, and the ticket keeps its state", async () => {
-		const rigRef = rig([SECOND]);
+		const rigRef = await rig([SECOND]);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
@@ -2806,7 +2804,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a force-dispatch at a full cap refuses the covered ticket the way the pickup does", async () => {
-		const rigRef = rig([SECOND]);
+		const rigRef = await rig([SECOND]);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
@@ -2867,7 +2865,7 @@ describe("the Parallel limit and the Work queue", () => {
 		// The covered gate is the pickup's, not the enqueue's (ADR 0049): the
 		// enqueue accepts the start, and the pickup drops the covered item, and
 		// the ticket keeps its state and its pull request's rank (ADR 0042).
-		const rigRef = rig([SECOND]);
+		const rigRef = await rig([SECOND]);
 		const pulls = { name: "pulls", kind: "github-pull-requests" };
 		rigRef.state.sourceFact.applyFetch(pulls, {
 			status: "success",
@@ -2916,7 +2914,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a pickup the state refuses drops the item, and the warning says why once", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
@@ -2949,7 +2947,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a workflow pickup keeps the route decision the ask recorded on the turn it routes from", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		// The ticket rests on its settled turn, awaiting its route.
 		const stored = await handOff(rigRef, FIRST);
 		settleTurn(rigRef, FIRST, stored.handoffId);
@@ -3002,7 +3000,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("removing a waiting start cancels the pickup the held herdr seat parked", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		// One module owns the seat, the queue, and the cancel, so the parked
 		// intent and its removal meet in the same drain.
 		const gate = gatedRunner(rigRef.runner, (command) => command.startsWith("herdr agent start"));
@@ -3064,7 +3062,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a parked pickup the drain refuses says it once, and the item keeps its place", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		// FIRST rests on its settled turn, awaiting its route.
 		const stored = await handOff(rigRef, FIRST);
 		settleTurn(rigRef, FIRST, stored.handoffId);
@@ -3139,7 +3137,7 @@ describe("the Parallel limit and the Work queue", () => {
 	 * operator ended (issue #92).
 	 */
 	test("a cancel that reaches a row whose pickup is inside herdr keeps the line quiet", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const gate = gatedRunner(rigRef.runner, (command) => command.startsWith("herdr agent start"));
 		let held = rigRef.config.maxParallelAgents;
 		const mod = withRunner(rigRef, gate.runner, { seatCount: () => held });
@@ -3189,7 +3187,7 @@ describe("the Parallel limit and the Work queue", () => {
 	 * automatic start of the same ticket at the pickup.
 	 */
 	test("a cancelled ask answers with the cancel, and never answers a later start", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const answers: DispatchResult[] = [];
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
@@ -3238,7 +3236,7 @@ describe("the Parallel limit and the Work queue", () => {
 	 * start, even with a free seat; the resume's immediate pass takes it.
 	 */
 	test("an enqueue while paused does not start, and the resume takes the free seat", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		rigRef.state.workQueue.setQueuePaused(true);
 		// A free seat and a standing pause: the dispatch enqueues, reports the
 		// pause on the line, and runs no pickup pass.
@@ -3267,7 +3265,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("an automatic start at the cap waits in the queue", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
@@ -3291,7 +3289,7 @@ describe("the Parallel limit and the Work queue", () => {
 
 	test("a queued restart whose ticket restarted while it waits is cancelled, not double-started", async () => {
 		let clockMs = Date.parse("2026-09-01T00:00:00Z");
-		const rigRef = rig([FIRST], () => clockMs);
+		const rigRef = await rig([FIRST], () => clockMs);
 		// The ticket is in flight on a live agent.
 		seedHandoff(rigRef, FIRST);
 		clockMs += 60_000;
@@ -3327,7 +3325,7 @@ describe("the Parallel limit and the Work queue", () => {
 
 	test("a queued route whose ticket routed while it waits is cancelled, not double-started", async () => {
 		let clockMs = Date.parse("2026-09-01T00:00:00Z");
-		const rigRef = rig([FIRST], () => clockMs);
+		const rigRef = await rig([FIRST], () => clockMs);
 		// The ticket rests on its settled turn, awaiting a route.
 		const seeded = seedHandoff(rigRef, FIRST);
 		settleTurn(rigRef, FIRST, seeded.handoffId);
@@ -3379,7 +3377,7 @@ describe("the Parallel limit and the Work queue", () => {
 	 * the end in the dispatch's own words.
 	 */
 	test("a force-dispatch at a full cap starts the item, and the line names the cap", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		// Every seat is held, and it stays held across the start: the seat
 		// count stands over the cap until the work settles.
 		const capped = withRunner(rigRef, rigRef.runner, {
@@ -3407,7 +3405,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a force-dispatch under a full cap says the pickup's own words", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		// One free seat stands: the start runs, and the line may not state a
 		// cap it did not run over.
 		const mod = withRunner(rigRef, rigRef.runner, {
@@ -3430,7 +3428,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a force-dispatch passes the queue pause, and the pause holds the drain", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		// Every seat is held, and the pause stands: the pickup takes nothing
 		// while it stands, so the item the start left is still waiting when the
 		// force-dispatch keys it.
@@ -3463,7 +3461,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a force-dispatch the claim refuses leaves the queue with the warning", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 		});
@@ -3492,7 +3490,7 @@ describe("the Parallel limit and the Work queue", () => {
 	});
 
 	test("a force-dispatch that fails its start leaves the queue with the failure's warning", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		// The herdr the start meets is down: the first external step fails with
 		// herdr's own refusal, before it creates anything.
 		const broken = new FakeRunner();
@@ -3555,7 +3553,7 @@ describe("the Work queue's Consultation pickup (ADR 0034, issue #90)", () => {
 	}
 
 	test("a full cap holds the pickup, and the item waits", async () => {
-		const rigRef = rig([]);
+		const rigRef = await rig([]);
 		const calls: string[] = [];
 		const module = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
@@ -3573,7 +3571,7 @@ describe("the Work queue's Consultation pickup (ADR 0034, issue #90)", () => {
 	});
 
 	test("a freed seat starts the item, and the item leaves the queue", async () => {
-		const rigRef = rig([]);
+		const rigRef = await rig([]);
 		const calls: string[] = [];
 		const modes: StartMode[] = [];
 		const module = withRunner(rigRef, rigRef.runner, {
@@ -3598,7 +3596,7 @@ describe("the Work queue's Consultation pickup (ADR 0034, issue #90)", () => {
 	});
 
 	test("the pickup's start holds the cycle's seat from the items behind it", async () => {
-		const rigRef = rig([]);
+		const rigRef = await rig([]);
 		const calls: string[] = [];
 		const module = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents - 1,
@@ -3617,7 +3615,7 @@ describe("the Work queue's Consultation pickup (ADR 0034, issue #90)", () => {
 	});
 
 	test("a failed pickup removes the item, and says nothing on its own", async () => {
-		const rigRef = rig([]);
+		const rigRef = await rig([]);
 		const module = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => 0,
 			pickupConsultation: () => {
@@ -3636,7 +3634,7 @@ describe("the Work queue's Consultation pickup (ADR 0034, issue #90)", () => {
 	});
 
 	test("a moved pickup removes the item and names the record it found", async () => {
-		const rigRef = rig([]);
+		const rigRef = await rig([]);
 		const module = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => 0,
 			pickupConsultation: () => {
@@ -3653,7 +3651,7 @@ describe("the Work queue's Consultation pickup (ADR 0034, issue #90)", () => {
 	});
 
 	test("a module without a Consultation side leaves the item standing", async () => {
-		const rigRef = rig([]);
+		const rigRef = await rig([]);
 		queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
 		// The item is not this run's to clear: it stands for a later module that
 		// holds the side, and the seat it would have held stays free.
@@ -3696,7 +3694,7 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 	}
 
 	test("a force-dispatch at a full cap starts the Consultation, and the line names the cap", async () => {
-		const rigRef = rig([]);
+		const rigRef = await rig([]);
 		const calls: string[] = [];
 		const modes: StartMode[] = [];
 		const capped = withRunner(rigRef, rigRef.runner, {
@@ -3722,7 +3720,7 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 	});
 
 	test("a force-dispatch under a full cap says the pickup's own words", async () => {
-		const rigRef = rig([]);
+		const rigRef = await rig([]);
 		const modes: StartMode[] = [];
 		const mod = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents - 1,
@@ -3744,7 +3742,7 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 	});
 
 	test("a force-dispatch the record out-waits names the record it found", async () => {
-		const rigRef = rig([]);
+		const rigRef = await rig([]);
 		const mod = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 			pickupConsultation: () => Promise.resolve({ kind: "moved" }),
@@ -3762,7 +3760,7 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 	});
 
 	test("a force-dispatch whose start fails says nothing on its own", async () => {
-		const rigRef = rig([]);
+		const rigRef = await rig([]);
 		const mod = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
 			pickupConsultation: () => Promise.resolve({ kind: "failed" }),
@@ -3778,7 +3776,7 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 	});
 
 	test("a force-dispatch on a row the queue no longer holds runs nothing", async () => {
-		const rigRef = rig([]);
+		const rigRef = await rig([]);
 		const calls: string[] = [];
 		const mod = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
@@ -3795,7 +3793,7 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 	});
 
 	test("the row's identity names the item across kinds", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const calls: string[] = [];
 		const mod = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
@@ -3852,12 +3850,12 @@ describe("the decision screen's route close", () => {
 	}
 
 	test("a direct route closes the settled workspace, and the handoff reopens the worktree beside it", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);
 		settleTurn(rigRef, FIRST, stored.handoffId);
 		// The close took the workspace: herdr's list no longer holds it, and
 		// the ticket's branch is what the handoff takes instead.
-		const branch = "factory/5-add-a-webhook-retry-policy";
+		const branch = "factory/5-persist-source-facts";
 		const worktreePath = join(rigRef.checkout, "wt");
 		rigRef.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
 		rigRef.runner.set("git", ["-C", rigRef.checkout, "branch", "--list", branch], {
@@ -3892,7 +3890,7 @@ describe("the decision screen's route close", () => {
 	});
 
 	test("a direct route of a live cycle closes the previous tab, and starts a fresh tab in the workspace", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = await handOff(rigRef, FIRST);
 		settleTurn(rigRef, FIRST, stored.handoffId);
 		// The shared workspace stands: only the settled turn's tab goes.
@@ -3916,7 +3914,7 @@ describe("the decision screen's route close", () => {
 	});
 
 	test("a route that waits in the Work queue closes the previous environment at the ask", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);
 		settleTurn(rigRef, FIRST, stored.handoffId);
 		// Every seat is held: the route waits in the Work queue.
@@ -3957,7 +3955,7 @@ describe("the decision screen's route close", () => {
 	});
 
 	test("a queued route that crosses closes the settled ticket's environment, not the position's", async () => {
-		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const rigRef = await rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		const settled = settleRoutePair(rigRef);
 		const capped = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents,
@@ -3982,7 +3980,7 @@ describe("the decision screen's route close", () => {
 	});
 
 	test("a cross-position pickup starts the position while the source rests (ADR 0072)", async () => {
-		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const rigRef = await rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		settleRoutePair(rigRef);
 		// Every seat is held: the route waits in the Work queue, and the ask
 		// ends the settled ticket's cycle with the decision it records.
@@ -4020,7 +4018,7 @@ describe("the decision screen's route close", () => {
 	});
 
 	test("a cancel of the route item marks the turn and leaves the source (ADR 0072)", async () => {
-		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const rigRef = await rig([ROUTE_SETTLED, ROUTE_TARGET]);
 		settleRoutePair(
 			rigRef,
 			[{ paneId: ROUTE_SETTLED.paneId, workspaceId: ROUTE_SETTLED.workspaceId }],
@@ -4058,12 +4056,12 @@ describe("the decision screen's route close", () => {
 	});
 
 	test("a same-position pickup hands the open ticket off in its next cycle (ADR 0072)", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);
 		settleTurn(rigRef, FIRST, stored.handoffId);
 		// The pickup reopens the worktree on the ticket's branch, beside the
 		// workspace the ask closed.
-		const branch = "factory/5-add-a-webhook-retry-policy";
+		const branch = "factory/5-persist-source-facts";
 		rigRef.runner.set("git", ["-C", rigRef.checkout, "branch", "--list", branch], {
 			stdout: `* ${branch}\n`,
 		});
@@ -4107,7 +4105,7 @@ describe("the decision screen's route close", () => {
 	});
 
 	test("the automatic route keeps the stored workspace, and closes nothing at the ask", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = await handOff(rigRef, FIRST);
 		settleTurn(rigRef, FIRST, stored.handoffId);
 		rigRef.runner.set("herdr", ["workspace", "list"], {
@@ -4145,7 +4143,7 @@ describe("the decision screen's route close", () => {
 	});
 
 	test("a refused close keeps the handoff running on the stored workspace", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = await handOff(rigRef, FIRST);
 		settleTurn(rigRef, FIRST, stored.handoffId);
 		// The handoff the rig started holds its own tab and workspace: the
@@ -4182,11 +4180,11 @@ describe("the decision screen's route close", () => {
 	});
 
 	test("a direct route whose worktree stands on another branch reopens it by path", async () => {
-		const rigRef = rig();
+		const rigRef = await rig();
 		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);
 		settleTurn(rigRef, FIRST, stored.handoffId);
 		// The close took the workspace: herdr's list no longer holds it.
-		const branch = "factory/5-add-a-webhook-retry-policy";
+		const branch = "factory/5-persist-source-facts";
 		// The agent that last worked the ticket left the worktree on the
 		// branch the work needed, so no worktree holds the ticket's branch
 		// while the worktree still stands at the path herdr names for it.
@@ -4194,7 +4192,7 @@ describe("the decision screen's route close", () => {
 			rigRef.home,
 			"worktrees",
 			"factory",
-			"factory-5-add-a-webhook-retry-policy",
+			"factory-5-persist-source-facts",
 		);
 		rigRef.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
 		rigRef.runner.set("git", ["-C", rigRef.checkout, "branch", "--list", branch], {
@@ -4241,7 +4239,7 @@ describe("the decision screen's route close", () => {
 
 describe("the record lines", () => {
 	test("a claimed start leaves one line, and a refused claim leaves its reason", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const lines: RecordedLine[] = [];
 		// The gate holds every command, so the start's work pauses on its
 		// first call: only the claim runs, and the settle never meets the
@@ -4275,7 +4273,7 @@ describe("the record lines", () => {
 	});
 
 	test("a start the queue's pickup takes names the pickup and the seats it read", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		// The cap is full at the ask, so the factory's automatic ask only enqueues
@@ -4313,7 +4311,7 @@ describe("the record lines", () => {
 	test("a start under an unlimited cap states its held seats with no limit", async () => {
 		// `max-parallel-agents = 0` lifts the cap, so the seat part names the held
 		// count and states no limit at all (issue #209).
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		rigRef.config.maxParallelAgents = 0;
 		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
@@ -4338,7 +4336,7 @@ describe("the record lines", () => {
 		// The issue #209 case: `max-parallel-agents = 1`, two starts, and the log
 		// has to say which path took the second seat. The seat count is the
 		// state's own unresolved claims, the fact the app's shared count reads.
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		rigRef.config.maxParallelAgents = 1;
 		const lines: RecordedLine[] = [];
 		// The gate holds every command, so each claimed start stays unresolved
@@ -4382,7 +4380,7 @@ describe("the record lines", () => {
 	 * `open` - so the queue's lines name the staging.
 	 */
 	test("an operator-staged row and the factory's own row read differently on the same origin", async () => {
-		const rigRef = rig([FIRST, SECOND]);
+		const rigRef = await rig([FIRST, SECOND]);
 		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
@@ -4415,7 +4413,7 @@ describe("the record lines", () => {
 	 * always left its line; this refusal left none (issue #223).
 	 */
 	test("a second ask for a ticket that already waits leaves its refusal in the record", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
@@ -4463,7 +4461,7 @@ describe("the record lines", () => {
 		// is no fact of this refusal, and the test must not stand or fall on which
 		// millisecond the removed row and the new row land in.
 		let clockMs = Date.parse("2026-09-01T00:00:00Z");
-		const rigRef = rig([FIRST], () => clockMs);
+		const rigRef = await rig([FIRST], () => clockMs);
 		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
@@ -4511,7 +4509,7 @@ describe("the record lines", () => {
 	 */
 	test("a row that left through another aggregate is a new standing fact", async () => {
 		let clockMs = Date.parse("2026-09-01T00:00:00Z");
-		const rigRef = rig([FIRST], () => clockMs);
+		const rigRef = await rig([FIRST], () => clockMs);
 		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
@@ -4563,7 +4561,7 @@ describe("the record lines", () => {
 	 * the fact stands, again when the fact moves.
 	 */
 	test("the claim refusal states itself once while the claim stands, and again when it moves", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const lines: RecordedLine[] = [];
 		// The gate holds the start's commands, so the claim the first ask made stays
 		// unresolved: the recovery gate is the fact every later ask meets.
@@ -4602,7 +4600,7 @@ describe("the record lines", () => {
 	 * refusal. The attempt ledger is what tells the two apart.
 	 */
 	test("a claim that settled elsewhere makes the next refusal a new fact", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, { log: recordLogger(lines) });
@@ -4643,7 +4641,7 @@ describe("the record lines", () => {
 	 * stays bounded to the rows that stand.
 	 */
 	test("the pickup pass drops the entry of a row that no longer stands", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const lines: RecordedLine[] = [];
 		const hold = gatedRunner(rigRef.runner, () => true);
 		const mod = withRunner(rigRef, hold.runner, {
@@ -4702,7 +4700,7 @@ describe("the record lines", () => {
 	 * `failed`, at the `warn` level every refusal wears.
 	 */
 	test("a start that reaches no Agent states the ticket and the reason it ended", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const lines: RecordedLine[] = [];
 		// herdr refuses the start's first command: the claim stands, the run ends,
 		// and the attempt settles `failed`.
@@ -4736,7 +4734,7 @@ describe("the record lines", () => {
 	 * facts. A new attempt is a new start, and it states itself again.
 	 */
 	test("the failed start states itself once per attempt, and again for the next attempt", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const lines: RecordedLine[] = [];
 		rigRef.runner.set("herdr", ["workspace", "list"], {
 			code: 1,
@@ -4767,7 +4765,7 @@ describe("the record lines", () => {
 	 * leaves its own line and no refusal. One grep answers one question.
 	 */
 	test("a gate refusal and a failed start state themselves under different prefixes", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const lines: RecordedLine[] = [];
 		// The gate first: the cap is full, so the second ask never claims, and the
 		// queue's one-item rule refuses it.
@@ -4817,7 +4815,7 @@ describe("the record lines", () => {
 	 * reached.
 	 */
 	test("a parked start whose ticket moved on states how it ended", async () => {
-		const rigRef = rig([FIRST, SECOND, THIRD]);
+		const rigRef = await rig([FIRST, SECOND, THIRD]);
 		const lines: RecordedLine[] = [];
 		// The gate holds only the agent start, so each later claim parks behind the
 		// first start's seat while the test moves the ticket out from under it.
@@ -4887,7 +4885,7 @@ describe("the seat a missing Agent left (ADR 0108)", () => {
 	}
 
 	test("a queued Consultation does not take the seat a missing Agent left", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		// One seat: the seat the missing Agent left is the only seat the limit
 		// has, so the reservation is all of it.
 		rigRef.config.maxParallelAgents = 1;
@@ -4910,7 +4908,7 @@ describe("the seat a missing Agent left (ADR 0108)", () => {
 	});
 
 	test("the restart row takes the seat reserved for it", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		seedHandoff(rigRef, FIRST);
 		const mod = withRunner(
 			rigRef,
@@ -4936,7 +4934,7 @@ describe("the seat a missing Agent left (ADR 0108)", () => {
 	});
 
 	test("a seat no restart row can take is not reserved", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const calls: string[] = [];
 		const mod = withRunner(rigRef, rigRef.runner, {
 			// The Top-up restarts nothing: the flag, the Handoff limit, or the
@@ -4955,7 +4953,7 @@ describe("the seat a missing Agent left (ADR 0108)", () => {
 	});
 
 	test("the Plane action's run is not held by a reserved seat", async () => {
-		const rigRef = rig([FIRST]);
+		const rigRef = await rig([FIRST]);
 		const mod = withRunner(
 			rigRef,
 			rigRef.runner,

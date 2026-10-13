@@ -17,7 +17,7 @@
  * from a literal this suite picks.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { controlById } from "../src/components/controls.ts";
 import {
 	type AppSetup,
@@ -42,12 +42,7 @@ import {
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
-import { plane } from "./seeded-plane.ts";
-import { cleanupStateFixtures } from "./state-fixture.ts";
-
-afterEach(() => {
-	cleanupStateFixtures();
-});
+import { plane } from "./plane.ts";
 
 /** Boot a plane whose source stands healthy, so the bar paints its full hints. */
 async function withHealthyPlane(

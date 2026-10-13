@@ -32,7 +32,7 @@ import {
 } from "./app-harness.ts";
 import { agentListJson, type FakeRunner } from "./fake-runner.ts";
 import { withholdPassiveFlushes } from "./passive-flush-hold.ts";
-import { plane } from "./seeded-plane.ts";
+import { plane } from "./plane.ts";
 
 /** The viewer answer the list stands on in these tests. */
 const VIEWER = {

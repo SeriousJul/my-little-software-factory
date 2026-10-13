@@ -16,13 +16,13 @@ import { join } from "node:path";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket, IssueReference } from "../src/domain/ticket.ts";
 import { withHeadBranch, withIssueReferences } from "../src/domain/ticket.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import { isCoveredByFixingPullRequest } from "../src/workflow.ts";
 import { awaitFrame, HEIGHT, rowsOf, WIDTH, withApp } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { DEFAULT_TICKET_TITLE, fetchSuccess, issueTicket } from "./fact-fixtures.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane } from "./seeded-plane.ts";
-import { issueTicket, success } from "./state-fixture.ts";
+import { plane, reopenState } from "./plane.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -122,10 +122,10 @@ function closingPullTicket(over: Partial<FetchedTicket> = {}): FetchedTicket {
 
 describe("the list rule", () => {
 	test("an open ticket with an open fixing pull request leaves the list, and the pull request stays", () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		state.sourceFact.initializeSources([issues, pulls]);
-		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
-		state.sourceFact.applyFetch(pulls, success([closingPullTicket()]));
+		state.sourceFact.applyFetch(issues, fetchSuccess([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(pulls, fetchSuccess([closingPullTicket()]));
 		// The projection before the list rule holds both; the list withholds
 		// the covered issue's row and keeps the pull request's.
 		const projected = state.ticketWorkCycle.projectedTickets([], "implement");
@@ -139,10 +139,10 @@ describe("the list rule", () => {
 	});
 
 	test("the rule holds for every source kind: a security item rests behind its branch-named pull request", () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		state.sourceFact.initializeSources([security, pulls]);
-		state.sourceFact.applyFetch(security, success([securityTicket()]));
-		state.sourceFact.applyFetch(pulls, success([securityPullTicket()]));
+		state.sourceFact.applyFetch(security, fetchSuccess([securityTicket()]));
+		state.sourceFact.applyFetch(pulls, fetchSuccess([securityPullTicket()]));
 		const projected = state.ticketWorkCycle.projectedTickets([], "implement");
 		const item = projected.find((ticket) => ticket.identity === securityIdentity);
 		if (item === undefined) throw new Error("the security item is missing from the projection");
@@ -153,12 +153,12 @@ describe("the list rule", () => {
 	});
 
 	test("a draft fixing pull request covers the ticket", () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		state.sourceFact.initializeSources([issues, pulls]);
-		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(issues, fetchSuccess([issueTicket(issueIdentity)]));
 		state.sourceFact.applyFetch(
 			pulls,
-			success([
+			fetchSuccess([
 				pullTicket(
 					pullIdentity,
 					7,
@@ -181,10 +181,10 @@ describe("the list rule", () => {
 		// the standing draft carries no label - the world's answer is an empty pull
 		// request list (test/stub-world.test.ts pins that read). So the ticket keeps
 		// its row, and its next Handoff reuses the branch and the draft.
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		state.sourceFact.initializeSources([issues, pulls]);
-		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
-		state.sourceFact.applyFetch(pulls, success([]));
+		state.sourceFact.applyFetch(issues, fetchSuccess([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(pulls, fetchSuccess([]));
 		const projected = state.ticketWorkCycle.projectedTickets([], "implement");
 		const item = projected.find((ticket) => ticket.identity === issueIdentity);
 		if (item === undefined) throw new Error("the ticket is missing from the projection");
@@ -198,12 +198,12 @@ describe("the list rule", () => {
 		// The boundary of the rule above: a draft enters the projection only through
 		// the policy's other query, the one that requires `needs-work`. Once the row
 		// stands in the projection, ADR 0042 rests the open ticket behind it.
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		state.sourceFact.initializeSources([issues, pulls]);
-		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(issues, fetchSuccess([issueTicket(issueIdentity)]));
 		state.sourceFact.applyFetch(
 			pulls,
-			success([
+			fetchSuccess([
 				pullTicket(
 					pullIdentity,
 					7,
@@ -222,10 +222,10 @@ describe("the list rule", () => {
 	});
 
 	test("an in-flight ticket stays listed whatever pull requests exist", () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		state.sourceFact.initializeSources([issues, pulls]);
-		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
-		state.sourceFact.applyFetch(pulls, success([closingPullTicket()]));
+		state.sourceFact.applyFetch(issues, fetchSuccess([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(pulls, fetchSuccess([closingPullTicket()]));
 		// The ticket leaves open behind: the rule suppresses only the open
 		// state, and the in-flight ticket stays reachable for its decision.
 		const claim = state.handoff.claimHandoff(
@@ -262,39 +262,42 @@ describe("the list rule", () => {
 	});
 
 	test("a ticket whose fixing pull request closed unmerged re-enters on the next refresh", () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		state.sourceFact.initializeSources([issues, pulls]);
-		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
-		state.sourceFact.applyFetch(pulls, success([closingPullTicket()]));
+		state.sourceFact.applyFetch(issues, fetchSuccess([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(pulls, fetchSuccess([closingPullTicket()]));
 		expect(
 			state.ticketWorkCycle.ticketListViews([], "implement").rows.map((ticket) => ticket.identity),
 		).toEqual([pullIdentity]);
 		// The next refresh lists the pull request closed and unmerged: it no
 		// longer fixes the ticket, and the ticket re-enters the list.
-		state.sourceFact.applyFetch(pulls, success([closingPullTicket({ sourceState: "closed" })]));
+		state.sourceFact.applyFetch(
+			pulls,
+			fetchSuccess([closingPullTicket({ sourceState: "closed" })]),
+		);
 		const reentered = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(reentered.map((ticket) => ticket.identity).sort()).toEqual([
 			issueIdentity,
 			pullIdentity,
 		]);
 		// The next refresh drops the pull request from the source the same way.
-		state.sourceFact.applyFetch(pulls, success([]));
+		state.sourceFact.applyFetch(pulls, fetchSuccess([]));
 		const back = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(back.map((ticket) => ticket.identity)).toEqual([issueIdentity]);
 		state.close();
 	});
 
 	test("the branch link holds across the repository identity casing an older plane stored", () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		state.sourceFact.initializeSources([security, pulls]);
-		state.sourceFact.applyFetch(security, success([securityTicket()]));
+		state.sourceFact.applyFetch(security, fetchSuccess([securityTicket()]));
 		// A plane that predates the canonical lowercase identity stored the
 		// pull request's repository with the API's owner casing. The link is
 		// on the same repository, and the repository identity is
 		// case-insensitive on GitHub, so the link still holds (ADR 0042).
 		state.sourceFact.applyFetch(
 			pulls,
-			success([
+			fetchSuccess([
 				securityPullTicket({
 					repository: {
 						identity: "github.com/Acme/Factory",
@@ -310,12 +313,12 @@ describe("the list rule", () => {
 	});
 
 	test("a pull request that fixes nothing covers nothing", () => {
-		const state = openFactoryState(statePath());
+		const state = reopenState(statePath());
 		state.sourceFact.initializeSources([issues, pulls]);
-		state.sourceFact.applyFetch(issues, success([issueTicket(issueIdentity)]));
+		state.sourceFact.applyFetch(issues, fetchSuccess([issueTicket(issueIdentity)]));
 		state.sourceFact.applyFetch(
 			pulls,
-			success([
+			fetchSuccess([
 				pullTicket(
 					pullIdentity,
 					7,
@@ -367,8 +370,8 @@ describe("the section header counts", () => {
 		await withApp(
 			async (setup) => {
 				const [issuesSource, pullsSource] = setup.plane.sources as readonly FakeSource[];
-				issuesSource.settle(success([issueTicket(issueIdentity)]));
-				pullsSource.settle(success([closingPullTicket({ title: "Persist source facts" })]));
+				issuesSource.settle(fetchSuccess([issueTicket(issueIdentity)]));
+				pullsSource.settle(fetchSuccess([closingPullTicket({ title: DEFAULT_TICKET_TITLE })]));
 				const frame = await awaitFrame(
 					setup,
 					// The list row truncates the title: match on its lead.

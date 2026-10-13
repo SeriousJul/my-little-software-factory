@@ -21,7 +21,7 @@ import { type FetchedTicket, withIssueReferences } from "../src/domain/ticket.ts
 import { agentNameFor, cycleAgentName } from "../src/naming.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import {
@@ -52,6 +52,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { DEFAULT_TICKET_TITLE, fetchedTicket } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -62,8 +63,8 @@ import {
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner as gateOnRunner } from "./gated-runner.ts";
+import { type Plane, plane, reopenState } from "./plane.ts";
 import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
-import { plane, type SeededPlane } from "./seeded-plane.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -98,8 +99,8 @@ const pullsSource: TicketSourceConfig = {
  * The herdr names the naming rule gives the fixture Ticket (ADR 0098): its
  * stable name, and the name of its second work cycle.
  */
-const AGENT = agentNameFor({ identity, title: "Persist source facts" });
-const CYCLE2 = cycleAgentName({ identity, title: "Persist source facts" }, 2);
+const AGENT = agentNameFor({ identity, title: DEFAULT_TICKET_TITLE });
+const CYCLE2 = cycleAgentName({ identity, title: DEFAULT_TICKET_TITLE }, 2);
 /** The herdr name the naming rule gives the second fixture Ticket. */
 const SECOND_AGENT = agentNameFor({ identity: secondIdentity, title: "Watch agent turns" });
 /**
@@ -135,26 +136,14 @@ const WIDE_STATUS = 240;
 /** A fetched ticket of the issues source; the index is the issue number. */
 function fetched(
 	index = 5,
-	title = "Persist source facts",
+	title = DEFAULT_TICKET_TITLE,
 	labels: readonly string[] = ["ready-for-agent"],
 ): FetchedTicket {
-	return {
+	return fetchedTicket({
 		identity: `github:github.com:I_${index}`,
-		sourceKind: "github-issue",
-		externalKey: `#${index}`,
-		sourceState: "open",
-		url: `https://github.com/acme/factory/issues/${index}`,
 		title,
-		description: "Keep state independent from GitHub.",
 		labels: [...labels],
-		externalUpdatedAt: "2026-08-31T10:00:00Z",
-		repository: {
-			identity: repoIdentity,
-			displayName: "acme/factory",
-			cloneUrl: "https://github.com/acme/factory.git",
-		},
-		attributes: {},
-	};
+	});
 }
 
 /** The commands that change herdr's or git's state: every read is dropped. */
@@ -184,7 +173,7 @@ const success: FetchOutcome = {
 const pairSuccess: FetchOutcome = {
 	status: "success",
 	fetchedAt: "2026-08-31T10:01:00Z",
-	tickets: [fetched(5, "Persist source facts"), fetched(6, "Watch agent turns")],
+	tickets: [fetched(5, DEFAULT_TICKET_TITLE), fetched(6, "Watch agent turns")],
 };
 
 /** A checkout directory the config maps the ticket's repository to. */
@@ -288,10 +277,7 @@ function seed(
 ): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));
 	paths.push(dir);
-	const state = openFactoryState(join(dir, "state.sqlite"), detail.stateNow);
-	// The frames assert the unsplit list: a fresh file opens grouped by
-	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.grouping.setGroupingAxis("tickets", "none");
+	const state = reopenState(join(dir, "state.sqlite"), detail.stateNow);
 	state.sourceFact.initializeSources([source]);
 	state.sourceFact.applyFetch(source, outcome);
 	if (shape !== "open") seedStoredHandoff(state, shape, environment, detail);
@@ -417,13 +403,14 @@ function seededApp(
  * stands beside it, and the config the plane writes carries the fixture's
  * source configs in place of the fixture's empty default.
  */
-async function planeOf(app: SeededApp, runner?: CommandRunner): Promise<SeededPlane> {
+async function planeOf(app: SeededApp, runner?: CommandRunner): Promise<Plane> {
 	return plane({
 		config: {
 			...app.config,
 			sources: app.pullSrc === undefined ? [issuesSource] : [issuesSource, pullsSource],
 		},
 		existing: app.state,
+		groupingAxis: "none",
 		runner: () => runner ?? app.runner,
 		prepare: async () => ({
 			boundSources: app.pullSrc === undefined ? [app.src] : [app.src, app.pullSrc],
@@ -447,7 +434,7 @@ async function bootedApp(
 		detail?: SeedDetail;
 		pullOutcome?: FetchOutcome;
 	} = {},
-): Promise<{ app: SeededApp; planeRecord: SeededPlane }> {
+): Promise<{ app: SeededApp; planeRecord: Plane }> {
 	const app = seededApp(shape, fields);
 	if (!app.runner.hasStub("herdr", ["agent", "list"])) {
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -548,7 +535,7 @@ async function pressEscape(
  * marker and the title's leading cells, with the full-title row (the detail
  * pane, the modal's title) as the fallback a modal frame offers.
  */
-function ticketRow(frame: string, title = "Persist source facts"): string {
+function ticketRow(frame: string, title = DEFAULT_TICKET_TITLE): string {
 	const rows = rowsOf(frame);
 	const row =
 		rows.find((line) => line.includes("❯") && line.includes(title.slice(0, 3))) ??
@@ -601,7 +588,7 @@ describe("the mode cell and the a key", () => {
 		planeRecord.close();
 
 		// The next run reads the mode back off the same file, not off the config.
-		const reopened = openFactoryState(statePath);
+		const reopened = reopenState(statePath);
 		expect(reopened.handoff.autoHandoffMode()).toBe(true);
 		const src = new FakeSource("issues", "github-issues", success);
 		const restarted = await plane({
@@ -1024,7 +1011,9 @@ describe("the failure markers", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("blocked"), "the blocked badge");
 				// Enter on the blocked ticket opens the Live view: the Goto is
 				// one confirm away, and nothing focuses before it.
-				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await pressReturn(setup, "the Live view", (f) =>
+					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent focus");
 				// The stream shows the pane output under the ticket's context,
 				// and the blocked status stands on the context line.
@@ -1153,7 +1142,7 @@ describe("the Ticket Close key", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				const before = app.runner.commands();
 				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				const body = frameText(opened);
 				// The first line names who is alive - here, the fact the last
@@ -1175,7 +1164,7 @@ describe("the Ticket Close key", () => {
 				const cancelled = await pressEscape(
 					setup,
 					"the base view",
-					(f) => !f.includes("Close: Persist source facts"),
+					(f) => !f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				await settle(setup);
 				// Cancel is the way out with nothing changed: the ticket, its
@@ -1214,7 +1203,7 @@ describe("the Ticket Close key", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				await focusDetail(setup);
 				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				expect(frameText(opened)).toContain(
 					"Close removes the worktree checkout; a dirty checkout stays as a leftover.",
@@ -1239,7 +1228,7 @@ describe("the Ticket Close key", () => {
 				// with no Agent to stop, and the close is the way out of it.
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				const body = frameText(opened);
 				expect(body).toContain(
@@ -1383,7 +1372,7 @@ describe("the Ticket Close key", () => {
 				// with no Agent to stop, and the close is the way out of it.
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				const frame = await confirmPanel(setup, "the close", (f) =>
 					ticketRow(f).includes("[open]"),
@@ -1430,7 +1419,7 @@ describe("the Ticket Close key", () => {
 				// with no Agent to stop, and the close is the way out of it.
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				// The dialog warned about this outcome before the answer was given.
 				expect(frameText(setup.captureCharFrame())).toContain(
@@ -1493,7 +1482,7 @@ describe("the Ticket Close key", () => {
 					"the in-flight ticket",
 				);
 				await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				// The Agent dies while the dialog stands. Auto mode ends the missing
 				// cycle at the handoff limit, so the ticket returns to open under it.
@@ -1501,7 +1490,7 @@ describe("the Ticket Close key", () => {
 				const released = await awaitFrame(
 					setup,
 					(f) =>
-						!frameText(f).includes("Close: Persist source facts") &&
+						!frameText(f).includes(`Close: ${DEFAULT_TICKET_TITLE}`) &&
 						ticketRow(f).includes("[open]"),
 					"the panel to let go when its cycle ends",
 				);
@@ -1510,7 +1499,7 @@ describe("the Ticket Close key", () => {
 				const refused = await press(setup, "delete", "the refusal on the open ticket", (f) =>
 					messageRowOf(f).includes("no work is in flight to close"),
 				);
-				expect(frameText(refused)).not.toContain("Close: Persist source facts");
+				expect(frameText(refused)).not.toContain(`Close: ${DEFAULT_TICKET_TITLE}`);
 				expect(frameText(released)).toContain("[open]");
 			},
 			{
@@ -1534,7 +1523,7 @@ describe("the Ticket Close key", () => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
 				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				expect(frameText(opened)).toContain("The turn has settled, and no Agent works.");
 				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");
@@ -1711,7 +1700,7 @@ describe("the decision modal", () => {
 		const landed: FetchOutcome = {
 			status: "success",
 			fetchedAt: "2026-08-31T10:01:00Z",
-			tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+			tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-review"])],
 		};
 		const app = seededApp("awaiting", {
 			extra: { maxHandoffsPerTicket: 1 },
@@ -1745,7 +1734,7 @@ describe("the decision modal", () => {
 		const landed: FetchOutcome = {
 			status: "success",
 			fetchedAt: "2026-08-31T10:01:00Z",
-			tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+			tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-review"])],
 		};
 		const app = seededApp("awaiting", {
 			extra: {},
@@ -2802,7 +2791,7 @@ describe("the decision modal", () => {
 				const modal = frameText(await settle(setup));
 				// The border names the ticket, and the context line names the
 				// repository, the task type, the agent, and the completion time.
-				expect(modal).toContain("Decision: Persist source facts");
+				expect(modal).toContain(`Decision: ${DEFAULT_TICKET_TITLE}`);
 				expect(modal).toContain("acme/factory · implement · pi · 2026-08-31 11:00");
 				// The log renders in order: the opening text, the tool notes,
 				// and the markdown-dressed conclusion. The heading's hash and
@@ -3076,7 +3065,7 @@ describe("the leftover environment", () => {
 				// The refusal is readable on the Message line, in the catalogue's
 				// own words, and no panel opened under it.
 				expect(messageRowOf(frame)).toContain("no work is in flight to close");
-				expect(frame).not.toContain("Close: Persist source facts");
+				expect(frame).not.toContain(`Close: ${DEFAULT_TICKET_TITLE}`);
 				// No panel and no reopened decision, and no herdr command ran:
 				// the refusal's fact sends its own desktop notification (ADR 0080),
 				// and the command list before and after holds everything else.
@@ -4050,7 +4039,7 @@ describe("the auto decision", () => {
 				app.src.settle({
 					status: "success",
 					fetchedAt: "2026-08-31T10:02:00Z",
-					tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+					tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-review"])],
 				});
 				// No operator key: the loop routed the settled turn, and the
 				// trace carries the automatic decision. The predicate waits for
@@ -4137,7 +4126,7 @@ describe("the auto decision", () => {
 				app.src.settle({
 					status: "success",
 					fetchedAt: "2026-08-31T10:02:00Z",
-					tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+					tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-review"])],
 				});
 				// Wait for the start command as well as the frame: under load the
 				// route's frame can be captured before the runner records the start,
@@ -4192,7 +4181,7 @@ describe("the auto decision", () => {
 				app.src.settle({
 					status: "success",
 					fetchedAt: "2026-08-31T10:02:00Z",
-					tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+					tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-review"])],
 				});
 				// The loud reason reaches the status line as the drop warning, and
 				// it names the ticket the route was for.
@@ -4487,7 +4476,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				// re-derives where the machine offers it next - open, and ready
 				// to be offered for implementation.
 				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes("Close: Persist source facts"),
+					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
 				);
 				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");
 				await confirmPanel(setup, "the close", (f) => ticketRow(f).includes("[open]"));
@@ -4609,7 +4598,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 		const bugOutcome: FetchOutcome = {
 			status: "success",
 			fetchedAt: "2026-08-31T10:01:00Z",
-			tickets: [fetched(5, "Persist source facts", ["bug"])],
+			tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["bug"])],
 		};
 		const pullFetched = (labels: string[] = []): FetchedTicket => ({
 			identity: pullIdentity,
@@ -4617,7 +4606,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 			externalKey: "#12",
 			sourceState: "open",
 			url: "https://github.com/acme/factory/pulls/12",
-			title: "Diagnose Persist source facts",
+			title: `Diagnose ${DEFAULT_TICKET_TITLE}`,
 			description: "The diagnosis of #5.",
 			labels,
 			externalUpdatedAt: "2026-08-31T10:30:00Z",
@@ -4722,7 +4711,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 	const specSuccess: FetchOutcome = {
 		status: "success",
 		fetchedAt: "2026-08-31T10:00:00Z",
-		tickets: [fetched(5, "Persist source facts", ["ready-for-spec"])],
+		tickets: [fetched(5, DEFAULT_TICKET_TITLE, ["ready-for-spec"])],
 	};
 
 	/** Stub the live-worktree handoff's sequence at the convention checkout. */
@@ -4922,16 +4911,13 @@ describe("the handoff queue", () => {
 			status: "success",
 			fetchedAt: "2026-08-31T10:01:00Z",
 			tickets: [
-				fetched(5, "Persist source facts"),
+				fetched(5, DEFAULT_TICKET_TITLE),
 				{ ...fetched(6, "Watch agent turns"), externalUpdatedAt: "2026-08-31T10:05:00Z" },
 			],
 		};
 		// Pinned past the startup grace: the seeded handoff is a dead Agent,
 		// not a booting one, so its missing badge stands on the first poll.
-		const state = openFactoryState(join(dir, "state.sqlite"), () => Date.now() - 600_000);
-		// The test reads the list unsplit: a fresh file opens grouped by
-		// repository (ADR 0066), so the fixture holds the flat axis.
-		state.grouping.setGroupingAxis("tickets", "none");
+		const state = reopenState(join(dir, "state.sqlite"), () => Date.now() - 600_000);
 		state.sourceFact.initializeSources([source]);
 		state.sourceFact.applyFetch(source, pairMoved);
 		// The second ticket starts in flight, with the stored herdr handles.
@@ -4999,6 +4985,7 @@ describe("the handoff queue", () => {
 		const planeRecord = await plane({
 			config: { ...config, sources: [issuesSource] },
 			existing: state,
+			groupingAxis: "none",
 			runner: () => gate.runner,
 			prepare: async () => ({ boundSources: [src] }),
 		});
@@ -5061,7 +5048,7 @@ describe("the handoff queue", () => {
 				// read on the queue's own row: the handoff's item keeps the queue
 				// holding one row, and the selection clamps onto it.
 				await pressQuietFor("delete", "the item removed", (f) =>
-					queueRowLeads(f, "Persist source facts"),
+					queueRowLeads(f, DEFAULT_TICKET_TITLE),
 				);
 				// Back to the Ticket list: up crosses the empty Consultation
 				// section to the last Ticket, and one more step lands the

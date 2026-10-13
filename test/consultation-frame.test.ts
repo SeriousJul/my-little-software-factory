@@ -13,7 +13,7 @@
  * real repository. Random launch identities are canonicalized by
  * ConsultationRunner so the command sequence stays pinnable.
  */
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,6 +59,7 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
+import { fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
 import {
 	type FakeRunner,
 	herdrFocusCommands,
@@ -69,8 +70,7 @@ import {
 	worktreeCreateJson,
 } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane, ticketOf } from "./seeded-plane.ts";
-import { cleanupStateFixtures, freshState, issueTicket, success } from "./state-fixture.ts";
+import { plane, wrappedState } from "./plane.ts";
 
 /** The canonical ids ConsultationRunner rewrites random launch ids to. */
 const AGENT = "consultation-00000000";
@@ -149,9 +149,6 @@ async function closeConsultationStep(
 	await confirmPanel(setup, `the close status for ${id8}`, (f) => f.includes(`${id8} closed`));
 	return id8;
 }
-afterEach(() => {
-	cleanupStateFixtures();
-});
 const repository = {
 	identity: "github.com/acme/factory",
 	displayName: "acme/factory",
@@ -513,7 +510,7 @@ async function consultationBoot(
 		runner?: (fake: FakeRunner) => ConsultationRunner;
 	} = {},
 ): Promise<{ state: FactoryState; planeRecord: Awaited<ReturnType<typeof plane>> }> {
-	const { state = freshState(), config = {}, commands, runner } = options;
+	const { state = wrappedState(), config = {}, commands, runner } = options;
 	const planeRecord = await plane({
 		existing: state,
 		sources: [],
@@ -583,7 +580,7 @@ async function pressF12(
 describe("Consultation launch and monitoring through the UI", () => {
 	test("the launcher resolves an unmapped selected Ticket Repository before the pinned launch sequence", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const planeRecord = await plane({
 			existing: state,
 			sources: [
@@ -648,7 +645,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 	});
 	test("the observation loop settles a restarted working Consultation", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -705,7 +702,7 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 	// Consultation settles to awaiting-response it drops its seat, and the
 	// line holds the ticket's seat alone.
 	let runner: ConsultationRunner;
-	const state = freshState();
+	const state = wrappedState();
 	const ticketSource = { name: "tickets", kind: "github-issues" as const };
 	const ticketOutcome = {
 		status: "success" as const,
@@ -846,7 +843,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 	});
 	test("recovery re-checks the stored settings before it resumes the Agent", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		// The interrupted launch recorded its Agent pane and the count its type
 		// named, and never reached a settled state. Herdr reports no Agent, so the
 		// stored count is the one thing that can refuse this recovery: pi maps no
@@ -1113,7 +1110,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 	});
 	test("the recovery panel's Close retires a failed record without a dialog", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const short = FAILED_ID.slice(0, 8);
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -1305,7 +1302,7 @@ describe("Consultation responses through the UI", () => {
 	});
 	test("the settled Agent output stays visible until an accepted response opens the next turn", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${RESPONSE_ID.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -1370,7 +1367,7 @@ describe("Consultation responses through the UI", () => {
 describe("Agent interaction through the UI", () => {
 	test("interaction renders pane ANSI safely and serializes Unicode input", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -1434,7 +1431,7 @@ describe("Agent interaction through the UI", () => {
 describe("Consultation close and cleanup through the UI", () => {
 	test("close takes down only what is exclusively owned, and keeps every worktree", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const a = CLOSE_A_ID.slice(0, 8);
 		const b = CLOSE_B_ID.slice(0, 8);
 		const c = CLOSE_C_ID.slice(0, 8);
@@ -1522,7 +1519,7 @@ describe("Consultation close and cleanup through the UI", () => {
 	});
 	test("a failed cleanup recovers through the force-close panel", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const short = FORCE_ID.slice(0, 8);
 		// The close verifies the Agent's identity before it takes the workspace
 		// down, so the list holds the record's Agent at its recorded pane.
@@ -1604,7 +1601,7 @@ describe("Consultation close and cleanup through the UI", () => {
 	});
 	test("a missing or a failed Consultation closes directly, without a dialog", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		// Neither record holds an Agent, so the close has nothing to confirm.
 		const missing8 = MISSING_DIRECT_ID.slice(0, 8);
 		const failed8 = FAILED_DIRECT_ID.slice(0, 8);
@@ -1700,7 +1697,7 @@ describe("Consultation close and cleanup through the UI", () => {
 	});
 	test("the close confirmation lets go of the keys when the Agent dies first", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const gone8 = CONFIRM_GONE_ID.slice(0, 8);
 		// The Agent is alive at first: the observation loop matches its pane,
 		// so the Consultation stays working until the list loses it.
@@ -1858,7 +1855,7 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 describe("Consultation attention through the UI", () => {
 	test("a newly settled turn rings once, and the startup reconciliation never rings", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
 		// The startup cycle finds the Agent still working: nothing settles.
 		const bells = countBells();
@@ -1927,7 +1924,7 @@ describe("Consultation attention through the UI", () => {
 	});
 	test("a settle found by the startup reconciliation rings no bell", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
 		// The startup cycle finds the Agent already settled.
 		const bells = countBells();
@@ -1979,7 +1976,7 @@ describe("Consultation attention through the UI", () => {
 	});
 	test("the cross takes the first Consultation row, and awaiting response wins", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		// Creation order is future-dated so the wall-clock stamps of the state
 		// transitions (now) stay older than every seeded created_at.
 		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
@@ -2038,7 +2035,7 @@ describe("Consultation attention through the UI", () => {
 	});
 	test("a Consultation that needs the operator adds no row to the compact frame", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${AWAITING_ID.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -2124,7 +2121,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 	});
 	test("a Consultation type's context window rides on its agent start", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const planeRecord = await plane({
 			existing: state,
 			sources: [],
@@ -2245,7 +2242,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 	 */
 	test("every live checkout conflict is named whatever the List filter draws", async () => {
 		let runner!: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		// Two Tickets work in this exact checkout: the judged-out one and the one
 		// the operator left in the list. Both Agents are live; neither row's place
 		// in the filter decides whether the safety read names it.
@@ -2254,7 +2251,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch(
 			{ name: "issues", kind: "github-issues" },
-			success([
+			fetchSuccess([
 				issueTicket(ignoredTicket, { title: "Watch agent turns" }),
 				issueTicket(listedTicket, { title: "Rank tickets by priority", externalKey: "#7" }),
 			]),
@@ -2385,7 +2382,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 	 */
 	test("the repository catalog holds every Ticket's repository across a filter cycle", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		// Two repositories the config does not name, so the catalog can only learn
 		// them from a Ticket's own row: one on a judged-out Ticket with live work,
 		// one on a settled Ticket the pile leaves out.
@@ -2394,7 +2391,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.sourceFact.applyFetch(
 			{ name: "issues", kind: "github-issues" },
-			success([
+			fetchSuccess([
 				issueTicket(judged, {
 					title: "Watch agent turns",
 					repository: {
@@ -2607,7 +2604,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 	 */
 	test("an unfit Model refuses the submit before the record or any external step", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const planeRecord = await plane({
 			existing: state,
 			sources: [],
@@ -2712,7 +2709,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 	});
 	test("a live-worktree close confirms and names the checkout that stays", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		// The live Consultation works in the operator's own checkout, so the
 		// confirmation names the checkout as the resource the close keeps,
 		// not the worktree and branch a worktree Consultation keeps.
@@ -2769,7 +2766,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 describe("Consultation response gating by observed Agent status", () => {
 	test("a blocked Agent takes Enter into interaction, with the exit key shown first", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -2833,7 +2830,7 @@ describe("Consultation response gating by observed Agent status", () => {
 	});
 	test("an unblocked Agent keeps the response editor after a blocked turn", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		// The last settled turn was blocked, but the Agent itself is idle now.
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
@@ -2889,7 +2886,7 @@ describe("Consultation response gating by observed Agent status", () => {
 	});
 	test("a forwarded input re-reads the pane before the next refresh tick", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -2961,7 +2958,7 @@ const interactionExitCases = [
 for (const exitCase of interactionExitCases) {
 	test(`the configured ${exitCase.name} exits Agent interaction end to end`, async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
 		const planeRecord = await plane({
 			existing: state,
@@ -3014,7 +3011,7 @@ for (const exitCase of interactionExitCases) {
 describe("The full Consultation operator flow", () => {
 	test("launch, settle, respond, blocked interaction, settle, close, and inspect the history", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const bells = countBells();
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -3149,7 +3146,7 @@ describe("The full Consultation operator flow", () => {
 	});
 	test("a launch stays on the launched Consultation, not on older attention", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		// An older Consultation already needs the operator. The launch must
 		// not jump the view onto it: the operator is watching the one it
 		// just created.
@@ -3202,7 +3199,7 @@ describe("The full Consultation operator flow", () => {
 		}
 	});
 	test("a settling refresh cannot clear the Consultation's progress line", async () => {
-		const state = freshState();
+		const state = wrappedState();
 		const sourceConfig = {
 			name: "tickets",
 			kind: "github-issues" as const,
@@ -3319,7 +3316,7 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 	}
 	test("the working detail shows the record's rows, and g focuses the pane without touching the Consultation", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
 		const { dir, path } = seedRecord(WORKING_ID);
 		const { planeRecord } = await consultationBoot({
@@ -3378,7 +3375,7 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 	});
 	test("g names the workspace in the focus confirmation so the operator can switch herdr's view", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const short = WORKING_ID.slice(0, 8);
 		const paneId = `pane-${short}`;
 		const workspaceId = `ws-${short}`;
@@ -3433,7 +3430,7 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 	});
 	test("a closed Consultation shows its record for the after-the-fact review, and g loses its pane when the poll drops it", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const closedId = uid("9");
 		const paneId = `pane-${closedId.slice(0, 8)}`;
 		const { dir, path } = seedRecord(closedId);
@@ -3503,7 +3500,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	const seatId = uid("1");
 	test("a launch at the full cap queues the Consultation in the Work queue", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${seatId.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -3674,7 +3671,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	 */
 	test("the queue pause holds a Consultation's item with a free seat, and the submit says why", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		// No seeded Consultation: nothing holds the one seat.
 		state.workQueue.setQueuePaused(true);
 		const { planeRecord } = await consultationBoot({
@@ -3736,7 +3733,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	});
 	test("the Delete key takes a queued Consultation's item out of the queue, and the record stays", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const paneId = `pane-${seatId.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -3804,7 +3801,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	});
 	test("the pickup at a freed seat starts the queued Consultation", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -3887,7 +3884,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	});
 	test("Enter on the queue item force-dispatches the Consultation over the cap", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -4127,7 +4124,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	});
 	test("the Consultation section starts the unscheduled record now, over the cap", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,
@@ -4181,7 +4178,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	});
 	test("the Consultation section starts the unscheduled record now, under the cap", async () => {
 		let runner: ConsultationRunner;
-		const state = freshState();
+		const state = wrappedState();
 		const seatPane = `pane-${seatId.slice(0, 8)}`;
 		const { planeRecord } = await consultationBoot({
 			state,

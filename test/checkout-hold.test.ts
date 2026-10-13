@@ -39,6 +39,7 @@ import { planeActionCheckoutWord } from "../src/plane-action-registry.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { DEFAULT_TICKET_TITLE } from "./fact-fixtures.ts";
 import { FakeRunner } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
 import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
@@ -74,7 +75,7 @@ const issuesBSource = { name: "issues-b", kind: "github-issues" } as const;
 const ISSUE = {
 	identity: "github:github.com:I_5",
 	externalKey: "#5",
-	title: "Add a webhook retry policy",
+	title: DEFAULT_TICKET_TITLE,
 	repository: FACTORY,
 };
 const OTHER = {

@@ -11,7 +11,7 @@
  * sees a key.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
@@ -42,21 +42,10 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane, ticketOf } from "./seeded-plane.ts";
-import {
-	cleanupStateFixtures,
-	freshState,
-	issuesConfig,
-	issuesSourceConfig,
-	issueTicket,
-	success,
-} from "./state-fixture.ts";
-
-afterEach(() => {
-	cleanupStateFixtures();
-});
+import { issuesConfig, issuesSourceConfig, plane, wrappedState } from "./plane.ts";
 
 /** Stub the git answers for a healthy convention checkout under the home. */
 function stubCheckout(runner: FakeRunner, home: string): void {
@@ -248,13 +237,13 @@ describe("the in-app Key guide", () => {
 		{
 			// The recorded pane is a dead Agent, not a booting one: the clock
 			// sits past the startup grace, so the row reads missing at once.
-			const state = freshState("none", () => Date.now() - 60_000);
+			const state = wrappedState("none", () => Date.now() - 60_000);
 			try {
 				const missingRunner = new FakeRunner();
 				missingRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 				const sourceDef = { name: "issues", kind: "github-issues" };
 				state.sourceFact.initializeSources([sourceDef]);
-				state.sourceFact.applyFetch(sourceDef, success([issueTicket()]));
+				state.sourceFact.applyFetch(sourceDef, fetchSuccess([issueTicket()]));
 				const claim = state.handoff.claimHandoff(
 					"github:github.com:I_5",
 					{
@@ -277,13 +266,13 @@ describe("the in-app Key guide", () => {
 					existing: state,
 					sources: [{ config: issuesSourceConfig, tickets: [ticketOf(issueTicket())] }],
 					config: issuesConfig,
-					applyFetch: false,
+					settledReads: false,
 					runner: () => missingRunner,
 				});
 
 				await withApp(
 					async (setup) => {
-						(planeRecord.sources[0] as FakeSource).settle(success([issueTicket()]));
+						(planeRecord.sources[0] as FakeSource).settle(fetchSuccess([issueTicket()]));
 						await awaitFrame(
 							setup,
 							(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
@@ -329,7 +318,7 @@ describe("the in-app Key guide", () => {
 	// verification record: the catalogue dispatch and the guide's per-section
 	// key names, measured (ADR 0034).
 	test("names the Work queue modes, and keeps each section's keys in its own guide", async () => {
-		const state = freshState();
+		const state = wrappedState();
 		try {
 			// One waiting start: the guide reads the queue cursor through it.
 			const enqueued = state.workQueue.enqueueWork({
@@ -355,12 +344,12 @@ describe("the in-app Key guide", () => {
 				existing: state,
 				sources: [{ config: issuesSourceConfig, tickets: [] }],
 				config: zeroSeatConfig,
-				applyFetch: false,
+				settledReads: false,
 				runner: () => runner,
 			});
 			await withApp(
 				async (setup) => {
-					(planeRecord.sources[0] as FakeSource).settle(success(tickets));
+					(planeRecord.sources[0] as FakeSource).settle(fetchSuccess(tickets));
 					// The Work header stands with its count; it starts expanded (ADR 0049).
 					// Wait for the source's title to reach the queue row as well: the
 					// row holds the raw ticket identity until the first source poll.
@@ -1000,13 +989,13 @@ describe("the in-app Key guide", () => {
 	});
 
 	test("updates availability live while open", async () => {
-		const state = freshState();
+		const state = wrappedState();
 		try {
 			const planeRecord = await plane({
 				existing: state,
 				sources: [{ config: issuesSourceConfig, tickets: [] }],
 				config: issuesConfig,
-				applyFetch: false,
+				settledReads: false,
 			});
 			await withApp(
 				async (setup) => {
@@ -1029,7 +1018,7 @@ describe("the in-app Key guide", () => {
 
 					// The fetch settles while the guide is open: the reason
 					// leaves and the key takes the focus color, live.
-					(planeRecord.sources[0] as FakeSource).settle(success([issueTicket()]));
+					(planeRecord.sources[0] as FakeSource).settle(fetchSuccess([issueTicket()]));
 					await awaitFrame(
 						setup,
 						(f) =>

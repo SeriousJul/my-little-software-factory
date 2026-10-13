@@ -11,7 +11,7 @@
  * severity chip. Progress lines never enter the record.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { padToWidth, truncateToWidth, widthOf } from "../src/components/text.ts";
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
@@ -41,28 +41,28 @@ import {
 } from "./app-harness.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
 import {
+	fetchRateLimited,
+	fetchSuccess,
+	issueTicket,
+	SAMPLE_TICKETS,
+	ticketOf,
+} from "./fact-fixtures.ts";
+import {
 	agentListJson,
 	FakeRunner,
 	workspaceCreateJson,
 	workspaceListJson,
 } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
-import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
+
 import {
 	callsReached,
-	cleanupStateFixtures,
-	freshState,
 	issuesSourceConfig,
-	issueTicket,
-	RATE_LIMITED,
+	type Plane,
+	plane,
 	seedAwaitingTurn,
-	success,
-} from "./state-fixture.ts";
-
-afterEach(() => {
-	cleanupStateFixtures();
-});
+	wrappedState,
+} from "./plane.ts";
 
 /** Stub the git answers for a checkout directory of one repository. */
 function stubCheckoutInto(runner: FakeRunner, path: string, repository: string): void {
@@ -123,7 +123,7 @@ async function faultPlane(
 		config?: Partial<FactoryConfig>;
 		commands?: (fake: FakeRunner, home: string) => void;
 	} = {},
-): Promise<SeededPlane> {
+): Promise<Plane> {
 	return plane({
 		groupingAxis: "none",
 		sources: [{ config: faultSourceConfig, tickets: [ticketOf(faultTicket)] }],
@@ -267,7 +267,7 @@ describe("the permanent Message line", () => {
 		// A refused refresh warns on the line. A source app needs state to
 		// own the refresh coordinator at all.
 		const refusedPlane = await plane({
-			existing: freshState(),
+			existing: wrappedState(),
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
 		});
 		await withApp(
@@ -292,13 +292,13 @@ describe("the permanent Message line", () => {
 
 		// Working.
 		const workingPlane = await plane({
-			existing: freshState(),
+			existing: wrappedState(),
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
 		});
 		const source = workingPlane.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
 				// A manual refresh shows its working, and settles back to clear.
 				await press(setup, "r", "the working", (f) =>
@@ -308,7 +308,7 @@ describe("the permanent Message line", () => {
 				const row = rowsOf(frame).length - 2;
 				expect(messageRowOf(frame).trim()).toBe("Working: refreshing 1 sources");
 				expect(spanColorAt(setup, row, "Working:")).toEqual(rgb(roleColor("blue")));
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the working to clear");
 			},
 			{
@@ -334,7 +334,7 @@ describe("the permanent Message line", () => {
 		const errorSource = errorPlane.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				errorSource.settle(success([issueTicket()]));
+				errorSource.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(setup, (f) => f.includes("missing"), "the in-flight ticket");
 				await press(setup, "delete", "the Close confirmation", (f) =>
 					f.includes("Close: Add a webhook retry policy"),
@@ -369,7 +369,7 @@ describe("the permanent Message line", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				source.settle(success([faultTicket]));
+				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				await press(setup, "return", "the working", (f) =>
 					messageRowOf(f).startsWith("Working: handing off"),
@@ -398,18 +398,18 @@ describe("the permanent Message line", () => {
 
 	test("lets a manual refresh cover a stale source, and the warning return", async () => {
 		const planeRecord = await plane({
-			existing: freshState(),
+			existing: wrappedState(),
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
 				// A failed refresh leaves the source stale: the line warns.
 				setup.mockInput.pressKey("r");
 				await callsReached(source, 2);
-				source.settle(RATE_LIMITED);
+				source.settle(fetchRateLimited);
 				await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
@@ -420,7 +420,7 @@ describe("the permanent Message line", () => {
 					messageRowOf(f).includes("refreshing 1 sources"),
 				);
 				await callsReached(source, 3);
-				source.settle(RATE_LIMITED);
+				source.settle(fetchRateLimited);
 				await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
@@ -440,7 +440,7 @@ describe("the permanent Message line", () => {
 	 */
 	test("surfaces a source refresh's absorbed failure as one warning on the line", async () => {
 		const planeRecord = await plane({
-			existing: freshState(),
+			existing: wrappedState(),
 			sources: [
 				{
 					config: {
@@ -458,7 +458,7 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				// The first refresh settles cleanly.
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
 				// The next refresh absorbs one feed's failure: the source still
 				// succeeds, and its one warning line surfaces on the line.
@@ -477,7 +477,7 @@ describe("the permanent Message line", () => {
 					"the warning",
 				);
 				expect(messageRowOf(frame).trim()).toBe(`Warning: ${disabled}`);
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "production" } },
 		);
@@ -492,7 +492,7 @@ describe("the permanent Message line", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				source.settle(success([faultTicket]));
+				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				// The in-flight handoff's working.
 				await press(setup, "return", "the handoff working", (f) =>
@@ -514,7 +514,7 @@ describe("the permanent Message line", () => {
 					messageRowOf(f).includes("refreshing 1 sources"),
 				);
 				await callsReached(source, 2);
-				source.settle(RATE_LIMITED);
+				source.settle(fetchRateLimited);
 				// The refresh working cleared: the stale source's warning returns.
 				await awaitFrame(
 					setup,
@@ -534,7 +534,7 @@ describe("the permanent Message line", () => {
 				});
 				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe("Working: refreshing 1 sources");
 				await callsReached(source, 3);
-				source.settle(RATE_LIMITED);
+				source.settle(fetchRateLimited);
 				// The progress clears with the refresh: the refusal returns,
 				// and it outranks the source-health warning (story 52).
 				await awaitFrame(
@@ -553,10 +553,10 @@ describe("the permanent Message line", () => {
 	});
 
 	test("leaves an in-flight refresh's progress to the refresh that owns it", async () => {
-		const state = freshState();
+		const state = wrappedState();
 		// The fixture Ticket ends its turn and awaits its decision, with the
 		// herdr handles the decision's actions read from stored against it.
-		seedAwaitingTurn(state, success([issueTicket()]));
+		seedAwaitingTurn(state, fetchSuccess([issueTicket()]));
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		// The cycle-end draft close reads the branch's open pull requests:
@@ -584,7 +584,7 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				// The boot fetch has to land before the test asks for its own.
 				await callsReached(source, 1);
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(setup, (f) => f.includes("[awaiting]"), "the awaiting ticket");
 				await settle(setup);
 				// A manual refresh is in flight, and its progress owns the line.
@@ -597,7 +597,7 @@ describe("the permanent Message line", () => {
 				await press(setup, "return", "the Close to run", (f) => !f.includes("Decision:"));
 				expect(messageRowOf(await settle(setup)).trim()).toBe("Working: refreshing 1 sources");
 				// The refresh settles, and only then does its line clear.
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(
 					setup,
 					(f) => !messageRowOf(f).includes("refreshing 1 sources"),
@@ -619,7 +619,7 @@ describe("the permanent Message line", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				source.settle(success([faultTicket]));
+				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				await press(setup, "return", "the fault", (f) =>
 					messageRowOf(f).includes("the daemon refused"),
@@ -702,7 +702,7 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				// A truncated fault on the line: the view has text to hold.
-				source.settle(success([faultTicket]));
+				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				await press(setup, "return", "the fault", (f) =>
 					messageRowOf(f).includes("the daemon refused"),
@@ -826,8 +826,8 @@ describe("the permanent Message line", () => {
 	test("states a plain notice, and lets a refusal take the line back", async () => {
 		// The settled turn the factory decides: the awaiting Ticket the state
 		// holds, the way the state module writes it.
-		const state = freshState();
-		seedAwaitingTurn(state, success([issueTicket()]));
+		const state = wrappedState();
+		seedAwaitingTurn(state, fetchSuccess([issueTicket()]));
 		const planeRecord = await plane({
 			existing: state,
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
@@ -879,7 +879,7 @@ describe("the permanent Message line", () => {
 					"the refusal to take the line back",
 				);
 				expect(refused).not.toContain("auto-handoff is on");
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 			},
 			{
 				width: WIDTH,
@@ -901,7 +901,7 @@ describe("the permanent Message line", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				source.settle(success([faultTicket]));
+				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				await press(setup, "return", "the fault", (f) =>
 					messageRowOf(f).includes("the daemon refused"),
@@ -980,7 +980,7 @@ describe("the permanent Message line", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				source.settle(success([faultTicket]));
+				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				await press(setup, "return", "the fault", (f) =>
 					messageRowOf(f).includes("the daemon refused"),
@@ -1028,7 +1028,7 @@ describe("the permanent Message line", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				source.settle(success([faultTicket]));
+				source.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(planeRecord.state);
 				await press(setup, "return", "the fault", (f) =>
 					messageRowOf(f).includes("the daemon refused"),
@@ -1055,7 +1055,7 @@ describe("the permanent Message line", () => {
 		const guideSource = guidePlane.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				guideSource.settle(success([faultTicket]));
+				guideSource.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(guidePlane.state);
 				await press(setup, "return", "the fault", (f) =>
 					messageRowOf(f).includes("the daemon refused"),
@@ -1092,7 +1092,7 @@ describe("the permanent Message line", () => {
 		const errorSource = errorPlane.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				errorSource.settle(success([issueTicket()]));
+				errorSource.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(setup, (f) => f.includes("missing"), "the in-flight ticket");
 				await press(setup, "delete", "the Close confirmation", (f) =>
 					f.includes("Close: Add a webhook retry policy"),
@@ -1172,7 +1172,7 @@ describe("the permanent Message line", () => {
 		const errSource = errPlane.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				errSource.settle(success([faultTicket]));
+				errSource.settle(fetchSuccess([faultTicket]));
 				await waitSourceHealthy(errPlane.state);
 				await press(setup, "return", "the fault", (f) =>
 					messageRowOf(f).includes("the daemon refused"),
@@ -1203,7 +1203,7 @@ describe("the permanent Message line", () => {
 		// and the pickup's notice says where it ran.
 		const runner = new FakeRunner();
 		const planeRecord = await plane({
-			existing: freshState(),
+			existing: wrappedState(),
 			runner: () => runner,
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
 			repos: { "github.com/acme/factory": "src/factory" },
@@ -1223,7 +1223,7 @@ describe("the permanent Message line", () => {
 				const secondTicket = issueTicket("github:github.com:I_6", {
 					title: "Keep tickets across starts",
 				});
-				source.settle(success([issueTicket(), secondTicket]));
+				source.settle(fetchSuccess([issueTicket(), secondTicket]));
 				await awaitFrame(
 					setup,
 					(f) => rowsOf(f).some((row) => row.includes("Keep tickets acro")),
@@ -1271,7 +1271,7 @@ describe("the permanent Message line", () => {
 		// is the one with no state change at all.
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		const planeRecord = await plane({
-			existing: freshState(),
+			existing: wrappedState(),
 			runner: () => runner,
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
 		});
@@ -1279,13 +1279,13 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				// The boot's own refresh settles clean.
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
 				// A source that goes stale lands one warning entry and one
 				// notification, at the change.
 				await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
 				await callsReached(source, 2);
-				source.settle(RATE_LIMITED);
+				source.settle(fetchRateLimited);
 				await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
@@ -1302,7 +1302,7 @@ describe("the permanent Message line", () => {
 				// stays stale, so no second entry and no second send.
 				await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
 				await callsReached(source, 3);
-				source.settle(RATE_LIMITED);
+				source.settle(fetchRateLimited);
 				await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
@@ -1317,7 +1317,7 @@ describe("the permanent Message line", () => {
 				// the recovery, and the info fact sends no notification.
 				await press(setup, "r", "the working", (f) => f.includes("refreshing 1 sources"));
 				await callsReached(source, 4);
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the line to clear");
 				expect(notificationCalls(runner)).toHaveLength(1);
 				const healed = await openMessageView(setup, "m", "Message view");
@@ -1351,7 +1351,7 @@ describe("the permanent Message line", () => {
 
 	test("is silent for scheduled refreshes, and warns on a failed fetch", async () => {
 		const planeRecord = await plane({
-			existing: freshState(),
+			existing: wrappedState(),
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
 		});
 		const source = planeRecord.sources[0] as FakeSource;
@@ -1361,7 +1361,7 @@ describe("the permanent Message line", () => {
 				await awaitFrame(setup, (f) => f.includes("loading tickets..."), "the loading list");
 				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe("");
 				// A failed fetch warns in the source's own words.
-				source.settle(RATE_LIMITED);
+				source.settle(fetchRateLimited);
 				await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
@@ -1372,7 +1372,7 @@ describe("the permanent Message line", () => {
 					messageRowOf(f).includes("refreshing 1 sources"),
 				);
 				await callsReached(source, 2);
-				source.settle(success([issueTicket()]));
+				source.settle(fetchSuccess([issueTicket()]));
 				await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the line to clear");
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "production" } },

@@ -340,7 +340,7 @@ description: The module map of the source tree, for agents working in this repos
 	paints from: each glyph rasterizes at run time from the two vendored
 	terminal faces (Regular and Bold) beside it in `scripts/fonts/`, and its
 	coverage is cached per face and character.
-- `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
+- `test/fact-fixtures.ts`: the deterministic facts the plane's test suites share: the default ticket, identity, and repository, and the sample sequence the frame tests read.
 - `test/shape-doc-paths.test.ts`: this module map held to the tree. Every path it
 	prints either exists or the check goes red, with the entry that printed it
 	named (ADR 0105).

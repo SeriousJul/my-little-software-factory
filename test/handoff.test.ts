@@ -7,9 +7,8 @@
  * real herdr session.
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
@@ -43,6 +42,11 @@ import type { Consultation } from "../src/state/consultation-record.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
 import {
+	DEFAULT_TICKET_DESCRIPTION,
+	DEFAULT_TICKET_TITLE,
+	ticket as defaultTicket,
+} from "./fact-fixtures.ts";
+import {
 	FakeRunner,
 	herdrFocusCommands,
 	tabCreateJson,
@@ -53,9 +57,31 @@ import {
 	worktreeListJson,
 	worktreeOpenJson,
 } from "./fake-runner.ts";
+import { type Plane, plane } from "./plane.ts";
 
-let HOME = "";
-let CHECKOUT = "";
+/** The repository's convention path in one home, as the plane's naming rule gives it. */
+function repoPath(home: string): string {
+	return join(home, "src", "factory");
+}
+
+/**
+ * The plane of this file's tests: one home holding the repository's directory,
+ * which the tests' pins then lie about as a git repository. The directory stands
+ * empty, as the suite's shared home always did.
+ */
+async function modulePlane(runner: CommandRunner): Promise<Plane> {
+	const p = await plane({ checkout: "none", runner: () => runner });
+	mkdirSync(repoPath(p.home), { recursive: true });
+	if (runner instanceof FakeRunner) conventionCheckout(runner, repoPath(p.home));
+	openPlanes.push(p);
+	return p;
+}
+
+/** The planes this file's tests open; each test's close hands the home back. */
+const openPlanes: Plane[] = [];
+afterEach(() => {
+	for (const p of openPlanes.splice(0)) p.close();
+});
 
 /** The reason a non-ok outcome carries; a success has none to read. */
 function reasonOf(outcome: HandoffOutcome): string {
@@ -65,59 +91,10 @@ function reasonOf(outcome: HandoffOutcome): string {
 	return outcome.reason;
 }
 
-beforeAll(() => {
-	// A real home with a real checkout directory: resolution does real
-	// filesystem work against it, while every git command stays faked.
-	HOME = join(tmpdir(), `factory-handoff-${Math.random().toString(36).slice(2)}`);
-	CHECKOUT = join(HOME, "src", "billing");
-	mkdirSync(CHECKOUT, { recursive: true });
-	writeFileSync(join(CHECKOUT, "marker"), "repo");
-});
-
-afterAll(() => {
-	rmSync(HOME, { recursive: true, force: true });
-});
-
-/** The path a herdr worktree checkout of the ticket's branch takes. */
-const WORKTREE_PATH = join(HOME, "worktrees", "billing", "factory-7-retry-policy-for-webhooks");
 /** The ticket branch the handoff takes, in the words git and herdr hear. */
-const BRANCH = "factory/7-retry-policy-for-webhooks";
+const BRANCH = "factory/9-persist-source-facts";
 
-const ticket: Ticket = {
-	identity: "github:github.com:I_7",
-	title: "Retry policy for webhooks",
-	repository: "acme/billing",
-	repositoryRef: {
-		identity: "github.com/acme/billing",
-		displayName: "acme/billing",
-		cloneUrl: "https://github.com/acme/billing.git",
-	},
-	state: "open",
-	handoff: null,
-	workCycle: 1,
-	description: "Add a retry policy.",
-	sourceKind: "github-issue",
-	externalKey: "#7",
-	sourceState: "open",
-	url: "https://github.com/acme/billing/issues/7",
-	labels: [],
-	externalUpdatedAt: "2026-01-01T00:00:00Z",
-	memberships: [],
-	suggestedTaskType: "implement",
-	matchedStateName: null,
-	actionable: true,
-	listActionable: true,
-	handoffRecoveryRequired: false,
-	ignored: false,
-	ignoredAt: null,
-	muted: false,
-	mutedAt: null,
-	handoffCount: 0,
-	failedStartStreak: 0,
-	lastCompletion: null,
-	leftover: null,
-	nameCollision: null,
-};
+const ticket: Ticket = defaultTicket();
 
 const defaultChoice = {
 	agentType: "pi",
@@ -127,48 +104,21 @@ const defaultChoice = {
 	thinking: "",
 	contextWindow: "",
 };
-/** The worktree choice the worktree sequence runs: the default on the worktree environment. */
 const worktreeChoice: HandoffChoice = { ...defaultChoice, environment: "worktree" };
 
-/** Stub the live-worktree herdr sequence at the convention checkout. */
-function stubLiveWorkspace(runner: FakeRunner): void {
-	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([{ id: "ws-other" }]) });
-	runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
-		stdout: workspaceCreateJson("ws-new"),
-	});
-	runner.set("herdr", ["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"], {
-		stdout: tabCreateJson("pane-1"),
-	});
+/** The path a herdr worktree checkout of the ticket's branch takes in one home. */
+function worktreePath(home: string): string {
+	return join(home, "worktrees", "factory", BRANCH.replaceAll("/", "-"));
 }
 
-/** The task type's prompt template, asserted: the test's task types carry the prompt form. */
-function templateOf(taskType: { template?: string }): string {
-	return taskType.template as string;
-}
-
-/** The exact prompt the implement task type renders for this ticket. */
-const PROMPT = renderPrompt(templateOf(BASE_CONFIG.taskTypes.implement), ticket);
-const EXPECTED_IMPLEMENT_PROMPT =
-	"Implement the following github-issue.\n\nRepository: acme/billing\n\n" +
-	"#7: Retry policy for webhooks\n\nURL: https://github.com/acme/billing/issues/7\n\n" +
-	"Labels: \n\nDescription:\nAdd a retry policy.";
-const AGENT = agentNameFor(ticket);
-/** The Ticket's own cycle name and ordinal name, in the words herdr hears. */
-const CYCLE = cycleAgentName(ticket, 1);
-const ORDINAL = cycleAgentName(ticket, 1, 1);
-
-/** A git checkout that resolves from the convention path. */
-function conventionCheckout(runner: FakeRunner): void {
-	runner.set("git", ["-C", CHECKOUT, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-	runner.set("git", ["-C", CHECKOUT, "remote", "get-url", "origin"], {
-		stdout: "https://github.com/acme/billing.git\n",
-	});
-}
-/** The ticket's handoff on the world the case stubbed: the base config and the
- * open claim stand, beside the overrides the case names. The case keeps its own
- * expected commands and the runner they are read from. */
+/**
+ * The handoff the worktree and live-worktree sequences run: the ticket and
+ * the facts the case does not name stand as the file's own, and the home the
+ * case's plane opened in is named by the caller, one plane per test.
+ */
 async function handoffRun(
 	runner: CommandRunner,
+	home: string,
 	choice: HandoffChoice,
 	over: {
 		ticket?: Ticket;
@@ -183,7 +133,7 @@ async function handoffRun(
 	return handOffTicket(over.ticket ?? ticket, choice, {
 		config: over.config ?? BASE_CONFIG,
 		runner,
-		home: HOME,
+		home,
 		onStage: over.onStage,
 		names: over.names,
 		claim: over.claim ?? "open",
@@ -192,15 +142,82 @@ async function handoffRun(
 	});
 }
 
+/** Stub the live-worktree herdr sequence at the convention checkout. */
+function stubLiveWorkspace(runner: FakeRunner, checkout: string): void {
+	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([{ id: "ws-other" }]) });
+	runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
+		stdout: workspaceCreateJson("ws-new"),
+	});
+	runner.set("herdr", ["tab", "create", "--workspace", "ws-new", "--cwd", checkout, "--no-focus"], {
+		stdout: tabCreateJson("pane-1"),
+	});
+}
+
+/** The task type's prompt template, asserted: the test's task types carry the prompt form. */
+function templateOf(taskType: { template?: string }): string {
+	return taskType.template as string;
+}
+
+/** The exact prompt the implement task type renders for this ticket. */
+const PROMPT = renderPrompt(templateOf(BASE_CONFIG.taskTypes.implement), ticket);
+const EXPECTED_IMPLEMENT_PROMPT =
+	"Implement the following github-issue.\n\nRepository: acme/factory\n\n" +
+	"#9: Persist source facts\n\nURL: https://github.com/acme/factory/issues/9\n\n" +
+	"Labels: ready-for-agent\n\nDescription:\n" +
+	DEFAULT_TICKET_DESCRIPTION;
+const AGENT = agentNameFor(ticket);
+/** The Ticket's own cycle name and ordinal name, in the words herdr hears. */
+const CYCLE = cycleAgentName(ticket, 1);
+const ORDINAL = cycleAgentName(ticket, 1, 1);
+
+/** A git checkout that resolves from the convention path. */
+function conventionCheckout(runner: FakeRunner, checkout: string): void {
+	runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+	runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
+		stdout: "https://github.com/acme/factory.git\n",
+	});
+}
+
 /**
  * Stub the worktree base rule: the origin/HEAD symref names the default
  * branch and the fetch of its single ref succeeds, so the base is the
  * fetched remote ref `origin/<branch>`.
  */
-function stubRemoteDefaultBranch(runner: FakeRunner, branch = "main"): void {
-	runner.set("git", ["-C", CHECKOUT, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+function stubRemoteDefaultBranch(runner: FakeRunner, checkout: string, branch = "main"): void {
+	runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
 		stdout: `refs/remotes/origin/${branch}\n`,
 	});
+}
+
+/** Pin `git branch --list`; `list` is the answer, defaulting to the branch held. */
+function stubBranchList(
+	runner: FakeRunner,
+	checkout: string,
+	branch = BRANCH,
+	list = `  ${branch}\n`,
+): void {
+	runner.set("git", ["-C", checkout, "branch", "--list", branch], { stdout: list });
+}
+
+/** The worktree open by branch answers herdr's not-found error. */
+function stubWorktreeOpenMissing(runner: FakeRunner, checkout: string, branch = BRANCH): void {
+	runner.set("herdr", ["worktree", "open", "--cwd", checkout, "--branch", branch, "--no-focus"], {
+		code: 1,
+		stderr: WORKTREE_NOT_FOUND_ERROR,
+	});
+}
+
+/** One `worktree create` that succeeds with the given workspace and pane. */
+function stubWorktreeCreate(
+	runner: FakeRunner,
+	checkout: string,
+	options: { branch?: string; base?: string; workspaceId?: string; paneId?: string } = {},
+): void {
+	const { branch = BRANCH, base, workspaceId = "ws-wt", paneId = "pane-wt" } = options;
+	const argv = ["worktree", "create", "--cwd", checkout, "--branch", branch];
+	if (base) argv.push("--base", base);
+	argv.push("--no-focus");
+	runner.set("herdr", argv, { stdout: worktreeCreateJson(workspaceId, paneId) });
 }
 
 /**
@@ -223,17 +240,6 @@ function stubConsultationStartFailure(runner: FakeRunner, pane: string): void {
 }
 
 /**
- * The absolute path herdr's naming rule gives the ticket's worktree checkout.
- *
- * The file's `WORKTREE_PATH` constant is built before the temp home exists, so
- * it is the path the fake herdr answers carry. A test that stands a real
- * directory on disk reads this one instead.
- */
-function ticketWorktreePath(): string {
-	return join(HOME, "worktrees", "billing", "factory-7-retry-policy-for-webhooks");
-}
-
-/**
  * The herdr answer for a create git refuses because the checkout path stands:
  * the stable code, and Git's whole stderr as the message.
  */
@@ -241,9 +247,11 @@ function worktreeCreateBlocked(path: string): { code: number; stderr: string } {
 	return {
 		code: 1,
 		stderr:
-			'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'\' + BRANCH + \'\')' +
-			`\\nfatal: '${path}' already exists` +
-			'"},"id":"cli:worktree:create"}\n',
+			'"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out ' +
+			`'${BRANCH}')` +
+			`\\nfatal: '` +
+			path +
+			`' already exists"},"id":"cli:worktree:create"}\n`,
 	};
 }
 
@@ -252,11 +260,11 @@ function worktreeCreateBlocked(path: string): { code: number; stderr: string } {
  * branch, without holding that directory: the repository's other linked
  * worktree gives the parent, the same way ADR 0046 reads it.
  */
-function siblingWorktreeList(): string {
+function siblingWorktreeList(checkout: string, home: string): string {
 	return worktreeListJson([
-		{ path: CHECKOUT, linked: false },
+		{ path: checkout, linked: false },
 		{
-			path: join(HOME, "worktrees", "billing", "factory-6-another-ticket"),
+			path: join(home, "worktrees", "factory", "factory-6-another-ticket"),
 			branch: "factory/6-another-ticket",
 		},
 	]);
@@ -272,24 +280,26 @@ function makeDirectory(path: string, entries: Record<string, string>): void {
 }
 
 /** The reuse sequence up to its fresh create: the branch exists, no worktree holds it. */
-function reuseToFreshCreate(runner: FakeRunner): void {
-	runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
+function reuseToFreshCreate(runner: FakeRunner, checkout: string, home: string): void {
+	runner.set("git", ["-C", checkout, "branch", "--list", BRANCH], {
 		stdout: `  ${BRANCH}\n`,
 	});
-	runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
+	runner.set("herdr", ["worktree", "open", "--cwd", checkout, "--branch", BRANCH, "--no-focus"], {
 		code: 1,
 		stderr: WORKTREE_NOT_FOUND_ERROR,
 	});
-	runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], { stdout: siblingWorktreeList() });
+	runner.set("herdr", ["worktree", "list", "--cwd", checkout], {
+		stdout: siblingWorktreeList(checkout, home),
+	});
 }
 
 /** The create argv the reuse sequence sends for the ticket's branch. */
-function createOnBranch(): string[] {
-	return ["worktree", "create", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"];
+function createOnBranch(checkout: string): string[] {
+	return ["worktree", "create", "--cwd", checkout, "--branch", BRANCH, "--no-focus"];
 }
 
 /** A Consultation record, as the state hands it to its own start. */
-function consultationRecord(over: Partial<Consultation> = {}): Consultation {
+function consultationRecord(checkout: string, over: Partial<Consultation> = {}): Consultation {
 	return {
 		id: "consultation-1",
 		typeName: "grill-with-docs",
@@ -302,10 +312,10 @@ function consultationRecord(over: Partial<Consultation> = {}): Consultation {
 		initialInput: "review auth",
 		renderedOpeningPrompt: "/grill review auth",
 		repository: {
-			identity: "github.com/acme/billing",
-			displayName: "acme/billing",
-			cloneUrl: "https://github.com/acme/billing.git",
-			path: CHECKOUT,
+			identity: "github.com/acme/factory",
+			displayName: "acme/factory",
+			cloneUrl: "https://github.com/acme/factory.git",
+			path: checkout,
 		},
 		state: "opening",
 		createdAt: "2026-09-01T00:00:00.000Z",
@@ -378,7 +388,7 @@ describe("renderPrompt", () => {
 			detailed,
 		);
 		expect(prompt).toBe(
-			"Repo: acme/billing\nTitle: Retry policy for webhooks\nDescription: Add a retry policy.\n" +
+			`Repo: acme/factory\nTitle: ${DEFAULT_TICKET_TITLE}\nDescription: ${DEFAULT_TICKET_DESCRIPTION}\n` +
 				"Kind: github-pull-request\nKey: PR-42\nURL: https://example.test/pulls/42\n" +
 				"Labels: ready-for-review, security",
 		);
@@ -387,7 +397,9 @@ describe("renderPrompt", () => {
 	test("a value that carries another placeholder is not re-scanned", () => {
 		const tricky: Ticket = { ...ticket, title: "Handle {description} in the body" };
 		const prompt = renderPrompt("Title: {title}\nBody: {description}", tricky);
-		expect(prompt).toBe("Title: Handle {description} in the body\nBody: Add a retry policy.");
+		expect(prompt).toBe(
+			`Title: Handle {description} in the body\nBody: ${DEFAULT_TICKET_DESCRIPTION}`,
+		);
 	});
 
 	test("dollar patterns in a value stay literal", () => {
@@ -400,7 +412,7 @@ describe("renderPrompt", () => {
 		const prompt = renderPrompt("Prev: {previous-message}\n{description}", ticket, {
 			previousMessage: "settled",
 		});
-		expect(prompt).toBe("Prev: settled\nAdd a retry policy.");
+		expect(prompt).toBe(`Prev: settled\n${DEFAULT_TICKET_DESCRIPTION}`);
 		expect(renderPrompt("Prev: {previous-message}", ticket)).toBe("Prev: ");
 	});
 
@@ -410,7 +422,7 @@ describe("renderPrompt", () => {
 			reviewVerdict: "Posted as a review at 2026-08-31T12:00:00Z:\n- **Score:** 85 / 100",
 		});
 		expect(prompt).toBe(
-			"Verdict: Posted as a review at 2026-08-31T12:00:00Z:\n- **Score:** 85 / 100\nAdd a retry policy.",
+			`Verdict: Posted as a review at 2026-08-31T12:00:00Z:\n- **Score:** 85 / 100\n${DEFAULT_TICKET_DESCRIPTION}`,
 		);
 		expect(renderPrompt("Verdict: {review-verdict}", ticket)).toBe("Verdict: ");
 	});
@@ -569,20 +581,20 @@ describe("settingArgs", () => {
 describe("handOffTicket: the live worktree sequence", () => {
 	test("creates the workspace when none holds the checkout, then tab, agent, prompt", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([{ id: "ws-other" }]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new"),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-new", "--cwd", repoPath(p.home), "--no-focus"],
 			{
 				stdout: tabCreateJson("pane-1"),
 			},
 		);
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome).toEqual({
 			status: "ok",
@@ -602,11 +614,11 @@ describe("handOffTicket: the live worktree sequence", () => {
 			)?.args,
 		).toEqual(["agent", "prompt", AGENT, EXPECTED_IMPLEMENT_PROMPT]);
 		expect(runner.commands()).toEqual([
-			`git -C ${CHECKOUT} rev-parse --git-dir`,
-			`git -C ${CHECKOUT} remote get-url origin`,
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
 			"herdr workspace list",
-			`herdr workspace create --cwd ${CHECKOUT} --no-focus`,
-			`herdr tab create --workspace ws-new --cwd ${CHECKOUT} --no-focus`,
+			`herdr workspace create --cwd ${repoPath(p.home)} --no-focus`,
+			`herdr tab create --workspace ws-new --cwd ${repoPath(p.home)} --no-focus`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -617,14 +629,14 @@ describe("handOffTicket: the live worktree sequence", () => {
 
 	test("retries a busy fresh pane until its shell is available", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new"),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-new", "--cwd", repoPath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-1") },
 		);
 		runner.setSequence(
@@ -640,15 +652,15 @@ describe("handOffTicket: the live worktree sequence", () => {
 			],
 		);
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome.status).toBe("ok");
 		expect(runner.commands()).toEqual([
-			`git -C ${CHECKOUT} rev-parse --git-dir`,
-			`git -C ${CHECKOUT} remote get-url origin`,
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
 			"herdr workspace list",
-			`herdr workspace create --cwd ${CHECKOUT} --no-focus`,
-			`herdr tab create --workspace ws-new --cwd ${CHECKOUT} --no-focus`,
+			`herdr workspace create --cwd ${repoPath(p.home)} --no-focus`,
+			`herdr tab create --workspace ws-new --cwd ${repoPath(p.home)} --no-focus`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
@@ -657,33 +669,17 @@ describe("handOffTicket: the live worktree sequence", () => {
 
 	test("stops retrying a pane that never reaches a shell", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,
 			stderr:
 				'{"error":{"code":"agent_pane_busy","message":"agent target pane pane-wt is not an available shell"},"id":"cli:agent:start"}',
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("agent_pane_busy");
@@ -691,47 +687,55 @@ describe("handOffTicket: the live worktree sequence", () => {
 		expect(starts.length).toBeGreaterThan(1);
 		// The bounded failure still uses the normal worktree cleanup.
 		expect(runner.commands()).toContain("herdr worktree remove --workspace ws-wt");
-		expect(runner.commands()).toContain(`git -C ${CHECKOUT} branch -D ${BRANCH}`);
+		expect(runner.commands()).toContain(
+			`git -C ${repoPath(p.home)} branch -D factory/9-persist-source-facts`,
+		);
 	});
 
 	test("reuses the workspace that already holds the checkout", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([
 				{ id: "ws-other", checkoutPath: "/elsewhere" },
-				{ id: "ws-mine", checkoutPath: CHECKOUT },
+				{ id: "ws-mine", checkoutPath: repoPath(p.home) },
 			]),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-mine", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-mine", "--cwd", repoPath(p.home), "--no-focus"],
 			{
 				stdout: tabCreateJson("pane-9"),
 			},
 		);
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
-		expect(commands).not.toContain(`herdr workspace create --cwd ${CHECKOUT} --no-focus`);
-		expect(commands).toContain(`herdr tab create --workspace ws-mine --cwd ${CHECKOUT} --no-focus`);
+		expect(commands).not.toContain(`herdr workspace create --cwd ${repoPath(p.home)} --no-focus`);
+		expect(commands).toContain(
+			`herdr tab create --workspace ws-mine --cwd ${repoPath(p.home)} --no-focus`,
+		);
 		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-9`);
 	});
 
 	test("settings the agent maps ride on the agent start, after a --", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws", checkoutPath: CHECKOUT }]),
+			stdout: workspaceListJson([{ id: "ws", checkoutPath: repoPath(p.home) }]),
 		});
-		runner.set("herdr", ["tab", "create", "--workspace", "ws", "--cwd", CHECKOUT, "--no-focus"], {
-			stdout: tabCreateJson("pane-1"),
-		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws", "--cwd", repoPath(p.home), "--no-focus"],
+			{
+				stdout: tabCreateJson("pane-1"),
+			},
+		);
 
 		const choice = { ...defaultChoice, agentType: "codex", model: "gpt-5.6", thinking: "high" };
-		const outcome = await handoffRun(runner, choice);
+		const outcome = await handoffRun(runner, p.home, choice);
 
 		expect(outcome.status).toBe("ok");
 		const start = runner.calls.find(
@@ -755,14 +759,14 @@ describe("handOffTicket: the live worktree sequence", () => {
 
 	test("a failed herdr step leaves the ticket open with the reason", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			code: 1,
 			stderr: "error: herdr is not running\n",
 		});
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome).toEqual({ status: "failed", reason: "error: herdr is not running" });
 		// Nothing after the failed step runs.
@@ -771,19 +775,23 @@ describe("handOffTicket: the live worktree sequence", () => {
 
 	test("a prompt failure after the agent started still settles the ticket as handed off", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws", checkoutPath: CHECKOUT }]),
+			stdout: workspaceListJson([{ id: "ws", checkoutPath: repoPath(p.home) }]),
 		});
-		runner.set("herdr", ["tab", "create", "--workspace", "ws", "--cwd", CHECKOUT, "--no-focus"], {
-			stdout: tabCreateJson("pane-1"),
-		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws", "--cwd", repoPath(p.home), "--no-focus"],
+			{
+				stdout: tabCreateJson("pane-1"),
+			},
+		);
 		runner.set("herdr", ["agent", "prompt", AGENT, PROMPT], {
 			code: 1,
 			stderr: "error: agent lost its pane\n",
 		});
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome.status).toBe("prompt-failed");
 		expect(reasonOf(outcome)).toContain("started, but the prompt failed");
@@ -791,10 +799,10 @@ describe("handOffTicket: the live worktree sequence", () => {
 
 	test("an unreadable workspace list fails instead of creating a second workspace", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("readable workspace list");
@@ -807,45 +815,29 @@ describe("handOffTicket: the live worktree sequence", () => {
 describe("handOffTicket: the worktree sequence", () => {
 	test("checks the branch, fetches the remote default branch, creates the worktree, starts the agent, sends the prompt", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		// The base is the fetched remote default branch, and a clean fetch
 		// leaves no fallback note.
 		expect(outcome.notes).toBeUndefined();
 		expect(runner.commands()).toEqual([
-			`git -C ${CHECKOUT} rev-parse --git-dir`,
-			`git -C ${CHECKOUT} remote get-url origin`,
-			`git -C ${CHECKOUT} branch --list ${BRANCH}`,
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
+			`git -C ${repoPath(p.home)} branch --list factory/9-persist-source-facts`,
 			// A branch the checkout does not carry is checked on origin before it is
 			// built: the remote copy may stand under a draft of its own (issue #296).
-			`git -C ${CHECKOUT} ls-remote --heads origin ${BRANCH}`,
+			`git -C ${repoPath(p.home)} ls-remote --heads origin factory/9-persist-source-facts`,
 			// The base rule checks for a usable origin on its own...
-			`git -C ${CHECKOUT} remote get-url origin`,
-			`git -C ${CHECKOUT} symbolic-ref refs/remotes/origin/HEAD`,
-			`git -C ${CHECKOUT} fetch origin main`,
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${BRANCH} --base origin/main --no-focus`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
+			`git -C ${repoPath(p.home)} symbolic-ref refs/remotes/origin/HEAD`,
+			`git -C ${repoPath(p.home)} fetch origin main`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base origin/main --no-focus`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -853,79 +845,49 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("with no origin/HEAD symref, detection falls back to origin/main", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		runner.set("git", ["-C", CHECKOUT, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		runner.set("git", ["-C", repoPath(p.home), "symbolic-ref", "refs/remotes/origin/HEAD"], {
 			code: 1,
 			stderr: "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref\n",
 		});
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		// The symref was tried first, then origin/main; the fetch pulled the
 		// one detected ref.
-		expect(runner.commands()).toContain(`git -C ${CHECKOUT} symbolic-ref refs/remotes/origin/HEAD`);
 		expect(runner.commands()).toContain(
-			`git -C ${CHECKOUT} rev-parse --verify --quiet origin/main^{commit}`,
+			`git -C ${repoPath(p.home)} symbolic-ref refs/remotes/origin/HEAD`,
 		);
-		expect(runner.commands()).toContain(`git -C ${CHECKOUT} fetch origin main`);
 		expect(runner.commands()).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${BRANCH} --base origin/main --no-focus`,
+			`git -C ${repoPath(p.home)} rev-parse --verify --quiet origin/main^{commit}`,
+		);
+		expect(runner.commands()).toContain(`git -C ${repoPath(p.home)} fetch origin main`);
+		expect(runner.commands()).toContain(
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base origin/main --no-focus`,
 		);
 	});
 
 	test("a failed fetch starts on the local HEAD with a note naming the base and the reason", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		stubRemoteDefaultBranch(runner);
-		runner.set("git", ["-C", CHECKOUT, "fetch", "origin", "main"], {
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		runner.set("git", ["-C", repoPath(p.home), "fetch", "origin", "main"], {
 			code: 128,
 			stderr: "fatal: unable to access: Network is down\n",
 		});
-		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123def456\n" });
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				BRANCH,
-				"--base",
-				"abc123def456",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		runner.set("git", ["-C", repoPath(p.home), "rev-parse", "HEAD"], { stdout: "abc123def456\n" });
+		stubWorktreeCreate(runner, repoPath(p.home), { base: "abc123def456" });
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		// The handoff still starts, on the local HEAD...
 		expect(outcome.status).toBe("ok");
 		expect(runner.commands()).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${BRANCH} --base abc123def456 --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base abc123def456 --no-focus`,
 		);
 		// ...and the note names the base actually used (ref name plus short
 		// sha) and the reason for the fallback.
@@ -936,52 +898,36 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("no default branch ref on the remote falls back to the local HEAD with a note", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		runner.set("git", ["-C", CHECKOUT, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		runner.set("git", ["-C", repoPath(p.home), "symbolic-ref", "refs/remotes/origin/HEAD"], {
 			code: 1,
 			stderr: "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref\n",
 		});
 		runner.set(
 			"git",
-			["-C", CHECKOUT, "rev-parse", "--verify", "--quiet", "origin/main^{commit}"],
+			["-C", repoPath(p.home), "rev-parse", "--verify", "--quiet", "origin/main^{commit}"],
 			{
 				code: 1,
 			},
 		);
 		runner.set(
 			"git",
-			["-C", CHECKOUT, "rev-parse", "--verify", "--quiet", "origin/master^{commit}"],
+			["-C", repoPath(p.home), "rev-parse", "--verify", "--quiet", "origin/master^{commit}"],
 			{
 				code: 1,
 			},
 		);
-		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123def456\n" });
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				BRANCH,
-				"--base",
-				"abc123def456",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		runner.set("git", ["-C", repoPath(p.home), "rev-parse", "HEAD"], { stdout: "abc123def456\n" });
+		stubWorktreeCreate(runner, repoPath(p.home), { base: "abc123def456" });
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		// No fetch ran: there was no ref to fetch.
 		expectNoCommand(runner.commands(), "fetch origin");
 		expect(runner.commands()).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${BRANCH} --base abc123def456 --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base abc123def456 --no-focus`,
 		);
 		expect(outcome.notes?.worktreeBase).toBe(
 			"the worktree base fell back to HEAD abc123d: no default branch found on origin (tried the origin/HEAD symref, then origin/main, then origin/master)",
@@ -989,15 +935,16 @@ describe("handOffTicket: the worktree sequence", () => {
 	});
 
 	test("a repository without a usable origin falls back to the local HEAD with a note", async () => {
-		const sibling = join(HOME, "src", "billing_1");
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
+		const sibling = join(p.home, "src", "factory_1");
 		// The convention checkout has no verifiable origin: resolution bends
 		// to a sibling clone and warns about it.
-		runner.set("git", ["-C", CHECKOUT, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-		runner.set("git", ["-C", CHECKOUT, "remote", "get-url", "origin"], { code: 1 });
+		runner.set("git", ["-C", repoPath(p.home), "rev-parse", "--git-dir"], { stdout: ".git\n" });
+		runner.set("git", ["-C", repoPath(p.home), "remote", "get-url", "origin"], { code: 1 });
 		// The sibling is a local-only repository: no origin remote to fetch
 		// from, so the base is the checkout's own HEAD.
-		runner.set("git", ["-C", sibling, "branch", "--list", BRANCH], {
+		runner.set("git", ["-C", sibling, "branch", "--list", "factory/9-persist-source-facts"], {
 			stdout: "",
 		});
 		runner.set("git", ["-C", sibling, "remote", "get-url", "origin"], { code: 1 });
@@ -1010,7 +957,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--cwd",
 				sibling,
 				"--branch",
-				BRANCH,
+				"factory/9-persist-source-facts",
 				"--base",
 				"abc123def456",
 				"--no-focus",
@@ -1018,15 +965,15 @@ describe("handOffTicket: the worktree sequence", () => {
 			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
 		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		// The handoff ran on the sibling the resolution bent to...
-		expect(runner.commands()).toContain(`git clone https://github.com/acme/billing.git ${sibling}`);
+		expect(runner.commands()).toContain(`git clone https://github.com/acme/factory.git ${sibling}`);
 		// ...and no fetch ran: there was no origin to fetch from.
 		expectNoCommand(runner.commands(), "fetch origin");
 		expect(runner.commands()).toContain(
-			`herdr worktree create --cwd ${sibling} --branch ${BRANCH} --base abc123def456 --no-focus`,
+			`herdr worktree create --cwd ${sibling} --branch factory/9-persist-source-facts --base abc123def456 --no-focus`,
 		);
 		// The fallback note and the resolution warning ride the same channel.
 		expect(outcome.notes?.worktreeBase).toBe(
@@ -1037,31 +984,41 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("an existing branch reuses the open worktree workspace with a fresh tab", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			stdout: worktreeOpenJson("ws-wt", "pane-root", {
-				alreadyOpen: true,
-				worktreePath: WORKTREE_PATH,
-			}),
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-wt", "--cwd", WORKTREE_PATH, "--no-focus"],
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				repoPath(p.home),
+				"--branch",
+				"factory/9-persist-source-facts",
+				"--no-focus",
+			],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-root", {
+					alreadyOpen: true,
+					worktreePath: worktreePath(p.home),
+				}),
+			},
+		);
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-wt", "--cwd", worktreePath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-tab") },
 		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		expect(runner.commands()).toEqual([
-			`git -C ${CHECKOUT} rev-parse --git-dir`,
-			`git -C ${CHECKOUT} remote get-url origin`,
-			`git -C ${CHECKOUT} branch --list ${BRANCH}`,
-			`herdr worktree open --cwd ${CHECKOUT} --branch ${BRANCH} --no-focus`,
-			`herdr tab create --workspace ws-wt --cwd ${WORKTREE_PATH} --no-focus`,
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
+			`git -C ${repoPath(p.home)} branch --list factory/9-persist-source-facts`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
+			`herdr tab create --workspace ws-wt --cwd ${worktreePath(p.home)} --no-focus`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-tab`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -1074,23 +1031,33 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("an existing branch without an open workspace attaches one and starts in its first pane", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			stdout: worktreeOpenJson("ws-wt", "pane-wt", {
-				alreadyOpen: false,
-				worktreePath: WORKTREE_PATH,
-			}),
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				repoPath(p.home),
+				"--branch",
+				"factory/9-persist-source-facts",
+				"--no-focus",
+			],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-wt", {
+					alreadyOpen: false,
+					worktreePath: worktreePath(p.home),
+				}),
+			},
+		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`herdr worktree open --cwd ${CHECKOUT} --branch ${BRANCH} --no-focus`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-wt`);
 		expect(commands).toContain(`herdr agent prompt ${AGENT} ${PROMPT}`);
@@ -1101,27 +1068,18 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("an existing branch no worktree holds is checked out into a fresh worktree", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			code: 1,
-			stderr: WORKTREE_NOT_FOUND_ERROR,
-		});
-		runner.set(
-			"herdr",
-			["worktree", "create", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeOpenMissing(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home));
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
 		// The existing branch is checked out, not re-created from a base.
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${BRANCH} --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expectNoCommand(commands, "--base");
 		expectNoCommand(commands, "rev-parse HEAD");
@@ -1130,19 +1088,29 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("a failed agent start in an open worktree workspace closes only the fresh tab", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			stdout: worktreeOpenJson("ws-wt", "pane-root", {
-				alreadyOpen: true,
-				worktreePath: WORKTREE_PATH,
-			}),
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-wt", "--cwd", WORKTREE_PATH, "--no-focus"],
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				repoPath(p.home),
+				"--branch",
+				"factory/9-persist-source-facts",
+				"--no-focus",
+			],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-root", {
+					alreadyOpen: true,
+					worktreePath: worktreePath(p.home),
+				}),
+			},
+		);
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-wt", "--cwd", worktreePath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-tab") },
 		);
 		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-tab"], {
@@ -1150,7 +1118,7 @@ describe("handOffTicket: the worktree sequence", () => {
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("agent_name_taken");
@@ -1169,22 +1137,32 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("a failed agent start in an attached worktree closes the attached workspace", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			stdout: worktreeOpenJson("ws-wt", "pane-wt", {
-				alreadyOpen: false,
-				worktreePath: WORKTREE_PATH,
-			}),
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				repoPath(p.home),
+				"--branch",
+				"factory/9-persist-source-facts",
+				"--no-focus",
+			],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-wt", {
+					alreadyOpen: false,
+					worktreePath: worktreePath(p.home),
+				}),
+			},
+		);
 		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("agent_name_taken");
@@ -1199,25 +1177,16 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("a failed agent start on a checked-out branch removes the worktree but keeps the branch", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			code: 1,
-			stderr: WORKTREE_NOT_FOUND_ERROR,
-		});
-		runner.set(
-			"herdr",
-			["worktree", "create", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeOpenMissing(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home));
 		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("agent_name_taken");
@@ -1231,16 +1200,23 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("a failed worktree open for a reason other than a missing worktree fails without a create", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			code: 1,
-			stderr: "error: herdr is not running\n",
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				repoPath(p.home),
+				"--branch",
+				"factory/9-persist-source-facts",
+				"--no-focus",
+			],
+			{ code: 1, stderr: "error: herdr is not running\n" },
+		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toBe("error: herdr is not running");
@@ -1249,32 +1225,16 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("a failed agent start removes the worktree and the branch", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("agent_name_taken");
@@ -1282,7 +1242,9 @@ describe("handOffTicket: the worktree sequence", () => {
 		// the branch the first attempt left behind.
 		const commands = runner.commands();
 		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
-		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${BRANCH}`);
+		expect(commands).toContain(
+			`git -C ${repoPath(p.home)} branch -D factory/9-persist-source-facts`,
+		);
 		// The cleanup runs after the failure, not before it.
 		expect(commands.indexOf(`herdr worktree remove --workspace ws-wt`)).toBeGreaterThan(
 			commands.indexOf(`herdr agent start ${AGENT} --kind pi --pane pane-wt`),
@@ -1291,11 +1253,9 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("a worktree create without a workspace id points at the leftover branch", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		stubRemoteDefaultBranch(runner);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		// A worktree create result without the workspace block.
 		runner.set(
 			"herdr",
@@ -1303,9 +1263,9 @@ describe("handOffTicket: the worktree sequence", () => {
 				"worktree",
 				"create",
 				"--cwd",
-				CHECKOUT,
+				repoPath(p.home),
 				"--branch",
-				BRANCH,
+				"factory/9-persist-source-facts",
 				"--base",
 				"origin/main",
 				"--no-focus",
@@ -1313,11 +1273,11 @@ describe("handOffTicket: the worktree sequence", () => {
 			{ stdout: JSON.stringify({ result: { root_pane: { pane_id: "pane-wt" } } }) },
 		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("no workspace id");
-		expect(reasonOf(outcome)).toContain(`leftover branch ${BRANCH}`);
+		expect(reasonOf(outcome)).toContain("leftover branch factory/9-persist-source-facts");
 		// The cleanup needs the workspace id, so it cannot run and no
 		// command ran after the failed step.
 		expectNoCommand(runner.commands(), "worktree remove");
@@ -1325,63 +1285,50 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("a refused worktree create states the line that names the failure", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			code: 1,
-			stderr: WORKTREE_NOT_FOUND_ERROR,
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeOpenMissing(runner, repoPath(p.home));
 		// herdr answers a refused create with Git's whole stderr: the line of
 		// the work it was doing first, and the refusal last.
-		runner.set(
-			"herdr",
-			["worktree", "create", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"],
-			{
-				code: 1,
-				stderr:
-					'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'\' + BRANCH + \'\')' +
-					`\\nfatal: '${BRANCH}' is already used by worktree at '/home/op/worktrees/billing/factory-7'` +
-					'"},"id":"cli:worktree:create"}\n',
-			},
-		);
-
-		const outcome = await handoffRun(runner, worktreeChoice);
-
-		expect(outcome.status).toBe("failed");
-		// The operator reads the refusal they can act on and herdr's stable
-		// code, never the progress line that precedes it.
-		expect(reasonOf(outcome)).toBe(
-			`fatal: '${BRANCH}' is already used by worktree at '/home/op/worktrees/billing/factory-7' (worktree_create_failed)`,
-		);
-	});
-
-	test("a started agent keeps the worktree even when the prompt fails", async () => {
-		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		stubRemoteDefaultBranch(runner);
 		runner.set(
 			"herdr",
 			[
 				"worktree",
 				"create",
 				"--cwd",
-				CHECKOUT,
+				repoPath(p.home),
 				"--branch",
-				BRANCH,
-				"--base",
-				"origin/main",
+				"factory/9-persist-source-facts",
 				"--no-focus",
 			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+			{
+				code: 1,
+				stderr:
+					'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'factory/9-persist-source-facts\')' +
+					"\\nfatal: 'factory/9-persist-source-facts' is already used by worktree at '/home/op/worktrees/factory/factory-5'" +
+					'"},"id":"cli:worktree:create"}\n',
+			},
 		);
+
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
+
+		expect(outcome.status).toBe("failed");
+		// The operator reads the refusal they can act on and herdr's stable
+		// code, never the progress line that precedes it.
+		expect(reasonOf(outcome)).toBe(
+			"fatal: 'factory/9-persist-source-facts' is already used by worktree at '/home/op/worktrees/factory/factory-5' (worktree_create_failed)",
+		);
+	});
+
+	test("a started agent keeps the worktree even when the prompt fails", async () => {
+		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		runner.set("herdr", ["agent", "prompt", AGENT, PROMPT], { code: 1, stderr: "prompt failed\n" });
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		// The agent is running in the worktree and can be prompted by hand.
 		expect(outcome.status).toBe("prompt-failed");
@@ -1391,42 +1338,42 @@ describe("handOffTicket: the worktree sequence", () => {
 	// The ticket's worktree, left on another branch by the agent that last
 	// worked the ticket: the directory herdr names for the branch still
 	// stands on disk, holding the branch the work needed.
-	const WORKTREE_PARENT = join(HOME, "worktrees", "billing");
 
 	/** The list that holds the ticket's worktree beside one other worktree. */
-	function strandedWorktreeList(): string {
+	function strandedWorktreeList(checkout: string, home: string): string {
 		return worktreeListJson([
-			{ path: CHECKOUT, linked: false },
-			{ path: join(WORKTREE_PARENT, "factory-9-other-branch"), branch: "factory/9-other-branch" },
-			{ path: WORKTREE_PATH, branch: "factory/146-the-branch-the-work-needed" },
+			{ path: checkout, linked: false },
+			{
+				path: join(home, "worktrees", "factory", "factory-9-other-branch"),
+				branch: "factory/9-other-branch",
+			},
+			{
+				path: worktreePath(home),
+				branch: "factory/146-the-branch-the-work-needed",
+			},
 		]);
 	}
 
 	test("an existing branch no worktree holds reopens the ticket's worktree left on another branch", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			code: 1,
-			stderr: WORKTREE_NOT_FOUND_ERROR,
-		});
-		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
-			stdout: strandedWorktreeList(),
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeOpenMissing(runner, repoPath(p.home));
+		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
+			stdout: strandedWorktreeList(repoPath(p.home), p.home),
 		});
 		runner.set(
 			"herdr",
-			["worktree", "open", "--cwd", CHECKOUT, "--path", WORKTREE_PATH, "--no-focus"],
+			["worktree", "open", "--cwd", repoPath(p.home), "--path", worktreePath(p.home), "--no-focus"],
 			{
 				stdout: worktreeOpenJson("ws-wt", "pane-wt", {
 					alreadyOpen: false,
-					worktreePath: WORKTREE_PATH,
+					worktreePath: worktreePath(p.home),
 				}),
 			},
 		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		// The branch lookup finds no worktree, the list finds the ticket's
@@ -1435,12 +1382,12 @@ describe("handOffTicket: the worktree sequence", () => {
 		// branch it holds. No create: a create would collide with the
 		// directory.
 		expect(runner.commands()).toEqual([
-			`git -C ${CHECKOUT} rev-parse --git-dir`,
-			`git -C ${CHECKOUT} remote get-url origin`,
-			`git -C ${CHECKOUT} branch --list ${BRANCH}`,
-			`herdr worktree open --cwd ${CHECKOUT} --branch ${BRANCH} --no-focus`,
-			`herdr worktree list --cwd ${CHECKOUT}`,
-			`herdr worktree open --cwd ${CHECKOUT} --path ${WORKTREE_PATH} --no-focus`,
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
+			`git -C ${repoPath(p.home)} branch --list factory/9-persist-source-facts`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
+			`herdr worktree list --cwd ${repoPath(p.home)}`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --path ${worktreePath(p.home)} --no-focus`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -1449,122 +1396,97 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("an existing branch no worktree holds creates fresh when the worktree is gone from disk", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			code: 1,
-			stderr: WORKTREE_NOT_FOUND_ERROR,
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeOpenMissing(runner, repoPath(p.home));
 		// The list holds the other worktree, and no worktree at the path the
 		// branch names: the checkout is gone, and the create takes it.
-		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
 			stdout: worktreeListJson([
-				{ path: CHECKOUT, linked: false },
-				{ path: join(WORKTREE_PARENT, "factory-9-other-branch"), branch: "factory/9-other-branch" },
+				{ path: repoPath(p.home), linked: false },
+				{
+					path: join(p.home, "worktrees", "factory", "factory-9-other-branch"),
+					branch: "factory/9-other-branch",
+				},
 			]),
 		});
-		runner.set(
-			"herdr",
-			["worktree", "create", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		stubWorktreeCreate(runner, repoPath(p.home));
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
-		expect(commands).toContain(`herdr worktree list --cwd ${CHECKOUT}`);
+		expect(commands).toContain(`herdr worktree list --cwd ${repoPath(p.home)}`);
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${BRANCH} --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expectNoCommand(commands, "--path");
 	});
 
 	test("an existing branch no worktree holds creates fresh when the ticket's worktree is prunable", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			code: 1,
-			stderr: WORKTREE_NOT_FOUND_ERROR,
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeOpenMissing(runner, repoPath(p.home));
 		// The worktree git would prune is not the worktree: the create takes
 		// the path it leaves free.
-		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
 			stdout: worktreeListJson([
-				{ path: CHECKOUT, linked: false },
-				{ path: WORKTREE_PATH, branch: "factory/146-the-branch-the-work-needed", prunable: true },
+				{ path: repoPath(p.home), linked: false },
+				{
+					path: worktreePath(p.home),
+					branch: "factory/146-the-branch-the-work-needed",
+					prunable: true,
+				},
 			]),
 		});
-		runner.set(
-			"herdr",
-			["worktree", "create", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		stubWorktreeCreate(runner, repoPath(p.home));
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${BRANCH} --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expectNoCommand(commands, "--path");
 	});
 
 	test("an existing branch no worktree holds creates fresh when the worktree list does not read", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			code: 1,
-			stderr: WORKTREE_NOT_FOUND_ERROR,
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeOpenMissing(runner, repoPath(p.home));
 		// A list that refuses does not stop the handoff: the create runs, the
 		// way the reuse did before the list looked.
-		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
 			code: 1,
 			stderr: "the list refused",
 		});
-		runner.set(
-			"herdr",
-			["worktree", "create", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		stubWorktreeCreate(runner, repoPath(p.home));
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${BRANCH} --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expectNoCommand(commands, "--path");
 	});
 
 	test("an open workspace on the ticket's worktree gets a fresh tab, not a create", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			code: 1,
-			stderr: WORKTREE_NOT_FOUND_ERROR,
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeOpenMissing(runner, repoPath(p.home));
 		// A workspace already stands on the worktree: the open by path reuses
 		// it, and the agent takes a fresh tab in it.
-		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
 			stdout: worktreeListJson([
-				{ path: CHECKOUT, linked: false },
+				{ path: repoPath(p.home), linked: false },
 				{
-					path: WORKTREE_PATH,
+					path: worktreePath(p.home),
 					branch: "factory/146-the-branch-the-work-needed",
 					openWorkspaceId: "ws-open",
 				},
@@ -1572,29 +1494,29 @@ describe("handOffTicket: the worktree sequence", () => {
 		});
 		runner.set(
 			"herdr",
-			["worktree", "open", "--cwd", CHECKOUT, "--path", WORKTREE_PATH, "--no-focus"],
+			["worktree", "open", "--cwd", repoPath(p.home), "--path", worktreePath(p.home), "--no-focus"],
 			{
 				stdout: worktreeOpenJson("ws-open", "pane-root", {
 					alreadyOpen: true,
-					worktreePath: WORKTREE_PATH,
+					worktreePath: worktreePath(p.home),
 				}),
 			},
 		);
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-open", "--cwd", WORKTREE_PATH, "--no-focus"],
+			["tab", "create", "--workspace", "ws-open", "--cwd", worktreePath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-tab") },
 		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`herdr worktree open --cwd ${CHECKOUT} --path ${WORKTREE_PATH} --no-focus`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --path ${worktreePath(p.home)} --no-focus`,
 		);
 		expect(commands).toContain(
-			`herdr tab create --workspace ws-open --cwd ${WORKTREE_PATH} --no-focus`,
+			`herdr tab create --workspace ws-open --cwd ${worktreePath(p.home)} --no-focus`,
 		);
 		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-tab`);
 		expectNoCommand(commands, "worktree create");
@@ -1602,71 +1524,57 @@ describe("handOffTicket: the worktree sequence", () => {
 
 	test("a path open that finds nothing falls through to the fresh create", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			code: 1,
-			stderr: WORKTREE_NOT_FOUND_ERROR,
-		});
-		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
-			stdout: strandedWorktreeList(),
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeOpenMissing(runner, repoPath(p.home));
+		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
+			stdout: strandedWorktreeList(repoPath(p.home), p.home),
 		});
 		// The worktree went between the list and the open: herdr says so, and
 		// the create takes the place it left.
 		runner.set(
 			"herdr",
-			["worktree", "open", "--cwd", CHECKOUT, "--path", WORKTREE_PATH, "--no-focus"],
+			["worktree", "open", "--cwd", repoPath(p.home), "--path", worktreePath(p.home), "--no-focus"],
 			{
 				code: 1,
 				stderr: WORKTREE_NOT_FOUND_ERROR,
 			},
 		);
-		runner.set(
-			"herdr",
-			["worktree", "create", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		stubWorktreeCreate(runner, repoPath(p.home));
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`herdr worktree open --cwd ${CHECKOUT} --path ${WORKTREE_PATH} --no-focus`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --path ${worktreePath(p.home)} --no-focus`,
 		);
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${BRANCH} --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 	});
 
 	test("a refused path open fails the handoff, and no create runs", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			code: 1,
-			stderr: WORKTREE_NOT_FOUND_ERROR,
-		});
-		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
-			stdout: strandedWorktreeList(),
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeOpenMissing(runner, repoPath(p.home));
+		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
+			stdout: strandedWorktreeList(repoPath(p.home), p.home),
 		});
 		// A refusal that is not "gone" stands on its own: the handoff fails
 		// with it, and the create never runs on a directory it would collide
 		// with.
 		runner.set(
 			"herdr",
-			["worktree", "open", "--cwd", CHECKOUT, "--path", WORKTREE_PATH, "--no-focus"],
+			["worktree", "open", "--cwd", repoPath(p.home), "--path", worktreePath(p.home), "--no-focus"],
 			{
 				code: 1,
 				stderr: "the worktree will not open",
 			},
 		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("the worktree will not open");
@@ -1675,21 +1583,17 @@ describe("handOffTicket: the worktree sequence", () => {
 });
 
 describe("handOffTicket: the leftover worktree directory that blocks a create", () => {
-	afterEach(() => {
-		rmSync(join(HOME, "worktrees"), { recursive: true, force: true });
-	});
-
 	test("the plane moves the leftover aside, creates again, and starts the agent", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		reuseToFreshCreate(runner);
-		makeDirectory(ticketWorktreePath(), { ".docusaurus/routes.js": "cache" });
-		runner.setSequence("herdr", createOnBranch(), [
-			worktreeCreateBlocked(ticketWorktreePath()),
+		const p = await modulePlane(runner);
+		reuseToFreshCreate(runner, repoPath(p.home), p.home);
+		makeDirectory(worktreePath(p.home), { ".docusaurus/routes.js": "cache" });
+		runner.setSequence("herdr", createOnBranch(repoPath(p.home)), [
+			worktreeCreateBlocked(worktreePath(p.home)),
 			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
 		]);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		// The create ran twice: the refusal, the move, then the same ask.
@@ -1697,44 +1601,48 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 			runner.commands().filter((command) => command.includes("worktree create --cwd")),
 		).toHaveLength(2);
 		// Nothing was deleted: the leftover stands whole under the name that says so.
-		expect(existsSync(ticketWorktreePath())).toBe(false);
-		expect(readFileSync(`${ticketWorktreePath()}.leftover/.docusaurus/routes.js`, "utf8")).toBe(
+		expect(existsSync(worktreePath(p.home))).toBe(false);
+		expect(readFileSync(`${worktreePath(p.home)}.leftover/.docusaurus/routes.js`, "utf8")).toBe(
 			"cache",
 		);
 		expect(outcome.notes?.leftoverWorktree).toBe(
-			`the plane moved the leftover worktree directory ${ticketWorktreePath()} aside to ${ticketWorktreePath()}.leftover`,
+			`the plane moved the leftover worktree directory ${worktreePath(p.home)} aside to ${worktreePath(p.home)}.leftover`,
 		);
 	});
 
 	test("a second leftover takes the next free name, so the first stays where it is", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		reuseToFreshCreate(runner);
-		makeDirectory(ticketWorktreePath(), { ".docusaurus/routes.js": "second" });
-		makeDirectory(`${ticketWorktreePath()}.leftover`, { ".docusaurus/routes.js": "first" });
-		runner.setSequence("herdr", createOnBranch(), [
-			worktreeCreateBlocked(ticketWorktreePath()),
+		const p = await modulePlane(runner);
+		reuseToFreshCreate(runner, repoPath(p.home), p.home);
+		makeDirectory(worktreePath(p.home), { ".docusaurus/routes.js": "second" });
+		makeDirectory(`${worktreePath(p.home)}.leftover`, { ".docusaurus/routes.js": "first" });
+		runner.setSequence("herdr", createOnBranch(repoPath(p.home)), [
+			worktreeCreateBlocked(worktreePath(p.home)),
 			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
 		]);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
-		expect(readFileSync(`${ticketWorktreePath()}.leftover/.docusaurus/routes.js`, "utf8")).toBe(
+		expect(readFileSync(`${worktreePath(p.home)}.leftover/.docusaurus/routes.js`, "utf8")).toBe(
 			"first",
 		);
-		expect(readFileSync(`${ticketWorktreePath()}.leftover-2/.docusaurus/routes.js`, "utf8")).toBe(
+		expect(readFileSync(`${worktreePath(p.home)}.leftover-2/.docusaurus/routes.js`, "utf8")).toBe(
 			"second",
 		);
 	});
 
 	test("a refusal with no leftover directory beside it runs one create and moves nothing", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		reuseToFreshCreate(runner);
-		runner.set("herdr", createOnBranch(), worktreeCreateBlocked(ticketWorktreePath()));
+		const p = await modulePlane(runner);
+		reuseToFreshCreate(runner, repoPath(p.home), p.home);
+		runner.set(
+			"herdr",
+			createOnBranch(repoPath(p.home)),
+			worktreeCreateBlocked(worktreePath(p.home)),
+		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("already exists");
@@ -1746,88 +1654,96 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 
 	test("an empty directory blocks nothing, so the plane leaves it and its refusal alone", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		reuseToFreshCreate(runner);
-		mkdirSync(ticketWorktreePath(), { recursive: true });
-		runner.set("herdr", createOnBranch(), worktreeCreateBlocked(ticketWorktreePath()));
+		const p = await modulePlane(runner);
+		reuseToFreshCreate(runner, repoPath(p.home), p.home);
+		mkdirSync(worktreePath(p.home), { recursive: true });
+		runner.set(
+			"herdr",
+			createOnBranch(repoPath(p.home)),
+			worktreeCreateBlocked(worktreePath(p.home)),
+		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		// git takes an empty directory, so that refusal is about something else.
-		expect(existsSync(ticketWorktreePath())).toBe(true);
-		expect(existsSync(`${ticketWorktreePath()}.leftover`)).toBe(false);
+		expect(existsSync(worktreePath(p.home))).toBe(true);
+		expect(existsSync(`${worktreePath(p.home)}.leftover`)).toBe(false);
 	});
 
 	test("a path git still records is herdr's to clear: the plane never moves it", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		reuseToFreshCreate(runner);
-		makeDirectory(ticketWorktreePath(), { ".docusaurus/routes.js": "cache" });
+		const p = await modulePlane(runner);
+		reuseToFreshCreate(runner, repoPath(p.home), p.home);
+		makeDirectory(worktreePath(p.home), { ".docusaurus/routes.js": "cache" });
 		// git's list holds the ticket's own path, and prunes it: a stale record,
 		// not an untracked directory.
-		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
 			stdout: worktreeListJson([
-				{ path: CHECKOUT, linked: false },
+				{ path: repoPath(p.home), linked: false },
 				{
-					path: ticketWorktreePath(),
-					branch: BRANCH,
+					path: worktreePath(p.home),
+					branch: "factory/9-persist-source-facts",
 					prunable: true,
 				},
 			]),
 		});
-		runner.set("herdr", createOnBranch(), {
+		runner.set("herdr", createOnBranch(repoPath(p.home)), {
 			code: 1,
 			stderr:
-				'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'\' + BRANCH + \'\')' +
-				`\\nfatal: '${ticketWorktreePath()}' is a missing but already registered worktree;` +
+				'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'factory/9-persist-source-facts\')' +
+				`\\nfatal: '${worktreePath(p.home)}' is a missing but already registered worktree;` +
 				"\\nuse 'add -f' to override, or 'prune' or 'remove' to clear\"},\"id\":\"cli:worktree:create\"}\n",
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("already registered worktree");
-		expect(existsSync(`${ticketWorktreePath()}.leftover`)).toBe(false);
-		expect(readFileSync(join(ticketWorktreePath(), ".docusaurus/routes.js"), "utf8")).toBe("cache");
+		expect(existsSync(`${worktreePath(p.home)}.leftover`)).toBe(false);
+		expect(readFileSync(join(worktreePath(p.home), ".docusaurus/routes.js"), "utf8")).toBe("cache");
 	});
 
 	test("a path that holds a .git entry is a checkout: the plane never moves it", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		reuseToFreshCreate(runner);
-		makeDirectory(ticketWorktreePath(), {
+		const p = await modulePlane(runner);
+		reuseToFreshCreate(runner, repoPath(p.home), p.home);
+		makeDirectory(worktreePath(p.home), {
 			".git": "gitdir: /somewhere/worktrees/x",
 			"src/app.ts": "the work",
 		});
-		runner.set("herdr", createOnBranch(), worktreeCreateBlocked(ticketWorktreePath()));
+		runner.set(
+			"herdr",
+			createOnBranch(repoPath(p.home)),
+			worktreeCreateBlocked(worktreePath(p.home)),
+		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
-		expect(existsSync(`${ticketWorktreePath()}.leftover`)).toBe(false);
-		expect(existsSync(join(ticketWorktreePath(), ".git"))).toBe(true);
+		expect(existsSync(`${worktreePath(p.home)}.leftover`)).toBe(false);
+		expect(existsSync(join(worktreePath(p.home), ".git"))).toBe(true);
 	});
 
 	test("the fresh create on a new branch takes the same recovery", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
+			stdout: siblingWorktreeList(repoPath(p.home), p.home),
 		});
-		stubRemoteDefaultBranch(runner);
-		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], { stdout: siblingWorktreeList() });
-		makeDirectory(ticketWorktreePath(), { ".docusaurus/routes.js": "cache" });
+		makeDirectory(worktreePath(p.home), { ".docusaurus/routes.js": "cache" });
 		runner.setSequence(
 			"herdr",
-			[...createOnBranch().slice(0, 6), "--base", "origin/main", "--no-focus"],
+			[...createOnBranch(repoPath(p.home)).slice(0, 6), "--base", "origin/main", "--no-focus"],
 			[
-				worktreeCreateBlocked(ticketWorktreePath()),
+				worktreeCreateBlocked(worktreePath(p.home)),
 				{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
 			],
 		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		// The retry asks the same create, the worktree base and all.
@@ -1837,14 +1753,15 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 		expect(
 			runner.commands().filter((command) => command.includes("--base origin/main")),
 		).toHaveLength(2);
-		expect(existsSync(`${ticketWorktreePath()}.leftover/.docusaurus/routes.js`)).toBe(true);
+		expect(existsSync(`${worktreePath(p.home)}.leftover/.docusaurus/routes.js`)).toBe(true);
 	});
 });
 
 describe("handOffTicket: the guard rails", () => {
 	test("only open tickets can be handed off", async () => {
 		const runner = new FakeRunner();
-		const outcome = await handoffRun(runner, defaultChoice, {
+		const p = await modulePlane(runner);
+		const outcome = await handoffRun(runner, p.home, defaultChoice, {
 			ticket: { ...ticket, state: "running" },
 		});
 		expect(outcome.status).toBe("failed");
@@ -1853,7 +1770,11 @@ describe("handOffTicket: the guard rails", () => {
 
 	test("the container environment is reserved", async () => {
 		const runner = new FakeRunner();
-		const outcome = await handoffRun(runner, { ...defaultChoice, environment: "container" });
+		const p = await modulePlane(runner);
+		const outcome = await handoffRun(runner, p.home, {
+			...defaultChoice,
+			environment: "container",
+		});
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("reserved");
 		expect(runner.calls).toHaveLength(0);
@@ -1862,11 +1783,11 @@ describe("handOffTicket: the guard rails", () => {
 	describe("handOffTicket: the setting fit check (ADR 0010)", () => {
 		test("a model the agent does not report fails before its first external change", async () => {
 			const runner = new FakeRunner();
-			conventionCheckout(runner);
-			stubLiveWorkspace(runner);
+			const p = await modulePlane(runner);
+			stubLiveWorkspace(runner, repoPath(p.home));
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 
-			const outcome = await handoffRun(runner, { ...defaultChoice, model: "gpt-4o" });
+			const outcome = await handoffRun(runner, p.home, { ...defaultChoice, model: "gpt-4o" });
 
 			expect(outcome.status).toBe("failed");
 			expect(reasonOf(outcome)).toBe(
@@ -1879,11 +1800,11 @@ describe("handOffTicket: the guard rails", () => {
 
 		test("a model the agent reports rides on the start", async () => {
 			const runner = new FakeRunner();
-			conventionCheckout(runner);
-			stubLiveWorkspace(runner);
+			const p = await modulePlane(runner);
+			stubLiveWorkspace(runner, repoPath(p.home));
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 
-			const outcome = await handoffRun(runner, {
+			const outcome = await handoffRun(runner, p.home, {
 				...defaultChoice,
 				model: "anthropic/claude-sonnet-4-5",
 			});
@@ -1906,11 +1827,11 @@ describe("handOffTicket: the guard rails", () => {
 
 		test("an unfit thinking level fails the handoff, and no list query is needed to see it", async () => {
 			const runner = new FakeRunner();
-			conventionCheckout(runner);
-			stubLiveWorkspace(runner);
+			const p = await modulePlane(runner);
+			stubLiveWorkspace(runner, repoPath(p.home));
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 
-			const outcome = await handoffRun(runner, {
+			const outcome = await handoffRun(runner, p.home, {
 				...defaultChoice,
 				model: "anthropic/claude-sonnet-4-5",
 				thinking: "ultra",
@@ -1930,12 +1851,12 @@ describe("handOffTicket: the guard rails", () => {
 
 		test("a model list that cannot be fetched lets the handoff run on", async () => {
 			const runner = new FakeRunner();
-			conventionCheckout(runner);
-			stubLiveWorkspace(runner);
+			const p = await modulePlane(runner);
+			stubLiveWorkspace(runner, repoPath(p.home));
 			// The fake holds no list for the pi kind: the query fails as an
 			// uninstalled or unreadable CLI would, and the agent's own rejection
 			// stands.
-			const outcome = await handoffRun(runner, { ...defaultChoice, model: "gpt-4o" });
+			const outcome = await handoffRun(runner, p.home, { ...defaultChoice, model: "gpt-4o" });
 
 			expect(outcome.status).toBe("ok");
 			const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
@@ -1944,12 +1865,13 @@ describe("handOffTicket: the guard rails", () => {
 
 		test("a restart fails an unfit model before it touches the stored workspace", async () => {
 			const runner = new FakeRunner();
-			conventionCheckout(runner);
-			stubLiveWorkspace(runner);
+			const p = await modulePlane(runner);
+			stubLiveWorkspace(runner, repoPath(p.home));
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 
 			const outcome = await handoffRun(
 				runner,
+				p.home,
 				{ ...defaultChoice, model: "gpt-4o" },
 				{
 					previousMessage: "settled earlier",
@@ -1974,15 +1896,15 @@ describe("handOffTicket: the guard rails", () => {
 	describe("handOffConsultation: the setting fit check", () => {
 		test("a start with no verdict refuses an unfit model before any external change", async () => {
 			const runner = new FakeRunner();
-			conventionCheckout(runner);
-			stubLiveWorkspace(runner);
+			const p = await modulePlane(runner);
+			stubLiveWorkspace(runner, repoPath(p.home));
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 
 			const outcome = await handOffConsultation({
-				consultation: consultationRecord({ model: "gpt-4o" }),
+				consultation: consultationRecord(repoPath(p.home), { model: "gpt-4o" }),
 				config: BASE_CONFIG,
 				runner,
-				home: HOME,
+				home: p.home,
 			});
 
 			expect(outcome.status).toBe("failed");
@@ -1996,14 +1918,14 @@ describe("handOffTicket: the guard rails", () => {
 
 		test("a start with no verdict refuses an unfit thinking level", async () => {
 			const runner = new FakeRunner();
-			conventionCheckout(runner);
-			stubLiveWorkspace(runner);
+			const p = await modulePlane(runner);
+			stubLiveWorkspace(runner, repoPath(p.home));
 
 			const outcome = await handOffConsultation({
-				consultation: consultationRecord({ thinking: "ultra" }),
+				consultation: consultationRecord(repoPath(p.home), { thinking: "ultra" }),
 				config: BASE_CONFIG,
 				runner,
-				home: HOME,
+				home: p.home,
 			});
 
 			expect(outcome.status).toBe("failed");
@@ -2043,11 +1965,12 @@ describe("handOffTicket: the guard rails", () => {
 			];
 			for (const item of cases) {
 				const runner = new FakeRunner();
+				const p = await modulePlane(runner);
 				const outcome = await handOffConsultation({
-					consultation: consultationRecord({ ...item.consultation }),
+					consultation: consultationRecord(repoPath(p.home), { ...item.consultation }),
 					config: item.config,
 					runner,
-					home: HOME,
+					home: p.home,
 				});
 				expect(outcome.status, item.label).toBe("failed");
 				expect(reasonOf(outcome)).toContain(item.text);
@@ -2058,6 +1981,7 @@ describe("handOffTicket: the guard rails", () => {
 
 		test("a Consultation start refuses a count that is not positive digits", async () => {
 			const runner = new FakeRunner();
+			const p = await modulePlane(runner);
 			const config: FactoryConfig = {
 				...BASE_CONFIG,
 				agents: {
@@ -2066,10 +1990,10 @@ describe("handOffTicket: the guard rails", () => {
 				},
 			};
 			const outcome = await handOffConsultation({
-				consultation: consultationRecord({ contextWindow: "0" }),
+				consultation: consultationRecord(repoPath(p.home), { contextWindow: "0" }),
 				config,
 				runner,
-				home: HOME,
+				home: p.home,
 			});
 			expect(outcome.status).toBe("failed");
 			expect(reasonOf(outcome)).toContain(
@@ -2080,15 +2004,17 @@ describe("handOffTicket: the guard rails", () => {
 
 		test("a start with no verdict runs on a fit model, and asks the CLI once", async () => {
 			const runner = new FakeRunner();
-			conventionCheckout(runner);
-			stubLiveWorkspace(runner);
+			const p = await modulePlane(runner);
+			stubLiveWorkspace(runner, repoPath(p.home));
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 
 			const outcome = await handOffConsultation({
-				consultation: consultationRecord({ model: "anthropic/claude-sonnet-4-5" }),
+				consultation: consultationRecord(repoPath(p.home), {
+					model: "anthropic/claude-sonnet-4-5",
+				}),
 				config: BASE_CONFIG,
 				runner,
-				home: HOME,
+				home: p.home,
 			});
 
 			expect(outcome.status).toBe("ok");
@@ -2112,10 +2038,12 @@ describe("handOffTicket: the guard rails", () => {
 
 		test("a start that carries the launch route's verdict does not ask again", async () => {
 			const runner = new FakeRunner();
-			conventionCheckout(runner);
-			stubLiveWorkspace(runner);
+			const p = await modulePlane(runner);
+			stubLiveWorkspace(runner, repoPath(p.home));
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
-			const consultation = consultationRecord({ model: "anthropic/claude-sonnet-4-5" });
+			const consultation = consultationRecord(repoPath(p.home), {
+				model: "anthropic/claude-sonnet-4-5",
+			});
 			const startCheck = await checkStart(consultation, BASE_CONFIG, runner);
 			expect(startCheck.ok).toBe(true);
 
@@ -2123,7 +2051,7 @@ describe("handOffTicket: the guard rails", () => {
 				consultation,
 				config: BASE_CONFIG,
 				runner,
-				home: HOME,
+				home: p.home,
 				startCheck,
 			});
 
@@ -2136,15 +2064,17 @@ describe("handOffTicket: the guard rails", () => {
 
 	test("an unknown agent type or task type fails without a command", async () => {
 		const runner = new FakeRunner();
-		const agent = await handoffRun(runner, { ...defaultChoice, agentType: "cursor" });
+		const p = await modulePlane(runner);
+		const agent = await handoffRun(runner, p.home, { ...defaultChoice, agentType: "cursor" });
 		expect(agent).toEqual({ status: "failed", reason: "unknown agent type: cursor" });
-		const task = await handoffRun(runner, { ...defaultChoice, taskType: "refactor" });
+		const task = await handoffRun(runner, p.home, { ...defaultChoice, taskType: "refactor" });
 		expect(task).toEqual({ status: "failed", reason: "unknown task type: refactor" });
 		expect(runner.calls).toHaveLength(0);
 	});
 
 	test("a model the resolved agent cannot map fails before any command", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		// The profile names no model: the default one resolves onto an agent
 		// that maps no model, so the value has nowhere to go.
 		const config: FactoryConfig = {
@@ -2157,7 +2087,9 @@ describe("handOffTicket: the guard rails", () => {
 			},
 		};
 
-		const outcome = await handoffRun(runner, resolveHandoffChoice(config, "implement"), { config });
+		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "implement"), {
+			config: config,
+		});
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toBe(
@@ -2171,6 +2103,7 @@ describe("handOffTicket: the guard rails", () => {
 
 	test("a thinking level the resolved agent cannot map fails before any command", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
 			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
@@ -2180,7 +2113,9 @@ describe("handOffTicket: the guard rails", () => {
 			},
 		};
 
-		const outcome = await handoffRun(runner, resolveHandoffChoice(config, "implement"), { config });
+		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "implement"), {
+			config: config,
+		});
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toBe(
@@ -2193,6 +2128,7 @@ describe("handOffTicket: the guard rails", () => {
 
 	test("a thinking level the resolved agent does not offer fails before any command", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		// zed maps a thinking template, so the value has an argv to ride on, and
 		// it offers only two levels. An operator can still draft a third one by
 		// cycling the panel's Agent row onto zed: the level list is the other
@@ -2207,8 +2143,11 @@ describe("handOffTicket: the guard rails", () => {
 
 		const outcome = await handoffRun(
 			runner,
+			p.home,
 			{ ...defaultChoice, agentType: "zed", thinking: "minimal" },
-			{ config },
+			{
+				config: config,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -2221,6 +2160,7 @@ describe("handOffTicket: the guard rails", () => {
 
 	test("a context window that is not a token count fails before any command", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		// The panel keeps a count to digits, but digits are not yet a count: an
 		// all-zero one asks for no context at all, and one that runs past the
 		// safe integer range cannot be stated without rounding it. A separator
@@ -2236,8 +2176,11 @@ describe("handOffTicket: the guard rails", () => {
 		for (const draft of ["0", "000", "200k", "272 000", "9007199254740993"]) {
 			const outcome = await handoffRun(
 				runner,
+				p.home,
 				{ ...defaultChoice, agentType: "codex", contextWindow: draft },
-				{ config },
+				{
+					config: config,
+				},
 			);
 			expect(outcome.status).toBe("failed");
 			expect(reasonOf(outcome)).toBe(
@@ -2252,25 +2195,26 @@ describe("handOffTicket: the guard rails", () => {
 
 	test("a failed herdr step after a sibling clone still hands back the mapping", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		// The convention path holds a different repository: a sibling clone.
-		runner.set("git", ["-C", CHECKOUT, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-		runner.set("git", ["-C", CHECKOUT, "remote", "get-url", "origin"], {
+		runner.set("git", ["-C", repoPath(p.home), "rev-parse", "--git-dir"], { stdout: ".git\n" });
+		runner.set("git", ["-C", repoPath(p.home), "remote", "get-url", "origin"], {
 			stdout: "https://github.com/acme/portal.git\n",
 		});
-		const sibling = join(HOME, "src", "billing_1");
+		const sibling = join(p.home, "src", "factory_1");
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
 		runner.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
 			code: 1,
 			stderr: "error: herdr is not running\n",
 		});
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome.status).toBe("failed");
 		// The clone ran and the handoff failed after it: the mapping must not
 		// wait for a later successful handoff.
 		expect(outcome.notes?.mappingToWrite).toEqual({
-			repository: "github.com/acme/billing",
+			repository: "github.com/acme/factory",
 			path: sibling,
 		});
 		expect(reasonOf(outcome)).toBe("error: herdr is not running");
@@ -2278,12 +2222,13 @@ describe("handOffTicket: the guard rails", () => {
 
 	test("a sibling clone warns and hands back the mapping to persist", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		// The convention path holds a different repository.
-		runner.set("git", ["-C", CHECKOUT, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-		runner.set("git", ["-C", CHECKOUT, "remote", "get-url", "origin"], {
+		runner.set("git", ["-C", repoPath(p.home), "rev-parse", "--git-dir"], { stdout: ".git\n" });
+		runner.set("git", ["-C", repoPath(p.home), "remote", "get-url", "origin"], {
 			stdout: "https://github.com/acme/portal.git\n",
 		});
-		const sibling = join(HOME, "src", "billing_1");
+		const sibling = join(p.home, "src", "factory_1");
 		// The handoff then runs at the sibling, not the conflicting path.
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
 		runner.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
@@ -2293,16 +2238,16 @@ describe("handOffTicket: the guard rails", () => {
 			stdout: tabCreateJson("pane-1"),
 		});
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome.status).toBe("ok");
 		expect(outcome.notes?.warning).toContain("sibling");
 		expect(outcome.notes?.mappingToWrite).toEqual({
-			repository: "github.com/acme/billing",
+			repository: "github.com/acme/factory",
 			path: sibling,
 		});
 		// The handoff runs at the sibling, not the conflicting path.
-		expect(runner.commands()).toContain(`git clone https://github.com/acme/billing.git ${sibling}`);
+		expect(runner.commands()).toContain(`git clone https://github.com/acme/factory.git ${sibling}`);
 	});
 });
 
@@ -2321,7 +2266,7 @@ const previousMessageConfig: FactoryConfig = {
 describe("handOffTicket: the workflow handoff and the restart", () => {
 	test("reuses the stored live workspace, tabs without a cwd, closes the previous tab", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-stored" }]),
 		});
@@ -2329,7 +2274,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 			stdout: tabCreateJson("pane-2"),
 		});
 
-		const outcome = await handoffRun(runner, defaultChoice, {
+		const outcome = await handoffRun(runner, p.home, defaultChoice, {
 			previousMessage: "settled earlier",
 			claim: "continuation",
 			previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
@@ -2343,8 +2288,8 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 			workspaceId: "ws-stored",
 		});
 		expect(runner.commands()).toEqual([
-			`git -C ${CHECKOUT} rev-parse --git-dir`,
-			`git -C ${CHECKOUT} remote get-url origin`,
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
 			"herdr workspace list",
 			"herdr tab create --workspace ws-stored --no-focus",
 			`herdr agent start ${AGENT} --kind pi --pane pane-2`,
@@ -2355,7 +2300,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 
 	test("a restart repeats its stored agent model and thinking in the start command", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-stored" }]),
 		});
@@ -2365,6 +2310,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 
 		const outcome = await handoffRun(
 			runner,
+			p.home,
 			{ ...defaultChoice, agentType: "codex", model: "gpt-5.6", thinking: "high" },
 			{
 				previousMessage: "the interrupted work",
@@ -2400,7 +2346,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 
 	test("the prompt carries the last captured message through the placeholder", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-stored" }]),
 		});
@@ -2408,7 +2354,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 			stdout: tabCreateJson("pane-2"),
 		});
 
-		const outcome = await handoffRun(runner, defaultChoice, {
+		const outcome = await handoffRun(runner, p.home, defaultChoice, {
 			config: previousMessageConfig,
 			previousMessage: "settled earlier",
 			claim: "continuation",
@@ -2420,20 +2366,30 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 			(c) => c.command === "herdr" && c.args[0] === "agent" && c.args[1] === "prompt",
 		);
 		// `herdr agent prompt <name> <prompt>`: the prompt is the last argument.
-		expect(prompt?.args.at(-1)).toBe("Previous: settled earlier\nAdd a retry policy.");
+		expect(prompt?.args.at(-1)).toBe(`Previous: settled earlier\n${DEFAULT_TICKET_DESCRIPTION}`);
 		// No previous tab: nothing to close.
 		expectNoCommand(runner.commands(), "tab close");
 	});
 
 	test("a stored worktree that is gone is reopened on its branch", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			stdout: worktreeCreateJson("ws-reopen", "pane-ro"),
-		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				repoPath(p.home),
+				"--branch",
+				"factory/9-persist-source-facts",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-reopen", "pane-ro") },
+		);
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			previousMessage: "settled earlier",
 			claim: "continuation",
 			previous: { workspaceId: "ws-gone", environment: "worktree", tabId: "tab-prev" },
@@ -2446,7 +2402,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		expectNoCommand(commands, "branch --list");
 		expectNoCommand(commands, "rev-parse HEAD");
 		expect(commands).toContain(
-			`herdr worktree open --cwd ${CHECKOUT} --branch ${BRANCH} --no-focus`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
 		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-ro`);
 		expect(commands).toContain("herdr tab close tab-prev");
@@ -2454,17 +2410,17 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 
 	test("a stored live workspace that is gone falls back to the live sequence", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-still", checkoutPath: CHECKOUT }]),
+			stdout: workspaceListJson([{ id: "ws-still", checkoutPath: repoPath(p.home) }]),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-still", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-still", "--cwd", repoPath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-3") },
 		);
 
-		const outcome = await handoffRun(runner, defaultChoice, {
+		const outcome = await handoffRun(runner, p.home, defaultChoice, {
 			previousMessage: "settled earlier",
 			claim: "continuation",
 			previous: { workspaceId: "ws-gone", environment: "live-worktree", tabId: "tab-prev" },
@@ -2474,7 +2430,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		const commands = runner.commands();
 		// The live sequence found the workspace the checkout still lives in.
 		expect(commands).toContain(
-			`herdr tab create --workspace ws-still --cwd ${CHECKOUT} --no-focus`,
+			`herdr tab create --workspace ws-still --cwd ${repoPath(p.home)} --no-focus`,
 		);
 		expectNoCommand(commands, "workspace create");
 		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-3`);
@@ -2483,28 +2439,12 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 
 	test("a stored workspace of another environment kind is not reused", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			previousMessage: "settled earlier",
 			claim: "continuation",
 			previous: { workspaceId: "ws-live", environment: "live-worktree", tabId: "tab-prev" },
@@ -2514,14 +2454,14 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		// The choice says worktree, the storage says live: build fresh.
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${BRANCH} --base origin/main --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base origin/main --no-focus`,
 		);
 		expectNoCommand(commands, "tab create --workspace ws-live");
 	});
 
 	test("an agent that fails in a reused workspace closes the tab the handoff made", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-stored" }]),
 		});
@@ -2533,7 +2473,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 			stderr: "error: herdr is not running\n",
 		});
 
-		const outcome = await handoffRun(runner, defaultChoice, {
+		const outcome = await handoffRun(runner, p.home, defaultChoice, {
 			previousMessage: "settled earlier",
 			claim: "continuation",
 			previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
@@ -2574,20 +2514,25 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 			},
 		};
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new"),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-new", "--cwd", repoPath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-1") },
 		);
 
-		const outcome = await handoffRun(runner, resolveHandoffChoice(profileConfig, "implement"), {
-			config: profileConfig,
-		});
+		const outcome = await handoffRun(
+			runner,
+			p.home,
+			resolveHandoffChoice(profileConfig, "implement"),
+			{
+				config: profileConfig,
+			},
+		);
 
 		expect(outcome.status).toBe("ok");
 		const start = runner.calls.find((call) => call.args[0] === "agent" && call.args[1] === "start");
@@ -2611,6 +2556,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 
 	test("a context window the resolved agent cannot map fails before any command", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
 			agents: {
@@ -2628,7 +2574,9 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 			},
 		};
 
-		const outcome = await handoffRun(runner, resolveHandoffChoice(config, "implement"), { config });
+		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "implement"), {
+			config: config,
+		});
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toBe(
@@ -2645,13 +2593,14 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		// kept count fails the handoff the same way a profile's does: a restart
 		// never quietly widens or narrows the room the agent worked in.
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-stored" }]),
 		});
 
 		const outcome = await handoffRun(
 			runner,
+			p.home,
 			{ ...defaultChoice, agentType: "pi", contextWindow: "272000" },
 			{
 				ticket: { ...ticket, state: "running" },
@@ -2669,6 +2618,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 
 	test("an edge reroute onto an agent that cannot map the target model fails", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		// ADR 0009: a model written for the target profile's own agent can
 		// fail a handoff an edge routed to another agent, and that failure is
 		// how the config error is seen.
@@ -2682,9 +2632,9 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		};
 		const edge = { from: "implement", to: ["review"], agent: "cursor" };
 
-		const outcome = await handoffRun(runner, resolveHandoffChoice(config, "review", edge), {
+		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "review", edge), {
 			ticket: { ...ticket, state: "awaiting" },
-			config,
+			config: config,
 			previousMessage: "settled earlier",
 			claim: "continuation",
 			previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
@@ -2697,6 +2647,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 
 	test("an edge reroute onto an agent that does not offer the profile's level fails", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		// Startup paired "medium" with pi, the profile's own agent. The edge
 		// replaced only the agent, so the pair the reroute creates is checked at
 		// handoff time by the same rule that fails a model (ADR 0009).
@@ -2713,9 +2664,9 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		};
 		const edge = { from: "implement", to: ["review"], agent: "zed" };
 
-		const outcome = await handoffRun(runner, resolveHandoffChoice(config, "review", edge), {
+		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "review", edge), {
 			ticket: { ...ticket, state: "awaiting" },
-			config,
+			config: config,
 			previousMessage: "settled earlier",
 			claim: "continuation",
 			previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
@@ -2729,48 +2680,65 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 
 describe("a leftover agent that holds the ticket's name", () => {
 	/** The herdr reason that names the holder of a taken agent name. */
+	type PaneHolder = { paneId: string; workspaceId: string };
+
 	function nameTaken(
-		paneId: string,
-		workspaceId: string,
-		tabId: string,
+		holder: PaneHolder & { tabId: string },
+		home: string,
 		name: string = AGENT,
 	): string {
 		return (
 			`{"error":{"code":"agent_name_taken","message":"agent name ${name} is already used; ` +
-			`candidates: terminal_id=term_1 pane_id=${paneId} workspace_id=${workspaceId} ` +
-			`tab_id=${tabId} cwd=${WORKTREE_PATH} status=Working"},"id":"cli:agent:start"}\n`
+			`candidates: terminal_id=term_1 pane_id=${holder.paneId} workspace_id=${holder.workspaceId} ` +
+			`tab_id=${holder.tabId} cwd=${worktreePath(home)} status=Working"},"id":"cli:agent:start"}\n`
 		);
 	}
 
 	/** The open-worktree sequence, up to the fresh tab the agent starts in. */
-	function openedWorktree(runner: FakeRunner, holderPane: string, holderWorkspace: string): void {
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			stdout: worktreeOpenJson("ws-wt", "pane-root", {
-				alreadyOpen: true,
-				worktreePath: WORKTREE_PATH,
-			}),
-		});
+	function openedWorktree(
+		runner: FakeRunner,
+		holder: PaneHolder,
+		checkout: string,
+		home: string,
+	): void {
+		conventionCheckout(runner, checkout);
+		stubBranchList(runner, checkout);
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-wt", "--cwd", WORKTREE_PATH, "--no-focus"],
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				checkout,
+				"--branch",
+				"factory/9-persist-source-facts",
+				"--no-focus",
+			],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-root", {
+					alreadyOpen: true,
+					worktreePath: worktreePath(home),
+				}),
+			},
+		);
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-wt", "--cwd", worktreePath(home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-tab") },
 		);
 		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-tab"], {
 			code: 1,
-			stderr: nameTaken(holderPane, holderWorkspace, "ws-old:t1"),
+			stderr: nameTaken({ ...holder, tabId: "ws-old:t1" }, home),
 		});
 	}
 
 	test("starts under its cycle name beside its own leftover agent", async () => {
 		const runner = new FakeRunner();
-		openedWorktree(runner, "pane-old", "ws-old");
+		const p = await modulePlane(runner);
+		openedWorktree(runner, { paneId: "pane-old", workspaceId: "ws-old" }, repoPath(p.home), p.home);
 		const cycle = CYCLE;
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
 		});
 
@@ -2804,22 +2772,32 @@ describe("a leftover agent that holds the ticket's name", () => {
 
 	test("takes its cycle name on a known leftover even when herdr names no holder", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
-		runner.set("herdr", ["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"], {
-			stdout: worktreeOpenJson("ws-wt", "pane-root", {
-				alreadyOpen: false,
-				worktreePath: WORKTREE_PATH,
-			}),
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				repoPath(p.home),
+				"--branch",
+				"factory/9-persist-source-facts",
+				"--no-focus",
+			],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-root", {
+					alreadyOpen: false,
+					worktreePath: worktreePath(p.home),
+				}),
+			},
+		);
 		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-root"], {
 			code: 1,
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			names: { ownPaneIds: [], ownWorkspaceIds: [], leftoverKnown: true },
 		});
 
@@ -2831,9 +2809,15 @@ describe("a leftover agent that holds the ticket's name", () => {
 
 	test("fails on a name another agent holds, and says where it is held", async () => {
 		const runner = new FakeRunner();
-		openedWorktree(runner, "pane-stranger", "ws-stranger");
+		const p = await modulePlane(runner);
+		openedWorktree(
+			runner,
+			{ paneId: "pane-stranger", workspaceId: "ws-stranger" },
+			repoPath(p.home),
+			p.home,
+		);
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
 		});
 
@@ -2854,16 +2838,20 @@ describe("a leftover agent that holds the ticket's name", () => {
 
 	test("gives up with its own name spent, and points at the leftover", async () => {
 		const runner = new FakeRunner();
-		openedWorktree(runner, "pane-old", "ws-old");
+		const p = await modulePlane(runner);
+		openedWorktree(runner, { paneId: "pane-old", workspaceId: "ws-old" }, repoPath(p.home), p.home);
 		// Every name of this ticket is held by one of its own leftover agents.
 		for (const name of [CYCLE, ORDINAL]) {
 			runner.set("herdr", ["agent", "start", name, "--kind", "pi", "--pane", "pane-tab"], {
 				code: 1,
-				stderr: nameTaken("pane-old", "ws-old", "ws-old:t1"),
+				stderr: nameTaken(
+					{ paneId: "pane-old", workspaceId: "ws-old", tabId: "ws-old:t1" },
+					p.home,
+				),
 			});
 		}
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: [], leftoverKnown: false },
 		});
 
@@ -2877,7 +2865,13 @@ describe("a leftover agent that holds the ticket's name", () => {
 
 	test("a refusal that names two holders reports the one the ticket recorded", async () => {
 		const runner = new FakeRunner();
-		openedWorktree(runner, "pane-stranger", "ws-stranger");
+		const p = await modulePlane(runner);
+		openedWorktree(
+			runner,
+			{ paneId: "pane-stranger", workspaceId: "ws-stranger" },
+			repoPath(p.home),
+			p.home,
+		);
 		// herdr names the stranger first and the ticket's own leftover pane
 		// after it, on every candidate the handoff asks for. The collision the
 		// operator reads must point at the pane that is the ticket's to end.
@@ -2893,7 +2887,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			});
 		}
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
 		});
 
@@ -2914,6 +2908,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 
 	test("asks herdr for each of its names once, and never repeats one", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		// A 32-character slug whose tail already spells the cycle suffix was the
 		// shape where the length cut rebuilt the stable name, and the candidate
 		// list had to drop the repeat. The identity tag is what keeps the three
@@ -2929,23 +2924,26 @@ describe("a leftover agent that holds the ticket's name", () => {
 		const cycle = cycleAgentName(longTicket, 2);
 		const ordinal = cycleAgentName(longTicket, 2, 2);
 		expect(new Set([stable, cycle, ordinal]).size).toBe(3);
-		conventionCheckout(runner);
 		runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws", checkoutPath: CHECKOUT }]),
+			stdout: workspaceListJson([{ id: "ws", checkoutPath: repoPath(p.home) }]),
 		});
-		runner.set("herdr", ["tab", "create", "--workspace", "ws", "--cwd", CHECKOUT, "--no-focus"], {
-			stdout: tabCreateJson("pane-1"),
-		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws", "--cwd", repoPath(p.home), "--no-focus"],
+			{
+				stdout: tabCreateJson("pane-1"),
+			},
+		);
 		runner.set("herdr", ["agent", "start", stable, "--kind", "pi", "--pane", "pane-1"], {
 			code: 1,
-			stderr: nameTaken("pane-old", "ws-old", "ws-old:t1", stable),
+			stderr: nameTaken({ paneId: "pane-old", workspaceId: "ws-old", tabId: "ws-old:t1" }, stable),
 		});
 		runner.set("herdr", ["agent", "start", cycle, "--kind", "pi", "--pane", "pane-1"], {
 			code: 1,
-			stderr: nameTaken("pane-old", "ws-old", "ws-old:t1", cycle),
+			stderr: nameTaken({ paneId: "pane-old", workspaceId: "ws-old", tabId: "ws-old:t1" }, cycle),
 		});
 
-		const outcome = await handoffRun(runner, defaultChoice, {
+		const outcome = await handoffRun(runner, p.home, defaultChoice, {
 			ticket: longTicket,
 			names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
 		});
@@ -2962,7 +2960,8 @@ describe("a leftover agent that holds the ticket's name", () => {
 
 	test("reports the failure a later name really met, not the earlier collision", async () => {
 		const runner = new FakeRunner();
-		openedWorktree(runner, "pane-old", "ws-old");
+		const p = await modulePlane(runner);
+		openedWorktree(runner, { paneId: "pane-old", workspaceId: "ws-old" }, repoPath(p.home), p.home);
 		// The stable name is the ticket's own leftover; the cycle name then
 		// fails for a reason of its own. The operator reads that reason, not
 		// the collision an earlier candidate met.
@@ -2972,7 +2971,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 				'{"error":{"code":"agent_kind_unknown","message":"herdr does not know the agent kind pi"},"id":"cli:agent:start"}\n',
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
 		});
 
@@ -3261,21 +3260,21 @@ describe("the review verdict of the rework handoff prompt", () => {
 		"--paginate",
 		"--hostname",
 		"github.com",
-		"repos/acme/billing/issues/12/comments?per_page=100",
+		"repos/acme/factory/issues/12/comments?per_page=100",
 	];
 	const REVIEW_READ: readonly string[] = [
 		"api",
 		"--paginate",
 		"--hostname",
 		"github.com",
-		"repos/acme/billing/pulls/12/reviews?per_page=100",
+		"repos/acme/factory/pulls/12/reviews?per_page=100",
 	];
 
 	const verdictSource: TicketSourceConfig = {
 		name: "github",
 		kind: "github-pull-requests",
 		refreshIntervalSeconds: 60,
-		repositories: ["github.com/acme/billing"],
+		repositories: ["github.com/acme/factory"],
 		host: "github.com",
 	};
 
@@ -3301,7 +3300,7 @@ describe("the review verdict of the rework handoff prompt", () => {
 		externalKey: "#12",
 		title: "Persist source facts",
 		description: "The implementation of #5.",
-		url: "https://github.com/acme/billing/pulls/12",
+		url: "https://github.com/acme/factory/pulls/12",
 		labels: ["needs-work"],
 		memberships: [
 			{
@@ -3309,15 +3308,15 @@ describe("the review verdict of the rework handoff prompt", () => {
 				sourceKind: "github-pull-request",
 				externalKey: "#12",
 				sourceState: "open",
-				url: "https://github.com/acme/billing/pulls/12",
+				url: "https://github.com/acme/factory/pulls/12",
 				title: "Persist source facts",
 				description: "The implementation of #5.",
 				labels: ["needs-work"],
 				externalUpdatedAt: "2026-01-01T00:00:00Z",
 				repository: {
-					identity: "github.com/acme/billing",
-					displayName: "acme/billing",
-					cloneUrl: "https://github.com/acme/billing.git",
+					identity: "github.com/acme/factory",
+					displayName: "acme/factory",
+					cloneUrl: "https://github.com/acme/factory.git",
 				},
 				attributes: {},
 				sourceName: "github",
@@ -3377,15 +3376,17 @@ describe("the review verdict of the rework handoff prompt", () => {
 
 	function freshRework(
 		runner: FakeRunner,
+		checkout: string,
+		home: string,
 		config: FactoryConfig = reviewVerdictConfig,
 	): Promise<HandoffOutcome> {
-		conventionCheckout(runner);
-		stubLiveWorkspace(runner);
+		conventionCheckout(runner, checkout);
+		stubLiveWorkspace(runner, checkout);
 		return handOffTicket(pullTicket, reworkChoice, {
 			claim: "open",
 			config,
 			runner,
-			home: HOME,
+			home,
 		});
 	}
 
@@ -3394,16 +3395,18 @@ describe("the review verdict of the rework handoff prompt", () => {
 		// the placeholder, so the command stream of a template that names no
 		// placeholder is unchanged.
 		const runner = new FakeRunner();
-		const outcome = await freshRework(runner, BASE_CONFIG);
+		const p = await modulePlane(runner);
+		const outcome = await freshRework(runner, repoPath(p.home), p.home, BASE_CONFIG);
 		expect(outcome.status).toBe("ok");
 		expect(runner.commands().filter((command) => command.startsWith("gh "))).toEqual([]);
 	});
 
 	test("a template with the placeholder reads both timelines", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		setComments(runner, []);
 		setReviews(runner, []);
-		const outcome = await freshRework(runner);
+		const outcome = await freshRework(runner, repoPath(p.home), p.home);
 		expect(outcome.status).toBe("ok");
 		expect(runner.commands()).toContain(`gh ${COMMENT_READ.join(" ")}`);
 		expect(runner.commands()).toContain(`gh ${REVIEW_READ.join(" ")}`);
@@ -3411,9 +3414,10 @@ describe("the review verdict of the rework handoff prompt", () => {
 
 	test("the standing verdict fills the prompt: header and body unchanged", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		setComments(runner, []);
 		setReviews(runner, [{ body: VERDICT_BODY, submitted_at: "2026-08-31T12:00:00Z" }]);
-		const outcome = await freshRework(runner);
+		const outcome = await freshRework(runner, repoPath(p.home), p.home);
 		expect(outcome.status).toBe("ok");
 		expect(promptOf(runner)).toBe(
 			"Verdict:\n" +
@@ -3427,11 +3431,12 @@ describe("the review verdict of the rework handoff prompt", () => {
 		// The rule is the judgment's: newest first across both timelines, and
 		// the first record that carries the fixed score line stands.
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		setComments(runner, [
 			{ body: "On re-check:\n- **Score:** 95 / 100", created_at: "2026-08-31T13:00:00Z" },
 		]);
 		setReviews(runner, [{ body: VERDICT_BODY, submitted_at: "2026-08-31T12:00:00Z" }]);
-		const outcome = await freshRework(runner);
+		const outcome = await freshRework(runner, repoPath(p.home), p.home);
 		expect(outcome.status).toBe("ok");
 		expect(promptOf(runner)).toBe(
 			"Verdict:\n" +
@@ -3443,11 +3448,12 @@ describe("the review verdict of the rework handoff prompt", () => {
 
 	test("no record carrying the score line fills the no-verdict fact", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		setComments(runner, [
 			{ body: "Looks good, no score line here.", created_at: "2026-08-31T12:00:00Z" },
 		]);
 		setReviews(runner, [{ body: "Approved.", submitted_at: "2026-08-31T13:00:00Z" }]);
-		const outcome = await freshRework(runner);
+		const outcome = await freshRework(runner, repoPath(p.home), p.home);
 		expect(outcome.status).toBe("ok");
 		expect(promptOf(runner)).toBe(
 			"Verdict:\n" +
@@ -3459,9 +3465,10 @@ describe("the review verdict of the rework handoff prompt", () => {
 
 	test("every timeline failing fills the failure fact with the read's reason", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		runner.set("gh", COMMENT_READ, { code: 1, stderr: "rate limited by the source\n" });
 		runner.set("gh", REVIEW_READ, { code: 1, stderr: "the source timed out\n" });
-		const outcome = await freshRework(runner);
+		const outcome = await freshRework(runner, repoPath(p.home), p.home);
 		expect(outcome.status).toBe("ok");
 		expect(promptOf(runner)).toBe(
 			"Verdict:\n" +
@@ -3476,11 +3483,12 @@ describe("the review verdict of the rework handoff prompt", () => {
 		// ADR 0078: the review passed, so the rework works the gates - the
 		// merge conflict or the failing CI check - not the review's feedback.
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		setComments(runner, []);
 		setReviews(runner, [
 			{ body: "Looks good.\n- **Score:** 95 / 100", submitted_at: "2026-08-31T12:00:00Z" },
 		]);
-		const outcome = await freshRework(runner, thresholdConfig);
+		const outcome = await freshRework(runner, repoPath(p.home), p.home, thresholdConfig);
 		expect(outcome.status).toBe("ok");
 		expect(promptOf(runner)).toBe(
 			"Verdict:\n" +
@@ -3494,9 +3502,10 @@ describe("the review verdict of the rework handoff prompt", () => {
 
 	test("a verdict score below the workflow threshold keeps the verdict's body", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		setComments(runner, []);
 		setReviews(runner, [{ body: VERDICT_BODY, submitted_at: "2026-08-31T12:00:00Z" }]);
-		const outcome = await freshRework(runner, thresholdConfig);
+		const outcome = await freshRework(runner, repoPath(p.home), p.home, thresholdConfig);
 		expect(outcome.status).toBe("ok");
 		expect(promptOf(runner)).toBe(
 			"Verdict:\n" +
@@ -3510,9 +3519,10 @@ describe("the review verdict of the rework handoff prompt", () => {
 		// The per-timeline fail-open the judgment runs: the failing timeline
 		// contributes nothing, and the standing timeline's record decides.
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		setComments(runner, [{ body: VERDICT_BODY, created_at: "2026-08-31T12:00:00Z" }]);
 		runner.set("gh", REVIEW_READ, { code: 1, stderr: "the source timed out\n" });
-		const outcome = await freshRework(runner);
+		const outcome = await freshRework(runner, repoPath(p.home), p.home);
 		expect(outcome.status).toBe("ok");
 		const prompt = promptOf(runner);
 		expect(prompt).toContain(`Posted as a comment at 2026-08-31T12:00:00Z:\n${VERDICT_BODY}`);
@@ -3525,7 +3535,7 @@ describe("the review verdict of the rework handoff prompt", () => {
 		// verdict stands in the prompt with the last captured message beside
 		// it, and a new agent session starts with the same context.
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-stored" }]),
 		});
@@ -3535,7 +3545,7 @@ describe("the review verdict of the rework handoff prompt", () => {
 		setComments(runner, []);
 		setReviews(runner, [{ body: VERDICT_BODY, submitted_at: "2026-08-31T12:00:00Z" }]);
 
-		const outcome = await handoffRun(runner, reworkChoice, {
+		const outcome = await handoffRun(runner, p.home, reworkChoice, {
 			ticket: pullTicket,
 			config: reviewVerdictConfig,
 			previousMessage: "the last message",
@@ -3561,22 +3571,28 @@ const PR_SOURCE: TicketSourceConfig = {
 	name: "github",
 	kind: "github-issues",
 	refreshIntervalSeconds: 60,
-	repositories: ["acme/billing"],
+	repositories: ["acme/factory"],
 	host: "github.com",
 };
 
 /** The handoff ticket with the membership its task type's open step reads. */
 const PR_TICKET: Ticket = {
 	...ticket,
+	identity: "github:github.com:I_7",
+	title: "Retry policy for webhooks",
+	externalKey: "#7",
+	url: "https://github.com/acme/factory/issues/7",
+	description: "Add a retry policy.",
+	labels: [],
 	memberships: [
 		{
 			sourceName: "github",
 			health: "healthy",
-			identity: "github:github.com:issue-github.com/acme/billing/7",
+			identity: "github:github.com:issue-github.com/acme/factory/7",
 			sourceKind: "github-issue",
 			externalKey: "#7",
 			sourceState: "open",
-			url: "https://github.com/acme/billing/issues/7",
+			url: "https://github.com/acme/factory/issues/7",
 			title: "Retry policy for webhooks",
 			description: "Add a retry policy.",
 			labels: [],
@@ -3586,6 +3602,14 @@ const PR_TICKET: Ticket = {
 		},
 	],
 };
+
+/** The herdr name the naming rule gives the PR world's ticket. */
+const PR_AGENT = agentNameFor(PR_TICKET);
+
+/** The path the PR world's ticket's worktree checkout takes. */
+function prWorktreePath(home: string): string {
+	return join(home, "worktrees", "factory", "factory-7-retry-policy-for-webhooks");
+}
 
 const PR_CONFIG: FactoryConfig = {
 	...BASE_CONFIG,
@@ -3599,26 +3623,26 @@ const PR_CONFIG: FactoryConfig = {
 	},
 };
 
-const PR_BRANCH = BRANCH;
-const PR_URL = "https://github.com/acme/billing/pull/42";
+const PR_BRANCH = "factory/7-retry-policy-for-webhooks";
+const PR_URL = "https://github.com/acme/factory/pull/42";
 const PR_READ_ARGS = [
 	"api",
 	"--hostname",
 	"github.com",
-	`repos/acme/billing/pulls?state=open&head=${encodeURIComponent(`acme:${PR_BRANCH}`)}`,
+	`repos/acme/factory/pulls?state=open&head=${encodeURIComponent(`acme:${PR_BRANCH}`)}`,
 ];
-const PR_BODY = `Closes #7\n\n${ticket.url}\n\n${ticket.description}`;
+const PR_BODY = `Closes #7\n\n${PR_TICKET.url}\n\n${PR_TICKET.description}`;
 const PR_CREATE_COMMAND = [
 	"gh",
 	"pr",
 	"create",
 	"--repo",
-	"github.com/acme/billing",
+	"github.com/acme/factory",
 	"--head",
 	PR_BRANCH,
 	"--draft",
 	"--title",
-	ticket.title,
+	PR_TICKET.title,
 	"--body",
 	PR_BODY,
 ].join(" ");
@@ -3628,27 +3652,27 @@ const PR_CREATE_COMMAND = [
  * contributor pre-push hook rides in it (ADR 0127), and the flag is read from
  * the constant the plane sends, so a change to the rule moves one place.
  */
-function pushBranchArgs(): string[] {
-	return ["-C", CHECKOUT, "push", ...BYPASS_CONTRIBUTOR_PUSH_HOOK, "origin", PR_BRANCH];
+function pushBranchArgs(checkout: string): string[] {
+	return ["-C", checkout, "push", ...BYPASS_CONTRIBUTOR_PUSH_HOOK, "origin", PR_BRANCH];
 }
 
-function pushBranchCommand(): string {
-	return `git ${pushBranchArgs().join(" ")}`;
+function pushBranchCommand(checkout: string): string {
+	return `git ${pushBranchArgs(checkout).join(" ")}`;
 }
 
 /**
  * Stub the hold commit the open steps a fresh branch onto: the refs read,
  * the empty commit built on them, and the branch moved to it.
  */
-function stubHoldCommit(runner: FakeRunner): void {
-	runner.set("git", ["-C", CHECKOUT, "rev-parse", PR_BRANCH, `${PR_BRANCH}^{tree}`], {
+function stubHoldCommit(runner: FakeRunner, checkout: string): void {
+	runner.set("git", ["-C", checkout, "rev-parse", PR_BRANCH, `${PR_BRANCH}^{tree}`], {
 		stdout: "abc123\ndef456\n",
 	});
 	runner.set(
 		"git",
 		[
 			"-C",
-			CHECKOUT,
+			checkout,
 			"commit-tree",
 			"def456",
 			"-p",
@@ -3658,7 +3682,7 @@ function stubHoldCommit(runner: FakeRunner): void {
 		],
 		{ stdout: "sha1111\n" },
 	);
-	runner.set("git", ["-C", CHECKOUT, "update-ref", `refs/heads/${PR_BRANCH}`, "sha1111"], {
+	runner.set("git", ["-C", checkout, "update-ref", `refs/heads/${PR_BRANCH}`, "sha1111"], {
 		stdout: "",
 	});
 }
@@ -3668,12 +3692,16 @@ function stubHoldCommit(runner: FakeRunner): void {
  * A standing draft stands on a branch the remote already carried, so the
  * branch read answers it in the standing mode.
  */
-function stubPullRequestOpenStep(runner: FakeRunner, { standing = false } = {}): void {
-	runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
+function stubPullRequestOpenStep(
+	runner: FakeRunner,
+	checkout: string,
+	{ standing = false } = {},
+): void {
+	runner.set("git", ["-C", checkout, "ls-remote", "--heads", "origin", PR_BRANCH], {
 		stdout: standing ? `abc123\trefs/heads/${PR_BRANCH}\n` : "",
 	});
-	if (!standing) stubHoldCommit(runner);
-	runner.set("git", pushBranchArgs(), { stdout: "" });
+	if (!standing) stubHoldCommit(runner, checkout);
+	runner.set("git", pushBranchArgs(checkout), { stdout: "" });
 	if (standing) {
 		runner.set("gh", PR_READ_ARGS, {
 			stdout: JSON.stringify([
@@ -3696,12 +3724,12 @@ function stubPullRequestOpenStep(runner: FakeRunner, { standing = false } = {}):
 				"pr",
 				"create",
 				"--repo",
-				"github.com/acme/billing",
+				"github.com/acme/factory",
 				"--head",
 				PR_BRANCH,
 				"--draft",
 				"--title",
-				ticket.title,
+				PR_TICKET.title,
 				"--body",
 				PR_BODY,
 			],
@@ -3715,32 +3743,37 @@ function stubPullRequestOpenStep(runner: FakeRunner, { standing = false } = {}):
  * already stands in the checkout, so the worktree opens on it - the state a
  * failed start leaves (issue #296) - and no create runs from the Worktree base.
  */
-function stubPrWorktreeHandoff(runner: FakeRunner, { standingBranch = false } = {}): void {
-	conventionCheckout(runner);
-	runner.set("git", ["-C", CHECKOUT, "branch", "--list", PR_BRANCH], {
+function stubPrWorktreeHandoff(
+	runner: FakeRunner,
+	checkout: string,
+	home: string,
+	{ standingBranch = false } = {},
+): void {
+	conventionCheckout(runner, checkout);
+	runner.set("git", ["-C", checkout, "branch", "--list", PR_BRANCH], {
 		stdout: standingBranch ? `  ${PR_BRANCH}\n` : "",
 	});
 	if (standingBranch) {
 		runner.set(
 			"herdr",
-			["worktree", "open", "--cwd", CHECKOUT, "--branch", PR_BRANCH, "--no-focus"],
+			["worktree", "open", "--cwd", checkout, "--branch", PR_BRANCH, "--no-focus"],
 			{
 				stdout: worktreeOpenJson("ws-wt", "pane-wt", {
 					alreadyOpen: false,
-					worktreePath: WORKTREE_PATH,
+					worktreePath: prWorktreePath(home),
 				}),
 			},
 		);
 		return;
 	}
-	stubRemoteDefaultBranch(runner);
+	stubRemoteDefaultBranch(runner, checkout);
 	runner.set(
 		"herdr",
 		[
 			"worktree",
 			"create",
 			"--cwd",
-			CHECKOUT,
+			checkout,
 			"--branch",
 			PR_BRANCH,
 			"--base",
@@ -3752,13 +3785,13 @@ function stubPrWorktreeHandoff(runner: FakeRunner, { standingBranch = false } = 
 }
 
 /** The source checkout and the Worktree base of a world-backed open step. */
-function stubPrWorldCheckout(runner: FakeRunner): void {
-	conventionCheckout(runner);
-	stubRemoteDefaultBranch(runner);
+function stubPrWorldCheckout(runner: FakeRunner, checkout: string): void {
+	conventionCheckout(runner, checkout);
+	stubRemoteDefaultBranch(runner, checkout);
 }
 
 /** The answer a source gives a create that runs before the fresh branch stands. */
-const PR_CREATE_LAG_STDERR = `GraphQL: No commits exist on github.com/acme/billing:${PR_BRANCH}. (HTTP 400)\n`;
+const PR_CREATE_LAG_STDERR = `GraphQL: No commits exist on github.com/acme/factory:${PR_BRANCH}. (HTTP 400)\n`;
 
 /**
  * The stateful double of the factory branch, its worktree, and its draft
@@ -3781,6 +3814,9 @@ const PR_CREATE_LAG_STDERR = `GraphQL: No commits exist on github.com/acme/billi
  * from the branch alone would never run that path - the path the field takes.
  */
 class PrWorldRunner extends FakeRunner {
+	/** The plane's parts, bound once the plane stands around this runner. */
+	private home = "";
+	private checkout = "";
 	private localBranch = false;
 	private remoteBranch = false;
 	private worktreeStanding = false;
@@ -3791,6 +3827,12 @@ class PrWorldRunner extends FakeRunner {
 	private blockedCreates = 0;
 	/** The hold commits the open has run, so a test can see a second one. */
 	holdCommits = 0;
+
+	/** Bind the plane's home and checkout to the world's command lines. */
+	use(home: string, checkout: string): void {
+		this.home = home;
+		this.checkout = checkout;
+	}
 
 	/** Make the next `times` draft creates answer the fresh branch's lag. */
 	answerCreatesWithLag(times: number): void {
@@ -3836,8 +3878,13 @@ class PrWorldRunner extends FakeRunner {
 		args: readonly string[],
 		options?: CommandOptions,
 	): Promise<CommandResult> {
+		const pre = existsSync(prWorktreePath(this.home));
 		this.answerFromWorld(command, args);
-		return await super.run(command, args, options);
+		const result = await super.run(command, args, options);
+		const post = existsSync(prWorktreePath(this.home));
+		if (pre !== post)
+			console.log("DBG-RM", command, args.join(" "), pre, "->", post, "code", result.code);
+		return result;
 	}
 
 	/**
@@ -3862,22 +3909,22 @@ class PrWorldRunner extends FakeRunner {
 
 	/** The branch-state git lines: the four facts the world holds. */
 	private answerGitLine(line: string, command: string, args: readonly string[]): void {
-		if (line === `-C ${CHECKOUT} branch --list ${PR_BRANCH}`)
+		if (line === `-C ${this.checkout} branch --list ${PR_BRANCH}`)
 			this.set(command, args, { stdout: this.localBranch ? `  ${PR_BRANCH}\n` : "" });
-		else if (line === `-C ${CHECKOUT} ls-remote --heads origin ${PR_BRANCH}`)
+		else if (line === `-C ${this.checkout} ls-remote --heads origin ${PR_BRANCH}`)
 			this.set(command, args, {
 				stdout: this.remoteBranch ? `abc123\trefs/heads/${PR_BRANCH}\n` : "",
 			});
-		else if (line === `-C ${CHECKOUT} fetch origin ${PR_BRANCH}:refs/heads/${PR_BRANCH}`) {
+		else if (line === `-C ${this.checkout} fetch origin ${PR_BRANCH}:refs/heads/${PR_BRANCH}`) {
 			this.localBranch = true;
 			this.set(command, args, { stdout: "" });
-		} else if (line === pushBranchArgs().join(" ")) {
+		} else if (line === pushBranchArgs(this.checkout).join(" ")) {
 			this.remoteBranch = true;
 			this.set(command, args, { stdout: "" });
-		} else if (line === `-C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`) {
+		} else if (line === `-C ${this.checkout} update-ref refs/heads/${PR_BRANCH} sha1111`) {
 			this.holdCommits += 1;
 			this.set(command, args, { stdout: "" });
-		} else if (line === `-C ${CHECKOUT} branch -D ${PR_BRANCH}`) {
+		} else if (line === `-C ${this.checkout} branch -D ${PR_BRANCH}`) {
 			this.localBranch = false;
 			this.set(command, args, { stdout: "" });
 		}
@@ -3890,7 +3937,7 @@ class PrWorldRunner extends FakeRunner {
 		if (args[1] === "create" && args.includes("--branch")) {
 			if (this.blockedCreates > 0) {
 				this.blockedCreates -= 1;
-				this.set(command, args, worktreeCreateBlocked(ticketWorktreePath()));
+				this.set(command, args, worktreeCreateBlocked(prWorktreePath(this.home)));
 				return;
 			}
 			this.localBranch = true;
@@ -3909,7 +3956,7 @@ class PrWorldRunner extends FakeRunner {
 				stdout: this.worktreeStanding
 					? worktreeOpenJson("ws-wt", "pane-wt", {
 							alreadyOpen: false,
-							worktreePath: WORKTREE_PATH,
+							worktreePath: prWorktreePath(this.home),
 						})
 					: "",
 				stderr: this.worktreeStanding ? "" : WORKTREE_NOT_FOUND_ERROR,
@@ -3962,30 +4009,25 @@ class PrWorldRunner extends FakeRunner {
 	 */
 	private worktreeList(): string {
 		const listed = [
-			{ path: CHECKOUT, linked: false },
+			{ path: this.checkout, linked: false },
 			{
-				path: join(HOME, "worktrees", "billing", "factory-6-another-ticket"),
+				path: join(this.home, "worktrees", "factory", "factory-6-another-ticket"),
 				branch: "factory/6-another-ticket",
 			},
 		];
-		if (this.worktreeStanding) listed.push({ path: ticketWorktreePath(), branch: PR_BRANCH });
+		if (this.worktreeStanding) listed.push({ path: prWorktreePath(this.home), branch: PR_BRANCH });
 		return worktreeListJson(listed);
 	}
 }
 
 describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
-	afterEach(() => {
-		// One test stands a real leftover worktree directory on disk; none of them
-		// is to meet the one the test before it left.
-		rmSync(join(HOME, "worktrees"), { recursive: true, force: true });
-	});
-
 	test("a task type that opens a pull request pushes the branch, opens the draft, and sends the prompt with its url", async () => {
 		const runner = new FakeRunner();
-		stubPrWorktreeHandoff(runner);
-		stubPullRequestOpenStep(runner);
+		const p = await modulePlane(runner);
+		stubPrWorktreeHandoff(runner, repoPath(p.home), p.home);
+		stubPullRequestOpenStep(runner, repoPath(p.home));
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -3998,34 +4040,35 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// draft is opened, and the prompt the agent receives carries the pull
 		// request's url.
 		expect(runner.commands()).toEqual([
-			`git -C ${CHECKOUT} rev-parse --git-dir`,
-			`git -C ${CHECKOUT} remote get-url origin`,
-			`git -C ${CHECKOUT} branch --list ${PR_BRANCH}`,
-			`git -C ${CHECKOUT} ls-remote --heads origin ${PR_BRANCH}`,
-			`git -C ${CHECKOUT} remote get-url origin`,
-			`git -C ${CHECKOUT} symbolic-ref refs/remotes/origin/HEAD`,
-			`git -C ${CHECKOUT} fetch origin main`,
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --base origin/main --no-focus`,
-			`git -C ${CHECKOUT} ls-remote --heads origin ${PR_BRANCH}`,
-			`git -C ${CHECKOUT} rev-parse ${PR_BRANCH} ${PR_BRANCH}^{tree}`,
-			`git -C ${CHECKOUT} commit-tree def456 -p abc123 -m factory: hold the branch for the pull request`,
-			`git -C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`,
-			pushBranchCommand(),
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
+			`git -C ${repoPath(p.home)} branch --list ${PR_BRANCH}`,
+			`git -C ${repoPath(p.home)} ls-remote --heads origin ${PR_BRANCH}`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
+			`git -C ${repoPath(p.home)} symbolic-ref refs/remotes/origin/HEAD`,
+			`git -C ${repoPath(p.home)} fetch origin main`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch ${PR_BRANCH} --base origin/main --no-focus`,
+			`git -C ${repoPath(p.home)} ls-remote --heads origin ${PR_BRANCH}`,
+			`git -C ${repoPath(p.home)} rev-parse ${PR_BRANCH} ${PR_BRANCH}^{tree}`,
+			`git -C ${repoPath(p.home)} commit-tree def456 -p abc123 -m factory: hold the branch for the pull request`,
+			`git -C ${repoPath(p.home)} update-ref refs/heads/${PR_BRANCH} sha1111`,
+			pushBranchCommand(repoPath(p.home)),
 			`gh ${PR_READ_ARGS.join(" ")}`,
 			PR_CREATE_COMMAND,
-			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
-			`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
+			`herdr agent start ${PR_AGENT} --kind pi --pane pane-wt`,
+			`herdr agent prompt ${PR_AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
 		]);
 	});
 
 	test("a draft create that answers the fresh branch's lag retries, and the prompt still goes out", async () => {
 		const runner = new FakeRunner();
-		stubPrWorktreeHandoff(runner);
-		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
+		const p = await modulePlane(runner);
+		stubPrWorktreeHandoff(runner, repoPath(p.home), p.home);
+		runner.set("git", ["-C", repoPath(p.home), "ls-remote", "--heads", "origin", PR_BRANCH], {
 			stdout: "",
 		});
-		stubHoldCommit(runner);
-		runner.set("git", pushBranchArgs(), { stdout: "" });
+		stubHoldCommit(runner, repoPath(p.home));
+		runner.set("git", pushBranchArgs(repoPath(p.home)), { stdout: "" });
 		runner.set("gh", PR_READ_ARGS, { stdout: "[]" });
 		runner.setSequence(
 			"gh",
@@ -4033,25 +4076,26 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 				"pr",
 				"create",
 				"--repo",
-				"github.com/acme/billing",
+				"github.com/acme/factory",
 				"--head",
 				PR_BRANCH,
 				"--draft",
 				"--title",
-				ticket.title,
+				PR_TICKET.title,
 				"--body",
 				PR_BODY,
 			],
 			[
 				{
 					code: 1,
-					stderr: `GraphQL: No commits exist on github.com:acme/billing:${BRANCH}. (HTTP 400)\n`,
+					stderr:
+						"GraphQL: No commits exist on github.com:acme/factory:factory/7-retry-policy-for-webhooks. (HTTP 400)\n",
 				},
 				{ stdout: `${PR_URL}\n` },
 			],
 		);
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4062,16 +4106,17 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const creates = runner.commands().filter((command) => command === PR_CREATE_COMMAND);
 		expect(creates).toHaveLength(2);
 		expect(runner.commands()).toContain(
-			`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
+			`herdr agent prompt ${PR_AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
 		);
 	});
 
 	test("a draft the branch already carries is reused: no second draft is opened", async () => {
 		const runner = new FakeRunner();
-		stubPrWorktreeHandoff(runner, { standingBranch: true });
-		stubPullRequestOpenStep(runner, { standing: true });
+		const p = await modulePlane(runner);
+		stubPrWorktreeHandoff(runner, repoPath(p.home), p.home, { standingBranch: true });
+		stubPullRequestOpenStep(runner, repoPath(p.home), { standing: true });
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4082,23 +4127,26 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		expect(commands).not.toContain(PR_CREATE_COMMAND);
 		// The standing branch pre-dates the attempt: the attempt commits no
 		// hold on it, the way it opens no second draft.
-		expect(commands).not.toContain(`git -C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`);
+		expect(commands).not.toContain(
+			`git -C ${repoPath(p.home)} update-ref refs/heads/${PR_BRANCH} sha1111`,
+		);
 		// The prompt still carries the standing pull request's url.
 		expect(commands).toContain(
-			`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
+			`herdr agent prompt ${PR_AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
 		);
 	});
 
 	test("a failed agent start after the open leaves the branch and the draft standing", async () => {
 		const runner = new FakeRunner();
-		stubPrWorktreeHandoff(runner);
-		stubPullRequestOpenStep(runner);
-		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+		const p = await modulePlane(runner);
+		stubPrWorktreeHandoff(runner, repoPath(p.home), p.home);
+		stubPullRequestOpenStep(runner, repoPath(p.home));
+		runner.set("herdr", ["agent", "start", PR_AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4115,9 +4163,9 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		expectNoCommand(commands, "branch -D");
 		// The exact resources, so a close or a delete aimed at another pull
 		// request or another branch cannot slip through the short form above.
-		expectNoCommand(commands, `gh pr close 42 --repo github.com/acme/billing`);
-		expectNoCommand(commands, `git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
-		expectNoCommand(commands, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		expectNoCommand(commands, `gh pr close 42 --repo github.com/acme/factory`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} push origin --delete ${PR_BRANCH}`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} branch -D ${PR_BRANCH}`);
 		// The herdr environment is still the start's own residue, and it goes.
 		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
 	});
@@ -4126,14 +4174,16 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// One runner, two starts, and the world between them: the second start
 		// answers to the state the first left, not to answers the test wrote.
 		const runner = new PrWorldRunner();
-		stubPrWorldCheckout(runner);
-		stubHoldCommit(runner);
-		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+		const p = await modulePlane(runner);
+		runner.use(p.home, repoPath(p.home));
+		stubPrWorldCheckout(runner, repoPath(p.home));
+		stubHoldCommit(runner, repoPath(p.home));
+		runner.set("herdr", ["agent", "start", PR_AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
 		});
 
-		const first = await handoffRun(runner, worktreeChoice, {
+		const first = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4151,11 +4201,11 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const firstEnd = runner.commands().length;
 
 		// The only thing that changes is herdr's answer to the Agent start.
-		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+		runner.set("herdr", ["agent", "start", PR_AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			stdout: "",
 		});
 
-		const second = await handoffRun(runner, worktreeChoice, {
+		const second = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4167,33 +4217,35 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// the failed start removed the checkout and kept the branch. The worktree is
 		// then created on the branch it did not make, never from the Worktree base.
 		expect(retry).toContain(
-			`herdr worktree open --cwd ${CHECKOUT} --branch ${PR_BRANCH} --no-focus`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch ${PR_BRANCH} --no-focus`,
 		);
 		expect(retry).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch ${PR_BRANCH} --no-focus`,
 		);
 		// No worktree git records for the branch, so no reopen by path: the create
 		// is the whole of the reuse.
-		expectNoCommand(retry, `worktree open --cwd ${CHECKOUT} --path`);
+		expectNoCommand(retry, `worktree open --cwd ${repoPath(p.home)} --path`);
 		// The exact fresh-branch ask, so a retry that builds the branch again from
 		// the Worktree base - and then fails its push against the standing remote
 		// copy - cannot pass this test.
 		expectNoCommand(
 			retry,
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --base origin/main --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch ${PR_BRANCH} --base origin/main --no-focus`,
 		);
 		// The branch pre-dates the retry, so it is not the retry's to delete: no
 		// cleanup of the checkout may take the local copy with it.
-		expectNoCommand(retry, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		expectNoCommand(retry, `git -C ${repoPath(p.home)} branch -D ${PR_BRANCH}`);
 		expectNoCommand(retry, "commit-tree");
 		expectNoCommand(retry, "update-ref");
 		// One ticket wears one pull request: the standing draft is read by its head
 		// branch and reused, and no second draft is opened.
 		expect(retry).toContain(`gh ${PR_READ_ARGS.join(" ")}`);
 		expectNoCommand(retry, "pr create");
-		expectNoCommand(retry, `gh pr create --repo github.com/acme/billing --head ${PR_BRANCH}`);
+		expectNoCommand(retry, `gh pr create --repo github.com/acme/factory --head ${PR_BRANCH}`);
 		// The prompt carries the standing pull request's url.
-		expect(retry).toContain(`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`);
+		expect(retry).toContain(
+			`herdr agent prompt ${PR_AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
+		);
 	});
 
 	test("the retry's create meets a leftover worktree directory, and the plane moves it aside", async () => {
@@ -4201,14 +4253,16 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// is the start that meets the directory a build cache left in the checkout's
 		// path (issue #296, ADR 0062): the reuse runs on the leftover recovery.
 		const runner = new PrWorldRunner();
-		stubPrWorldCheckout(runner);
-		stubHoldCommit(runner);
-		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+		const p = await modulePlane(runner);
+		runner.use(p.home, repoPath(p.home));
+		stubPrWorldCheckout(runner, repoPath(p.home));
+		stubHoldCommit(runner, repoPath(p.home));
+		runner.set("herdr", ["agent", "start", PR_AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
 		});
 
-		const first = await handoffRun(runner, worktreeChoice, {
+		const first = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4216,13 +4270,13 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		expect(first.status).toBe("failed");
 		const firstEnd = runner.commands().length;
 		// The checkout herdr removed left its directory behind with a cache in it.
-		makeDirectory(ticketWorktreePath(), { ".docusaurus/routes.js": "cache" });
+		makeDirectory(prWorktreePath(p.home), { ".docusaurus/routes.js": "cache" });
 		runner.answerCreatesWithBlock(1);
-		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+		runner.set("herdr", ["agent", "start", PR_AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			stdout: "",
 		});
 
-		const second = await handoffRun(runner, worktreeChoice, {
+		const second = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4233,21 +4287,21 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// the same ask. Nothing of the branch was rebuilt.
 		expect(
 			retry.filter((command) =>
-				command.includes(`worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH}`),
+				command.includes(`worktree create --cwd ${repoPath(p.home)} --branch ${PR_BRANCH}`),
 			),
 		).toHaveLength(2);
 		expectNoCommand(
 			retry,
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --base origin/main --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch ${PR_BRANCH} --base origin/main --no-focus`,
 		);
 		// The leftover stands whole under the name that says what it is, and the
 		// note reaches the handoff's note channel.
-		expect(existsSync(ticketWorktreePath())).toBe(false);
-		expect(readFileSync(`${ticketWorktreePath()}.leftover/.docusaurus/routes.js`, "utf8")).toBe(
+		expect(existsSync(prWorktreePath(p.home))).toBe(false);
+		expect(readFileSync(`${prWorktreePath(p.home)}.leftover/.docusaurus/routes.js`, "utf8")).toBe(
 			"cache",
 		);
 		expect(second.notes?.leftoverWorktree).toBe(
-			`the plane moved the leftover worktree directory ${ticketWorktreePath()} aside to ${ticketWorktreePath()}.leftover`,
+			`the plane moved the leftover worktree directory ${prWorktreePath(p.home)} aside to ${prWorktreePath(p.home)}.leftover`,
 		);
 		// The handover held through the recovery: the branch and its draft stand.
 		expect(runner.facts()).toEqual({
@@ -4256,7 +4310,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 			worktree: true,
 			draft: true,
 		});
-		expectNoCommand(retry, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		expectNoCommand(retry, `git -C ${repoPath(p.home)} branch -D ${PR_BRANCH}`);
 	});
 
 	test("a standing remote branch with no local copy is fetched, not built again", async () => {
@@ -4266,11 +4320,13 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// Worktree base would push against the remote copy's hold commit, and every
 		// retry would meet the same refusal until the Handoff limit (ADR 0101).
 		const runner = new PrWorldRunner();
-		stubPrWorldCheckout(runner);
-		stubHoldCommit(runner);
+		const p = await modulePlane(runner);
+		runner.use(p.home, repoPath(p.home));
+		stubPrWorldCheckout(runner, repoPath(p.home));
+		stubHoldCommit(runner, repoPath(p.home));
 		runner.standRemoteBranchWithoutLocalCopy();
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4279,27 +4335,30 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const commands = runner.commands();
 		// The branch check asks origin the question the checkout cannot answer, and
 		// the standing remote branch is fetched by name into a local branch.
-		expect(commands).toContain(`git -C ${CHECKOUT} ls-remote --heads origin ${PR_BRANCH}`);
+		expect(commands).toContain(`git -C ${repoPath(p.home)} ls-remote --heads origin ${PR_BRANCH}`);
 		expect(commands).toContain(
-			`git -C ${CHECKOUT} fetch origin ${PR_BRANCH}:refs/heads/${PR_BRANCH}`,
+			`git -C ${repoPath(p.home)} fetch origin ${PR_BRANCH}:refs/heads/${PR_BRANCH}`,
 		);
 		// The worktree is then built on the branch it did not make: no create from
 		// the Worktree base, and no second hold commit on a branch that carries one.
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch ${PR_BRANCH} --no-focus`,
 		);
 		expectNoCommand(
 			commands,
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --base origin/main --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch ${PR_BRANCH} --base origin/main --no-focus`,
 		);
 		expectNoCommand(commands, "commit-tree");
-		expectNoCommand(commands, `git -C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`);
+		expectNoCommand(
+			commands,
+			`git -C ${repoPath(p.home)} update-ref refs/heads/${PR_BRANCH} sha1111`,
+		);
 		expect(runner.holdCommits).toBe(0);
 		// The draft the branch carries is reused, and the prompt carries its url.
 		expect(commands).toContain(`gh ${PR_READ_ARGS.join(" ")}`);
 		expectNoCommand(commands, "pr create");
 		expect(commands).toContain(
-			`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
+			`herdr agent prompt ${PR_AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
 		);
 		// The fetched branch is not this start's to delete.
 		expect(runner.facts()).toEqual({
@@ -4315,14 +4374,16 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// after the handover (issue #296, ADR 0076): the branch stands on both
 		// sides with no draft on it, and the retry does not build the branch again.
 		const runner = new PrWorldRunner();
-		stubPrWorldCheckout(runner);
-		stubHoldCommit(runner);
+		const p = await modulePlane(runner);
+		runner.use(p.home, repoPath(p.home));
+		stubPrWorldCheckout(runner, repoPath(p.home));
+		stubHoldCommit(runner, repoPath(p.home));
 		// Every create answers the lag, so the create's retry window runs out.
 		// The window is the production one, so the test pays its real 5 seconds;
 		// its own timeout keeps that from reading as a hang.
 		runner.answerCreatesWithLag(Number.POSITIVE_INFINITY);
 
-		const first = await handoffRun(runner, worktreeChoice, {
+		const first = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4340,15 +4401,15 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 			worktree: false,
 			draft: false,
 		});
-		expectNoCommand(commands, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
-		expectNoCommand(commands, `git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} branch -D ${PR_BRANCH}`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} push origin --delete ${PR_BRANCH}`);
 		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
 		const firstEnd = runner.commands().length;
 
 		// The lag clears. The next start finds the branch it did not make.
 		runner.answerCreatesWithLag(0);
 
-		const second = await handoffRun(runner, worktreeChoice, {
+		const second = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4359,35 +4420,38 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// again from the Worktree base - and it carries the hold commit the first
 		// start put on it, so the open runs no second one.
 		expect(retry).toContain(
-			`herdr worktree open --cwd ${CHECKOUT} --branch ${PR_BRANCH} --no-focus`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch ${PR_BRANCH} --no-focus`,
 		);
 		expect(retry).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch ${PR_BRANCH} --no-focus`,
 		);
 		expectNoCommand(
 			retry,
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${PR_BRANCH} --base origin/main --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch ${PR_BRANCH} --base origin/main --no-focus`,
 		);
 		expectNoCommand(retry, "commit-tree");
-		expectNoCommand(retry, `git -C ${CHECKOUT} update-ref refs/heads/${PR_BRANCH} sha1111`);
-		expectNoCommand(retry, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		expectNoCommand(retry, `git -C ${repoPath(p.home)} update-ref refs/heads/${PR_BRANCH} sha1111`);
+		expectNoCommand(retry, `git -C ${repoPath(p.home)} branch -D ${PR_BRANCH}`);
 		expect(runner.holdCommits).toBe(1);
 		// The draft the branch never carried is the one the retry opens, and the
 		// prompt carries its url.
 		expect(retry).toContain(PR_CREATE_COMMAND);
-		expect(retry).toContain(`herdr agent prompt ${AGENT} Implement #7.\n\nPull request: ${PR_URL}`);
+		expect(retry).toContain(
+			`herdr agent prompt ${PR_AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
+		);
 	}, 20_000); // The create's retry window is the production 5 seconds, waited in real time.
 
 	test("a failed agent start after a reused draft closes nothing and deletes nothing", async () => {
 		const runner = new FakeRunner();
-		stubPrWorktreeHandoff(runner, { standingBranch: true });
-		stubPullRequestOpenStep(runner, { standing: true });
-		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+		const p = await modulePlane(runner);
+		stubPrWorktreeHandoff(runner, repoPath(p.home), p.home, { standingBranch: true });
+		stubPullRequestOpenStep(runner, repoPath(p.home), { standing: true });
+		runner.set("herdr", ["agent", "start", PR_AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4401,19 +4465,20 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		expectNoCommand(commands, "branch -D");
 		// The exact resources, so a close or a delete aimed at another pull request
 		// or another branch cannot slip through the short form above.
-		expectNoCommand(commands, `gh pr close 42 --repo github.com/acme/billing`);
-		expectNoCommand(commands, `git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
-		expectNoCommand(commands, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		expectNoCommand(commands, `gh pr close 42 --repo github.com/acme/factory`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} push origin --delete ${PR_BRANCH}`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} branch -D ${PR_BRANCH}`);
 		// The worktree was opened, not created, so its workspace closes.
 		expect(commands).toContain(`herdr workspace close ws-wt`);
 	});
 
 	test("the branch push bypasses the checkout's contributor pre-push hook", async () => {
 		const runner = new FakeRunner();
-		stubPrWorktreeHandoff(runner);
-		stubPullRequestOpenStep(runner);
+		const p = await modulePlane(runner);
+		stubPrWorktreeHandoff(runner, repoPath(p.home), p.home);
+		stubPullRequestOpenStep(runner, repoPath(p.home));
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4425,22 +4490,23 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// bypass (ADR 0127), and a checkout with its dependencies not installed
 		// cannot stop the factory.
 		const push = runner.commands().find((command) => command.includes(" push "));
-		expect(push).toBe(pushBranchCommand());
+		expect(push).toBe(pushBranchCommand(repoPath(p.home)));
 	});
 
 	test("a failed push leaves no residue of its own to clean up", async () => {
 		const runner = new FakeRunner();
-		stubPrWorktreeHandoff(runner);
-		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
+		const p = await modulePlane(runner);
+		stubPrWorktreeHandoff(runner, repoPath(p.home), p.home);
+		runner.set("git", ["-C", repoPath(p.home), "ls-remote", "--heads", "origin", PR_BRANCH], {
 			stdout: "",
 		});
-		stubHoldCommit(runner);
-		runner.set("git", pushBranchArgs(), {
+		stubHoldCommit(runner, repoPath(p.home));
+		runner.set("git", pushBranchArgs(repoPath(p.home)), {
 			code: 128,
 			stderr: "fatal: unable to access: Network is down\n",
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4451,22 +4517,23 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		expectNoCommand(commands, `gh ${PR_READ_ARGS.join(" ")}`);
 		expectNoCommand(commands, "pr create");
 		expectNoCommand(commands, "gh pr close");
-		expectNoCommand(commands, `gh pr close 42 --repo github.com/acme/billing`);
+		expectNoCommand(commands, `gh pr close 42 --repo github.com/acme/factory`);
 		// The environment is removed. The push never landed, so the branch never
 		// stood on the remote and the start still owns the local copy it created.
 		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
 		expectNoCommand(commands, "push origin --delete");
-		expectNoCommand(commands, `git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
-		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} push origin --delete ${PR_BRANCH}`);
+		expect(commands).toContain(`git -C ${repoPath(p.home)} branch -D ${PR_BRANCH}`);
 	});
 
 	test("a draft opened on a branch the remote already carries stands after a later failure", async () => {
 		const runner = new FakeRunner();
-		stubPrWorktreeHandoff(runner, { standingBranch: true });
-		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", PR_BRANCH], {
-			stdout: `abc123\trefs/heads/${BRANCH}\n`,
+		const p = await modulePlane(runner);
+		stubPrWorktreeHandoff(runner, repoPath(p.home), p.home, { standingBranch: true });
+		runner.set("git", ["-C", repoPath(p.home), "ls-remote", "--heads", "origin", PR_BRANCH], {
+			stdout: "abc123\trefs/heads/factory/7-retry-policy-for-webhooks\n",
 		});
-		runner.set("git", pushBranchArgs(), { stdout: "" });
+		runner.set("git", pushBranchArgs(repoPath(p.home)), { stdout: "" });
 		runner.set("gh", PR_READ_ARGS, { stdout: "[]" });
 		runner.set(
 			"gh",
@@ -4474,23 +4541,23 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 				"pr",
 				"create",
 				"--repo",
-				"github.com/acme/billing",
+				"github.com/acme/factory",
 				"--head",
 				PR_BRANCH,
 				"--draft",
 				"--title",
-				ticket.title,
+				PR_TICKET.title,
 				"--body",
 				PR_BODY,
 			],
 			{ stdout: `${PR_URL}\n` },
 		);
-		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+		runner.set("herdr", ["agent", "start", PR_AGENT, "--kind", "pi", "--pane", "pane-wt"], {
 			code: 1,
 			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
 		});
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -4504,9 +4571,9 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		expectNoCommand(commands, "gh pr close");
 		expectNoCommand(commands, "push origin --delete");
 		expectNoCommand(commands, "branch -D");
-		expectNoCommand(commands, `gh pr close 42 --repo github.com/acme/billing`);
-		expectNoCommand(commands, `git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
-		expectNoCommand(commands, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		expectNoCommand(commands, `gh pr close 42 --repo github.com/acme/factory`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} push origin --delete ${PR_BRANCH}`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} branch -D ${PR_BRANCH}`);
 		expect(commands).toContain(`herdr workspace close ws-wt`);
 	});
 
@@ -4575,11 +4642,12 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 
 	test("a raise in the open's source read after the push keeps the branch and the draft", async () => {
 		const runner = new FakeRunner();
-		stubPrWorktreeHandoff(runner);
-		stubPullRequestOpenStep(runner);
+		const p = await modulePlane(runner);
+		stubPrWorktreeHandoff(runner, repoPath(p.home), p.home);
+		stubPullRequestOpenStep(runner, repoPath(p.home));
 		runner.reject("gh", PR_AUTH_ARGS, PR_RAISED);
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_ACCOUNT_CONFIG,
 		});
@@ -4589,22 +4657,23 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		const commands = runner.commands();
 		// The raise lands after the push, so the answer carries the handover: the
 		// branch stands on both sides and the next Handoff reuses it.
-		expect(commands).toContain(pushBranchCommand());
-		expectNoCommand(commands, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		expect(commands).toContain(pushBranchCommand(repoPath(p.home)));
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} branch -D ${PR_BRANCH}`);
 		expectNoCommand(commands, "gh pr close");
-		expectNoCommand(commands, `git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} push origin --delete ${PR_BRANCH}`);
 		// The herdr environment is still this start's residue, and it goes.
 		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
 	});
 
 	test("a raise in the prompt render after the open keeps the branch and the draft", async () => {
 		const inner = new FakeRunner();
-		stubPrWorktreeHandoff(inner);
-		stubPullRequestOpenStep(inner);
-		inner.set("gh", PR_AUTH_ARGS, { stdout: "ghp_token\n" });
 		const runner = new RaiseOnCallRunner(inner, "gh", PR_AUTH_ARGS, 3);
+		const p = await modulePlane(runner);
+		stubPrWorktreeHandoff(inner, repoPath(p.home), p.home);
+		stubPullRequestOpenStep(inner, repoPath(p.home));
+		inner.set("gh", PR_AUTH_ARGS, { stdout: "ghp_token\n" });
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_VERDICT_CONFIG,
 		});
@@ -4618,10 +4687,10 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 		// the render does: the local branch stands beside the remote one, and the
 		// next Handoff finds the branch instead of meeting a push that cannot land.
 		expect(commands).toContain(PR_CREATE_COMMAND);
-		expect(commands).toContain(pushBranchCommand());
-		expectNoCommand(commands, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		expect(commands).toContain(pushBranchCommand(repoPath(p.home)));
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} branch -D ${PR_BRANCH}`);
 		expectNoCommand(commands, "gh pr close");
-		expectNoCommand(commands, `git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} push origin --delete ${PR_BRANCH}`);
 		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
 		// The raise came before the Agent, so no Agent started to roll back.
 		expectNoCommand(commands, "agent start");
@@ -4629,12 +4698,16 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 
 	test("a task type that opens a pull request refuses the live worktree before it acts", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 
 		const outcome = await handoffRun(
 			runner,
+			p.home,
 			{ ...defaultChoice, environment: "live-worktree" },
-			{ ticket: PR_TICKET, config: PR_CONFIG },
+			{
+				ticket: PR_TICKET,
+				config: PR_CONFIG,
+			},
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -4647,9 +4720,11 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 
 	test("a ticket that lists on no source the task type can read fails the open's pre-flight", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 
-		const outcome = await handoffRun(runner, worktreeChoice, { config: PR_CONFIG });
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
+			config: PR_CONFIG,
+		});
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("opens a pull request");
@@ -4660,30 +4735,18 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 
 	test("a task type that opens no pull request runs no open step", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", PR_BRANCH], { stdout: "" });
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				PR_BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), PR_BRANCH, "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), { branch: PR_BRANCH, base: "origin/main" });
 
-		const outcome = await handoffRun(runner, worktreeChoice, { ticket: PR_TICKET });
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
+			ticket: PR_TICKET,
+		});
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
-		expect(commands).not.toContain(pushBranchCommand());
+		expect(commands).not.toContain(pushBranchCommand(repoPath(p.home)));
 		expect(commands).not.toContain(`gh ${PR_READ_ARGS.join(" ")}`);
 	});
 });
@@ -4704,12 +4767,16 @@ describe("the one start: one pre-flight order on both paths", () => {
 
 	test("an unknown Agent type beside the reserved Environment answers the Agent type on both paths", async () => {
 		const runner = new FakeRunner();
-		const onTicket = await handoffRun(runner, { ...defaultChoice, ...AGENT_AND_ENVIRONMENT_FACTS });
+		const p = await modulePlane(runner);
+		const onTicket = await handoffRun(runner, p.home, {
+			...defaultChoice,
+			...AGENT_AND_ENVIRONMENT_FACTS,
+		});
 		const onConsultation = await handOffConsultation({
-			consultation: consultationRecord(AGENT_AND_ENVIRONMENT_FACTS),
+			consultation: consultationRecord(repoPath(p.home), AGENT_AND_ENVIRONMENT_FACTS),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 		});
 		expect(reasonOf(onTicket)).toBe("unknown agent type: nope");
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4719,13 +4786,14 @@ describe("the one start: one pre-flight order on both paths", () => {
 
 	test("a known Agent type with the reserved Environment answers the Environment on both paths", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		const facts = { agentType: "pi", environment: "container" as const };
-		const onTicket = await handoffRun(runner, { ...defaultChoice, ...facts });
+		const onTicket = await handoffRun(runner, p.home, { ...defaultChoice, ...facts });
 		const onConsultation = await handOffConsultation({
-			consultation: consultationRecord(facts),
+			consultation: consultationRecord(repoPath(p.home), facts),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 		});
 		expect(reasonOf(onTicket)).toBe("the container environment is reserved and not yet built");
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4734,7 +4802,8 @@ describe("the one start: one pre-flight order on both paths", () => {
 
 	test("the Agent type is answered before the Task type on the Ticket path", async () => {
 		const runner = new FakeRunner();
-		const outcome = await handoffRun(runner, {
+		const p = await modulePlane(runner);
+		const outcome = await handoffRun(runner, p.home, {
 			...defaultChoice,
 			agentType: "nope",
 			taskType: "refactor",
@@ -4744,10 +4813,11 @@ describe("the one start: one pre-flight order on both paths", () => {
 
 	test("the Task type is answered before the Setting fit on the Ticket path", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		// The model is unfit too, and the Agent type is known: the Task type is
 		// the fact the order puts first, so its reason is the one the operator reads.
 		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
-		const outcome = await handoffRun(runner, {
+		const outcome = await handoffRun(runner, p.home, {
 			...defaultChoice,
 			taskType: "refactor",
 			model: "gpt-4o",
@@ -4758,13 +4828,14 @@ describe("the one start: one pre-flight order on both paths", () => {
 
 	test("the Setting fit is the last half of the order on both paths", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
-		const onTicket = await handoffRun(runner, { ...defaultChoice, model: "gpt-4o" });
+		const onTicket = await handoffRun(runner, p.home, { ...defaultChoice, model: "gpt-4o" });
 		const onConsultation = await handOffConsultation({
-			consultation: consultationRecord({ model: "gpt-4o" }),
+			consultation: consultationRecord(repoPath(p.home), { model: "gpt-4o" }),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 		});
 		expect(reasonOf(onTicket)).toContain('has no model "gpt-4o"');
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4775,10 +4846,11 @@ describe("the one start: one pre-flight order on both paths", () => {
 
 	test("a choice that names no Task type answers with a whole reason", async () => {
 		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
 		// One facts builder for every start (issue #204): an empty Task type reads
 		// as "no Task type", so the answer is never `unknown task type: ` with a
 		// trailing space for a name no start ever named.
-		const outcome = await handoffRun(runner, { ...defaultChoice, taskType: "" });
+		const outcome = await handoffRun(runner, p.home, { ...defaultChoice, taskType: "" });
 		expect(reasonOf(outcome)).toBe("the handoff names no task type");
 		expect(runner.commands().join("\n")).not.toContain("herdr");
 	});
@@ -4812,19 +4884,21 @@ describe("the one start: one stage order on both paths", () => {
 
 	test("a Ticket live start reports the stages in one order", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([{ id: "ws-other" }]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new"),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-new", "--cwd", repoPath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-1") },
 		);
 		const stages: string[] = [];
 
-		const outcome = await handoffRun(runner, defaultChoice, { onStage: stageRecorder(stages) });
+		const outcome = await handoffRun(runner, p.home, defaultChoice, {
+			onStage: stageRecorder(stages),
+		});
 
 		expect(outcome.status).toBe("ok");
 		expect(stages).toEqual(START_STAGES);
@@ -4832,29 +4906,15 @@ describe("the one start: one stage order on both paths", () => {
 
 	test("a Ticket worktree start reports the same stages in the same order", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		const stages: string[] = [];
 
-		const outcome = await handoffRun(runner, worktreeChoice, { onStage: stageRecorder(stages) });
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
+			onStage: stageRecorder(stages),
+		});
 
 		expect(outcome.status).toBe("ok");
 		expect(stages).toEqual(START_STAGES);
@@ -4862,22 +4922,22 @@ describe("the one start: one stage order on both paths", () => {
 
 	test("a Consultation start reports the same stages in the same order", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-live", checkoutPath: CHECKOUT }]),
+			stdout: workspaceListJson([{ id: "ws-live", checkoutPath: repoPath(p.home) }]),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-live", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-live", "--cwd", repoPath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-c1", "tab-c1") },
 		);
 		const stages: string[] = [];
 
 		const outcome = await handOffConsultation({
-			consultation: consultationRecord(),
+			consultation: consultationRecord(repoPath(p.home)),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 			onStage: stageRecorder(stages),
 		});
 
@@ -4887,20 +4947,22 @@ describe("the one start: one stage order on both paths", () => {
 
 	test("a start that never reaches its Agent reports the stages it did reach", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([{ id: "ws-other" }]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new"),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-new", "--cwd", repoPath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-1") },
 		);
 		stubStartFailure(runner, "pane-1");
 		const stages: string[] = [];
 
-		const outcome = await handoffRun(runner, defaultChoice, { onStage: stageRecorder(stages) });
+		const outcome = await handoffRun(runner, p.home, defaultChoice, {
+			onStage: stageRecorder(stages),
+		});
 
 		expect(outcome.status).toBe("failed");
 		// The order is the same as far as it goes: the failure stops after the
@@ -4913,21 +4975,21 @@ describe("the one start: one stage order on both paths", () => {
 describe("the one start: one cleanup rule on every Environment kind", () => {
 	test("a live start that creates its workspace removes its tab and that workspace", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new"),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-new", "--cwd", repoPath(p.home), "--no-focus"],
 			{
 				stdout: tabCreateJson("pane-1"),
 			},
 		);
 		stubStartFailure(runner, "pane-1");
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome.status).toBe("failed");
 		// The live kind cleans up the way the worktree kind always did: the tab
@@ -4943,20 +5005,20 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 
 	test("a live start in the checkout's own workspace closes only the tab it created", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-live", checkoutPath: CHECKOUT }]),
+			stdout: workspaceListJson([{ id: "ws-live", checkoutPath: repoPath(p.home) }]),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-live", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-live", "--cwd", repoPath(p.home), "--no-focus"],
 			{
 				stdout: tabCreateJson("pane-1"),
 			},
 		);
 		stubStartFailure(runner, "pane-1");
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome.status).toBe("failed");
 		const commands = runner.commands();
@@ -4968,7 +5030,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 
 	test("a stored live start closes the tab it created and keeps the stored workspace", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
 			stdout: workspaceListJson([{ id: "ws-stored" }]),
 		});
@@ -4977,7 +5039,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		});
 		stubStartFailure(runner, "pane-1");
 
-		const outcome = await handoffRun(runner, defaultChoice, {
+		const outcome = await handoffRun(runner, p.home, defaultChoice, {
 			claim: "continuation",
 			previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
 		});
@@ -4990,18 +5052,18 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 
 	test("a Consultation start in its fresh workspace closes the workspace it created", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new", "pane-c1"),
 		});
 		stubConsultationStartFailure(runner, "pane-c1");
 
 		const outcome = await handOffConsultation({
-			consultation: consultationRecord(),
+			consultation: consultationRecord(repoPath(p.home)),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5014,29 +5076,13 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 
 	test("a Ticket worktree start removes the checkout it created and the branch it created", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		stubStartFailure(runner, "pane-wt");
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		// The worktree kind's row of the same rule: the checkout goes, and so does
@@ -5044,24 +5090,26 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 		// tab close runs.
 		const commands = runner.commands();
 		expect(commands).toContain("herdr worktree remove --workspace ws-wt");
-		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${BRANCH}`);
+		expect(commands).toContain(
+			`git -C ${repoPath(p.home)} branch -D factory/9-persist-source-facts`,
+		);
 		expectNoCommand(commands, "tab close");
 	});
 
 	test("a start whose fresh tab fails to open closes the workspace it created", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new"),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-new", "--cwd", repoPath(p.home), "--no-focus"],
 			{ code: 1, stderr: '{"error":{"code":"tab_create_failed","message":"no pane"}}\n' },
 		);
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome.status).toBe("failed");
 		// The workspace was written into the residue record before the tab was
@@ -5074,13 +5122,19 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 
 	test("a worktree open that answers no pane id closes the workspace herdr attached", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: `  ${BRANCH}\n`,
-		});
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home));
 		runner.set(
 			"herdr",
-			["worktree", "open", "--cwd", CHECKOUT, "--branch", BRANCH, "--no-focus"],
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				repoPath(p.home),
+				"--branch",
+				"factory/9-persist-source-facts",
+				"--no-focus",
+			],
 			// herdr attached a fresh workspace and answered no root pane.
 			{
 				stdout: JSON.stringify({
@@ -5088,13 +5142,13 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 						already_open: false,
 						workspace: { workspace_id: "ws-wt" },
 						tab: { tab_id: "tab-ws-wt" },
-						worktree: { path: WORKTREE_PATH },
+						worktree: { path: prWorktreePath(p.home) },
 					},
 				}),
 			},
 		);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("worktree open returned no pane id");
@@ -5122,19 +5176,19 @@ describe("the one start: a command that raises", () => {
 
 	test("a start whose Agent start raises still removes the tab and the workspace it created", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new"),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-new", "--cwd", repoPath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-1") },
 		);
 		runner.reject("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-1"], RAISED);
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome.status).toBe("failed");
 		// The raise is the reason the operator sees, the way a refusal is.
@@ -5151,18 +5205,18 @@ describe("the one start: a command that raises", () => {
 
 	test("a start whose fresh tab create raises still closes the workspace it created", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new"),
 		});
 		runner.reject(
 			"herdr",
-			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-new", "--cwd", repoPath(p.home), "--no-focus"],
 			RAISED,
 		);
 
-		const outcome = await handoffRun(runner, defaultChoice);
+		const outcome = await handoffRun(runner, p.home, defaultChoice);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain(RAISED);
@@ -5176,29 +5230,13 @@ describe("the one start: a command that raises", () => {
 
 	test("a raise at the prompt keeps the started Agent and its Environment", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", BRANCH], {
-			stdout: "",
-		});
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), { base: "origin/main" });
 		runner.reject("herdr", ["agent", "prompt", AGENT, PROMPT], RAISED);
 
-		const outcome = await handoffRun(runner, worktreeChoice);
+		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		// A started Agent is never rolled back: the raise reads as the failed prompt
 		// it is, so the ticket still settles as handed off with the Agent on its
@@ -5218,11 +5256,16 @@ describe("the one start: a command that raises", () => {
 
 	test("a raise after the pull request open leaves the branch and the draft standing", async () => {
 		const runner = new FakeRunner();
-		stubPrWorktreeHandoff(runner);
-		stubPullRequestOpenStep(runner);
-		runner.reject("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], RAISED);
+		const p = await modulePlane(runner);
+		stubPrWorktreeHandoff(runner, repoPath(p.home), p.home);
+		stubPullRequestOpenStep(runner, repoPath(p.home));
+		runner.reject(
+			"herdr",
+			["agent", "start", PR_AGENT, "--kind", "pi", "--pane", "pane-wt"],
+			RAISED,
+		);
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: PR_TICKET,
 			config: PR_CONFIG,
 		});
@@ -5236,33 +5279,24 @@ describe("the one start: a command that raises", () => {
 		expectNoCommand(commands, "gh pr close");
 		expectNoCommand(commands, "push origin --delete");
 		expectNoCommand(commands, "branch -D");
-		expectNoCommand(commands, `gh pr close 42 --repo github.com/acme/billing`);
-		expectNoCommand(commands, `git -C ${CHECKOUT} push origin --delete ${PR_BRANCH}`);
-		expectNoCommand(commands, `git -C ${CHECKOUT} branch -D ${PR_BRANCH}`);
+		expectNoCommand(commands, `gh pr close 42 --repo github.com/acme/factory`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} push origin --delete ${PR_BRANCH}`);
+		expectNoCommand(commands, `git -C ${repoPath(p.home)} branch -D ${PR_BRANCH}`);
 		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
 	});
 
 	test("a Consultation start whose Agent start raises confirms the rows it recorded for what it removed", async () => {
 		const branch = "factory/consultation-consulta-grill-with-docs";
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", branch], { stdout: "" });
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				branch,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-cwt", "pane-c1") },
-		);
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), branch, "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), {
+			branch: branch,
+			base: "origin/main",
+			workspaceId: "ws-cwt",
+			paneId: "pane-c1",
+		});
 		runner.reject(
 			"herdr",
 			["agent", "start", "consultation-11111111", "--kind", "pi", "--pane", "pane-c1"],
@@ -5272,10 +5306,10 @@ describe("the one start: a command that raises", () => {
 		const confirmed: string[] = [];
 
 		const outcome = await handOffConsultation({
-			consultation: consultationRecord({ environment: "worktree" }),
+			consultation: consultationRecord(repoPath(p.home), { environment: "worktree" }),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 			onResource: (kind, resourceId) => recorded.push(`${kind} ${resourceId}`),
 			onResourceRemoved: (kind, resourceId) => confirmed.push(`${kind} ${resourceId}`),
 		});
@@ -5284,7 +5318,7 @@ describe("the one start: a command that raises", () => {
 		expect(reasonOf(outcome)).toContain(RAISED);
 		const commands = runner.commands();
 		expect(commands).toContain("herdr worktree remove --workspace ws-cwt");
-		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${branch}`);
+		expect(commands).toContain(`git -C ${repoPath(p.home)} branch -D ${branch}`);
 		// Every row the start wrote is confirmed under the kind the start wrote it
 		// under, so no recorded row can be left standing over a handle the plane
 		// already took down.
@@ -5294,9 +5328,9 @@ describe("the one start: a command that raises", () => {
 
 	test("a Consultation start in its fresh live workspace confirms the tab row it recorded", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new", "pane-c1"),
 		});
 		runner.reject(
@@ -5308,10 +5342,10 @@ describe("the one start: a command that raises", () => {
 		const confirmed: string[] = [];
 
 		const outcome = await handOffConsultation({
-			consultation: consultationRecord(),
+			consultation: consultationRecord(repoPath(p.home)),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 			onResource: (kind, resourceId) => recorded.push(`${kind} ${resourceId}`),
 			onResourceRemoved: (kind, resourceId) => confirmed.push(`${kind} ${resourceId}`),
 		});
@@ -5345,13 +5379,13 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 
 	test("a Consultation reuses the checkout's workspace and adds a fresh tab", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], {
-			stdout: workspaceListJson([{ id: "ws-live", checkoutPath: CHECKOUT }]),
+			stdout: workspaceListJson([{ id: "ws-live", checkoutPath: repoPath(p.home) }]),
 		});
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-live", "--cwd", CHECKOUT, "--no-focus"],
+			["tab", "create", "--workspace", "ws-live", "--cwd", repoPath(p.home), "--no-focus"],
 			{
 				stdout: tabCreateJson("pane-c1", "tab-c1"),
 			},
@@ -5359,10 +5393,10 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 		const resources: string[] = [];
 
 		const outcome = await handOffConsultation({
-			consultation: consultationRecord(),
+			consultation: consultationRecord(repoPath(p.home)),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 			onResource: recorder(resources),
 		});
 
@@ -5385,18 +5419,18 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 
 	test("a Consultation creates the missing checkout workspace and starts in its root pane", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
+		const p = await modulePlane(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		runner.set("herdr", ["workspace", "create", "--cwd", repoPath(p.home), "--no-focus"], {
 			stdout: workspaceCreateJson("ws-new", "pane-c1"),
 		});
 		const resources: string[] = [];
 
 		const outcome = await handOffConsultation({
-			consultation: consultationRecord(),
+			consultation: consultationRecord(repoPath(p.home)),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 			onResource: recorder(resources),
 		});
 
@@ -5420,31 +5454,24 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 
 	test("a Consultation worktree start creates its worktree from the worktree base", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", CONSULTATION_BRANCH], { stdout: "" });
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				CONSULTATION_BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-cwt", "pane-c1") },
-		);
+		const p = await modulePlane(runner);
+		runner.set("git", ["-C", repoPath(p.home), "branch", "--list", CONSULTATION_BRANCH], {
+			stdout: "",
+		});
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), {
+			branch: CONSULTATION_BRANCH,
+			base: "origin/main",
+			workspaceId: "ws-cwt",
+			paneId: "pane-c1",
+		});
 		const resources: string[] = [];
 
 		const outcome = await handOffConsultation({
-			consultation: consultationRecord({ environment: "worktree" }),
+			consultation: consultationRecord(repoPath(p.home), { environment: "worktree" }),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 			onResource: recorder(resources),
 		});
 
@@ -5468,16 +5495,16 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 
 	test("a Consultation branch that already exists is refused before any herdr step", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", CONSULTATION_BRANCH], {
+		const p = await modulePlane(runner);
+		runner.set("git", ["-C", repoPath(p.home), "branch", "--list", CONSULTATION_BRANCH], {
 			stdout: `  ${CONSULTATION_BRANCH}\n`,
 		});
 
 		const outcome = await handOffConsultation({
-			consultation: consultationRecord({ environment: "worktree" }),
+			consultation: consultationRecord(repoPath(p.home), { environment: "worktree" }),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5490,24 +5517,17 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 
 	test("a Consultation worktree start removes the worktree and the branch it created", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", CONSULTATION_BRANCH], { stdout: "" });
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				CONSULTATION_BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-cwt", "pane-c1") },
-		);
+		const p = await modulePlane(runner);
+		runner.set("git", ["-C", repoPath(p.home), "branch", "--list", CONSULTATION_BRANCH], {
+			stdout: "",
+		});
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), {
+			branch: CONSULTATION_BRANCH,
+			base: "origin/main",
+			workspaceId: "ws-cwt",
+			paneId: "pane-c1",
+		});
 		runner.set(
 			"herdr",
 			["agent", "start", "consultation-11111111", "--kind", "pi", "--pane", "pane-c1"],
@@ -5518,10 +5538,10 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 		);
 
 		const outcome = await handOffConsultation({
-			consultation: consultationRecord({ environment: "worktree" }),
+			consultation: consultationRecord(repoPath(p.home), { environment: "worktree" }),
 			config: BASE_CONFIG,
 			runner,
-			home: HOME,
+			home: p.home,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5529,7 +5549,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 		// branch this start created.
 		const commands = runner.commands();
 		expect(commands).toContain("herdr worktree remove --workspace ws-cwt");
-		expect(commands).toContain(`git -C ${CHECKOUT} branch -D ${CONSULTATION_BRANCH}`);
+		expect(commands).toContain(`git -C ${repoPath(p.home)} branch -D ${CONSULTATION_BRANCH}`);
 	});
 });
 
@@ -5548,27 +5568,27 @@ describe("the Message lines one start's outcome leaves (ADR 0103)", () => {
 		} as const;
 		expect(
 			handoffReportLines({
-				warning: "cloned acme/billing to a sibling",
+				warning: "cloned acme/factory to a sibling",
 				write: failed,
 				worktreeBase: "worktree base fell back to the local HEAD",
 			}),
 		).toEqual([
 			"could not persist the repository mapping",
-			"cloned acme/billing to a sibling",
+			"cloned acme/factory to a sibling",
 			"worktree base fell back to the local HEAD",
 		]);
 		expect(
 			handoffReportLines({
 				reason: "the pane is gone",
-				collision: "a leftover agent holds acme/billing; this agent started as acme/billing-2",
-				warning: "cloned acme/billing to a sibling",
+				collision: "a leftover agent holds acme/factory; this agent started as acme/factory-2",
+				warning: "cloned acme/factory to a sibling",
 				write: landed,
 				leftoverWorktree: "moved aside the leftover worktree",
 			}),
 		).toEqual([
 			"the pane is gone",
-			"a leftover agent holds acme/billing; this agent started as acme/billing-2",
-			"cloned acme/billing to a sibling",
+			"a leftover agent holds acme/factory; this agent started as acme/factory-2",
+			"cloned acme/factory to a sibling",
 			"saved the mapping in /home/me/config.toml",
 			"moved aside the leftover worktree",
 		]);
@@ -5577,27 +5597,27 @@ describe("the Message lines one start's outcome leaves (ADR 0103)", () => {
 		// the fact that the whole file was replaced is the one the row must carry.
 		expect(
 			handoffReportLines({
-				warning: "cloned acme/billing to a sibling",
+				warning: "cloned acme/factory to a sibling",
 				write: rewritten,
 				worktreeBase: "worktree base fell back to the local HEAD",
 			}),
 		).toEqual([
 			rewritten.line,
-			"cloned acme/billing to a sibling",
+			"cloned acme/factory to a sibling",
 			"worktree base fell back to the local HEAD",
 		]);
 		// The fallback the pull request ticket's branch statement took (ADR
 		// 0112) trails the worktree base, and the moved directory stays last.
 		expect(
 			handoffReportLines({
-				warning: "cloned acme/billing to a sibling",
+				warning: "cloned acme/factory to a sibling",
 				worktreeBase: "worktree base fell back to the local HEAD",
 				branchFallback:
 					"the head branch could not be worked, so the start works the ticket's own branch",
 				leftoverWorktree: "moved aside the leftover worktree",
 			}),
 		).toEqual([
-			"cloned acme/billing to a sibling",
+			"cloned acme/factory to a sibling",
 			"worktree base fell back to the local HEAD",
 			"the head branch could not be worked, so the start works the ticket's own branch",
 			"moved aside the leftover worktree",
@@ -5612,7 +5632,7 @@ describe("the Message lines one start's outcome leaves (ADR 0103)", () => {
 // ---------------------------------------------------------------------------
 
 /** The issue's factory branch: the head the pull request's membership records. */
-const HEAD_BRANCH = BRANCH;
+const HEAD_BRANCH = "factory/7-retry-policy-for-webhooks";
 /** The pull request ticket's own numbered branch: the statement's fallback. */
 const NUMBERED_BRANCH = "factory/12-retry-policy-for-webhooks";
 
@@ -5625,9 +5645,12 @@ const NUMBERED_BRANCH = "factory/12-retry-policy-for-webhooks";
 const pullRequestTicket: Ticket = {
 	...ticket,
 	identity: "github:github.com:P_12",
+	title: "Retry policy for webhooks",
+	description: "Add a retry policy.",
+	labels: [],
 	sourceKind: "github-pull-request",
 	externalKey: "#12",
-	url: "https://github.com/acme/billing/pulls/12",
+	url: "https://github.com/acme/factory/pulls/12",
 	memberships: [
 		{
 			sourceName: "issues",
@@ -5636,7 +5659,7 @@ const pullRequestTicket: Ticket = {
 			sourceKind: "github-pull-request",
 			externalKey: "#12",
 			sourceState: "open",
-			url: "https://github.com/acme/billing/pulls/12",
+			url: "https://github.com/acme/factory/pulls/12",
 			title: "Retry policy for webhooks",
 			description: "Add a retry policy.",
 			labels: [],
@@ -5662,41 +5685,43 @@ const PULL_PROMPT = renderPrompt(templateOf(BASE_CONFIG.taskTypes.implement), pu
 describe("handOffTicket: the pull request ticket's branch (ADR 0112)", () => {
 	test("works the head branch its pull request holds, in the worktree that holds it", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", HEAD_BRANCH], {
+		const p = await modulePlane(runner);
+		runner.set("git", ["-C", repoPath(p.home), "branch", "--list", HEAD_BRANCH], {
 			stdout: `  ${HEAD_BRANCH}\n`,
 		});
 		runner.set(
 			"herdr",
-			["worktree", "open", "--cwd", CHECKOUT, "--branch", HEAD_BRANCH, "--no-focus"],
+			["worktree", "open", "--cwd", repoPath(p.home), "--branch", HEAD_BRANCH, "--no-focus"],
 			{
 				stdout: worktreeOpenJson("ws-impl", "pane-root", {
 					alreadyOpen: true,
-					worktreePath: WORKTREE_PATH,
+					worktreePath: worktreePath(p.home),
 				}),
 			},
 		);
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-impl", "--cwd", WORKTREE_PATH, "--no-focus"],
+			["tab", "create", "--workspace", "ws-impl", "--cwd", worktreePath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-tab") },
 		);
 
-		const outcome = await handoffRun(runner, worktreeChoice, { ticket: pullRequestTicket });
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
+			ticket: pullRequestTicket,
+		});
 
 		expect(outcome.status).toBe("ok");
 		// The head branch works, so the statement takes no fallback and the
 		// start states no note.
 		expect(outcome.notes).toBeUndefined();
 		expect(runner.commands()).toEqual([
-			`git -C ${CHECKOUT} rev-parse --git-dir`,
-			`git -C ${CHECKOUT} remote get-url origin`,
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
 			// The statement's read: the head fact answers against the checkout.
-			`git -C ${CHECKOUT} branch --list ${HEAD_BRANCH}`,
+			`git -C ${repoPath(p.home)} branch --list ${HEAD_BRANCH}`,
 			// The builder's own read of the branch it works.
-			`git -C ${CHECKOUT} branch --list ${HEAD_BRANCH}`,
-			`herdr worktree open --cwd ${CHECKOUT} --branch ${HEAD_BRANCH} --no-focus`,
-			`herdr tab create --workspace ws-impl --cwd ${WORKTREE_PATH} --no-focus`,
+			`git -C ${repoPath(p.home)} branch --list ${HEAD_BRANCH}`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch ${HEAD_BRANCH} --no-focus`,
+			`herdr tab create --workspace ws-impl --cwd ${worktreePath(p.home)} --no-focus`,
 			`herdr agent start ${PULL_AGENT} --kind pi --pane pane-tab`,
 			`herdr agent prompt ${PULL_AGENT} ${PULL_PROMPT}`,
 		]);
@@ -5709,51 +5734,53 @@ describe("handOffTicket: the pull request ticket's branch (ADR 0112)", () => {
 
 	test("works the head branch standing only on origin: fetches it and reuses it", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", HEAD_BRANCH], { stdout: "" });
-		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", HEAD_BRANCH], {
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), HEAD_BRANCH, "");
+		runner.set("git", ["-C", repoPath(p.home), "ls-remote", "--heads", "origin", HEAD_BRANCH], {
 			stdout: `abc123\trefs/heads/${HEAD_BRANCH}\n`,
 		});
 		runner.set(
 			"git",
-			["-C", CHECKOUT, "fetch", "origin", `${HEAD_BRANCH}:refs/heads/${HEAD_BRANCH}`],
+			["-C", repoPath(p.home), "fetch", "origin", `${HEAD_BRANCH}:refs/heads/${HEAD_BRANCH}`],
 			{ stdout: "" },
 		);
 		runner.set(
 			"herdr",
-			["worktree", "open", "--cwd", CHECKOUT, "--branch", HEAD_BRANCH, "--no-focus"],
+			["worktree", "open", "--cwd", repoPath(p.home), "--branch", HEAD_BRANCH, "--no-focus"],
 			{
 				stdout: worktreeOpenJson("ws-impl", "pane-root", {
 					alreadyOpen: true,
-					worktreePath: WORKTREE_PATH,
+					worktreePath: worktreePath(p.home),
 				}),
 			},
 		);
 		runner.set(
 			"herdr",
-			["tab", "create", "--workspace", "ws-impl", "--cwd", WORKTREE_PATH, "--no-focus"],
+			["tab", "create", "--workspace", "ws-impl", "--cwd", worktreePath(p.home), "--no-focus"],
 			{ stdout: tabCreateJson("pane-tab") },
 		);
 
-		const outcome = await handoffRun(runner, worktreeChoice, { ticket: pullRequestTicket });
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
+			ticket: pullRequestTicket,
+		});
 
 		expect(outcome.status).toBe("ok");
 		expect(outcome.notes).toBeUndefined();
 		expect(runner.commands()).toEqual([
-			`git -C ${CHECKOUT} rev-parse --git-dir`,
-			`git -C ${CHECKOUT} remote get-url origin`,
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
 			// The statement's reads: the head stands on no local branch, but the
 			// origin copy stands.
-			`git -C ${CHECKOUT} branch --list ${HEAD_BRANCH}`,
-			`git -C ${CHECKOUT} ls-remote --heads origin ${HEAD_BRANCH}`,
+			`git -C ${repoPath(p.home)} branch --list ${HEAD_BRANCH}`,
+			`git -C ${repoPath(p.home)} ls-remote --heads origin ${HEAD_BRANCH}`,
 			// The builder's own reads of the branch it works.
-			`git -C ${CHECKOUT} branch --list ${HEAD_BRANCH}`,
-			`git -C ${CHECKOUT} ls-remote --heads origin ${HEAD_BRANCH}`,
+			`git -C ${repoPath(p.home)} branch --list ${HEAD_BRANCH}`,
+			`git -C ${repoPath(p.home)} ls-remote --heads origin ${HEAD_BRANCH}`,
 			// The standing remote copy is the branch: the fetch takes the reuse
 			// path, the way the builder has always taken it.
-			`git -C ${CHECKOUT} fetch origin ${HEAD_BRANCH}:refs/heads/${HEAD_BRANCH}`,
-			`herdr worktree open --cwd ${CHECKOUT} --branch ${HEAD_BRANCH} --no-focus`,
-			`herdr tab create --workspace ws-impl --cwd ${WORKTREE_PATH} --no-focus`,
+			`git -C ${repoPath(p.home)} fetch origin ${HEAD_BRANCH}:refs/heads/${HEAD_BRANCH}`,
+			`herdr worktree open --cwd ${repoPath(p.home)} --branch ${HEAD_BRANCH} --no-focus`,
+			`herdr tab create --workspace ws-impl --cwd ${worktreePath(p.home)} --no-focus`,
 			`herdr agent start ${PULL_AGENT} --kind pi --pane pane-tab`,
 			`herdr agent prompt ${PULL_AGENT} ${PULL_PROMPT}`,
 		]);
@@ -5763,26 +5790,14 @@ describe("handOffTicket: the pull request ticket's branch (ADR 0112)", () => {
 
 	test("a missing head fact takes the ticket's own branch, and the note says why", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", NUMBERED_BRANCH], { stdout: "" });
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				NUMBERED_BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		const p = await modulePlane(runner);
+		runner.set("git", ["-C", repoPath(p.home), "branch", "--list", NUMBERED_BRANCH], {
+			stdout: "",
+		});
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), { branch: NUMBERED_BRANCH, base: "origin/main" });
 
-		const outcome = await handoffRun(runner, worktreeChoice, {
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
 			ticket: pullRequestTicketWithoutHead,
 		});
 
@@ -5796,36 +5811,26 @@ describe("handOffTicket: the pull request ticket's branch (ADR 0112)", () => {
 		// own check of the numbered branch on origin is its standing path.
 		expectNoCommand(runner.commands(), `ls-remote --heads origin ${HEAD_BRANCH}`);
 		expect(runner.commands()).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${NUMBERED_BRANCH} --base origin/main --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch ${NUMBERED_BRANCH} --base origin/main --no-focus`,
 		);
 	});
 
 	test("a head branch that stands in neither copy takes the ticket's own branch, and the note says why", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", HEAD_BRANCH], { stdout: "" });
-		runner.set("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", HEAD_BRANCH], {
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), HEAD_BRANCH, "");
+		runner.set("git", ["-C", repoPath(p.home), "ls-remote", "--heads", "origin", HEAD_BRANCH], {
 			stdout: "",
 		});
-		runner.set("git", ["-C", CHECKOUT, "branch", "--list", NUMBERED_BRANCH], { stdout: "" });
-		stubRemoteDefaultBranch(runner);
-		runner.set(
-			"herdr",
-			[
-				"worktree",
-				"create",
-				"--cwd",
-				CHECKOUT,
-				"--branch",
-				NUMBERED_BRANCH,
-				"--base",
-				"origin/main",
-				"--no-focus",
-			],
-			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
-		);
+		runner.set("git", ["-C", repoPath(p.home), "branch", "--list", NUMBERED_BRANCH], {
+			stdout: "",
+		});
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		stubWorktreeCreate(runner, repoPath(p.home), { branch: NUMBERED_BRANCH, base: "origin/main" });
 
-		const outcome = await handoffRun(runner, worktreeChoice, { ticket: pullRequestTicket });
+		const outcome = await handoffRun(runner, p.home, worktreeChoice, {
+			ticket: pullRequestTicket,
+		});
 
 		expect(outcome.status).toBe("ok");
 		// The fallback says why a cycle wears its numbered branch: the head
@@ -5835,21 +5840,23 @@ describe("handOffTicket: the pull request ticket's branch (ADR 0112)", () => {
 		);
 		// The head was checked in both copies, and the start was never refused:
 		// the numbered branch was built and worked.
-		expect(runner.commands()).toContain(`git -C ${CHECKOUT} branch --list ${HEAD_BRANCH}`);
+		expect(runner.commands()).toContain(`git -C ${repoPath(p.home)} branch --list ${HEAD_BRANCH}`);
 		expect(runner.commands()).toContain(
-			`git -C ${CHECKOUT} ls-remote --heads origin ${HEAD_BRANCH}`,
+			`git -C ${repoPath(p.home)} ls-remote --heads origin ${HEAD_BRANCH}`,
 		);
 		expect(runner.commands()).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch ${NUMBERED_BRANCH} --base origin/main --no-focus`,
+			`herdr worktree create --cwd ${repoPath(p.home)} --branch ${NUMBERED_BRANCH} --base origin/main --no-focus`,
 		);
 	});
 
 	test("a live worktree handoff of a pull request ticket states no head fact and takes no head read", async () => {
 		const runner = new FakeRunner();
-		conventionCheckout(runner);
-		stubLiveWorkspace(runner);
+		const p = await modulePlane(runner);
+		stubLiveWorkspace(runner, repoPath(p.home));
 
-		const outcome = await handoffRun(runner, defaultChoice, { ticket: pullRequestTicket });
+		const outcome = await handoffRun(runner, p.home, defaultChoice, {
+			ticket: pullRequestTicket,
+		});
 
 		expect(outcome.status).toBe("ok");
 		expect(outcome.notes).toBeUndefined();

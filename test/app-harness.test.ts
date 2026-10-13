@@ -20,7 +20,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { awaitFrame, withApp } from "./app-harness.ts";
-import { plane } from "./seeded-plane.ts";
+import { plane } from "./plane.ts";
 
 /** The ticket the named plane stands on, beside the default standing's. */
 const NAMED_TICKET: Ticket = {
@@ -111,6 +111,28 @@ describe("the shared frame harness boots the Seeded plane", () => {
 				);
 			},
 			{ loopPolicy: { kind: "polled", intervalMs: 25 } },
+		);
+	});
+
+	test("a plane that names a poll interval runs the loop the plane named", async () => {
+		// The standing the plane named names the loop policy, and the harness
+		// reads it off the plane's props, the way the App's own boot reads
+		// them: a plane that stands a poll interval boots the poll, and a
+		// policy named on the boot still stands over the plane's.
+		const named = await plane({ pollIntervalMs: 25 });
+		await withApp(
+			async (setup) => {
+				await awaitFrame(
+					setup,
+					() =>
+						setup.plane.fakeRunner
+							.commands()
+							.some((command) => command.startsWith("herdr agent list")),
+					"the observation poll",
+					5000,
+				);
+			},
+			{ plane: named },
 		);
 	});
 

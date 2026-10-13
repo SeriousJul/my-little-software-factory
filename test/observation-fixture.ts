@@ -30,6 +30,7 @@ import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { SessionTurnRead } from "../src/turn-log.ts";
 import { fireTransition, type RefiredSkip, refireRecordedSkips } from "../src/workflow.ts";
+import { fetchedTicket, fetchSuccess } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -42,7 +43,7 @@ import type { RecordedLine } from "./record-logger.ts";
 import { recordLogger } from "./record-logger.ts";
 
 /** The fixture's one time seam: the state file and the cycle answer from it. */
-const PINNED_EPOCH = Date.parse("2026-08-31T11:00:00Z");
+export const PINNED_EPOCH = Date.parse("2026-08-31T11:00:00Z");
 
 /**
  * The herdr stubs the default start needs: a live-worktree build at the
@@ -203,29 +204,10 @@ export function rig(options: RigOptions, baseConfig: FactoryConfig): Rig {
 	// refresh would.
 	const issuesSource = { name: "issues", kind: "github-issues" as const };
 	state.sourceFact.initializeSources([issuesSource]);
-	state.sourceFact.applyFetch(issuesSource, {
-		status: "success",
-		fetchedAt: "2026-08-31T10:01:00Z",
-		tickets: [
-			{
-				identity: "github:github.com:I_5",
-				sourceKind: "github-issue",
-				externalKey: "#5",
-				sourceState: "open",
-				url: "https://github.com/acme/factory/issues/5",
-				title: "Persist source facts",
-				description: "Keep state independent from GitHub.",
-				labels: ["ready-for-agent"],
-				externalUpdatedAt: "2026-08-31T10:00:00Z",
-				repository: {
-					identity: "github.com/acme/factory",
-					displayName: "acme/factory",
-					cloneUrl: "https://github.com/acme/factory.git",
-				},
-				attributes: {},
-			},
-		],
-	});
+	state.sourceFact.applyFetch(
+		issuesSource,
+		fetchSuccess([fetchedTicket({ identity: "github:github.com:I_5" })]),
+	);
 	const runner = options.runner ?? new FakeRunner();
 	if (options.runner === undefined) stubDefaultHerdr(runner, checkout);
 

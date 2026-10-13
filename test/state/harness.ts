@@ -20,6 +20,13 @@ import type {
 import type { FactoryState } from "../../src/state.ts";
 import { openFactoryState } from "../../src/state.ts";
 import type { TurnLogEntry } from "../../src/turn-log.ts";
+import {
+	DEFAULT_REPOSITORY,
+	fetchedTicket,
+	fetchSuccess,
+	handoffChoice,
+	WORKFLOW_STATES,
+} from "../fact-fixtures.ts";
 
 const paths: string[] = [];
 
@@ -36,14 +43,8 @@ export function statePath(): string {
 
 export const sourceA = { name: "issues-a", kind: "github-issues" };
 export const sourceB = { name: "issues-b", kind: "github-issues" };
-export const choice = {
-	agentType: "pi",
-	environment: "worktree" as const,
-	taskType: "implement",
-	model: "",
-	thinking: "",
-	contextWindow: "",
-};
+/** The six-field choice the aggregate suites claim Handoffs with. */
+export const choice = handoffChoice({ environment: "worktree" });
 
 /** A plain-text turn log for a settle fixture, one entry per line. */
 export function textLog(message: string): TurnLogEntry[] {
@@ -99,35 +100,19 @@ export function readStoredLog(path: string, identity: string): TurnLogEntry[] {
 
 /**
  * The herdr Agent name the naming rule gives the harness Ticket (ADR 0098):
- * its title slug with its own identity tag.
+ * its title slug with its own identity tag. The harness Ticket is the shared
+ * default Ticket under the harness identity, so the name stands beside the
+ * ticket the aggregate suites seed (issue #362).
  */
-export const HARNESS_AGENT_NAME = agentNameFor({
-	identity: "github:github.com:I_5",
-	title: "Persist source facts",
-});
+export const HARNESS_AGENT_NAME = agentNameFor(fetched());
 
+/** The default Ticket, with the caller's identity over it. */
 export function fetched(identity = "github:github.com:I_5"): FetchedTicket {
-	return {
-		identity,
-		sourceKind: "github-issue",
-		externalKey: "#5",
-		sourceState: "open",
-		url: "https://github.com/acme/factory/issues/5",
-		title: "Persist source facts",
-		description: "Keep state independent from GitHub.",
-		labels: ["ready-for-agent"],
-		externalUpdatedAt: "2026-08-31T10:00:00Z",
-		repository: {
-			identity: "github.com/acme/factory",
-			displayName: "acme/factory",
-			cloneUrl: "https://github.com/acme/factory.git",
-		},
-		attributes: {},
-	};
+	return fetchedTicket({ identity });
 }
 
 export function success(tickets: FetchedTicket[]) {
-	return { status: "success" as const, fetchedAt: "2026-08-31T10:01:00Z", tickets };
+	return fetchSuccess(tickets);
 }
 
 /**
@@ -266,25 +251,10 @@ export function decide(
 	});
 }
 
-// The States one projection read matches a ticket against: the first match
-// wins, a State with no task is a parking State, and no match at all leaves the
-// ticket on the fallback task type. The `position` grouping reads the matched
-// State's name, which the projection derives on every read and never stores
-// (issue #159).
-export const POSITION_STATES = [
-	{
-		name: "ready-for-agent",
-		taskType: "implement",
-		match: { sourceKind: "github-issue" as const, labelsAll: ["ready-for-agent"] },
-	},
-	{
-		name: "needs-review",
-		taskType: "review",
-		match: { sourceKind: "github-issue" as const, labelsAny: ["needs-review"] },
-	},
-	// A parking State: the plane suggests nothing and starts nothing on its own.
-	{ name: "on-hold", match: { sourceKind: "github-issue" as const, labelsAny: ["hold"] } },
-];
+// The States one projection read matches a ticket against, from the shared
+// fact module: the first match wins, a State with no task is a parking State,
+// and no match at all leaves the ticket on the fallback task type.
+export const POSITION_STATES = WORKFLOW_STATES;
 
 /** The v4 and later columns and tables a pre-v5 record never stored. */
 function dropPostV4(db: Database): void {
@@ -477,12 +447,7 @@ export function closedCycle(
 
 export const uid = (lead: string) => `${lead.repeat(8)}-1111-4111-8111-111111111111`;
 
-export const repository = {
-	identity: "github.com/acme/factory",
-	displayName: "acme/factory",
-	cloneUrl: "https://github.com/acme/factory.git",
-	path: "/tmp/factory",
-};
+export const repository = { ...DEFAULT_REPOSITORY, path: "/tmp/factory" };
 
 /** A `queued` Consultation, born with its Work queue item. */
 export function queuedConsultation(state: FactoryState, id: string, createdAt?: string) {

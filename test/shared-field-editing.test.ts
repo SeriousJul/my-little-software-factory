@@ -26,7 +26,7 @@ import {
 } from "./app-harness.ts";
 import type { FakeRunner } from "./fake-runner.ts";
 import { LAUNCHER_IDENTITY, launcherAnswers, launcherConfig } from "./launcher-fixtures.ts";
-import { plane } from "./seeded-plane.ts";
+import { plane } from "./plane.ts";
 
 /** Boot one launcher flow at the real app seam, with its own fake runner. */
 async function withLauncher(

@@ -25,7 +25,7 @@ import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
 import { repositoryInitSettingsHash } from "../src/repo-init.ts";
 import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	type AppSetup,
@@ -46,9 +46,9 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { ticketOf } from "./fact-fixtures.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
-import { callsReached } from "./state-fixture.ts";
+import { callsReached, type Plane, plane, reopenState } from "./plane.ts";
 
 let home = "";
 const opened: FactoryState[] = [];
@@ -210,8 +210,9 @@ const groupConfig: FactoryConfig = {
  * outranks every notice on the Message line, which would hide the axis's own
  * statement from the frames that check it.
  *
- * The axis stands where the standing names it; where it names none, the
- * state file's own answer stands, the fresh file's seeded split (ADR 0066).
+ * The axis stands where the standing names it. Where the standing names none,
+ * the plane settles the flat axis on the fresh file it opens, and a wrapped
+ * state stands on the axis its own file holds.
  */
 async function groupedPlane(
 	options: {
@@ -221,7 +222,7 @@ async function groupedPlane(
 		init?: boolean;
 		existing?: FactoryState;
 	} = {},
-): Promise<SeededPlane> {
+): Promise<Plane> {
 	const hold = options.hold === true;
 	const listed = options.listed ?? tickets();
 	const axis = options.axis;
@@ -497,66 +498,63 @@ function sectionHeader(frame: string): string {
 }
 
 describe("the Ticket section's Groups", () => {
-	// ADR 0066: a fresh state file seeds the repository split, so a newly
-	// configured plane comes up grouped before any press.
-	test("a freshly configured plane comes up grouped by repository", async () => {
-		await bootGrouped(async (setup) => {
-			const frame = await settle(setup);
-			// The fresh state file seeds the repository split (ADR 0066): the
-			// headers stand before any press, and the runs stand in the order the
-			// axis names them (ADR 0071): alphabetical, with the value's own word.
-			expect(headers(frame)).toEqual(["▾ acme/billing 2", "▾ acme/factory 3"]);
-			// The bar names the split the list wears once the cursor rests on a
-			// ticket row, the way a press would have named it.
-			const onTicket = await pressArrow(setup, "down", "a ticket row", (f) =>
-				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Legacy import"),
-			);
-			expect(actionBarRowOf(onTicket)).toContain("Tab Group: repository");
-		});
-	});
-
-	test("the flat list is the list today's plane draws, with no header", async () => {
+	// The standing's named axis stands on the fresh plane: the split the standing
+	// asks for is the one the frame wears before any press.
+	test("the standing's named axis stands on the fresh plane, before any press", async () => {
 		await bootGrouped(
 			async (setup) => {
 				const frame = await settle(setup);
-				// Every ticket shows, no header stands above any run, and the bar
-				// states no axis: `none` is the list exactly as it was (story 46).
-				// The cursor rests on the list's first row, so the check reads a row
-				// the marker does not touch.
-				expect(ticketRows(frame)).toContain("[open] [review] Deploy gate acme/factory");
-				expect(headers(frame)).toEqual([]);
-				expect(actionBarRowOf(frame)).not.toContain("Tab Group");
+				// The standing names the repository axis: the headers stand before any
+				// press, and the runs stand in the order the axis names them (ADR 0071):
+				// alphabetical, with the value's own word.
+				expect(headers(frame)).toEqual(["▾ acme/billing 2", "▾ acme/factory 3"]);
+				// The bar names the split the list wears once the cursor rests on a
+				// ticket row, the way a press would have named it.
+				const onTicket = await pressArrow(setup, "down", "a ticket row", (f) =>
+					(rowsOf(f)[markerRowOf(f)] ?? "").includes("Legacy import"),
+				);
+				expect(actionBarRowOf(onTicket)).toContain("Tab Group: repository");
 			},
-			{ axis: "none" },
+			{ axis: "repository" },
 		);
 	});
 
+	test("the fresh plane comes up flat, with no header", async () => {
+		await bootGrouped(async (setup) => {
+			const frame = await settle(setup);
+			// The plane settles the flat axis on the fresh file it opens, so every
+			// ticket shows and no header stands above any run, the list exactly as it
+			// was (story 46). The cursor rests on the list's first row, so the check
+			// reads a row the marker does not touch.
+			expect(ticketRows(frame)).toContain("[open] [review] Deploy gate acme/factory");
+			expect(headers(frame)).toEqual([]);
+			expect(actionBarRowOf(frame)).not.toContain("Tab Group");
+		});
+	});
+
 	test("Tab cycles the axis, states it on the Message line, and names it in the bar", async () => {
-		await bootGrouped(
-			async (setup) => {
-				const grouped = await pressTab(
-					setup,
-					"the repository axis",
-					(frame) => headers(frame).length === 2,
+		await bootGrouped(async (setup) => {
+			const grouped = await pressTab(
+				setup,
+				"the repository axis",
+				(frame) => headers(frame).length === 2,
+			);
+			expect(messageRowOf(grouped)).toContain("Ticket list grouped by repository");
+			expect(actionBarRowOf(grouped)).toContain("Tab Group: repository");
+			// The whole ladder, in the fixed order, back to the flat list:
+			// none, repository, source, task, state, position, none (story 4).
+			for (const word of ["source", "task", "state", "position"] as const) {
+				const frame = await pressTab(setup, `the ${word} axis`, (f) =>
+					messageRowOf(f).includes(`grouped by ${word}`),
 				);
-				expect(messageRowOf(grouped)).toContain("Ticket list grouped by repository");
-				expect(actionBarRowOf(grouped)).toContain("Tab Group: repository");
-				// The whole ladder, in the fixed order, back to the flat list:
-				// none, repository, source, task, state, position, none (story 4).
-				for (const word of ["source", "task", "state", "position"] as const) {
-					const frame = await pressTab(setup, `the ${word} axis`, (f) =>
-						messageRowOf(f).includes(`grouped by ${word}`),
-					);
-					expect(actionBarRowOf(frame)).toContain(`Tab Group: ${word}`);
-				}
-				const flat = await pressTab(setup, "the flat list", (f) =>
-					messageRowOf(f).includes("Ticket list grouping off: the flat list"),
-				);
-				expect(headers(flat)).toEqual([]);
-				expect(actionBarRowOf(flat)).not.toContain("Tab Group");
-			},
-			{ axis: "none" },
-		);
+				expect(actionBarRowOf(frame)).toContain(`Tab Group: ${word}`);
+			}
+			const flat = await pressTab(setup, "the flat list", (f) =>
+				messageRowOf(f).includes("Ticket list grouping off: the flat list"),
+			);
+			expect(headers(flat)).toEqual([]);
+			expect(actionBarRowOf(flat)).not.toContain("Tab Group");
+		});
 	});
 
 	test("Tab cycles the axis from the Ticket detail too, and names it in the bar", async () => {
@@ -574,62 +572,49 @@ describe("the Ticket section's Groups", () => {
 				expect(actionBarRowOf(grouped)).toContain("Tab Group: repository");
 				await press(setup, "h", "the list", (f) => f.includes("❯ Tickets"));
 			},
-			{ size: [WIDTH + 30, 34], axis: "none" },
+			{ size: [WIDTH + 30, 34] },
 		);
 	});
 
 	test("the repository axis puts one Repository's tickets under one header", async () => {
-		await bootGrouped(
-			async (setup) => {
-				const frame = await pressTab(
-					setup,
-					"the repository Groups",
-					(f) => headers(f).length === 2,
-				);
-				// The runs stand in the order the axis names them (ADR 0071):
-				// alphabetical, with no run special. The order inside a Group is the
-				// flat list's order, untouched.
-				expect(headers(frame)).toEqual(["▾ acme/billing 2", "▾ acme/factory 3"]);
-				expect(frame).toContain("Legacy import");
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			const frame = await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			// The runs stand in the order the axis names them (ADR 0071):
+			// alphabetical, with no run special. The order inside a Group is the
+			// flat list's order, untouched.
+			expect(headers(frame)).toEqual(["▾ acme/billing 2", "▾ acme/factory 3"]);
+			expect(frame).toContain("Legacy import");
+		});
 	});
 
 	test("the source axis lists a two-feed ticket once, under its own facts' source", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository axis", (f) => headers(f).length === 2);
-				const frame = await pressTab(setup, "the source axis", (f) =>
-					/Group: source/.test(actionBarRowOf(f)),
-				);
-				// The ticket two feeds list appears once, under the source its row's
-				// facts come from (story 13). The Group stands by its lowest ticket
-				// number in the open band (ADR 0065), so the feed that holds the lower
-				// numbers stands first.
-				const listed = ticketRows(frame).filter((row) => row.includes("Deploy gate"));
-				expect(listed).toHaveLength(1);
-				expect(headers(frame)).toEqual(["▾ issues 4", "▾ triage 1"]);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository axis", (f) => headers(f).length === 2);
+			const frame = await pressTab(setup, "the source axis", (f) =>
+				/Group: source/.test(actionBarRowOf(f)),
+			);
+			// The ticket two feeds list appears once, under the source its row's
+			// facts come from (story 13). The Group stands by its lowest ticket
+			// number in the open band (ADR 0065), so the feed that holds the lower
+			// numbers stands first.
+			const listed = ticketRows(frame).filter((row) => row.includes("Deploy gate"));
+			expect(listed).toHaveLength(1);
+			expect(headers(frame)).toEqual(["▾ issues 4", "▾ triage 1"]);
+		});
 	});
 
 	test("the task axis groups by the badge rule, and parked is a Group of its own", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "repository", (f) => headers(f).length === 2);
-				await pressTab(setup, "source", (f) => /Group: source/.test(actionBarRowOf(f)));
-				const frame = await pressTab(setup, "the task axis", (f) =>
-					/Group: task/.test(actionBarRowOf(f)),
-				);
-				// The badge's own words head the runs, and the ticket on the parking
-				// State stands in `parked` where it is hidden rather than lost
-				// (stories 15 and 16). The runs stand alphabetically (ADR 0071).
-				expect(headers(frame)).toEqual(["▾ implement 3", "▾ parked 1", "▾ review 1"]);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "repository", (f) => headers(f).length === 2);
+			await pressTab(setup, "source", (f) => /Group: source/.test(actionBarRowOf(f)));
+			const frame = await pressTab(setup, "the task axis", (f) =>
+				/Group: task/.test(actionBarRowOf(f)),
+			);
+			// The badge's own words head the runs, and the ticket on the parking
+			// State stands in `parked` where it is hidden rather than lost
+			// (stories 15 and 16). The runs stand alphabetically (ADR 0071).
+			expect(headers(frame)).toEqual(["▾ implement 3", "▾ parked 1", "▾ review 1"]);
+		});
 	});
 
 	test("the state axis groups on the state fact, not the badge a row wears", async () => {
@@ -646,7 +631,7 @@ describe("the Ticket section's Groups", () => {
 				// (ADR 0071).
 				expect(headers(frame)).toEqual(["▾ open 4", "▾ awaiting 1 held 1"]);
 			},
-			{ hold: true, axis: "none" },
+			{ hold: true },
 		);
 	});
 
@@ -671,99 +656,84 @@ describe("the Ticket section's Groups", () => {
 				// above the first, so four headers leave three blanks between them.
 				expect(airRows(frame).filter((row) => row === "")).toHaveLength(3);
 			},
-			{ size: [WIDTH + 50, 40], axis: "none" },
+			{ size: [WIDTH + 50, 40] },
 		);
 	});
 
 	test("Space on a Group header folds that Group, and Space again opens it", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				await pressArrow(setup, "up", "the header under the cursor", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
-				);
-				const onHeader = setup.captureCharFrame();
-				// The bar names the key the fold will run (issue #170). At the
-				// measured width the move's hint stands where the toggle's hint
-				// gave way (ADR 0071): the toggle's one meaning still runs on
-				// the header, and the guide names it.
-				expect(actionBarRowOf(onHeader)).toContain("Space Fold group");
-				expect(actionBarRowOf(onHeader)).toContain("+ Move up");
-				// The fold: the Group's rows leave, its header stays and turns.
-				const folded = await press(setup, "space", "the fold", (f) => /▸ acme\/factory/.test(f));
-				expect(ticketRows(folded).some((row) => row.includes("Webhook retry"))).toBe(false);
-				expect(headers(folded)).toContain("▸ acme/factory 3");
-				// The Section header's counts stand: a fold hides rows, not facts.
-				expect(sectionHeader(folded)).toContain("open: 5");
-				// The cursor rests on the header, and the detail kept its ticket.
-				expect(rowsOf(folded)[markerRowOf(folded)]).toContain("▸ acme/factory");
-				expect(detailPaneText(folded)).toContain("Webhook retry");
-				const opened = await press(setup, "space", "the fold back", (f) =>
-					/▾ acme\/factory/.test(f),
-				);
-				expect(ticketRows(opened).some((row) => row.includes("Webhook retry"))).toBe(true);
-				// No fold leaves a Message line: the routine move stays quiet
-				// (issue #170, user story 17).
-				expect(messageRowOf(setup.captureCharFrame())).not.toContain("Group");
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			await pressArrow(setup, "up", "the header under the cursor", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
+			);
+			const onHeader = setup.captureCharFrame();
+			// The bar names the key the fold will run (issue #170). At the
+			// measured width the move's hint stands where the toggle's hint
+			// gave way (ADR 0071): the toggle's one meaning still runs on
+			// the header, and the guide names it.
+			expect(actionBarRowOf(onHeader)).toContain("Space Fold group");
+			expect(actionBarRowOf(onHeader)).toContain("+ Move up");
+			// The fold: the Group's rows leave, its header stays and turns.
+			const folded = await press(setup, "space", "the fold", (f) => /▸ acme\/factory/.test(f));
+			expect(ticketRows(folded).some((row) => row.includes("Webhook retry"))).toBe(false);
+			expect(headers(folded)).toContain("▸ acme/factory 3");
+			// The Section header's counts stand: a fold hides rows, not facts.
+			expect(sectionHeader(folded)).toContain("open: 5");
+			// The cursor rests on the header, and the detail kept its ticket.
+			expect(rowsOf(folded)[markerRowOf(folded)]).toContain("▸ acme/factory");
+			expect(detailPaneText(folded)).toContain("Webhook retry");
+			const opened = await press(setup, "space", "the fold back", (f) => /▾ acme\/factory/.test(f));
+			expect(ticketRows(opened).some((row) => row.includes("Webhook retry"))).toBe(true);
+			// No fold leaves a Message line: the routine move stays quiet
+			// (issue #170, user story 17).
+			expect(messageRowOf(setup.captureCharFrame())).not.toContain("Group");
+		});
 	});
 
 	// Issue #170: `x` drops its second meaning. On a Group header row it runs
 	// the Section toggle, the one meaning it holds on every row, and the fold
 	// the operator made stands where it was made.
 	test("x on a Group header runs the Section toggle, its one meaning", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				await pressArrow(setup, "up", "the header", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
-				);
-				// The fold stands first, so the collapse shows the header stays.
-				await press(setup, "space", "the fold", (f) => /▸ acme\/factory/.test(f));
-				const collapsed = await press(setup, "x", "the Section collapse", (f) =>
-					/▸ Tickets/.test(f),
-				);
-				expect(headers(collapsed)).toEqual([]);
-				// The Section back on the header the cursor retained, and the
-				// fold the operator made still stands on it.
-				const back = await press(setup, "x", "the Section back", (f) => /▾ Tickets/.test(f));
-				expect(headers(back)).toEqual(["▾ acme/billing 2", "▸ acme/factory 3"]);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			await pressArrow(setup, "up", "the header", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
+			);
+			// The fold stands first, so the collapse shows the header stays.
+			await press(setup, "space", "the fold", (f) => /▸ acme\/factory/.test(f));
+			const collapsed = await press(setup, "x", "the Section collapse", (f) => /▸ Tickets/.test(f));
+			expect(headers(collapsed)).toEqual([]);
+			// The Section back on the header the cursor retained, and the
+			// fold the operator made still stands on it.
+			const back = await press(setup, "x", "the Section back", (f) => /▾ Tickets/.test(f));
+			expect(headers(back)).toEqual(["▾ acme/billing 2", "▸ acme/factory 3"]);
+		});
 	});
 
 	// Issue #170: `Space` answers only on a Group header row. On a ticket row
 	// - and in the flat list, where no header stands at all - it refuses in
 	// the catalogue's own words on the Message line, and moves nothing.
 	test("Space off a Group header row is refused in the catalogue's words", async () => {
-		await bootGrouped(
-			async (setup) => {
-				// The flat list holds no Group header at all (issue #170,
-				// user story 13).
-				await settle(setup);
-				setup.mockInput.pressKey(" ");
-				const refusedFlat = await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("no Group header is under the cursor"),
-					"the refusal in the flat list",
-				);
-				expect(headers(refusedFlat)).toEqual([]);
-				// On a ticket row of the grouped list the refusal says the same
-				// thing, and the row under the cursor never moves.
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				const rowBefore = setup.captureCharFrame();
-				const refused = await press(setup, "space", "the refusal on a ticket row", (f) =>
-					messageRowOf(f).includes("no Group header is under the cursor"),
-				);
-				expect(rowsOf(refused)[markerRowOf(refused)]).toBe(
-					rowsOf(rowBefore)[markerRowOf(rowBefore)],
-				);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			// The flat list holds no Group header at all (issue #170,
+			// user story 13).
+			await settle(setup);
+			setup.mockInput.pressKey(" ");
+			const refusedFlat = await awaitFrame(
+				setup,
+				(f) => messageRowOf(f).includes("no Group header is under the cursor"),
+				"the refusal in the flat list",
+			);
+			expect(headers(refusedFlat)).toEqual([]);
+			// On a ticket row of the grouped list the refusal says the same
+			// thing, and the row under the cursor never moves.
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			const rowBefore = setup.captureCharFrame();
+			const refused = await press(setup, "space", "the refusal on a ticket row", (f) =>
+				messageRowOf(f).includes("no Group header is under the cursor"),
+			);
+			expect(rowsOf(refused)[markerRowOf(refused)]).toBe(rowsOf(rowBefore)[markerRowOf(rowBefore)]);
+		});
 	});
 
 	test("a collapsed header carries its held count, so an owed decision stays named", async () => {
@@ -779,105 +749,88 @@ describe("the Ticket section's Groups", () => {
 				// would lose nothing (story 27, ADR 0059).
 				expect(sectionHeader(folded)).toContain("held: 1");
 			},
-			{ hold: true, axis: "none" },
+			{ hold: true },
 		);
 	});
 
 	test("a click on a Group header folds it and lands the cursor there", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				const before = setup.captureCharFrame();
-				const headerRow = rowIndexOf(before, /▾ acme\/factory/);
-				expect(headerRow).toBeGreaterThan(0);
-				await mouseClick(setup, 4, headerRow);
-				const folded = await awaitFrame(setup, (f) => /▸ acme\/factory/.test(f), "the fold");
-				// The cursor moved to the header the click folded (story 34).
-				expect(rowsOf(folded)[markerRowOf(folded)]).toContain("▸ acme/factory");
-				expect(ticketRows(folded).some((row) => row.includes("Webhook retry"))).toBe(false);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			const before = setup.captureCharFrame();
+			const headerRow = rowIndexOf(before, /▾ acme\/factory/);
+			expect(headerRow).toBeGreaterThan(0);
+			await mouseClick(setup, 4, headerRow);
+			const folded = await awaitFrame(setup, (f) => /▸ acme\/factory/.test(f), "the fold");
+			// The cursor moved to the header the click folded (story 34).
+			expect(rowsOf(folded)[markerRowOf(folded)]).toContain("▸ acme/factory");
+			expect(ticketRows(folded).some((row) => row.includes("Webhook retry"))).toBe(false);
+		});
 	});
 
 	test("x anywhere else in the Ticket section still folds the Section", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				expect(actionBarRowOf(setup.captureCharFrame())).toContain("x Section");
-				const collapsed = await press(setup, "x", "the Section collapse", (f) =>
-					/▸ Tickets/.test(f),
-				);
-				expect(headers(collapsed)).toEqual([]);
-				await press(setup, "x", "the Section back", (f) => /▾ Tickets/.test(f));
-				// The Groups return as the operator left them: the axis and the
-				// folds are the run's own facts, not the frame's.
-				expect(headers(setup.captureCharFrame())).toEqual(["▾ acme/billing 2", "▾ acme/factory 3"]);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			expect(actionBarRowOf(setup.captureCharFrame())).toContain("x Section");
+			const collapsed = await press(setup, "x", "the Section collapse", (f) => /▸ Tickets/.test(f));
+			expect(headers(collapsed)).toEqual([]);
+			await press(setup, "x", "the Section back", (f) => /▾ Tickets/.test(f));
+			// The Groups return as the operator left them: the axis and the
+			// folds are the run's own facts, not the frame's.
+			expect(headers(setup.captureCharFrame())).toEqual(["▾ acme/billing 2", "▾ acme/factory 3"]);
+		});
 	});
 
 	test("every Ticket control refuses a Group header, and the detail holds its ticket", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				const held = detailPaneText(setup.captureCharFrame());
-				expect(held).toContain("Webhook retry");
-				await pressArrow(setup, "up", "the header", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
-				);
-				// The pane did not blank out under the operator (story 40).
-				expect(detailPaneText(setup.captureCharFrame())).toContain("Webhook retry");
-				for (const key of ["delete", "g", "e"] as const) {
-					const refused = await press(setup, key, "the refusal", (f) =>
-						messageRowOf(f).includes("no Ticket is selected"),
-					);
-					expect(messageRowOf(refused)).toContain("no Ticket is selected");
-				}
-				// Enter answers the same way: the catalogue resolved the key to the
-				// section's Hand off, and its words are the plane's own.
-				const enter = await press(setup, "return", "the Enter refusal", (f) =>
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			const held = detailPaneText(setup.captureCharFrame());
+			expect(held).toContain("Webhook retry");
+			await pressArrow(setup, "up", "the header", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
+			);
+			// The pane did not blank out under the operator (story 40).
+			expect(detailPaneText(setup.captureCharFrame())).toContain("Webhook retry");
+			for (const key of ["delete", "g", "e"] as const) {
+				const refused = await press(setup, key, "the refusal", (f) =>
 					messageRowOf(f).includes("no Ticket is selected"),
 				);
-				expect(enter).toBeTruthy();
-			},
-			{ axis: "none" },
-		);
+				expect(messageRowOf(refused)).toContain("no Ticket is selected");
+			}
+			// Enter answers the same way: the catalogue resolved the key to the
+			// section's Hand off, and its words are the plane's own.
+			const enter = await press(setup, "return", "the Enter refusal", (f) =>
+				messageRowOf(f).includes("no Ticket is selected"),
+			);
+			expect(enter).toBeTruthy();
+		});
 	});
 
 	test("page, home, and end walk headers and rows alike", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				await press(setup, "end", "the last row", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("Held turn"),
-				);
-				const home = await press(setup, "home", "the first row", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
-				);
-				// Home lands on a Group header: the walk is one rule for both kinds
-				// of row (story 41).
-				expect(home).toBeTruthy();
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			await press(setup, "end", "the last row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Held turn"),
+			);
+			const home = await press(setup, "home", "the first row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
+			);
+			// Home lands on a Group header: the walk is one rule for both kinds
+			// of row (story 41).
+			expect(home).toBeTruthy();
+		});
 	});
 
 	test("the cursor keeps its ticket across an axis change", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				await pressArrow(setup, "down", "the second row", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("Deploy gate"),
-				);
-				const moved = await pressTab(setup, "the source axis", (f) =>
-					/Group: source/.test(actionBarRowOf(f)),
-				);
-				expect(rowsOf(moved)[markerRowOf(moved)]).toContain("Deploy gate");
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			await pressArrow(setup, "down", "the second row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Deploy gate"),
+			);
+			const moved = await pressTab(setup, "the source axis", (f) =>
+				/Group: source/.test(actionBarRowOf(f)),
+			);
+			expect(rowsOf(moved)[markerRowOf(moved)]).toContain("Deploy gate");
+		});
 	});
 
 	test("a fold changes no count, no mode cell, and no queue fact", async () => {
@@ -894,7 +847,7 @@ describe("the Ticket section's Groups", () => {
 				expect(sectionHeader(folded)).toBe(counts);
 				expect(rowsOf(folded)[0]).toBe(mode);
 			},
-			{ hold: true, axis: "none" },
+			{ hold: true },
 		);
 	});
 
@@ -919,91 +872,82 @@ describe("the Ticket section's Groups", () => {
 				expect(listRows(slid)).not.toContain("▾ acme/billing 2");
 				expect(listRows(slid).at(-1)).toContain("Held turn");
 			},
-			{ size: [WIDTH + 50, 27], axis: "none" },
+			{ size: [WIDTH + 50, 27] },
 		);
 	});
 
 	test("one blank row parts each Group, and none stands above the first", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				const frame = await settle(setup);
-				// The list opens on its first header: the air belongs to the Group it
-				// parts, so the first Group has none above it.
-				expect(airRows(frame)[0]).toContain("▾ acme/billing");
-				// One blank row, then the next Group's header, then its own rows.
-				const factoryAt = airRows(frame).findIndex((row) => row.includes("▾ acme/factory"));
-				expect(airRows(frame)[factoryAt - 1]).toBe("");
-				expect(airRows(frame)[factoryAt - 2]).toContain("Unlabeled work");
-				expect(airRows(frame)[factoryAt]).toContain("▾ acme/factory");
-				// Exactly one blank stands between the two Groups, and none elsewhere.
-				expect(airRows(frame).filter((row) => row === "")).toHaveLength(1);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			const frame = await settle(setup);
+			// The list opens on its first header: the air belongs to the Group it
+			// parts, so the first Group has none above it.
+			expect(airRows(frame)[0]).toContain("▾ acme/billing");
+			// One blank row, then the next Group's header, then its own rows.
+			const factoryAt = airRows(frame).findIndex((row) => row.includes("▾ acme/factory"));
+			expect(airRows(frame)[factoryAt - 1]).toBe("");
+			expect(airRows(frame)[factoryAt - 2]).toContain("Unlabeled work");
+			expect(airRows(frame)[factoryAt]).toContain("▾ acme/factory");
+			// Exactly one blank stands between the two Groups, and none elsewhere.
+			expect(airRows(frame).filter((row) => row === "")).toHaveLength(1);
+		});
 	});
 
 	test("the cursor steps over the blank row and never rests on it", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				// The walk starts at the top of the list, the first Group's header.
-				await press(setup, "home", "the first row", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
-				);
-				// Down through the first Group's rows, one press per row.
-				await pressArrow(setup, "down", "the second row", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("Legacy import"),
-				);
-				await pressArrow(setup, "down", "the Group's last row", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("Unlabeled work"),
-				);
-				// The next Down crosses the blank row and lands on the Group header
-				// under it: one press still moves the cursor to the next row it can hold.
-				const onHeader = await pressArrow(setup, "down", "the next Group's header", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
-				);
-				expect(actionBarRowOf(onHeader)).toContain("Space Fold group");
-				// The step back crosses the same air the other way.
-				await pressArrow(setup, "up", "the row above the air", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("Unlabeled work"),
-				);
-				// The list's last row is a ticket, so the edge lands on a word too.
-				const end = await press(setup, "end", "the last row", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("Held turn"),
-				);
-				expect(markerRowOf(end)).toBeGreaterThan(0);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			// The walk starts at the top of the list, the first Group's header.
+			await press(setup, "home", "the first row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
+			);
+			// Down through the first Group's rows, one press per row.
+			await pressArrow(setup, "down", "the second row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Legacy import"),
+			);
+			await pressArrow(setup, "down", "the Group's last row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Unlabeled work"),
+			);
+			// The next Down crosses the blank row and lands on the Group header
+			// under it: one press still moves the cursor to the next row it can hold.
+			const onHeader = await pressArrow(setup, "down", "the next Group's header", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
+			);
+			expect(actionBarRowOf(onHeader)).toContain("Space Fold group");
+			// The step back crosses the same air the other way.
+			await pressArrow(setup, "up", "the row above the air", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Unlabeled work"),
+			);
+			// The list's last row is a ticket, so the edge lands on a word too.
+			const end = await press(setup, "end", "the last row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Held turn"),
+			);
+			expect(markerRowOf(end)).toBeGreaterThan(0);
+		});
 	});
 
 	test("a click on the blank row takes the Group it parts, and folds nothing", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				const before = await settle(setup);
-				const airRow = rowIndexOf(before, /▾ acme\/factory/) - 1;
-				// The click aims at the air itself, not at a word the row might hold.
-				expect(
-					listHalfOf(rowsOf(before)[airRow] ?? "")
-						.replace(/[│┌┐└┘─]/gu, " ")
-						.trim(),
-				).toBe("");
-				await mouseClick(setup, 4, airRow);
-				// The air holds no cursor, so the click takes the Group it parts.
-				const landed = await awaitFrame(
-					setup,
-					(f) => (rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
-					"the Group the air parts",
-				);
-				expect(actionBarRowOf(landed)).toContain("Space Fold group");
-				// And the Group stays open: a click on air folds nothing.
-				expect(headers(landed)).toContain("▾ acme/factory 3");
-				expect(ticketRows(landed).some((row) => row.includes("Deploy gate"))).toBe(true);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			const before = await settle(setup);
+			const airRow = rowIndexOf(before, /▾ acme\/factory/) - 1;
+			// The click aims at the air itself, not at a word the row might hold.
+			expect(
+				listHalfOf(rowsOf(before)[airRow] ?? "")
+					.replace(/[│┌┐└┘─]/gu, " ")
+					.trim(),
+			).toBe("");
+			await mouseClick(setup, 4, airRow);
+			// The air holds no cursor, so the click takes the Group it parts.
+			const landed = await awaitFrame(
+				setup,
+				(f) => (rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
+				"the Group the air parts",
+			);
+			expect(actionBarRowOf(landed)).toContain("Space Fold group");
+			// And the Group stays open: a click on air folds nothing.
+			expect(headers(landed)).toContain("▾ acme/factory 3");
+			expect(ticketRows(landed).some((row) => row.includes("Deploy gate"))).toBe(true);
+		});
 	});
 
 	test("a frame of nothing but Group headers still reads its counts", async () => {
@@ -1024,7 +968,7 @@ describe("the Ticket section's Groups", () => {
 				expect(ticketRows(frame)).toEqual([]);
 				expect(headers(frame)).toEqual(["▸ implement 3", "▸ parked 1", "▸ review 1"]);
 			},
-			{ size: [WIDTH + 50, 27], axis: "none" },
+			{ size: [WIDTH + 50, 27] },
 		);
 	});
 
@@ -1090,13 +1034,12 @@ describe("the Ticket section's Groups", () => {
 	});
 
 	test("an empty grouped list names the axis in its message", async () => {
-		// The fresh file boots grouped by repository (ADR 0066): the press the
-		// test makes must start from the flat list to land on the repository
+		// The plane settles the flat axis on the fresh file it opens, so the press
+		// the test makes starts from the flat list and lands on the repository
 		// split it checks.
 		const planeRecord = await plane({
 			statePath: stateFile(),
 			config: groupConfig,
-			groupingAxis: "none",
 			sources: [
 				{ config: groupIssuesConfig, tickets: [] },
 				{ config: groupTriageConfig, tickets: [] },
@@ -1128,9 +1071,9 @@ describe("the Ticket section's Groups", () => {
 	});
 
 	test("the axis survives a restart on the same state file, and the folds do not", async () => {
-		// Seed the flat list, the way a pre-ADR 0066 file did, so the press
+		// The first boot settles the flat list on its fresh file, so the press
 		// writes the axis the restart must find.
-		const first = await groupedPlane({ axis: "none" });
+		const first = await groupedPlane();
 		await withApp(
 			async (setup) => {
 				(first.sources[0] as FakeSource).settle(success(tickets()));
@@ -1154,7 +1097,7 @@ describe("the Ticket section's Groups", () => {
 
 		// A second boot on the same file: the axis stands where the operator
 		// left it (story 49), and every Group is open again (story 53).
-		const second = openFactoryState(stateFile());
+		const second = reopenState(stateFile());
 		opened.push(second);
 		expect(second.grouping.groupingAxis("tickets")).toBe("repository");
 		await bootGrouped(
@@ -1168,9 +1111,9 @@ describe("the Ticket section's Groups", () => {
 	});
 
 	test("a state file that will not take the write reports it, and the view changes", async () => {
-		// Seed the flat list, so the press's repository split is the one the
-		// refused write would have stored.
-		const planeRecord = await groupedPlane({ axis: "none" });
+		// The boot settles the flat list on its fresh file, so the press's
+		// repository split is the one the refused write would have stored.
+		const planeRecord = await groupedPlane();
 		const refusing = planeRecord.state.grouping as unknown as { setGroupingAxis: () => void };
 		refusing.setGroupingAxis = () => {
 			throw new Error("read-only file system");
@@ -1269,64 +1212,61 @@ describe("the Ticket section's Groups", () => {
 	});
 
 	test("a fold never opens itself, and a gone value leaves no ghost header", async () => {
-		await bootGrouped(
-			async (setup, fixture) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				// Fold the billing run.
-				await mouseClick(setup, 4, rowIndexOf(setup.captureCharFrame(), /▾ acme\/billing/));
-				await awaitFrame(setup, (f) => f.includes("▸ acme/billing"), "the fold");
-				// A refresh brings a healthy ticket into the folded Group: the fold
-				// the operator made stays shut, and the header's count follows the
-				// rows behind it (story 35).
-				await refreshWith(setup, fixture, [
-					[
-						issue(2, "Deploy gate", FACTORY, {
-							labels: ["needs-review"],
-							externalUpdatedAt: "2026-09-02T09:00:00Z",
-						}),
-						issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
-						issue(1, "Webhook retry", BILLING, { labels: ["ready-for-agent"] }),
-						issue(3, "Legacy import", BILLING, { labels: ["hold"] }),
-						issue(4, "Unlabeled work", BILLING, { labels: [] }),
-					],
-					[
-						issue(2, "Deploy gate", FACTORY, {
-							labels: ["needs-review"],
-							externalUpdatedAt: "2026-09-02T09:00:00Z",
-						}),
-					],
-				]);
-				const moved = await awaitFrame(
-					setup,
-					(f) => headers(f).some((row) => row.startsWith("▸ acme/billing 3")),
-					"the folded Group's new count",
-				);
-				// The Groups stand by their lowest ticket number in the open band
-				// (ADR 0065): the billing run now holds #1, so it leads.
-				expect(headers(moved)).toEqual(["▸ acme/billing 3", "▾ acme/factory 2"]);
+		await bootGrouped(async (setup, fixture) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			// Fold the billing run.
+			await mouseClick(setup, 4, rowIndexOf(setup.captureCharFrame(), /▾ acme\/billing/));
+			await awaitFrame(setup, (f) => f.includes("▸ acme/billing"), "the fold");
+			// A refresh brings a healthy ticket into the folded Group: the fold
+			// the operator made stays shut, and the header's count follows the
+			// rows behind it (story 35).
+			await refreshWith(setup, fixture, [
+				[
+					issue(2, "Deploy gate", FACTORY, {
+						labels: ["needs-review"],
+						externalUpdatedAt: "2026-09-02T09:00:00Z",
+					}),
+					issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
+					issue(1, "Webhook retry", BILLING, { labels: ["ready-for-agent"] }),
+					issue(3, "Legacy import", BILLING, { labels: ["hold"] }),
+					issue(4, "Unlabeled work", BILLING, { labels: [] }),
+				],
+				[
+					issue(2, "Deploy gate", FACTORY, {
+						labels: ["needs-review"],
+						externalUpdatedAt: "2026-09-02T09:00:00Z",
+					}),
+				],
+			]);
+			const moved = await awaitFrame(
+				setup,
+				(f) => headers(f).some((row) => row.startsWith("▸ acme/billing 3")),
+				"the folded Group's new count",
+			);
+			// The Groups stand by their lowest ticket number in the open band
+			// (ADR 0065): the billing run now holds #1, so it leads.
+			expect(headers(moved)).toEqual(["▸ acme/billing 3", "▾ acme/factory 2"]);
 
-				// The last billing ticket leaves the list, and its header leaves with
-				// it: a stale fold costs nothing (story 64).
-				await refreshWith(setup, fixture, [
-					[
-						issue(2, "Deploy gate", FACTORY, {
-							labels: ["needs-review"],
-							externalUpdatedAt: "2026-09-02T09:00:00Z",
-						}),
-						issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
-					],
-					[
-						issue(2, "Deploy gate", FACTORY, {
-							labels: ["needs-review"],
-							externalUpdatedAt: "2026-09-02T09:00:00Z",
-						}),
-					],
-				]);
-				await awaitFrame(setup, (f) => headers(f).length === 1, "the gone value");
-				expect(headers(setup.captureCharFrame())).toEqual(["▾ acme/factory 2"]);
-			},
-			{ axis: "none" },
-		);
+			// The last billing ticket leaves the list, and its header leaves with
+			// it: a stale fold costs nothing (story 64).
+			await refreshWith(setup, fixture, [
+				[
+					issue(2, "Deploy gate", FACTORY, {
+						labels: ["needs-review"],
+						externalUpdatedAt: "2026-09-02T09:00:00Z",
+					}),
+					issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
+				],
+				[
+					issue(2, "Deploy gate", FACTORY, {
+						labels: ["needs-review"],
+						externalUpdatedAt: "2026-09-02T09:00:00Z",
+					}),
+				],
+			]);
+			await awaitFrame(setup, (f) => headers(f).length === 1, "the gone value");
+			expect(headers(setup.captureCharFrame())).toEqual(["▾ acme/factory 2"]);
+		});
 	});
 
 	// A collapsed Ticket section draws no Group header, so `x` keeps the
@@ -1334,149 +1274,134 @@ describe("the Ticket section's Groups", () => {
 	// controls keep working on the ticket the detail pane shows (issue #159,
 	// issue #170).
 	test("a collapsed Ticket section keeps x the Section toggle", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				// The cursor stands on a Group header: the fold owns `Space` there.
-				await press(setup, "home", "the first row", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
-				);
-				expect(actionBarRowOf(setup.captureCharFrame())).toContain("Space Fold group");
-				await press(setup, "space", "the fold", (f) => /▸ acme\/billing/.test(f));
-				// Step down onto a ticket row, then collapse the Section: its headers
-				// leave the frame, so `x` expands the Section back rather than
-				// folding a header nobody can see.
-				await pressArrow(setup, "down", "the next header", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
-				);
-				await pressArrow(setup, "down", "a ticket row", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("Webhook retry"),
-				);
-				expect(actionBarRowOf(setup.captureCharFrame())).toContain("x Section");
-				await press(setup, "x", "the Section collapse", (f) => /▸ Tickets/.test(f));
-				const collapsed = await settle(setup);
-				expect(actionBarRowOf(collapsed)).toContain("x Section");
-				expect(actionBarRowOf(collapsed)).not.toContain("Fold group");
-				// With no header on screen `Space` refuses in the catalogue's
-				// words and moves nothing (issue #170).
-				setup.mockInput.pressKey(" ");
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("no Group header is under the cursor"),
-					"the Space refusal in the collapsed section",
-				);
-				expect(actionBarRowOf(setup.captureCharFrame())).toContain("x Section");
-				// The Ticket controls keep working on the ticket the pane shows: the
-				// one the cursor stood on when the Section closed.
-				expect(detailPaneText(collapsed)).toContain("Webhook retry");
-				expect(actionBarRowOf(collapsed)).toContain("Enter Hand off");
-				await press(setup, "x", "the Section back", (f) => /▾ Tickets/.test(f));
-				expect(headers(setup.captureCharFrame())).toContain("▸ acme/billing 2");
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			// The cursor stands on a Group header: the fold owns `Space` there.
+			await press(setup, "home", "the first row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
+			);
+			expect(actionBarRowOf(setup.captureCharFrame())).toContain("Space Fold group");
+			await press(setup, "space", "the fold", (f) => /▸ acme\/billing/.test(f));
+			// Step down onto a ticket row, then collapse the Section: its headers
+			// leave the frame, so `x` expands the Section back rather than
+			// folding a header nobody can see.
+			await pressArrow(setup, "down", "the next header", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/factory"),
+			);
+			await pressArrow(setup, "down", "a ticket row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Webhook retry"),
+			);
+			expect(actionBarRowOf(setup.captureCharFrame())).toContain("x Section");
+			await press(setup, "x", "the Section collapse", (f) => /▸ Tickets/.test(f));
+			const collapsed = await settle(setup);
+			expect(actionBarRowOf(collapsed)).toContain("x Section");
+			expect(actionBarRowOf(collapsed)).not.toContain("Fold group");
+			// With no header on screen `Space` refuses in the catalogue's
+			// words and moves nothing (issue #170).
+			setup.mockInput.pressKey(" ");
+			await awaitFrame(
+				setup,
+				(f) => messageRowOf(f).includes("no Group header is under the cursor"),
+				"the Space refusal in the collapsed section",
+			);
+			expect(actionBarRowOf(setup.captureCharFrame())).toContain("x Section");
+			// The Ticket controls keep working on the ticket the pane shows: the
+			// one the cursor stood on when the Section closed.
+			expect(detailPaneText(collapsed)).toContain("Webhook retry");
+			expect(actionBarRowOf(collapsed)).toContain("Enter Hand off");
+			await press(setup, "x", "the Section back", (f) => /▾ Tickets/.test(f));
+			expect(headers(setup.captureCharFrame())).toContain("▸ acme/billing 2");
+		});
 	});
 
 	// Story 54 and ADR 0058: the folds are the run's, keyed by the axis as well
 	// as the value, so an axis the operator visits twice comes back as it was
 	// left, and a fold on one axis never shuts a Group of another.
 	test("an axis visited twice comes back with its own folds", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				await mouseClick(setup, 4, rowIndexOf(setup.captureCharFrame(), /▾ acme\/billing/));
-				await awaitFrame(setup, (f) => f.includes("▸ acme/billing"), "the fold");
-				// Leave grouping and return: the fold the operator made stands.
-				await pressTab(setup, "off grouping", (f) => headers(f).length === 0);
-				await pressTab(setup, "back to repository", (f) => headers(f).length === 2);
-				expect(headers(setup.captureCharFrame())).toEqual(["▸ acme/billing 2", "▾ acme/factory 3"]);
-				// A fold made on another axis is that axis's own: the state axis,
-				// reached by one more press, starts with every Group open.
-				await pressTab(setup, "source", (f) => /Group: source/.test(actionBarRowOf(f)));
-				await pressTab(setup, "task", (f) => /Group: task/.test(actionBarRowOf(f)));
-				expect(headers(setup.captureCharFrame()).every((row) => row.startsWith("▾"))).toBe(true);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			await mouseClick(setup, 4, rowIndexOf(setup.captureCharFrame(), /▾ acme\/billing/));
+			await awaitFrame(setup, (f) => f.includes("▸ acme/billing"), "the fold");
+			// Leave grouping and return: the fold the operator made stands.
+			await pressTab(setup, "off grouping", (f) => headers(f).length === 0);
+			await pressTab(setup, "back to repository", (f) => headers(f).length === 2);
+			expect(headers(setup.captureCharFrame())).toEqual(["▸ acme/billing 2", "▾ acme/factory 3"]);
+			// A fold made on another axis is that axis's own: the state axis,
+			// reached by one more press, starts with every Group open.
+			await pressTab(setup, "source", (f) => /Group: source/.test(actionBarRowOf(f)));
+			await pressTab(setup, "task", (f) => /Group: task/.test(actionBarRowOf(f)));
+			expect(headers(setup.captureCharFrame()).every((row) => row.startsWith("▾"))).toBe(true);
+		});
 	});
 
 	// Story 43: a ticket that leaves the list moves the cursor to the row
 	// nearest the one it held, the way a refresh already did - and the rows
 	// behind a fold count for that rule only while the fold is open.
 	test("a ticket that leaves the list leaves the cursor on the nearest row", async () => {
-		await bootGrouped(
-			async (setup, fixture) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				// The cursor takes the row the ticket holds, the billing Group's first.
-				await mouseClick(setup, 4, rowIndexOf(setup.captureCharFrame(), /Legacy import/));
-				await awaitFrame(
-					setup,
-					(f) => (rowsOf(f)[markerRowOf(f)] ?? "").includes("Legacy import"),
-					"the row the ticket holds",
-				);
-				await refreshWith(setup, fixture, [
-					[
-						issue(1, "Webhook retry", FACTORY, { labels: ["ready-for-agent"] }),
-						issue(2, "Deploy gate", FACTORY, {
-							labels: ["needs-review"],
-							externalUpdatedAt: "2026-09-02T09:00:00Z",
-						}),
-						issue(4, "Unlabeled work", BILLING, { labels: [] }),
-						issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
-					],
-					[
-						issue(2, "Deploy gate", FACTORY, {
-							labels: ["needs-review"],
-							externalUpdatedAt: "2026-09-02T09:00:00Z",
-						}),
-					],
-				]);
-				const after = await awaitFrame(
-					setup,
-					(f) => !ticketRows(f).some((row) => row.includes("Legacy import")),
-					"the re-read list",
-				);
-				// The cursor took the row nearest the one it held: the billing
-				// Group's remaining ticket, the one row below it.
-				expect(rowsOf(after)[markerRowOf(after)]).toContain("Unlabeled work");
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup, fixture) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			// The cursor takes the row the ticket holds, the billing Group's first.
+			await mouseClick(setup, 4, rowIndexOf(setup.captureCharFrame(), /Legacy import/));
+			await awaitFrame(
+				setup,
+				(f) => (rowsOf(f)[markerRowOf(f)] ?? "").includes("Legacy import"),
+				"the row the ticket holds",
+			);
+			await refreshWith(setup, fixture, [
+				[
+					issue(1, "Webhook retry", FACTORY, { labels: ["ready-for-agent"] }),
+					issue(2, "Deploy gate", FACTORY, {
+						labels: ["needs-review"],
+						externalUpdatedAt: "2026-09-02T09:00:00Z",
+					}),
+					issue(4, "Unlabeled work", BILLING, { labels: [] }),
+					issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
+				],
+				[
+					issue(2, "Deploy gate", FACTORY, {
+						labels: ["needs-review"],
+						externalUpdatedAt: "2026-09-02T09:00:00Z",
+					}),
+				],
+			]);
+			const after = await awaitFrame(
+				setup,
+				(f) => !ticketRows(f).some((row) => row.includes("Legacy import")),
+				"the re-read list",
+			);
+			// The cursor took the row nearest the one it held: the billing
+			// Group's remaining ticket, the one row below it.
+			expect(rowsOf(after)[markerRowOf(after)]).toContain("Unlabeled work");
+		});
 	});
 
 	// Story 67: grouping is the operator's view, not the frame's: a resize
 	// keeps the axis and every fold where they stand.
 	test("a resize keeps the axis and the folds", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				await mouseClick(setup, 4, rowIndexOf(setup.captureCharFrame(), /▾ acme\/factory/));
-				await awaitFrame(setup, (f) => f.includes("▸ acme/factory"), "the fold");
-				setup.resize(96, 30);
-				const narrow = await settle(setup);
-				setup.resize(WIDTH, 34);
-				const wide = await settle(setup);
-				expect(headers(narrow)).toEqual(["▾ acme/billing 2", "▸ acme/factory 3"]);
-				expect(headers(wide)).toEqual(["▾ acme/billing 2", "▸ acme/factory 3"]);
-				expect(messageRowOf(wide)).toContain("grouped by repository");
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			await mouseClick(setup, 4, rowIndexOf(setup.captureCharFrame(), /▾ acme\/factory/));
+			await awaitFrame(setup, (f) => f.includes("▸ acme/factory"), "the fold");
+			setup.resize(96, 30);
+			const narrow = await settle(setup);
+			setup.resize(WIDTH, 34);
+			const wide = await settle(setup);
+			expect(headers(narrow)).toEqual(["▾ acme/billing 2", "▸ acme/factory 3"]);
+			expect(headers(wide)).toEqual(["▾ acme/billing 2", "▸ acme/factory 3"]);
+			expect(messageRowOf(wide)).toContain("grouped by repository");
+		});
 	});
 
 	test("a press in a collapsed Ticket section still records the axis", async () => {
-		await bootGrouped(
-			async (setup) => {
-				await press(setup, "x", "the Section collapse", (f) => /▸ Tickets/.test(f));
-				const frame = await pressTab(setup, "the axis", (f) =>
-					messageRowOf(f).includes("grouped by repository"),
-				);
-				expect(actionBarRowOf(frame)).toContain("Tab Group: repository");
-				await press(setup, "x", "the Section back", (f) => /▾ Tickets/.test(f));
-				expect(headers(setup.captureCharFrame()).length).toBe(2);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup) => {
+			await press(setup, "x", "the Section collapse", (f) => /▸ Tickets/.test(f));
+			const frame = await pressTab(setup, "the axis", (f) =>
+				messageRowOf(f).includes("grouped by repository"),
+			);
+			expect(actionBarRowOf(frame)).toContain("Tab Group: repository");
+			await press(setup, "x", "the Section back", (f) => /▾ Tickets/.test(f));
+			expect(headers(setup.captureCharFrame()).length).toBe(2);
+		});
 	});
 
 	// The operator's complaint this fix answers: the Groups jumped between
@@ -1484,39 +1409,36 @@ describe("the Ticket section's Groups", () => {
 	// of the tickets they held, and both are facts the refresh changes. A
 	// Group's slot moves only on a press of the operator's own (ADR 0071).
 	test("a Group's slot does not move when the tickets' facts change", async () => {
-		await bootGrouped(
-			async (setup, fixture) => {
-				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
-				const before = groupOrderWords(setup.captureCharFrame());
-				// The refresh moves ticket #1 into acme/billing: the membership and
-				// every attention fact the old order read all change at once.
-				await refreshWith(setup, fixture, [
-					[
-						issue(1, "Webhook retry", BILLING, { labels: ["ready-for-agent"] }),
-						issue(2, "Deploy gate", FACTORY, {
-							labels: ["needs-review"],
-							externalUpdatedAt: "2026-09-02T09:00:00Z",
-						}),
-						issue(3, "Legacy import", BILLING, { labels: ["hold"] }),
-						issue(4, "Unlabeled work", BILLING, { labels: [] }),
-						issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
-					],
-					[
-						issue(2, "Deploy gate", FACTORY, {
-							labels: ["needs-review"],
-							externalUpdatedAt: "2026-09-02T09:00:00Z",
-						}),
-					],
-				]);
-				const frame = await awaitFrame(
-					setup,
-					(f) => headers(f).some((row) => row.includes("acme/billing 3")),
-					"the refreshed Groups",
-				);
-				expect(groupOrderWords(frame)).toEqual(before);
-			},
-			{ axis: "none" },
-		);
+		await bootGrouped(async (setup, fixture) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			const before = groupOrderWords(setup.captureCharFrame());
+			// The refresh moves ticket #1 into acme/billing: the membership and
+			// every attention fact the old order read all change at once.
+			await refreshWith(setup, fixture, [
+				[
+					issue(1, "Webhook retry", BILLING, { labels: ["ready-for-agent"] }),
+					issue(2, "Deploy gate", FACTORY, {
+						labels: ["needs-review"],
+						externalUpdatedAt: "2026-09-02T09:00:00Z",
+					}),
+					issue(3, "Legacy import", BILLING, { labels: ["hold"] }),
+					issue(4, "Unlabeled work", BILLING, { labels: [] }),
+					issue(5, "Held turn", FACTORY, { labels: ["ready-for-agent"] }),
+				],
+				[
+					issue(2, "Deploy gate", FACTORY, {
+						labels: ["needs-review"],
+						externalUpdatedAt: "2026-09-02T09:00:00Z",
+					}),
+				],
+			]);
+			const frame = await awaitFrame(
+				setup,
+				(f) => headers(f).some((row) => row.includes("acme/billing 3")),
+				"the refreshed Groups",
+			);
+			expect(groupOrderWords(frame)).toEqual(before);
+		});
 	});
 
 	// The `position` axis drifts the same way on a label change: the ticket
@@ -1571,7 +1493,7 @@ describe("the Ticket section's Groups", () => {
 				);
 				expect(groupOrderWords(moved)).toEqual(["ready-for-agent", "awaiting-review"]);
 			},
-			{ axis: "none", list: drifted },
+			{ list: drifted },
 		);
 	});
 });
@@ -1765,7 +1687,7 @@ describe("the operator's Group order (ADR 0071)", () => {
 		);
 		first.close();
 
-		const second = openFactoryState(stateFile());
+		const second = reopenState(stateFile());
 		opened.push(second);
 		await bootGrouped(
 			async (setup) => {

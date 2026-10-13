@@ -41,7 +41,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { agentListJson } from "./fake-runner.ts";
-import { plane } from "./seeded-plane.ts";
+import { plane } from "./plane.ts";
 
 const paths: string[] = [];
 afterEach(() => {

@@ -23,7 +23,7 @@ import { join } from "node:path";
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
-import { openFactoryState } from "../src/state.ts";
+
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	awaitFrame,
@@ -40,21 +40,17 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import type { FakeSource } from "./fake-source.ts";
-import { plane } from "./seeded-plane.ts";
-import { issuesSourceConfig } from "./state-fixture.ts";
+import { issuesSourceConfig, plane, reopenState } from "./plane.ts";
 
 const paths: string[] = [];
 afterEach(() => {
 	for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-function freshState(): FactoryState {
+function wrappedState(): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-frame-state-"));
 	paths.push(dir);
-	const state = openFactoryState(join(dir, "state.sqlite"));
-	// The frames assert the unsplit list: a fresh file opens grouped by
-	// repository (ADR 0066), so the fixture holds the flat axis.
-	state.grouping.setGroupingAxis("tickets", "none");
+	const state = reopenState(join(dir, "state.sqlite"));
 	return state;
 }
 
@@ -88,7 +84,7 @@ const success = (tickets: FetchedTicket[]): FetchOutcome => ({
 	tickets,
 });
 
-const RATE_LIMITED: FetchOutcome = { status: "failed", reason: "GitHub rate limit exceeded" };
+const fetchRateLimited: FetchOutcome = { status: "failed", reason: "GitHub rate limit exceeded" };
 
 const issuesConfig: FactoryConfig = {
 	...BASE_CONFIG,
@@ -156,8 +152,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -191,8 +186,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -218,8 +212,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -229,7 +222,7 @@ describe("source-driven frames", () => {
 
 				setup.mockInput.pressKey("r");
 				await callsReached(source, 2);
-				source.settle(RATE_LIMITED);
+				source.settle(fetchRateLimited);
 				const stale = await awaitFrame(
 					setup,
 					(f) => f.includes("issues: stale - GitHub rate limit exceeded"),
@@ -258,7 +251,7 @@ describe("source-driven frames", () => {
 	});
 
 	test("a removed source keeps its handed-off ticket, drops its open ticket, and pins no warning", async () => {
-		const state = freshState();
+		const state = wrappedState();
 		const definition = { name: "issues", kind: "github-issues" };
 		state.sourceFact.initializeSources([definition]);
 		state.sourceFact.applyFetch(
@@ -313,8 +306,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -373,8 +365,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -416,8 +407,7 @@ describe("source-driven frames", () => {
 				{ config: pullsSourceConfig, tickets: [] },
 			],
 			config: pullsConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const issuesSource = planeRecord.sources[0] as FakeSource;
 		const pullsSource = planeRecord.sources[1] as FakeSource;
@@ -470,7 +460,7 @@ describe("source-driven frames", () => {
 	});
 
 	test("orders the list by attention: awaiting, running, handed-off, actionable open, non-actionable open", async () => {
-		const state = freshState();
+		const state = wrappedState();
 		const issues = { name: "issues", kind: "github-issues" };
 		const pulls = { name: "pulls", kind: "github-pull-requests" };
 		const runTicket = ticket("github:github.com:I_run", {
@@ -585,8 +575,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -629,8 +618,7 @@ describe("source-driven frames", () => {
 		const planeRecord = await plane({
 			sources: [{ config: issuesSourceConfig, tickets: [] }],
 			config: issuesConfig,
-			groupingAxis: "none",
-			applyFetch: false,
+			settledReads: false,
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -662,7 +650,7 @@ describe("source-driven frames", () => {
 	});
 
 	test("a ticket with an unresolved handoff attempt refuses a new handoff and asks for recovery", async () => {
-		const state = freshState();
+		const state = wrappedState();
 		const definition = { name: "issues", kind: "github-issues" };
 		state.sourceFact.initializeSources([definition]);
 		state.sourceFact.applyFetch(definition, success([ticket()]));

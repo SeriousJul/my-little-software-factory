@@ -44,6 +44,7 @@ import {
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
+import { DEFAULT_TICKET_TITLE, fetchedTicket, ticketOf } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	type FakeRunner,
@@ -53,7 +54,7 @@ import {
 } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner } from "./gated-runner.ts";
-import { plane, type SeededPlane, ticketOf } from "./seeded-plane.ts";
+import { type Plane, plane } from "./plane.ts";
 import "./theme-isolation.ts";
 
 const paths: string[] = [];
@@ -64,26 +65,10 @@ afterEach(() => {
 const identity = "github:github.com:I_5";
 const repoIdentity = "github.com/acme/factory";
 /** The herdr name the naming rule gives this Ticket (ADR 0098). */
-const AGENT_NAME = agentNameFor({ identity, title: "Persist source facts" });
+const AGENT_NAME = agentNameFor({ identity, title: DEFAULT_TICKET_TITLE });
 
 function fetched(index = 5): FetchedTicket {
-	return {
-		identity: `github:github.com:I_${index}`,
-		sourceKind: "github-issue",
-		externalKey: `#${index}`,
-		sourceState: "open",
-		url: `https://github.com/acme/factory/issues/${index}`,
-		title: "Persist source facts",
-		description: "Keep state independent from GitHub.",
-		labels: ["ready-for-agent"],
-		externalUpdatedAt: "2026-08-31T10:00:00Z",
-		repository: {
-			identity: repoIdentity,
-			displayName: "acme/factory",
-			cloneUrl: `https://${repoIdentity}.git`,
-		},
-		attributes: {},
-	};
+	return fetchedTicket({ identity: `github:github.com:I_${index}` });
 }
 
 const success: FetchOutcome = {
@@ -179,7 +164,7 @@ function rowOf(shape: "open" | "in-flight" | "awaiting", detail: SeedDetail = {}
 }
 
 interface SeededFace {
-	plane: SeededPlane;
+	plane: Plane;
 	/** The gate over the plane's own runner. */
 	gate: GatedRunner;
 }
@@ -445,7 +430,7 @@ describe("the Starting window's timeline", () => {
 				// the line warns the queued start was not run, with the herdr
 				// reason behind it.
 				expect(messageRowOf(failed)).toContain(
-					'Warning: queued handoff for "Persist source facts" was not run: error: the workspace is not creatable',
+					`Warning: queued handoff for "${DEFAULT_TICKET_TITLE}" was not run: error: the workspace is not creatable`,
 				);
 			},
 			{
@@ -577,7 +562,7 @@ describe("the Starting window's timeline", () => {
 				// The route's failed start drops through the queue's drop
 				// (ADR 0049), with the herdr reason behind it.
 				expect(messageRowOf(back)).toContain(
-					'Warning: queued handoff for "Persist source facts" was not run: error: the pane is gone',
+					`Warning: queued handoff for "${DEFAULT_TICKET_TITLE}" was not run: error: the pane is gone`,
 				);
 				expect(badgeRow(back)).toContain("[open]");
 				expect(badgeRow(back)).not.toContain("held");

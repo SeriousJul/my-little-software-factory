@@ -22,6 +22,7 @@ import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { fetchedTicket } from "./fact-fixtures.ts";
 import { FakeRunner, tabCreateJson, worktreeOpenJson } from "./fake-runner.ts";
 import {
 	type RigOptions,
@@ -119,23 +120,7 @@ function fetched(
 	labels: readonly string[] = ["ready-for-agent"],
 	externalUpdatedAt = "2026-08-31T10:00:00Z",
 ): FetchedTicket {
-	return {
-		identity,
-		sourceKind: "github-issue",
-		externalKey: "#5",
-		sourceState: "open",
-		url: `https://github.com/acme/factory/issues/${identity.split("I_")[1]}`,
-		title: "Persist source facts",
-		description: "Keep state independent from GitHub.",
-		labels: [...labels],
-		externalUpdatedAt,
-		repository: {
-			identity: "github.com/acme/factory",
-			displayName: "acme/factory",
-			cloneUrl: "https://github.com/acme/factory.git",
-		},
-		attributes: {},
-	};
+	return fetchedTicket({ identity, labels: [...labels], externalUpdatedAt });
 }
 
 function success(tickets: FetchedTicket[]) {

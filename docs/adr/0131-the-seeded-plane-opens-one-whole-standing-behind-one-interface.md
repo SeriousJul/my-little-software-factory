@@ -78,6 +78,13 @@ the rule the two existing shared fixtures failed at. A field that names an aggre
 directory, or a step of the build is refused at review. Where building a standing needs a rule the
 plane owns - the naming rule, the work-cycle rule, the Transition fire - the module calls the module
 that owns it rather than reproducing it, so no test can pass because a fixture restated a rule.
+The rule bends at exactly four fields, and the bend is stated here rather than left to review: the
+case's own home directory (`home`), the case's own state file's path (`statePath`), the state file
+the case already holds open (`existing`), and the preparation of the plane's home once it exists
+(`prepare`). Each names a path or a state the case owns, or a step the case must run before it can
+name its standing, and none names a fact the plane itself holds. The
+[verification record](../verification/seeded-plane.md) states the reason the plane keeps each one,
+and the plane's own suite holds a case for each.
 
 **One default Ticket, one Repository, one derived herdr Agent name.** A shared fact module holds the
 fetched Ticket, the fetch outcome, the Handoff choice, the Repository reference, and the workflow
@@ -85,10 +92,15 @@ States the projection matches against. The Seeded plane and the state aggregate 
 that module, and the three default Tickets resolve to one. The herdr Agent name is derived from that
 Ticket once, so the 14 hand-typed derivations retire with the literals they were fed.
 
-**The Grouping axis default is the flat axis.** The fixture settles the flat axis and takes the
-repository axis as a named field, because a frame that wants the split is the exception and says so
-in one word. The 100 per-file writes and the 7 repeated comments go with it. This is the rule the
-app-level fixture already holds; it becomes the suite's.
+**The plane settles the flat axis on every fresh file it opens.** The state
+module's own rule opens a fresh file grouped by repository (ADR 0066), and a
+frame that asserts the unsplit list is the suite's norm. The plane writes the
+flat axis on every file it opens itself, whether or not the standing names
+sources, and takes a split axis as a named field: a frame that wants the split
+says so in one word. A standing that wraps a state file the case opened names
+the axis the plane writes on that state; where it names none, the state keeps
+its own axis. The 100 per-file writes and the 7 repeated comments go with it.
+This is the rule the app-level fixture already holds; it becomes the suite's.
 
 **One clock serves the state file and the test.** The fixture opens the state file on a clock it
 owns and hands that clock back, so a case ages a stored Handoff past its Startup grace without a
@@ -161,7 +173,21 @@ naming-rule change in one instead of twelve, an axis rule in one instead of twen
 
 The suite gains the ratchet the plane's sources already have: the clone count is reported at each
 step and only falls, and the static check refuses the two ways a suite can opt back out - a
-hand-opened state file, and a hand-built default Ticket.
+hand-opened state file, and a hand-spelled default Ticket title.
+
+## Deviation from the spec
+
+The spec says no case reads wall-clock time. The plane does not hold that at the interface: where a
+case names no clock, the plane's clock stands on the wall clock, and the state file it opens stands
+on the same clock. The suites hold the sentence themselves: the frame suites pin their clock through
+the frame harness, the plane's own suite names its clock at boot, and no case that depends on a time
+reads the wall. The wall-clock default stands for the scratch boots that name nothing. The Ticket
+source double stands beside it on the same discipline: both of its forms hold a
+read in flight until the test or the App's own read settles it, and its auto
+form stamps the settled read from the clock the plane owns, so a settle never
+carries a stamp the state's own clock would call older. The
+[verification record](../verification/seeded-plane.md) states the same deviation beside the fields
+the plane admits and refuses.
 
 The state module's suites keep their seam, and the module suites keep theirs. The suite ends with one
 app-level standing, one database-level tool set, and one set of fact builders between them.
