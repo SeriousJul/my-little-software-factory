@@ -2042,7 +2042,8 @@ copies. At the head that lands the Message line (`8ee43d3f`) the walk spans
 exports: 888 press-family calls, 275 hand operations, 817 raw waits, 724
 inline containment predicates, 435 reaches to the renderer's input, and 36
 per-suite helper copies, down from the base head's 935, 302, 848, 739, 449,
-and 36. At the head that lands the Action bar, one step further, the walk
+and 36. At the head that lands the Action bar (`ef535be7`), one step further,
+the walk
 stands at 822 press-family calls, 253 hand operations, 797 raw waits, 704
 inline containment predicates, 426 reaches to the renderer's input, and 36
 helper copies: the Action bar's suite presses through the rig with none of
