@@ -266,9 +266,9 @@ suite stands: on the Seeded plane, no bar the rig's suite stands paints a
 hint twice, so no press the rig sends reaches the guard's finding. The
 Consultations surface's remove pair stands the other shape, recorded in the
 verification record as a measured two-owner hint of the rig's read: on every
-Consultations frame the bar paints the hint for, the read names the one
-painted cell for both catalogue controls while the bar keeps the queue's
-removal off and paints the cell once. The rig's suite pins that shape on the
+Consultations frame the bar paints the hint, and the read names the one
+painted cell for both catalogue controls: the catalogue's reachability keeps
+the queue's removal off the bar, and the bar paints the cell once. The rig's suite pins that shape on the
 list and the detail frame at 170 columns, thirteen past the cut of their
 thirteen-hint rows, and pins the plane's dispatch of the key to the on-bar
 owner: the press of the record removal runs it, and the removal panel opens.

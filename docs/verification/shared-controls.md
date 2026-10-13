@@ -2073,9 +2073,10 @@ sends reaches the guard's finding, and issue #387 closes with the pull that
 lands this rule. The identical pair stands its second shape on the
 Consultations surface: the queue's removal runs every base mode and carries
 no section marker, and the read sees no availability, so on every
-Consultations frame the bar paints the hint for the read names the one
-painted Delete Remove cell for both catalogue controls while the bar keeps
-the queue's removal off and paints the cell once. The rig's suite pins that
+Consultations frame the bar paints the hint, and the read names the one
+painted Delete Remove cell for both catalogue controls: the catalogue's
+reachability keeps the queue's removal off the bar, and the bar paints the
+cell once. The rig's suite pins that
 shape on the list and the detail frame at 170 columns, thirteen past the cut
 of their thirteen-hint rows (at the suite's 120 columns the rows pack the
 cell out), and pins the plane's dispatch of the key to the on-bar owner: the
