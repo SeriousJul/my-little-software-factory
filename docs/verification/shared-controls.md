@@ -1905,9 +1905,12 @@ Agent terminal's exit key read from the plane's config; the hint's word starts
 with one of the control's label wordings, its static label plus the rig's own
 wording table for the controls whose `barLabel` repaints it, the table pinned
 against the catalogue in the rig's own suite; and the control runs on the
-frame's surface, read off the frame's own markers - a Section box title
-marked on the section the cursor holds, the guide's and the Override panel's
-titles - where a frame that names no surface resolves permissively, so a
+frame's surface, read off the frame's own markers - the full-screen
+surfaces' titles, the modal and panel titles' stable prefixes, a Section box
+title marked on the section the cursor holds, the detail panes' focus
+markers, and the consultation and the Work queue detail modes split on the
+bar's own section labels - where a frame that names no surface resolves
+permissively, so a
 marker the plane rewords degrades the read to the permissive answer, which
 weakens the filter and never misresolves a control the bar names. A control
 off the bar owns no painted hint and fails the resolution, and the rig's
@@ -1929,9 +1932,12 @@ healthy source, resolves every control the base bar advertises to the keys it
 painted, sends the token a press names with `via`, waits on the closed set of
 outcomes, and keeps the controls the bar never hints on its escape list. The
 closed catalogue walk is non-circular: each hint the bar paints is owned by
-the catalogue - exactly one control can paint it on the frame's surface -
-and the walk asserts the catalogue owns the hint on exactly one control and
-the rig resolves that owner to a key the hint painted. The walk's ground
+the catalogue - one or more controls can paint it on the frame's surface -
+and the walk records the hint's owners, asserts the catalogue owns the hint,
+and resolves every owner to a key the hint painted. A hint two owners share
+does not fail the walk: on a surface the rig names the read separates the
+owners, and on a surface it names not the bar's disagreement is the finding
+the rig's press guard files on the press of the hint it shares. The walk's ground
 truth is the bar the plane paints and the catalogue's facts, and the
 ownership it checks is the rig's own three reads applied per control, so the
 matcher is not its own ground truth: a drift between the bar and the
@@ -2017,22 +2023,34 @@ What was not measured: the remaining frame surfaces have not been migrated, so
 the 935 press-family calls and 848 raw waits above stand in the suites that
 have not landed yet, and this change's effect on the whole plane is the two
 owned surfaces plus the rig, not the surfaces that follow. The closed walk
-stands on the bar of the frame it walks, and at this head that frame is the
-base frame: the walk walks the base bar only, and it does not boot the mode
-that owns each hinted catalogue id, the shape the spec's walk names. The
-other surfaces' bars walk as their migrations land. Two gaps the migration
+stands on the bar of the frame it walks, and at this head the rig's suite
+walks the base bar and the bars of the detail frames of the three sections,
+the response editor, the Agent interaction input, the Decision modal, the
+action panel, and the Message view: each walk boots the frame the bar stands
+on. The walk still does not boot the mode that owns each hinted catalogue id,
+the shape the spec's walk names. The remaining surfaces' bars walk as their
+migrations land. Two gaps the migration
 will meet are recorded now: the guide's scroll keys and the panes' focus moves
 are not on the bar and so are not resolvable by `pressControl`; their coverage
 belongs to the catalogue suite and the Key guide's own frames, and a focus
 operation the escape list does not yet name is the next rig extension the
-migration needs. A painted hint two catalogue controls can both paint - the
+migration needs. The collision families the rule stood in issue #387 - the
 modal Esc Cancel family, the scroll pair on a permissive frame, the
 cross-section pair on a detail-focused frame, and the identical Delete Remove
-pair at wide widths - stands in issue #387: on the surfaces the frame names
-the rig owns every painted hint to one control, and on a frame that names no
-surface the permissive resolution owns the shared hint to each of them, so a
-press that names one of the colliding controls sends the painted key and the
-plane runs the control its mode owns. The spec's test decision that a
+pair at wide widths - stand measured on the Seeded plane at this head: the
+rig's suite stands each family's own frame - the three sections' base and
+detail frames, the Decision modal, the action panel, and the Message view for
+the modal family, the consultation's response editor and the Agent
+interaction input for the permissive and the shared-detail reads, and the
+detail frames of the consultation and the Work queue for the cross-section
+and the identical pairs - and walks each frame's bar: every painted hint
+resolves to one catalogue owner, named surface or permissive surface alike.
+No frame the plane paints on the Seeded plane stands a hint two catalogue
+controls can both paint, so no press the rig sends reaches the co-owner
+guard, and issue #387 closes with the pull that lands this rule. The guard's
+throw is pinned in the rig's own suite on the one collision the surface read
+cannot name: a frame with no marker, and a bar the permissive read leaves to
+two owners. The spec's test decision that a
 control whose aliases match two painted hints fails and the failure names
 both stands with it: no owned surface can paint two hints to one control,
 the first frame that can stands on the wide Work queue bar, and the pin that

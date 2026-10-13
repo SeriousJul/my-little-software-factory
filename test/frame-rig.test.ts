@@ -21,11 +21,16 @@
  * is a finding about the bar the rig files instead of pressing through. The
  * surface read names the catalogue modes the frame stands on from the
  * frame's own markers, and on a named surface the hint's owners are the
- * controls the surface runs: one owner lets the rig own the key, and two
- * owners are the collision pinned where this suite meets them.
+ * controls the surface runs. The Seeded plane stands no frame that paints a
+ * hint two catalogue controls can both paint - the measurement stands frame
+ * by frame in the verification record - so no Seeded press reaches the
+ * co-owner guard, and its throw is pinned here on the one collision the
+ * surface read cannot name: a frame with no marker, and a bar the
+ * permissive read leaves to two owners.
  */
 
 import { describe, expect, test } from "bun:test";
+import { createTestRenderer } from "@opentui/core/testing";
 import { controlById } from "../src/components/controls.ts";
 import {
 	type AppSetup,
@@ -45,6 +50,7 @@ import {
 	resolveControl,
 	type SurfaceFamily,
 	settle,
+	sharedHintGuard,
 	surfaceFamily,
 	surfaceModes,
 	toggleAutoHandoff,
@@ -121,6 +127,14 @@ const REVIEW_RECORD: ConsultationSeed = {
 	repository: REPO_BILLING,
 	agentName: "sample-agent",
 };
+
+const AWAITING_RECORD: ConsultationSeed = {
+	...REVIEW_RECORD,
+	agent: true,
+	state: "awaiting-response",
+};
+
+const WORKING_RECORD: ConsultationSeed = { ...REVIEW_RECORD, agent: true, state: "working" };
 
 const HANDOFF_ROW: WorkQueueSeed = {
 	kind: "handoff",
@@ -652,6 +666,99 @@ describe("the frame rig owns a painted hint one control paints (issue #387)", ()
 			},
 			{ standing: "open" },
 		);
+	});
+
+	test("the response editor's bar is owned by the form's controls alone", async () => {
+		await withSeededPlane(
+			async (setup) => {
+				await toSection(setup, "consultation");
+				await pressControl(setup, "detail", { quiet: true });
+				await pressControl(setup, "consultation-respond", { quiet: true });
+				// The editor stands on no marker the rig names: the surface read
+				// is permissive, the last unnamed surface the plane paints. The
+				// form's painted hints each resolve to one owner, so no press on
+				// this frame reaches the co-owner guard.
+				expect(surfaceModes(setup.captureCharFrame())).toBeNull();
+				const owners = barHintOwners(setup);
+				expect(owners.get("Tab Field")).toEqual(["move-field"]);
+				expect(owners.get("Esc Close")).toEqual(["close-form"]);
+				expect(owners.get("F1 Help")).toEqual(["help"]);
+				expect(barControlIds(setup)).toEqual(["move-field", "close-form", "help"]);
+				// The modal and the panel's cancels share the editor's Close
+				// wording and own no hint on it: the guard's throw is the
+				// collision's, and this frame stands none.
+				expect(() => resolveControl(setup, "cancel")).toThrow(/the bar paints no hint/);
+				expect(() => resolveControl(setup, "cancel-action")).toThrow(/the bar paints no hint/);
+			},
+			{ standing: "open", consultations: [AWAITING_RECORD] },
+		);
+	});
+
+	test("the interaction input's bar is owned by the interaction's control alone", async () => {
+		await withSeededPlane(
+			async (setup) => {
+				await toSection(setup, "consultation");
+				await pressControl(setup, "detail", { quiet: true });
+				await pressControl(setup, "consultation-interact", { quiet: true });
+				// The input stands on the detail pane's marker: the read names
+				// both detail modes, and the Agent input's bar paints its exit
+				// alone, one owner.
+				expect(surfaceModes(setup.captureCharFrame())).toEqual([
+					"consultation-detail",
+					"consultation-interaction",
+					"work-queue-detail",
+				]);
+				const owners = barHintOwners(setup);
+				expect(owners.get("F12 Exit interaction")).toEqual(["interact-exit"]);
+				expect(barControlIds(setup)).toEqual(["interact-exit"]);
+			},
+			{ standing: "open", consultations: [WORKING_RECORD] },
+		);
+	});
+});
+
+describe("the frame rig cannot press a hint two controls own (issue #387)", () => {
+	test("a press of a hint two catalogue controls own throws the co-owner error", async () => {
+		// No Seeded frame stands the collision: every frame the plane paints
+		// either names a surface whose read separates the owners, or paints
+		// no hint two owners share (the measurement stands in the
+		// verification record). The guard's throw is pinned on the one
+		// collision the surface read cannot name: a frame with no marker, and
+		// a bar the permissive read leaves to the scroll pair, the two
+		// catalogue controls that both paint the hint's key and word.
+		const setup = await createTestRenderer({ width: WIDTH, height: HEIGHT, exitOnCtrlC: false });
+		try {
+			const modes = surfaceModes("an unnamed panel\n↑↓/jk Scroll");
+			expect(modes).toBeNull();
+			const hint = parseBarText("↑↓/jk Scroll", null)[0];
+			// The press of either owner throws and names the other: the rig
+			// cannot own the key it would send while the co-owner's hint stands
+			// unread behind it, a press named with `via` included, because the
+			// guard reads the hint the press would send.
+			expect(() => sharedHintGuard(setup, controlById("scroll-detail"), hint, modes)).toThrow(
+				`cannot press "scroll-detail": the bar's painted hint "↑↓/jk Scroll" is owned by guide-scroll as well`,
+			);
+			expect(() => sharedHintGuard(setup, controlById("guide-scroll"), hint, modes)).toThrow(
+				`cannot press "guide-scroll": the bar's painted hint "↑↓/jk Scroll" is owned by scroll-detail as well`,
+			);
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+
+	test("the guard passes a hint one control owns on the same frame", async () => {
+		// The same marker-less frame, the same permissive read: the guard
+		// files the shared hint and lets the single-owner hint stand, so the
+		// throw is the collision's and not the permissive read's.
+		const setup = await createTestRenderer({ width: WIDTH, height: HEIGHT, exitOnCtrlC: false });
+		try {
+			const modes = surfaceModes("an unnamed panel\nEsc Close");
+			expect(modes).toBeNull();
+			const hint = parseBarText("Esc Close", null)[0];
+			expect(() => sharedHintGuard(setup, controlById("close-form"), hint, modes)).not.toThrow();
+		} finally {
+			await setup.renderer.destroy();
+		}
 	});
 });
 

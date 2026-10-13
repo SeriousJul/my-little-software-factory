@@ -2123,10 +2123,14 @@ function resolutionFor(
  * the bar, not a key the rig can own (issue #387): the rig's press resolves
  * the hint's key to the control the catalogue ranks first, and the other
  * owner's hint stands unread behind it. The rig throws and names the
- * co-owners, so a suite that meets the collision names the key with the
- * bar's own wording instead of pressing it blind.
+ * co-owners on every press of the hint, a press named with `via` included:
+ * the guard reads the hint the press would send, not the wording that chose
+ * it, so naming the key with the bar's own wording does not reach the press
+ * either. A suite that meets the collision stands the frame on a surface the
+ * rig names, where the surface's read separates the owners, or it walks the
+ * bar and records the hint's owners instead of pressing the hint it shares.
  */
-function sharedHintGuard(
+export function sharedHintGuard(
 	setup: Setup,
 	control: ControlDefinition,
 	hint: BarHint,

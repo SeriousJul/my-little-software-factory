@@ -195,3 +195,40 @@ filter instead of misresolving. The closed walk moved with the rule: it owns
 each painted hint to the catalogue, exactly one owner, and asserts the rig's
 resolution of that owner against the hint, so it can no longer assert the
 matcher against itself.
+
+## Addendum: the surface read names the modes, and the press guards the shared hint
+
+The rework above left the rule one step short of the frames it runs on: the
+surface read answered a surface family, and a painted hint two catalogue
+controls can both paint stood in issue #387 with no rule of its own. The walk
+asserted exactly one owner per hint, and a press of a hint two owners shared
+sent the painted key to the owner the catalogue ranked first, the other
+owner's hint standing unread behind it.
+
+Both statements are superseded. The surface read names the catalogue modes
+the frame stands on, read off the frame's own markers: the full-screen
+surfaces' titles, the modal and panel titles' stable prefixes, the section
+boxes' focus markers, and the detail panes' focus markers, the consultation
+and the Work queue detail modes split on the bar's own section labels. A
+frame that shows no marker still resolves permissively, the way the family
+read did. The closed walk records the owners of each painted hint, one or
+more, and asserts the catalogue owns the hint and the rig resolves every
+owner to a key the hint painted. A hint two owners share does not fail the
+walk: on a surface the rig names the read separates the owners, and on a
+surface it names not the bar's disagreement is the finding the rig records
+and the press guard files, not a failure of either owner.
+
+The press gained the rule the walk left open: a painted hint two catalogue
+controls can both paint is not a key the rig can own. A press of it - a press
+named with `via` included, because the guard reads the hint the press would
+send, not the wording that chose it - throws the rig's named error and the
+co-owners it files. A suite that meets the collision stands the frame on a
+surface the rig names, or it walks the bar and records the hint's owners.
+
+Issue #387 closes with the pull that lands this rule. On the Seeded plane no
+frame stands a painted hint two catalogue controls can both paint: every
+frame stands a surface the rig names, or stands a permissive surface whose
+painted hints each resolve to one owner, and the measurement stands frame by
+frame in the verification record. The guard's throw is pinned in the rig's
+own suite on the one collision the surface read cannot name: a frame with no
+marker, and a bar the permissive read leaves to two owners.
