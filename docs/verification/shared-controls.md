@@ -1881,10 +1881,11 @@ always held it. A skipped required check is not a pass.
 
 ## The frame rig runs the controls, not the keys (issue #365, ADR 0128)
 
-Status: the automated checks pass for the rig and the five owned surfaces: its
-own suite, the Action bar, the Key guide, the Message line, and the theme
-frame. The remaining frame surfaces migrate one at a time, and the owned list
-in the architecture check is the record of what has landed.
+Status: the automated checks pass for the rig and the seven owned surfaces: its
+own suite, the Action bar, the Key guide, the Message line, the theme frame,
+the Ticket scroll frame, and the merged Main view. The remaining frame
+surfaces migrate one at a time, and the owned list in the architecture check
+is the record of what has landed.
 
 What was measured: the frame rig in `test/app-harness.ts` now resolves a
 control to the key the Action bar painted for it and owns the input end to
@@ -1970,7 +1971,16 @@ nothing recorded), and a control the bar leaves off on this surface. The key
 source the guide paints from, and a key the guide names nowhere for the
 control fails the press, naming the aliases the guide does name; the rig's
 suite pins both the escape on the empty-record Message press and that
-refusal. `frameUntil` stands for a frame check no outcome names. A wait that still stands after the deadline names the
+refusal. The section cross-walk stands on the same list: crossing the
+unified cursor into another section is not one control press, it is the
+list's own Move keys walked to the boundary row and across, so the named
+`crossCursor` operation walks it with the walk key read from the catalogue,
+and each step goes out straight after the frame it answers from - a settle
+before a step gives the plane the pass that commits the detail pane's
+identity reset before the cross's unmount saves the pane's offset, and a
+round trip through the other section loses the offset the operator left
+behind - and the rig's suite pins the walk across the boundary and back.
+`frameUntil` stands for a frame check no outcome names. A wait that still stands after the deadline names the
 outcome it waited on and the press that sent it, and the rig's suite pins the
 message on a press that runs to the deadline. The close proof is the set of
 handler identities the opening recorded on the key bus: the closing press
@@ -2067,7 +2077,24 @@ reaches to the renderer's input, and 36 helper copies: the Key guide's suite
 presses through the rig with none of the retired input left, and its remaining
 containment is the fourteen named `frameUntil` and row probes it keeps beside
 the `scrollGuide` range-wording fixture, which rides the rig's `guideKey` and
-is a domain fixture, not input the rig should own. The five owned surfaces
+is a domain fixture, not input the rig should own. At the head that lands
+the Ticket scroll frame (`7491fb1c`), one step further, the walk stands at
+765 press-family calls, 184 hand operations, 748 raw waits, 672 inline
+containment predicates, 400 reaches to the renderer's input, and 36 helper
+copies: the suite's page keys ride the rig's `pageKey`, its refresh presses
+ride `guideKey` beside the bar's packed hints, and its mouse actions keep
+the rig's named mouse operations. At the head that lands the merged Main
+view (`fc4e2f75`), one step further, the walk stands at 730 press-family
+calls, 166 hand operations, 720 raw waits, 666 inline containment
+predicates, 396 reaches to the renderer's input, and 36 helper copies: the
+suite presses every control through the rig - the section toggles through
+the guide's key where the packed bar leaves the hint off, the launch,
+history, message, refresh, and override keys through the named press and
+its guide-named sibling, the page and jump keys through `pageKey`, the
+auto-handoff toggle through its named operation, and the guide's scroll and
+close keys through `guideKey` - waits through the rig's frame check and
+its named outcomes, and rides `crossCursor` for the section's cross-walk.
+The seven owned surfaces
 press through the rig
 with none of the retired surface left: no hand-picked key, no hand operation,
 no raw wait, and no reach to the renderer's input, as the architecture check
@@ -2085,8 +2112,8 @@ script run at either head prints them, and a head that moves the suites
 re-records them here from the same script.
 
 What was not measured: the remaining frame surfaces have not been migrated, so
-the 782 press-family calls and 790 raw waits above stand in the suites that
-have not landed yet, and this change's effect on the whole plane is the five
+the 730 press-family calls and 720 raw waits above stand in the suites that
+have not landed yet, and this change's effect on the whole plane is the seven
 owned surfaces plus the rig, not the surfaces that follow. The closed walk
 stands on the bar of the frame it walks, and at this head the rig's suite
 walks the base bar and the bars of the detail frames of the three sections,
