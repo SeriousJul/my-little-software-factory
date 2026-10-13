@@ -44,19 +44,19 @@ import {
 } from "./app-harness.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
 import {
-	type FakeRunner,
-	tabCreateJson,
-	workspaceCreateJson,
-	workspaceListJson,
-} from "./fake-runner.ts";
-import type { FakeSource } from "./fake-source.ts";
-import {
 	fetchRateLimited,
 	fetchSuccess,
 	issueTicket,
 	SAMPLE_TICKETS,
 	ticketOf,
 } from "./fact-fixtures.ts";
+import {
+	type FakeRunner,
+	tabCreateJson,
+	workspaceCreateJson,
+	workspaceListJson,
+} from "./fake-runner.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { callsReached, plane, wrappedState } from "./plane.ts";
 
 /** The issues source the standing seeds, as its config stands in the file. */

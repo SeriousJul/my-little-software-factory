@@ -42,19 +42,19 @@ import {
 } from "./app-harness.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
 import {
-	agentListJson,
-	FakeRunner,
-	workspaceCreateJson,
-	workspaceListJson,
-} from "./fake-runner.ts";
-import type { FakeSource } from "./fake-source.ts";
-import {
 	fetchRateLimited,
 	fetchSuccess,
 	issueTicket,
 	SAMPLE_TICKETS,
 	ticketOf,
 } from "./fact-fixtures.ts";
+import {
+	agentListJson,
+	FakeRunner,
+	workspaceCreateJson,
+	workspaceListJson,
+} from "./fake-runner.ts";
+import type { FakeSource } from "./fake-source.ts";
 import {
 	callsReached,
 	issuesSourceConfig,
