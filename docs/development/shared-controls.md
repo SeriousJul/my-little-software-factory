@@ -513,3 +513,56 @@ the library's region state, the shared chrome being the one stated
 exemption. The screen-reader procedure is written down in
 [the verification record](../verification/shared-controls.md); it has not been
 run, and no result is claimed for it.
+
+## The frame rig drives the frame tests
+
+The frame tests in `test/` run controls through the frame rig in
+`test/app-harness.ts`; they do not send key characters by hand (issue #365,
+[ADR 0128](../adr/0128-the-frame-rig-runs-controls-not-keys.md)). A test names
+a control from the Control catalogue and one outcome from the closed set:
+`opens`, `closes`, `refuses`, `shows`, `hides`, `moved`, and `quiet`.
+
+```ts
+await pressControl(setup, "override");
+await pressControl(setup, "handoff", { refuses: "no Ticket is selected" });
+await pressControl(setup, "live-view", { opens: "Live" });
+```
+
+The rig reads the Action bar the plane painted, resolves the key for the
+named control, and sends only that key. It owns the wait, the flush, the
+key-ownership window, and the one deadline, `FRAME_DEADLINE_MS`. A test writes
+no frame predicate where a named outcome stands, and it keeps no private
+press, open, close, or wait helper.
+
+Two sets sit beside the catalogue and stay on the rig:
+
+- The **closed outcome set** is enforced in the rig. A field outside the set is
+  a rig error, and `opens` belongs to a press alone, which `waitFor` refuses.
+  `closes` proves the surface it names gave back the keys it took and
+  settled; it does not prove the surface left the frame, so a test that needs
+  the frame fact pairs `closes` with `hides`.
+- The **escape list** holds the controls the bar never hints, on named rig
+  operations: the auto-handoff toggle, the quit and the emergency exit, the
+  repository init, the field's own keys, and the form's type-ahead.
+  `frameUntil` stands for a frame check no outcome names. The guide's scroll
+  keys and the panes' focus moves are not on the bar and so are not on this
+  list; their coverage belongs to the catalogue suite and the Key guide's own
+  frames.
+
+Running the rig's own suite needs the runner's own budget: its timeout pin
+stands at the rig's twenty-second deadline, above bun test's default
+five-second per-test timeout, so the suite runs through `bun run test` or
+`bun run test:changed`, which carry the test script's sixty-second timeout,
+or through the standalone form `bun test --timeout=60000
+test/frame-rig.test.ts`, which stands the same sixty-second budget on the
+file. A bare `bun test test/frame-rig.test.ts` without the flag reports the
+pin as a failure.
+
+The migration moves a frame suite to the rig one surface at a time and adds
+it to the owned list in `test/frame-rig-architecture.test.ts`, which refuses a
+hand-picked key outside the escape list, a reach to the renderer's input or
+mouse, and a retired private press, open, close, or wait in an owned surface.
+The owned list grows and never shrinks. The before and after of the move, and
+the surfaces that still run the retired surface, are recorded in
+[the frame-rig section of the verification
+record](../verification/shared-controls.md).

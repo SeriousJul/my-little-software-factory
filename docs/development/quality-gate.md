@@ -213,7 +213,11 @@ consecutive targeted runs before the push.
 
 The load-flake rule stands as it is: a file that fails in the full suite and
 passes alone is a load flake, the report names it as one, and the machine's load
-is recorded beside it. The gate does not fix the CI frame-test flake; that item
+is recorded beside it. The runner's own budget, which the test script
+carries as one timeout of sixty seconds, local and CI alike, stands above
+twice the frame rig's one deadline of twenty seconds, so a test's waits
+fail on the rig's deadline, which dumps the last frame, before the runner's
+budget can end the test without one. The gate does not fix the CI frame-test flake; that item
 stays open in [the verification record](../verification/quality-gate.md).
 
 ## A fake carries every field of the seam it stands for

@@ -319,8 +319,11 @@ the control plane owns, are wired to the shared Control catalogue, and every
 surface - the base panes included - paints from the shared Theme module (ADR
 0020). The remaining gaps: the screen-reader path has not been measured (see
 above), the terminal walks have not been re-run on the theme-inherited paint
-(see the inherited-Theme record above), and inherited herdr theme pairs are
-not contrast-checked (limit recorded there).
+(see the inherited-Theme record above), inherited herdr theme pairs are not
+contrast-checked (limit recorded there), and the frame suites' move to the
+rig's named controls and outcomes lands one surface at a time - two are owned
+now, the rest still run the retired surface - as the frame-rig record below
+measures.
 
 ## The merged Main view (PR 42)
 
@@ -1875,3 +1878,168 @@ What was not measured: the terminal walks have not been re-run on the
 changed bar and guide rows, so the new rows stand as not walked in a live
 terminal, and the screen-reader path remains unverified, as this record has
 always held it. A skipped required check is not a pass.
+
+## The frame rig runs the controls, not the keys (issue #365, ADR 0128)
+
+Status: the automated checks pass for the rig and the two owned surfaces. The
+remaining frame surfaces migrate one at a time, and the owned list in the
+architecture check is the record of what has landed.
+
+What was measured: the frame rig in `test/app-harness.ts` now resolves a
+control to the key the Action bar painted for it and owns the input end to
+end. A frame test names a control from the Control catalogue and one outcome
+from the closed set - `opens`, `closes`, `refuses`, `shows`, `hides`, `moved`,
+and `quiet` - and the rig reads the bar the plane painted, resolves the key,
+sends only that key, and owns the wait, the flush, the key-ownership window,
+and the one deadline. `pressControl(setup, "override")`,
+`pressControl(setup, "handoff", { refuses: "no Ticket is selected" })`, and
+`pressControl(setup, "live-view", { opens: "Live" })` are the interface a
+migrated test reaches: it names no key character and writes no frame predicate
+where a named outcome stands.
+
+The resolution owns a painted hint to the named control on three reads, and a
+hint the control does not own is not its key: the hint's key label is one the
+catalogue paints for the control in a mode the control runs, read through the
+catalogue's own display-label function the Action bar paints with, with the
+Agent terminal's exit key read from the plane's config; the hint's word starts
+with one of the control's label wordings, its static label plus the rig's own
+wording table for the controls whose `barLabel` repaints it, the table pinned
+against the catalogue in the rig's own suite; and the control runs on the
+frame's surface, read off the frame's own markers - a Section box title
+marked on the section the cursor holds, the guide's and the Override panel's
+titles - where a frame that names no surface resolves permissively, so a
+marker the plane rewords degrades the read to the permissive answer, which
+weakens the filter and never misresolves a control the bar names. A control
+off the bar owns no painted hint and fails the resolution, and the rig's
+suite pins the refusal where a key collides: the controls that answer to
+Enter fail on the bar's painted Decide hint, and the other sections'
+controls fail on the hints the frame's section paints for its own. A hint
+the catalogue paints display-only - a label for a control that claims no
+key, the text row's Type and Backspace - is owned the same way and is
+keyless: the rig's parser reads the hint keyless instead of splitting the
+label's letters into keys, and a press that names the control fails,
+because the field the hint names owns its own keys. The rig's suite pins
+the parser's keyless read and the closed keyless set against the
+catalogue's own display-only labels, and the first painted keyless hint
+lands with the override-text migration.
+
+The rig's own suite, `test/frame-rig.test.ts`, is the first owned surface and
+the reference for the rest: it boots the real app on the Seeded plane with a
+healthy source, resolves every control the base bar advertises to the keys it
+painted, sends the token a press names with `via`, waits on the closed set of
+outcomes, and keeps the controls the bar never hints on its escape list. The
+closed catalogue walk is non-circular: each hint the bar paints is owned by
+the catalogue - exactly one control can paint it on the frame's surface -
+and the walk asserts the catalogue owns the hint on exactly one control and
+the rig resolves that owner to a key the hint painted. The walk's ground
+truth is the bar the plane paints and the catalogue's facts, and the
+ownership it checks is the rig's own three reads applied per control, so the
+matcher is not its own ground truth: a drift between the bar and the
+catalogue fails the walk. The `theme-frame` suite is the first app surface moved
+to the rig: its Key guide opens and closes through `pressControl` and its
+fallback notice waits through the rig's `frameUntil`, so it names no key and
+keeps no private wait.
+
+The closed set is enforced in the rig, not in the test: an outcome field
+outside the set is a rig error, not a quiet no-op, and `opens` belongs to a
+press alone, which the rig's `waitFor` refuses. The escape list keeps the
+controls the bar never hints - the auto-handoff toggle, the quit and the
+emergency exit, the repository init, the field's own keys, and the form's
+type-ahead - on named rig operations, and `frameUntil` stands for a frame
+check no outcome names. A wait that still stands after the deadline names the
+outcome it waited on and the press that sent it, and the rig's suite pins the
+message on a press that runs to the deadline. The close proof is the set of
+handler identities the opening recorded on the key bus: the closing press
+waits for exactly those handlers to release. A surface that re-created its
+own handlers during the open window would swap them out of the set the close
+waits on, and the proof would not see the swap; no owned surface behaves
+that way, and a surface that does lands as a finding on its own migration.
+
+One deadline stands, with no per-test budget and no CI branch:
+`FRAME_DEADLINE_MS` is twenty seconds on the local run and on CI alike, and
+the runner's own budget stands above the sum of two of the rig's deadline
+waits: the test script carries one `--timeout` of sixty seconds, local and CI
+alike, and twice the deadline is forty, so a test's waits fail on the rig's
+deadline, which dumps the last frame, before the runner's budget can end the
+test without one. That budget is also what the rig's own suite runs on: its
+timeout pin stands at the rig's deadline, above bun test's default
+five-second per-test timeout, so the suite is green through `bun run
+test` or `bun run test:changed`, or through the standalone form `bun
+test --timeout=60000 test/frame-rig.test.ts`, which stands the same
+budget on the file; a bare `bun test test/frame-rig.test.ts` without
+the flag reports the pin as a failure.
+
+Measured at head `da5fa356` on this machine (32 cores, 60 GB RAM, 11 GB
+available, load 1.1): the rig's own suite ran its twenty-four tests in
+29.4 seconds, of which the timeout pin stands 20.46 seconds at the rig's
+deadline, the only wait in the suite that runs to it by design; the longest
+wait that settles before the deadline was the guide's open-close round trip
+at 243 ms, measured on the suite's own flow run standalone, and every other
+wait stood under one second at the poll's interval. The full suite ran its
+3,348 tests in 65.2 seconds, 0 fail, at head `275058db` (this machine,
+load 1.6 at its run), one commit behind `da5fa356`: the commit between them
+lands the rig's stale-line guard on the `refuses` outcome, whose effect
+stands on the rig's own suite, green at `da5fa356`, and no wait in either
+run reached the deadline. These are the waits the one deadline stands
+above at this head; a head that moves a surface slower re-records them here.
+
+The static architecture check, `test/frame-rig-architecture.test.ts`, owns the
+set of surfaces the rig drives and refuses the two ways a surface can opt out:
+reaching the renderer's input or mouse by hand, and keeping a private press,
+open, close, or wait the rig should own. The owned list grows one surface at a
+time as a migration lands and never shrinks; a surface that drifts back to a
+hand-picked key fails the check and is migrated again, not removed from the
+list.
+
+The before and after, measured at the named heads by the campaign's walk,
+which is committed as `scripts/walk-frame-rig-counts.ts` and whose header
+documents each count: at the base head `a5a947dd` the 42 frame suites held
+935 press-family calls, 302 hand operations, 848 `awaitFrame` waits, 739
+inline containment predicates on the frame's own strings, and 449 direct
+reaches to the renderer's input, over 79 rig exports and 36 per-suite helper
+copies. At this head the walk spans 43 suites and the rig owns 103 exports,
+and the two owned surfaces press through it with none of the retired surface
+left: no hand-picked key, no hand operation, no raw wait, and no reach to
+the renderer's input, as the architecture check pins. The nine lines of
+inline containment the walk still counts on the owned surfaces all stand in
+the `theme-frame` suite: they are row probes - the border row and the
+marker row - that the rig leaves alone. The escape list's named `frameUntil`
+check, which the closed set of outcomes does not reach, is invisible to the
+walk's line-based metric: its arrow and its containment test stand on
+different lines. The test-tree duplication clone count, the Quality audit's
+own metric, stands at 204 at the base head and at this head, and the Quality
+baseline, which only shrinks, holds that count. The walk counts in this
+paragraph re-derive from the committed walk at the two named heads: the
+script run at either head prints them, and a head that moves the suites
+re-records them here from the same script.
+
+What was not measured: the remaining frame surfaces have not been migrated, so
+the 935 press-family calls and 848 raw waits above stand in the suites that
+have not landed yet, and this change's effect on the whole plane is the two
+owned surfaces plus the rig, not the surfaces that follow. The closed walk
+stands on the bar of the frame it walks, and at this head that frame is the
+base frame: the walk walks the base bar only, and it does not boot the mode
+that owns each hinted catalogue id, the shape the spec's walk names. The
+other surfaces' bars walk as their migrations land. Two gaps the migration
+will meet are recorded now: the guide's scroll keys and the panes' focus moves
+are not on the bar and so are not resolvable by `pressControl`; their coverage
+belongs to the catalogue suite and the Key guide's own frames, and a focus
+operation the escape list does not yet name is the next rig extension the
+migration needs. A painted hint two catalogue controls can both paint - the
+modal Esc Cancel family, the scroll pair on a permissive frame, the
+cross-section pair on a detail-focused frame, and the identical Delete Remove
+pair at wide widths - stands in issue #387: on the surfaces the frame names
+the rig owns every painted hint to one control, and on a frame that names no
+surface the permissive resolution owns the shared hint to each of them, so a
+press that names one of the colliding controls sends the painted key and the
+plane runs the control its mode owns. The spec's test decision that a
+control whose aliases match two painted hints fails and the failure names
+both stands with it: no owned surface can paint two hints to one control,
+the first frame that can stands on the wide Work queue bar, and the pin that
+names both lands with that surface's migration. The hint parse groups the
+bar's spans on their gaps and assumes a runnable hint's key and label wear
+different inks: a theme that equates the two inks merges the gap into the
+label span, and the resolution fails loudly on the hint it cannot split. The
+plane's own themes keep the tested pairs, and the inherited-theme walks
+stand on that limit. The terminal walks and the screen-reader
+path stand as they do for the rest of this record: not walked, not verified.

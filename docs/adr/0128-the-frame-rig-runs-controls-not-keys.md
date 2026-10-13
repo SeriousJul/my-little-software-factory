@@ -58,12 +58,34 @@ suites instead of in the rig.
 ## Decision
 
 **The rig resolves every key it sends from the Control catalogue, through the
-Action bar.** A frame test names a Control catalogue id. The rig takes that
-control's key aliases as their display names, reads the Action bar row of the
-current frame as its spans, and matches the painted hints whose key part is one
-of those aliases. Exactly one match sends that key. No match fails, naming the
-control and stating that the Action bar shows no hint for it in this frame. More
-than one fails and names every match.
+Action bar.** A frame test names a Control catalogue id. The rig owns a
+painted hint to the named control on three reads, and a hint the control does
+not own is not its key: the hint's key label is one the catalogue paints for
+the control in a mode the control runs, read through the catalogue's own
+display-label function the Action bar paints with, with the Agent terminal's
+exit key read from the plane's config; the hint's word starts with one of the
+control's label wordings, its static label plus the rig's own wording table for
+the controls whose `barLabel` repaints it; and the control runs on the
+frame's surface, read off the frame's own markers, where a frame that names
+no surface resolves permissively, so a reworded marker weakens the filter
+and never misresolves a control the bar names. Exactly one owned hint sends
+its first painted key, or a named `via` token if the press names one. No
+owned hint fails, naming the control and the hints the bar paints, and stating
+that the bar paints no hint the control owns. More than one owned hint fails
+and names every match, key and label, so a pair that paints the same key
+twice still names both. A hint the catalogue paints display-only - a label
+for a control that claims no key, the text row's Type and Backspace - is
+owned the same way and is keyless: the rig owns it to its control and fails
+a press that names it, because the field the hint names owns its own keys.
+The closed walk is the same rule turned around: each painted hint is owned
+by the catalogue - exactly one control can paint it on the frame's surface -
+and the walk asserts the catalogue owns the hint on exactly one control and
+the rig resolves that owner to a key the hint painted. Its ground truth is
+the painted frame and the catalogue's facts, and the ownership it checks is
+the rig's own three reads applied per control, so the matcher is not its own
+ground truth: a drift between the bar and the catalogue fails the walk. A
+painted hint two catalogue controls can both paint stands in issue #387,
+filed under the rule below: a finding about the bar, not a rig workaround.
 
 The rule leans on the catalogue's standing guarantee that the bar never shows a
 hint whose keys do something else in the current mode. That guarantee is what
@@ -72,15 +94,18 @@ the plane advertises, which is the operator's path.
 
 **Naming is by Control catalogue id, not by hint wording.** Naming by wording
 was rejected: it re-couples the suite to a wording, and the quality gate already
-refuses restating a wording that has its own test. The refusal wording a test
-checks comes from the catalogue, not from a copy in the test.
+refuses restating a wording that has its own test. The `refuses` outcome takes
+the wording the test names, and the spec's story 7 - the outcome reading the
+catalogue's own words off the Message line - stands: the catalogue's interface
+does not expose the refusal words per control, so the test still names them.
 
 **A frame test names one outcome from a closed set, and the rig owns the wait.**
 
 - `opens` and `closes` - a surface appears or goes away, and its key ownership
   settles with it.
-- `refuses` - the Message line carries the catalogue's own refusal words for
-  that control.
+- `refuses` - the Message line carries the control's refusal, and the
+  outcome takes the wording the test names: the catalogue's interface does
+  not expose the refusal words per control, so the test still names them.
 - `shows` and `hides` - the screen text, for the facts that are not a control's
   effect.
 - `moved` - which pane or section holds the cursor.
@@ -97,12 +122,13 @@ takes a snapshot, because a caller no longer knows there is a bus.
 records the measured wait times at the head it measured them on, so the number is
 evidence.
 
-**The escape list is closed and named.** Five controls stand outside the Action
-bar, and three more are guide-only: a field's editing keys, which the plane
-dispatches nowhere. Those routes stay, as named rig operations for typing and for
-the form's slot walk. A static check refuses a frame test that reaches for a raw
-key outside the list, in the shape of the assertion-architecture check and the
-shared-control check.
+**The escape list is closed and named.** Four controls stand outside the Action
+bar: the auto-handoff toggle, the quit and the emergency exit, and the
+repository init. The field's twelve editing rows are guide-only: a field's
+editing keys, which the plane dispatches nowhere. Those routes stay, as named
+rig operations for typing and for the form's slot walk. A static check refuses
+a frame test that reaches for a raw key outside the list, in the shape of the
+assertion-architecture check and the shared-control check.
 
 **No production code changes.** No control moves, no key moves, no hint rewords,
 and no surface is touched. Where the rule cannot resolve a control through the
@@ -154,3 +180,18 @@ spec for this change.
 
 The glossary names the **Frame rig**. As with ADR 0122, the decision and the term
 land before the key change they govern does.
+
+## Addendum: the rework of the delivered rule
+
+The rule as first delivered matched the painted hints on the key label alone.
+On the base frame that owned the bar's painted Decide hint to every catalogue
+control that answers to Enter, and a press that named one of them resolved to
+the hint the plane painted for another. The rework adds the two reads the key
+label cannot carry: the hint's word, matched against the control's label
+wordings, and the frame's surface, matched against the control's modes. The
+surface read runs on the markers the frame itself paints, and a frame that
+names no surface resolves permissively, so the read degrades to the weaker
+filter instead of misresolving. The closed walk moved with the rule: it owns
+each painted hint to the catalogue, exactly one owner, and asserts the rig's
+resolution of that owner against the hint, so it can no longer assert the
+matcher against itself.
