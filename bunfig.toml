@@ -1,6 +1,14 @@
 # The test runner's options that hold for every `bun test` invocation in this
 # repository, the `bun run test` script included.
 #
+# The per-test budget is sixty seconds, the test script's `--timeout` flag:
+# bun takes it on the command line only, and the flag stays above twice the
+# frame rig's twenty-second deadline (ADR 0128), so a test's waits fail on
+# the rig's deadline, which dumps the last frame, before the runner's budget
+# can end the test without one. The mutation campaign's test children take
+# the same budget through `stryker.config.mjs`'s `bun.bunArgs`, which the
+# runner forwards onto its own `bun test` command line.
+#
 # The theme isolation preloads into every test file: the test files share one
 # worker's environment, and a file that leaves a theme variable behind (a
 # `NO_COLOR` a no-color test set and did not delete) would otherwise stand
@@ -22,6 +30,7 @@
 # the planes they open; the preload's hook belongs to no file and holds in
 # every file, with or without `--isolate`.
 [test]
+timeout = 60000
 preload = [
   "./test/theme-isolation.ts",
   "./test/passive-flush-hold.ts",

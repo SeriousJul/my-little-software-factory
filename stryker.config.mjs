@@ -15,7 +15,7 @@ export default {
 	// The community Bun test-runner plugin. Stryker's own scope publishes no
 	// Bun runner (stryker-mutator/stryker-js#5424), and the generic `command`
 	// runner cannot report per-test coverage, which would put a full test run
-	// behind every one of the 26,177 mutants this scope holds. This plugin
+	// behind every one of the 37,207 mutants this scope holds. This plugin
 	// spawns `bun test` per mutant and correlates tests to mutants over Bun's
 	// inspector protocol, so a mutant run executes only the tests that covered
 	// that mutant.
@@ -26,8 +26,8 @@ export default {
 		"src/**/*.ts",
 		// The shared control gallery is a development preview surface: the module
 		// holds the example list the gallery walks, `bun run gallery` is its only
-		// caller, and no shipped behavior reads it. It holds 1,116 of the 27,293
-		// mutants in `src` - 4 percent of the campaign from one module - and it
+		// caller, and no shipped behavior reads it. It holds 1,904 of the 39,111
+		// mutants in `src` - 5 percent of the campaign from one module - and it
 		// imports the whole control library, so they reach the frame tests.
 		"!src/components/shared/gallery.ts",
 	],
@@ -68,6 +68,18 @@ export default {
 		// kill every mutant in the nine state modules for the wrong reason. It
 		// stays in `bun run test`, which reads the uninstrumented tree.
 		"test/state-architecture.test.ts",
+		// The record-lines-doc suite (issue #223 review) holds that the configuration
+		// reference states the same words the code writes, and for the words that
+		// live only in a module's source it reads them out of that source: the
+		// dispatch's refusal facts out of `src/handoff-dispatch.ts`, the checkout
+		// hold's lines out of `src/checkout-hold.ts`, and the rest out of the domain
+		// modules. Instrumentation rewrites those string literals in every file it
+		// mutates, so under mutation the suite reads the mutated words and fails on
+		// a text change rather than on a behavior change. Measured on this branch:
+		// with `src/handoff-dispatch.ts` in the scope, the campaign's initial run
+		// died on `every refusal shape the dispatch writes is on the page`. It stays
+		// in `bun run test`, which reads the uninstrumented tree.
+		"test/record-lines-doc.test.ts",
 		// Not an exclusion, and the note stands here because the file looks like one:
 		// `test/config-write-architecture.test.ts` (ADR 0103, issue #222) also reads
 		// production source as text, but it counts call names - `writeConfigFile(`,
@@ -75,8 +87,9 @@ export default {
 		// whole. Measured on this branch: a `--dryRunOnly` initial run over the whole
 		// instrumented tree (117 files, 34,432 mutants) reported 2,771 tests at exit 0
 		// with the file in the set, and its cases passed run alone inside that
-		// campaign's kept sandbox - 5 cases then, 6 now, and the campaign has not been
-		// re-run since the sixth landed. It stays in the campaign. The rule is what a file
+		// campaign's kept sandbox - 5 cases then, 6 now, and this branch's scoped
+		// campaign ran it inside the initial run on both trees it measured, with no
+		// failure. It stays in the campaign. The rule is what a file
 		// counts, not that it reads source.
 	],
 	// "json" is the machine-readable report: a future `break` gate and any
@@ -102,21 +115,29 @@ export default {
 	// this number times 250 MB. Measured on 32 cores: 8 workers ran 814 mutants of
 	// session-record and domain logic (10 tests per mutant on average) in 11
 	// minutes, and 16 workers ran 913 mutants of the shared control library (47
-	// tests per mutant on average) in 22 minutes. The campaign is CPU-bound before
+	// tests per mutant on average) in 22 minutes. Measured beside this machine's
+	// model server on 2026-10-13, 4 workers ran 4,835 mutants of the Handoff
+	// dispatch and the observation in 5 hours 42 minutes, the rate this branch's
+	// whole-scope extrapolation stands on. The campaign is CPU-bound before
 	// it is memory-bound, so raise the share on a machine that is doing nothing
 	// else, not because the children need room.
 	concurrency: "25%",
 	// The initial run is the whole suite in one instrumented serial process, and
 	// core bounds it: Stryker wraps every test runner in its TimeoutDecorator and
 	// races this number against the dry run (3-dry-run-executor.js, then
-	// timeout-decorator.js). 10 minutes, not the 5-minute default, because the
-	// measured run is 3 minutes 31 seconds: the default would leave about 85
-	// seconds of headroom on a machine this record calls busy. Measured here:
-	// `--dryRunTimeoutMinutes=0.5` cut the initial run at 30 seconds with
-	// `bun.timeout` still at 300_000. The initial run's real bound is the tighter
-	// of this number and the plugin's child bound below, so with 10 minutes here
-	// it is the plugin's 330 seconds that governs.
-	dryRunTimeoutMinutes: 10,
+	// timeout-decorator.js). Measured on the pushed tree on 2026-10-13 on this
+	// machine: 3,369 tests in 6 minutes 10 seconds, net 3 minutes 56 seconds of
+	// test time plus the inspector's 2 minutes 14 seconds of overhead. Fifteen
+	// minutes stands well
+	// over it, and the plugin's 630-second child bound below is the tighter of
+	// the two, so it is the one that governs. The suite has grown since the
+	// 1,905-test run that set the previous 10-minute number at 3 minutes 31
+	// seconds, and the frame rig's timeout naming test now waits out its full
+	// twenty-second deadline inside the run, which the previous bound could not
+	// allow: the initial run's tests take the suite's own sixty-second per-test
+	// budget through `bun.bunArgs` below, and the child bound below stands over
+	// the measured run with room.
+	dryRunTimeoutMinutes: 15,
 	// The fixed part of a mutant run's bound: core plans it as
 	// `timeoutFactor * netTime + timeoutMS + overhead` (mutant-test-planner.js),
 	// where `netTime` is what that mutant's own covering tests took in the initial
@@ -127,20 +148,39 @@ export default {
 	// bounds the same run from the other side.
 	timeoutMS: 60_000,
 	bun: {
+		// The per-test budget the campaign's test children run under, handed to
+		// them on the child's own `bun test` command line: bun 1.4.2 takes the
+		// per-test timeout from the CLI only, not from a `bunfig.toml` (a six
+		// second test still dies at five under a `[test] timeout = 60000`
+		// bunfig, measured on this branch), and the plugin's sanitized bunfig
+		// for its children carries no timeout. Sixty seconds stands for the
+		// suite's, the test script's `--timeout` (ADR 0128): it stays above
+		// twice the frame rig's twenty-second deadline, so a test's waits fail
+		// on the rig's deadline, which dumps the last frame, before the runner
+		// ends the test. Without it the campaign's children die on bun's five
+		// second default: measured on this branch, the frame rig's timeout
+		// naming test, which waits out the full deadline, and the audit
+		// command's test, which runs the audit pipeline as a child, both died
+		// at five seconds in the instrumented initial run and the runner's
+		// completeness gate then refused the run's data.
+		bunArgs: ["--timeout=60000"],
 		// The plugin's kill bound for one `bun test` child. It holds this one number
 		// for a mutant run, and the initial run gets it plus a fixed 30 seconds the
 		// plugin allows itself for the inspector drain (dist/index.js: `timeout:
-		// this.timeout + DRAIN_ACK_ABSOLUTE_CEILING_MS`), so 300_000 here is a 330
-		// second bound on the initial run and a 300 second one on each mutant run.
+		// this.timeout + DRAIN_ACK_ABSOLUTE_CEILING_MS`), so 600_000 here is a 630
+		// second bound on the initial run and a 600 second one on each mutant run.
 		// `dryRunTimeoutMinutes` above is core's own second bound on the initial
-		// run, and the tighter of the two governs. Measured directly: an initial run
-		// with `bun.timeout` at 30 seconds died at 61 seconds, and one with
-		// `--dryRunTimeoutMinutes=0.5` died at 30 seconds with this value at
-		// 300_000. Underneath both, Stryker's plan above is what cuts a mutant run
-		// that hangs. The plugin also answers a child that outlives its parent and
-		// signals the whole process group on a kill, so a timed-out mutant leaves no
-		// `bun test` behind.
-		timeout: 300_000,
+		// run, and the tighter of the two governs: at this value the plugin's 630
+		// seconds stands over the measured initial run of 370 seconds with 70
+		// percent of headroom, the way the previous 330 second bound stood over the
+		// 205 seconds the 1,905-test suite measured when ADR 0055 set it in 2026. The same 600 seconds
+		// bounds a mutant run from the child's side; underneath it, Stryker's plan
+		// above is what cuts a mutant run that hangs, and the worst mutant run - a
+		// static mutant whose covering set is the whole suite - is the initial run
+		// itself, which this value already stands over. The plugin also answers a
+		// child that outlives its parent and signals the whole process group on a
+		// kill, so a timed-out mutant leaves no `bun test` behind.
+		timeout: 600_000,
 	},
 	thresholds: {
 		// Report colors only. There is no `break` threshold yet: the plane has

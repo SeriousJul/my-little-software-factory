@@ -51,6 +51,7 @@ let mutateScript: string;
 let strykerStub: string;
 let shimPath: string;
 let recordFile: string;
+let shimDir: string;
 
 beforeAll(() => {
 	dir = mkdtempSync(join(tmpdir(), "mutate-script-"));
@@ -60,6 +61,13 @@ beforeAll(() => {
 	mkdirSync(join(dir, "scripts"), { recursive: true });
 	for (const name of ["mutate.sh", "crash-guard.sh", "nondumpable.c"]) {
 		copyFileSync(join(REPO_ROOT, "scripts", name), join(dir, "scripts", name));
+	}
+	// The Stryker host's typescript shim, the copy the entry point stages under
+	// the tree's `node_modules` before it starts a campaign (issue #377).
+	shimDir = join(dir, "scripts", "stryker-host-typescript");
+	mkdirSync(shimDir, { recursive: true });
+	for (const name of ["package.json", "index.cjs"]) {
+		copyFileSync(join(REPO_ROOT, "scripts", "stryker-host-typescript", name), join(shimDir, name));
 	}
 	mutateScript = join(dir, "scripts", "mutate.sh");
 	// The Stryker entry point the script refuses to run without. The script reads
@@ -178,6 +186,15 @@ function sandboxSurvives(): boolean {
 	return recordedSandbox() !== null;
 }
 
+/**
+ * The typescript package the entry point staged under the tree's
+ * `node_modules/@stryker-mutator/core/node_modules`, where the Stryker host's
+ * ts-config preprocessor resolves it before the top-level typescript.
+ */
+function stagedHostTypescript(): string {
+	return join(dir, "node_modules", "@stryker-mutator", "core", "node_modules", "typescript");
+}
+
 /** The `--tempDirName` the entry point handed Stryker, if it handed one. */
 function tempDirOf(run: { stderr: string }): string | undefined {
 	return run.stderr.match(/--tempDirName=(\S+)/)?.[1];
@@ -229,6 +246,63 @@ describe("the mutation campaign entry", () => {
 		expect(run.status).toBe(1);
 		expect(run.stderr).toContain("no-such-stryker.js is missing");
 		expect(run.stderr).not.toContain("fake-bun-call:");
+	});
+
+	it("refuses a campaign whose checkout is missing the host's typescript shim", () => {
+		// The shim is part of the checkout, not of `node_modules`: a tree that lost
+		// it would stage nothing, and the host would resolve the top-level
+		// typescript the preprocessor cannot read. The gate names the tree it
+		// found the shim in, before any campaign process starts.
+		rmSync(shimDir, { recursive: true, force: true });
+		try {
+			const run = runMutate("1.4.2", ["--dryRunOnly"]);
+			expect(run.status).toBe(1);
+			expect(run.stderr).toContain("scripts/stryker-host-typescript");
+			expect(run.stderr).toContain("top-level typescript 7.0.2");
+			expect(run.stderr).not.toContain("fake-bun-call:");
+		} finally {
+			mkdirSync(shimDir, { recursive: true });
+			for (const name of ["package.json", "index.cjs"]) {
+				copyFileSync(
+					join(REPO_ROOT, "scripts", "stryker-host-typescript", name),
+					join(shimDir, name),
+				);
+			}
+		}
+	});
+
+	it("stages the host's typescript shim where the preprocessor resolves it", () => {
+		// The staged copy is what the Stryker host reads: under core's own
+		// `node_modules`, named `typescript`, and byte-for-byte the shim the
+		// checkout ships. The campaign still starts: the staging is a step, not
+		// a substitute for the run.
+		runMutate("1.4.2", ["--dryRunOnly"]);
+		const staged = stagedHostTypescript();
+		expect(readFileSync(join(staged, "package.json"), "utf8")).toBe(
+			readFileSync(join(REPO_ROOT, "scripts", "stryker-host-typescript", "package.json"), "utf8"),
+		);
+		expect(readFileSync(join(staged, "index.cjs"), "utf8")).toBe(
+			readFileSync(join(REPO_ROOT, "scripts", "stryker-host-typescript", "index.cjs"), "utf8"),
+		);
+		const manifest = JSON.parse(readFileSync(join(staged, "package.json"), "utf8"));
+		expect(manifest.name).toBe("typescript");
+		expect(manifest.main).toBe("index.cjs");
+	});
+
+	it("re-stages a copy the checkout has moved on from", () => {
+		// A staged copy outlives the change that made it until the next `bun
+		// install` prunes it or the next run re-stages it. A planted stale copy is
+		// what a tree that edited the shim after a campaign holds, and the entry
+		// point must not start the campaign on the stale bytes.
+		const staged = stagedHostTypescript();
+		mkdirSync(staged, { recursive: true });
+		writeFileSync(join(staged, "index.cjs"), "module.exports = {};\n", "utf8");
+		const run = runMutate("1.4.2", ["--dryRunOnly"]);
+		expect(run.status).toBe(0);
+		expect(run.stderr).toContain("fake-bun-call:");
+		expect(readFileSync(join(staged, "index.cjs"), "utf8")).toBe(
+			readFileSync(join(REPO_ROOT, "scripts", "stryker-host-typescript", "index.cjs"), "utf8"),
+		);
 	});
 
 	it("starts the campaign inside its own tree, and forwards every argument", () => {

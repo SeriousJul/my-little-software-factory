@@ -145,3 +145,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0134: The settle that takes a Ticket's turn decides the trace it supersedes](./0134-the-settle-that-takes-a-tickets-turn-decides-the-trace-it-supersedes.md)
 - [ADR 0135: The Quality audit counts the test suite's duplication as its own metric](./0135-the-quality-audit-counts-the-test-suites-duplication-as-its-own-metric.md)
 - [ADR 0136: A claimed queue row stands until its start answers](./0136-a-claimed-queue-row-stands-until-its-start-answers.md)
+- [ADR 0137: The mutation campaign host runs the vendored typescript shim](./0137-the-mutation-campaign-host-runs-the-vendored-typescript-shim.md)

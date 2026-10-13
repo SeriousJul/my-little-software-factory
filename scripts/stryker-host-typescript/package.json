@@ -1,0 +1,7 @@
+{
+	"name": "typescript",
+	"version": "1.0.0",
+	"description": "The typescript package the Stryker campaign host resolves: a vendored shim that exposes the one function @stryker-mutator/core's ts-config preprocessor reads (issue #377). Staged by scripts/mutate.sh under node_modules/@stryker-mutator/core/node_modules/typescript. It is not a compiler: it runs no type check and compiles nothing.",
+	"main": "index.cjs",
+	"license": "MIT"
+}
