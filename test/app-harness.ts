@@ -19,6 +19,7 @@ import {
 	controlById,
 	controlsForMode,
 	type InteractionMode,
+	keyLabelFor,
 } from "../src/components/controls.ts";
 import { controlInk } from "../src/components/shared/presentation.ts";
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
@@ -47,6 +48,12 @@ const FRAME_POLL_MS = 10;
  * head that set it - the record names them - and above the load a shared
  * runner puts on them; a wait that still needs more than the deadline is a
  * slow plane, and the deadline names it instead of a tuned constant.
+ *
+ * The runner's own budget stays above the sum of two of the rig's deadline
+ * waits: the test script's `--timeout` is sixty seconds, local and CI alike,
+ * and twice the deadline is forty, so a test's waits fail on the rig's
+ * deadline, which dumps the last frame, before the runner's budget can
+ * end the test without one (ADR 0128).
  */
 export const FRAME_DEADLINE_MS = 20000;
 /** The dispatch grace `settle` waits out before trusting stability. */
@@ -1609,30 +1616,171 @@ function planeOf(setup: Setup): SeededPlane | undefined {
 }
 
 /**
- * The display names a control's keys and its bar key label can be painted
- * as, across every mode the control runs in: the rig's match set. A bar
- * hint whose painted key tokens intersect this set is the hint for the
- * control.
+ * The modes the catalogue runs, the rig's own copy: the permissive surface
+ * family and the closed walk union the controls of every mode to reach the
+ * whole catalogue without a production export the plane does not make.
  */
-function keyAliases(setup: Setup, control: ControlDefinition): Set<string> {
-	const names = new Set<string>();
-	for (const token of keyTokens(control.keyLabel)) names.add(token);
-	for (const mode of control.modes) {
-		let keys: readonly string[];
-		try {
-			keys = control.keys(mode, DUMMY_FACTS);
-		} catch {
-			continue;
+const ALL_MODES: InteractionMode[] = [
+	"ticket-list",
+	"ticket-detail",
+	"consultation-list",
+	"consultation-detail",
+	"work-queue-list",
+	"work-queue-detail",
+	"override-list",
+	"override-model",
+	"override-text",
+	"form-field",
+	"form-selector",
+	"form-action",
+	"action-panel",
+	"decision-modal",
+	"missing-modal",
+	"repository-select",
+	"live-view",
+	"key-guide",
+	"message-view",
+	"consultation-interaction",
+];
+
+/**
+ * The catalogue's mode union, checked against the rig's copy: a mode added
+ * to the union without the copy fails this line at the type check, so the
+ * permissive family and the closed walk cannot go blind to a new mode's
+ * controls until the copy is updated.
+ */
+const ALL_MODES_COVERS_THE_CATALOGUE: [InteractionMode] extends [(typeof ALL_MODES)[number]]
+	? true
+	: never = true;
+if (ALL_MODES_COVERS_THE_CATALOGUE !== true)
+	throw new Error("the frame rig's mode list lags the catalogue's mode union");
+
+/** The catalogue's controls, every mode's union de-duplicated on the control's id. */
+export function allControls(): ControlDefinition[] {
+	const seen = new Map<string, ControlDefinition>();
+	for (const mode of ALL_MODES) for (const def of controlsForMode(mode)) seen.set(def.id, def);
+	return [...seen.values()];
+}
+
+/**
+ * The key labels a control's bar hint can be painted with: the catalogue's
+ * display label for the control in each mode it runs in, read through the
+ * same function the Action bar paints with (ADR 0128). A painted hint whose
+ * key label stands in this set is a hint the control could be painted as,
+ * and a key label no control paints this way fails the resolution.
+ *
+ * The Agent terminal's exit key is read from the plane's config, so its
+ * painted name is the rig's to compute the way the catalogue states it.
+ */
+function paintedKeyLabels(setup: Setup, control: ControlDefinition): Set<string> {
+	const labels = new Set<string>();
+	if (control.id !== "interact-exit") {
+		for (const mode of control.modes) {
+			let label: string;
+			try {
+				label = keyLabelFor(mode, control, DUMMY_FACTS);
+			} catch {
+				continue;
+			}
+			if (label !== "") labels.add(label);
 		}
-		for (const key of keys) names.add(displayKey(key));
-	}
-	// The Agent terminal's exit key is read from the plane's config, so its
-	// painted name is the rig's to compute the way the catalogue states it.
-	if (control.id === "interact-exit") {
+	} else {
 		const exit = planeOf(setup)?.config.interactionExitKey ?? "f12";
-		names.add(displayKey(String(exit).trim().toLowerCase()));
+		labels.add(displayKey(String(exit).trim().toLowerCase()));
 	}
-	return names;
+	return labels;
+}
+
+/**
+ * The label wordings a control's bar hint can be painted with: the
+ * control's static label, plus the wordings its dynamic `barLabel` produces
+ * that the static label cannot read back. The bar paints the `barLabel`'s
+ * output where a control wears one, so those wordings are the rig's own
+ * table, one row per control that wears a `barLabel`, pinned against the
+ * catalogue in the rig's own suite: an entry the catalogue no longer
+ * produces, or a wording the catalogue produces that no row carries, breaks
+ * the pin (ADR 0128).
+ */
+export const BAR_LABEL_WORDINGS: Record<string, readonly string[]> = {
+	"ticket-ignore": ["Un-ignore"],
+	"ticket-mute": ["Un-mute"],
+	"ticket-filter": ["Show"],
+	"group-fold": ["Unfold group"],
+	"group-move-up": ["Move up"],
+	"group-move-down": ["Move down"],
+	"queue-pause": ["Resume queue"],
+	"select-repository": ["Start queue"],
+};
+
+/** The label wordings a painted hint must start with for the control to own it. */
+export function hintWordings(control: ControlDefinition): string[] {
+	return [control.label, ...(BAR_LABEL_WORDINGS[control.id] ?? [])];
+}
+
+/**
+ * The surface the frame stands on, read off the frame's own markers: the
+ * Section box titles carry the focus marker on the section the cursor holds,
+ * and the full-screen surfaces state their own titles. A frame that shows
+ * none of the markers - a detail with the focus, a modal over a section,
+ * the Message or the Live view, a surface the rig does not name - stands
+ * for no section, where the rig resolves permissively: no control is
+ * filtered by the surface. A marker the plane rewords fails the read to
+ * that permissive answer, which weakens the filter and never misresolves a
+ * control the bar names, because the bar paints only its own mode's
+ * controls and the key label and the wording still stand against the
+ * catalogue (ADR 0128).
+ */
+export type SurfaceFamily = "ticket" | "consultation" | "queue" | "override" | "guide" | "other";
+
+export function surfaceFamily(frame: string): SurfaceFamily {
+	const ticket = frame.includes("┌─❯ Tickets");
+	const consultation = frame.includes("┌─❯ Consultations");
+	const queue = frame.includes("┌─❯ Work queue");
+	const marked = [ticket, consultation, queue].filter(Boolean).length;
+	if (marked === 1) {
+		if (ticket) return "ticket";
+		if (consultation) return "consultation";
+		return "queue";
+	}
+	if (frame.includes("┌─Override")) return "override";
+	if (frame.includes("Key guide")) return "guide";
+	return "other";
+}
+
+/**
+ * The modes each surface family runs: a control is compatible with the
+ * family when one of its modes runs there. The permissive family runs the
+ * catalogue's whole mode union, so on a frame that names no surface no
+ * control is filtered out.
+ */
+const FAMILY_MODES: Record<SurfaceFamily, readonly InteractionMode[]> = {
+	ticket: ["ticket-list", "ticket-detail"],
+	consultation: ["consultation-list", "consultation-detail", "consultation-interaction"],
+	queue: ["work-queue-list", "work-queue-detail"],
+	override: ["override-list", "override-model", "override-text"],
+	guide: ["key-guide"],
+	other: ALL_MODES,
+};
+
+/**
+ * Whether a painted hint belongs to the control on the frame's surface:
+ * the hint's key label is one the control paints with, the hint's word is
+ * one of the control's label wordings, and the control runs a mode of the
+ * surface. The three reads together are what "the bar names this control
+ * for this key" means (ADR 0128): a control off the bar owns no painted
+ * hint and fails, a hint two sections share is owned by the section the
+ * frame stands on, and a control the surface never runs owns no hint there.
+ */
+function hintOwnedBy(
+	setup: Setup,
+	control: ControlDefinition,
+	hint: BarHint,
+	family: SurfaceFamily,
+): boolean {
+	const modes = FAMILY_MODES[family];
+	if (!control.modes.some((mode) => modes.includes(mode))) return false;
+	if (!paintedKeyLabels(setup, control).has(hint.key)) return false;
+	return hintWordings(control).some((wording) => hint.label.startsWith(wording));
 }
 
 interface BarHint {
@@ -1748,35 +1896,43 @@ export interface ControlResolution {
 
 /**
  * Resolve a control to the key the Action bar of the current frame painted
- * for it. When `via` is named, it must be one of the tokens the hint
- * painted. The rig throws when the bar paints no hint the control answers
- * to, when several painted hints answer to it, or when `via` is not among
- * the hint's tokens.
+ * for it. A painted hint belongs to the control when its key label is one
+ * the control paints with, its word is one of the control's label wordings,
+ * and the control runs on the frame's surface (ADR 0128): a control off the
+ * bar owns no painted hint and fails here, reaching the rig's escape list
+ * instead of pressing a key the bar names for another control. When `via` is
+ * named, it must be one of the hint's tokens, and a `via` two hints name
+ * fails instead of taking the first. The rig throws when the bar paints no
+ * hint the control owns, when several painted hints do, or when `via` is not
+ * among the hint's tokens.
  */
 export function resolveControl(setup: Setup, controlId: string, via?: string): ControlResolution {
 	const control = catalogueControl(controlId);
+	const family = surfaceFamily(setup.captureCharFrame());
 	const all = barHints(setup);
-	const hints = all.filter((hint) =>
-		hint.tokens.some((token) => keyAliases(setup, control).has(token)),
-	);
+	const hints = all.filter((hint) => hintOwnedBy(setup, control, hint, family));
 	const paint = all
 		.map((hint) => (hint.label === "" ? hint.key : `${hint.key} ${hint.label}`))
 		.join("  ");
 	if (hints.length === 0)
 		throw new Error(
-			`the frame rig cannot press "${controlId}": the bar paints no hint whose key the control answers to (the bar paints: ${paint || "nothing"}); if the control is off the bar, the rig's escape list reaches it`,
+			`the frame rig cannot press "${controlId}": the bar paints no hint that belongs to it (the bar paints: ${paint || "nothing"}); if the control is off the bar, the rig's escape list reaches it`,
 		);
 	if (via !== undefined) {
-		const chosen = hints.find((hint) => hint.tokens.includes(via));
-		if (chosen === undefined)
+		const chosen = hints.filter((hint) => hint.tokens.includes(via));
+		if (chosen.length === 0)
 			throw new Error(
 				`the frame rig cannot press "${controlId}" via "${via}": the bar's hint names ${hints[0].key}, and the key is not among its tokens`,
 			);
-		return { key: via, label: chosen.label };
+		if (chosen.length > 1)
+			throw new Error(
+				`the frame rig cannot press "${controlId}" via "${via}": ${chosen.length} bar hints name it (${chosen.map((h) => `${h.key} ${h.label}`).join(" | ")}); name the hint the press means`,
+			);
+		return { key: via, label: chosen[0].label };
 	}
 	if (hints.length > 1)
 		throw new Error(
-			`the frame rig cannot press "${controlId}": ${hints.length} bar hints answer to it (${hints.map((h) => h.key).join(" | ")}); name the key with \`via\``,
+			`the frame rig cannot press "${controlId}": ${hints.length} bar hints belong to it (${hints.map((h) => h.key).join(" | ")}); name the key with \`via\``,
 		);
 	return { key: hints[0].tokens[0], label: hints[0].label };
 }
@@ -1789,52 +1945,37 @@ const ARROW_BY_TOKEN: Record<string, "up" | "down" | "left" | "right"> = {
 };
 
 /**
- * The modes the catalogue runs, the rig's own copy: the closed walk unions the
- * controls of every mode to reach the whole catalogue without a production
- * export the plane does not make.
- */
-const ALL_MODES: InteractionMode[] = [
-	"ticket-list",
-	"ticket-detail",
-	"consultation-list",
-	"consultation-detail",
-	"work-queue-list",
-	"work-queue-detail",
-	"override-list",
-	"override-model",
-	"override-text",
-	"form-field",
-	"form-selector",
-	"form-action",
-	"action-panel",
-	"decision-modal",
-	"missing-modal",
-	"repository-select",
-	"live-view",
-	"key-guide",
-	"message-view",
-	"consultation-interaction",
-];
-
-/** The catalogue's controls, every mode's union de-duplicated on the control's id. */
-function allControls(): ControlDefinition[] {
-	const seen = new Map<string, ControlDefinition>();
-	for (const mode of ALL_MODES) for (const def of controlsForMode(mode)) seen.set(def.id, def);
-	return [...seen.values()];
-}
-
-/**
  * The catalogue controls the current bar paints a hint for: the closed set a
- * press can resolve from this frame. The rig's suite walks it to prove the rig
- * resolves every control the bar advertises, and the architecture check reads
- * it to name the controls a frame suite must reach by a control, not a
- * hand-picked key.
+ * press can resolve from this frame. Each painted hint is owned by the
+ * catalogue - exactly one control whose key label and label wordings can
+ * paint it on the frame's surface - and the set is those owners, walked in
+ * the bar's own order. The set derives from the frame the plane painted and
+ * the catalogue, never from the rig's own matcher, so the closed walk the
+ * rig's suite runs against it cannot assert the matcher against itself: a
+ * painted hint the catalogue owns twice, or owns not at all, fails the walk
+ * as a disagreement between the bar and the catalogue (ADR 0128).
  */
 export function barControlIds(setup: Setup): string[] {
+	const family = surfaceFamily(setup.captureCharFrame());
 	const hints = barHints(setup);
-	return allControls()
-		.filter((def) => hints.some((h) => h.tokens.some((t) => keyAliases(setup, def).has(t))))
-		.map((def) => def.id);
+	const ids: string[] = [];
+	for (const hint of hints) {
+		const owners = allControls().filter((def) => hintOwnedBy(setup, def, hint, family));
+		if (owners.length !== 1)
+			throw new Error(
+				owners.length === 0
+					? `the frame rig's walk breaks on the bar's painted hint "${hint.key} ${hint.label}": no catalogue control can paint it on this surface`
+					: `the frame rig's walk breaks on the bar's painted hint "${hint.key} ${hint.label}": ${owners.map((o) => o.id).join(", ")} can each paint it on this surface, so the bar and the catalogue disagree`,
+			);
+		const owner = owners[0];
+		const resolution = resolveControl(setup, owner.id);
+		if (!hint.tokens.includes(resolution.key))
+			throw new Error(
+				`the frame rig's walk breaks on the bar's painted hint "${hint.key} ${hint.label}": the rig resolves ${owner.id} to "${resolution.key}", a key the hint did not paint`,
+			);
+		ids.push(owner.id);
+	}
+	return ids;
 }
 
 /** Send one painted key token through the app's own input parser. */
@@ -1953,6 +2094,13 @@ interface PressContext {
 	preLine: string;
 	/** The holding the input opened, when the outcomes name `opens`. */
 	holding?: SurfaceHolding;
+	/**
+	 * The press the outcomes are named for, when the rig sent one: the
+	 * control, or the escape key the operation sends. A wait that still
+	 * stands after the deadline names this input, not only the outcome it
+	 * waited on (ADR 0128).
+	 */
+	press?: string;
 }
 
 function toHex(rgb: [number, number, number]): string {
@@ -2004,6 +2152,7 @@ export async function pressControl(
 			preFrame,
 			preLine: messageRowOf(preFrame),
 			holding,
+			press: `the control "${control.id}"`,
 		});
 	} catch (error) {
 		holding?.stop();
@@ -2033,19 +2182,34 @@ function movedChecker(target: string, preFrame: string): (frame: string) => bool
 	};
 }
 
+/**
+ * The name a wait stands under: the outcome, and the press that sent it when
+ * the rig sent one. A timeout that names the press tells which input the
+ * wait stood behind, so a red test names its cause instead of the wall it
+ * ran into (ADR 0128).
+ */
+export function namedWhat(what: string, press: string | undefined): string {
+	return press === undefined ? what : `${what}, after ${press}`;
+}
+
 async function runOutcomes(
 	setup: Setup,
 	fields: ControlOutcomeFields,
 	ctx: PressContext,
 ): Promise<string> {
 	let frame = ctx.preFrame;
+	const named = (what: string) => namedWhat(what, ctx.press);
 	if (fields.opens !== undefined) {
 		const opens = fields.opens;
 		if (ctx.holding === undefined)
 			throw new Error(`the frame rig cannot open "${opens}": no press recorded it`);
 		const holding = ctx.holding;
-		frame = await awaitFrame(setup, (f) => frameText(f).includes(opens), "the surface to open");
-		await awaitKeyBus(setup, `the keys the ${opens} takes over`, () => holding.grew);
+		frame = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(opens),
+			named(`the surface "${opens}" to open`),
+		);
+		await awaitKeyBus(setup, named(`the keys the ${opens} takes over`), () => holding.grew);
 		frame = await settle(setup);
 		recordHoldingKeys(setup, holding);
 		holdingsFor(setup).push(holding);
@@ -2065,7 +2229,7 @@ async function runOutcomes(
 		// added leaves the bus. The base mode's own handlers are not waited on,
 		// because a mode the surface opened can re-create them with fresh identity
 		// on the way back, and that is not the surface holding a key.
-		await awaitKeyBus(setup, `the keys the ${fields.closes} gives back`, (now) =>
+		await awaitKeyBus(setup, named(`the keys the ${fields.closes} gives back`), (now) =>
 			holding.added.every((handler) => !now.includes(handler)),
 		);
 		holding.stop();
@@ -2082,24 +2246,28 @@ async function runOutcomes(
 				if (line === ctx.preLine && !ctx.preLine.startsWith("Warning:")) return false;
 				return target === undefined || line.includes(target);
 			},
-			"the Message line to state the refusal",
+			named("the Message line to state the refusal"),
 		);
 	}
 	if (fields.shows !== undefined) {
 		const shows = fields.shows;
-		frame = await awaitFrame(setup, (f) => frameText(f).includes(shows), "the frame to show");
+		frame = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(shows),
+			named(`the frame to show "${shows}"`),
+		);
 	}
 	if (fields.hides !== undefined) {
 		const hides = fields.hides;
 		frame = await awaitFrame(
 			setup,
 			(f) => !frameText(f).includes(hides),
-			"the frame to stop showing",
+			named(`the frame to stop showing "${hides}"`),
 		);
 	}
 	if (fields.moved !== undefined) {
 		const check = movedChecker(fields.moved, ctx.preFrame);
-		frame = await awaitFrame(setup, check, "the cursor to move");
+		frame = await awaitFrame(setup, check, named("the cursor to move"));
 	}
 	if (fields.quiet) frame = await settle(setup);
 	return frame;
@@ -2150,8 +2318,9 @@ export async function pasteText(setup: Setup, text: string): Promise<void> {
 /**
  * One raw key into the focused field: the Key guide's field-editing rows,
  * which the plane dispatches itself and the Action bar names nowhere. The
- * named keys stand as the guide shows them, and a single printable
- * character stands for itself.
+ * named keys stand as the guide shows them, and the type closes on them: a
+ * character the test wants in the field goes through `typeText`, not a key
+ * the rig would have to invent.
  */
 export type FieldKey =
 	| "left"
@@ -2175,8 +2344,7 @@ export type FieldKey =
 	| "enter"
 	| "tab"
 	| "space"
-	| `F${number}`
-	| (string & {});
+	| `F${number}`;
 
 const FIELD_ARROW: Record<string, "up" | "down" | "left" | "right"> = {
 	left: "left",
@@ -2229,12 +2397,14 @@ export function fieldKey(setup: Setup, key: FieldKey): void {
 		input.pressKey(upper, mods);
 		return;
 	}
-	if (/^[a-z0-9?+-=]$/.test(base)) {
+	// The Ctrl plus a letter rows: undo, redo, and select all in the field's
+	// editor, which the plane dispatches off the terminal's own modifiers.
+	if (mods.ctrl && /^[a-z]$/.test(base)) {
 		input.pressKey(key, mods);
 		return;
 	}
 	throw new Error(
-		`the frame rig cannot send "${key}" to a field: name a field-editing key (an arrow, Home, End, Delete, Backspace, a Ctrl combination, a function key) or a single printable character`,
+		`the frame rig cannot send "${key}" to a field: name a field-editing key (an arrow, Home, End, Delete, Backspace, Enter, Tab, Space, a Ctrl plus a letter, or a function key); the field's characters go through \`typeText\``,
 	);
 }
 
@@ -2268,7 +2438,11 @@ export async function quitApp(setup: Setup, fields: ControlOutcomeFields = {}): 
 	const key = catalogueKey("quit", "ticket-list");
 	const preFrame = await settle(setup);
 	sendKey(setup, key);
-	return runOutcomes(setup, fields, { preFrame, preLine: messageRowOf(preFrame) });
+	return runOutcomes(setup, fields, {
+		preFrame,
+		preLine: messageRowOf(preFrame),
+		press: "the quit key",
+	});
 }
 
 export async function emergencyExit(
@@ -2278,7 +2452,11 @@ export async function emergencyExit(
 	checkOutcomeFields(fields, false);
 	const preFrame = await settle(setup);
 	sendKey(setup, "Ctrl+C");
-	return runOutcomes(setup, fields, { preFrame, preLine: messageRowOf(preFrame) });
+	return runOutcomes(setup, fields, {
+		preFrame,
+		preLine: messageRowOf(preFrame),
+		press: "the emergency exit",
+	});
 }
 
 export async function initRepository(
@@ -2289,7 +2467,11 @@ export async function initRepository(
 	const key = catalogueKey("repository-init", "ticket-list");
 	const preFrame = await settle(setup);
 	sendKey(setup, key);
-	return runOutcomes(setup, fields, { preFrame, preLine: messageRowOf(preFrame) });
+	return runOutcomes(setup, fields, {
+		preFrame,
+		preLine: messageRowOf(preFrame),
+		press: "the repository-init key",
+	});
 }
 
 export async function toggleAutoHandoff(
@@ -2300,5 +2482,9 @@ export async function toggleAutoHandoff(
 	const preFrame = await settle(setup);
 	const key = catalogueKey("auto-handoff", textEntryFocused(setup) ? "form-field" : "ticket-list");
 	sendKey(setup, key);
-	return runOutcomes(setup, fields, { preFrame, preLine: messageRowOf(preFrame) });
+	return runOutcomes(setup, fields, {
+		preFrame,
+		preLine: messageRowOf(preFrame),
+		press: "the auto-handoff toggle",
+	});
 }

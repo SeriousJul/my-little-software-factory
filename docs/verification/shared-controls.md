@@ -1892,25 +1892,43 @@ from the closed set - `opens`, `closes`, `refuses`, `shows`, `hides`, `moved`,
 and `quiet` - and the rig reads the bar the plane painted, resolves the key,
 sends only that key, and owns the wait, the flush, the key-ownership window,
 and the one deadline. `pressControl(setup, "override")`,
-`pressControl(setup, "hand-off", { refuses: "no Ticket is selected" })`, and
+`pressControl(setup, "handoff", { refuses: "no Ticket is selected" })`, and
 `pressControl(setup, "live-view", { opens: "Live" })` are the interface a
 migrated test reaches: it names no key character and writes no frame predicate
-where a named outcome stands. The rig keeps one deadline,
-`FRAME_DEADLINE_MS`, set to a single value for the local run and for CI alike;
-a per-test budget would let a slow surface pass and a fast one fail, so the rig
-waits to the one deadline and the measured wait at the named head is the
-evidence.
+where a named outcome stands.
+
+The resolution owns a painted hint to the named control on three reads, and a
+hint the control does not own is not its key: the hint's key label is one the
+catalogue paints for the control in a mode the control runs, read through the
+catalogue's own display-label function the Action bar paints with, with the
+Agent terminal's exit key read from the plane's config; the hint's word starts
+with one of the control's label wordings, its static label plus the rig's own
+wording table for the controls whose `barLabel` repaints it, the table pinned
+against the catalogue in the rig's own suite; and the control runs on the
+frame's surface, read off the frame's own markers - a Section box title
+marked on the section the cursor holds, the guide's and the Override panel's
+titles - where a frame that names no surface resolves permissively, so a
+marker the plane rewords degrades the read to the permissive answer, which
+weakens the filter and never misresolves a control the bar names. A control
+off the bar owns no painted hint and fails the resolution, and the rig's
+suite pins the refusal where a key collides: the controls that answer to
+Enter fail on the bar's painted Decide hint, and the other sections'
+controls fail on the hints the frame's section paints for its own.
 
 The rig's own suite, `test/frame-rig.test.ts`, is the first owned surface and
 the reference for the rest: it boots the real app on the Seeded plane with a
 healthy source, resolves every control the base bar advertises to the keys it
 painted, sends the token a press names with `via`, waits on the closed set of
 outcomes, and keeps the controls the bar never hints on its escape list. The
-closed catalogue walk reads the bar the plane paints and resolves whatever it
-advertises, so the resolution is not tuned to one bar. The `theme-frame` suite
-is the first app surface moved to the rig: its Key guide opens and closes
-through `pressControl` and its fallback notice waits through the rig's
-`frameUntil`, so it names no key and keeps no private wait.
+closed catalogue walk is non-circular: each hint the bar paints is owned by
+the catalogue - exactly one control whose key label and label wordings can
+paint it on the frame's surface - and the walk asserts that the rig resolves
+that owner to a key the hint painted. The walk reads the bar the plane paints
+and the catalogue, never the rig's own matcher, so it cannot assert the
+matcher against itself. The `theme-frame` suite is the first app surface moved
+to the rig: its Key guide opens and closes through `pressControl` and its
+fallback notice waits through the rig's `frameUntil`, so it names no key and
+keeps no private wait.
 
 The closed set is enforced in the rig, not in the test: an outcome field
 outside the set is a rig error, not a quiet no-op, and `opens` belongs to a
@@ -1918,7 +1936,27 @@ press alone, which the rig's `waitFor` refuses. The escape list keeps the
 controls the bar never hints - the auto-handoff toggle, the quit and the
 emergency exit, the repository init, the field's own keys, and the form's
 type-ahead - on named rig operations, and `frameUntil` stands for a frame
-check no outcome names.
+check no outcome names. A wait that still stands after the deadline names the
+outcome it waited on and the press that sent it, and the rig's suite pins the
+message on a press that runs to the deadline.
+
+One deadline stands, with no per-test budget and no CI branch:
+`FRAME_DEADLINE_MS` is twenty seconds on the local run and on CI alike, and
+the runner's own budget stands above the sum of two of the rig's deadline
+waits: the test script carries one `--timeout` of sixty seconds, local and CI
+alike, and twice the deadline is forty, so a test's waits fail on the rig's
+deadline, which dumps the last frame, before the runner's budget can end the
+test without one.
+
+Measured at head `__HEAD__` on this machine (32 cores, 60 GB RAM): the rig's
+own suite ran its twenty-two tests in __RIG_SUITE_S__ seconds, and the longest
+waits inside it were the two that run to the deadline by design, the timeout
+pin at __TIMEOUT_PIN_MS__ and the guide's open-close round trip at
+__GUIDE_MS__; every other outcome wait in the suite stood under one second at
+the poll's interval. The full suite ran its 33__FULL__ tests in __FULL_S__
+seconds, 0 fail, and no wait in it reached the deadline. These are the waits
+the one deadline stands above at this head; a head that moves a surface slower
+re-records them here.
 
 The static architecture check, `test/frame-rig-architecture.test.ts`, owns the
 set of surfaces the rig drives and refuses the two ways a surface can opt out:
@@ -1932,9 +1970,8 @@ The before and after, measured at the named heads by the same walk over every
 frame suite: at the base head `a5a947dd` the frame suites held 954 press-family
 calls, 847 `awaitFrame` waits, 739 inline containment predicates, and 429
 direct reaches to the renderer's input, over 79 rig exports and 21 per-suite
-helper copies. At this head the rig owns 95 exports - the 79 it had plus the
-resolution, the outcomes, the escape list, and `barControlIds` - and the two
-owned surfaces press through it with none of the retired surface left: no
+helper copies. At this head the rig owns 101 exports, and the two owned
+surfaces press through it with none of the retired surface left: no
 hand-picked key, no raw wait, and no reach to the renderer's input, as the
 architecture check pins.
 
@@ -1946,5 +1983,12 @@ will meet are recorded now: the guide's scroll keys and the panes' focus moves
 are not on the bar and so are not resolvable by `pressControl`; their coverage
 belongs to the catalogue suite and the Key guide's own frames, and a focus
 operation the escape list does not yet name is the next rig extension the
-migration needs. The terminal walks and the screen-reader path stand as they do
-for the rest of this record: not walked, not verified.
+migration needs. A painted hint two catalogue controls can both paint - the
+modal Esc Cancel family, the scroll pair on a permissive frame, the
+cross-section pair on a detail-focused frame, and the identical Delete Remove
+pair at wide widths - stands in issue #387: on the surfaces the frame names
+the rig owns every painted hint to one control, and on a frame that names no
+surface the permissive resolution owns the shared hint to each of them, so a
+press that names one of the colliding controls sends the painted key and the
+plane runs the control its mode owns. The terminal walks and the screen-reader
+path stand as they do for the rest of this record: not walked, not verified.

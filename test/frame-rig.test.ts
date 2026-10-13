@@ -8,23 +8,32 @@
  * `via`, waits on the closed set of outcomes, and keeps the controls the bar
  * never hints on its escape list. The closed catalogue walk proves the
  * resolution is not tuned to one bar: it reads the bar the plane paints and
- * resolves whatever it advertises.
+ * resolves whatever it advertises. A control off the bar owns no painted
+ * hint and fails the resolution instead of pressing a key the bar names for
+ * another control, and the bar's dynamic label wordings agree with the
+ * catalogue's `barLabel` functions on the samples that cover their branches.
  *
  * The rig's keys flow from the control catalogue and the painted bar, never
  * from a literal this suite picks.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { controlById } from "../src/components/controls.ts";
 import {
 	type AppSetup,
 	actionBarRowOf,
+	allControls,
+	BAR_LABEL_WORDINGS,
 	barControlIds,
 	frameText,
 	HEIGHT,
+	hintWordings,
 	messageRowOf,
+	namedWhat,
 	pressControl,
 	resolveControl,
 	settle,
+	surfaceFamily,
 	toggleAutoHandoff,
 	WIDTH,
 	waitFor,
@@ -100,9 +109,44 @@ describe("the frame rig's resolution", () => {
 			await settle(setup);
 			// auto-handoff never stands on the base bar; the rig's escape list reaches it.
 			expect(() => resolveControl(setup, "auto-handoff")).toThrow(
-				/the bar paints no hint whose key the control answers to/,
+				/the bar paints no hint that belongs to it/,
 			);
 		}, toOpenTicket);
+	});
+
+	test("a control off the bar fails where its key collides with a painted hint", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			// The bar paints "Enter Decide" for the control that decides; a
+			// different control that answers to Enter owns no painted hint and
+			// fails the resolution instead of pressing that key for it. On the
+			// row the frame stands on, the handoff's own hint is packed out of
+			// the bar, so the handoff control fails here too.
+			for (const id of [
+				"confirm-action",
+				"confirm-choice",
+				"consultation-respond",
+				"live-goto",
+				"queue-force-dispatch",
+				"handoff",
+				"queue-jump",
+			]) {
+				expect(() => resolveControl(setup, id)).toThrow(`cannot press "${id}"`);
+			}
+		});
+	});
+
+	test("a control the frame's surface does not run fails on a hint its section paints", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			// The bar stands on the ticket section: the hint it paints for "g" and
+			// "Delete" belongs to the ticket's control, so the same-named hint
+			// painted for the other sections' controls owns none of it here.
+			expect(surfaceFamily(setup.captureCharFrame())).toBe("ticket");
+			for (const id of ["consultation-goto", "consultation-close", "queue-remove", "queue-list"]) {
+				expect(() => resolveControl(setup, id)).toThrow(`cannot press "${id}"`);
+			}
+		}, undefined);
 	});
 
 	test("throws for a control the catalogue names nowhere", async () => {
@@ -116,7 +160,11 @@ describe("the frame rig's resolution", () => {
 	test("resolves the Override panel's controls once it stands open", async () => {
 		await withHealthyPlane(async (setup) => {
 			await toOpenTicket(setup);
-			await pressControl(setup, "override", { opens: "Override" });
+			const open = await pressControl(setup, "override", { opens: "Override" });
+			// The panel is a full-screen surface of its own: the frame names it by
+			// its title, so the rig resolves the panel's controls against the
+			// panel's modes, not the section the panel stands over.
+			expect(surfaceFamily(open)).toBe("override");
 			expect(resolveControl(setup, "cancel").key).toBe("Esc");
 		}, toOpenTicket);
 	});
@@ -153,8 +201,12 @@ describe("the frame rig's outcomes", () => {
 			await settle(setup);
 			const open = await pressControl(setup, "help", { opens: "Key guide" });
 			expect(frameText(open)).toContain("Key guide");
+			// The guide is a full-screen surface: the frame names it by its title,
+			// and the close resolves against the guide's modes, not the section's.
+			expect(surfaceFamily(open)).toBe("guide");
 			const closed = await pressControl(setup, "guide-close", { closes: "Key guide" });
 			expect(frameText(closed)).not.toContain("Key guide");
+			expect(surfaceFamily(closed)).toBe("ticket");
 		}, toOpenTicket);
 	});
 
@@ -250,8 +302,87 @@ describe("the frame rig's escape list", () => {
 		await withHealthyPlane(async (setup) => {
 			await settle(setup);
 			await expect(pressControl(setup, "auto-handoff")).rejects.toThrow(
-				/the bar paints no hint whose key the control answers to/,
+				/the bar paints no hint that belongs to it/,
 			);
+		}, toOpenTicket);
+	});
+});
+
+describe("the frame rig's bar wordings", () => {
+	/**
+	 * The samples that cover the branches of each `barLabel` the rig carries:
+	 * one sample per branch the function can take, so the pin reads back every
+	 * wording the bar can paint. A `barLabel` that gains a branch the samples
+	 * do not cover fails the pin until its sample row grows.
+	 */
+	const SAMPLES: Record<string, readonly unknown[]> = {
+		"ticket-ignore": [{ selectedTicket: undefined }, { selectedTicket: { ignored: true } }],
+		"ticket-mute": [
+			{ selectedTicket: undefined },
+			{ selectedTicket: { muted: true, memberships: [{ sourceName: "issues" }] } },
+			{ selectedTicket: { muted: false, memberships: [] } },
+		],
+		"ticket-filter": [{ ticketListFilter: "active" }, { ticketListFilter: "all" }],
+		"group-axis": [{ groupingAxis: "none" }, { groupingAxis: "repository" }],
+		"group-fold": [{ selectedGroupHeader: null }, { selectedGroupHeader: { collapsed: true } }],
+		"group-move-up": [{}],
+		"group-move-down": [{}],
+		"queue-pause": [{ queuePaused: true }, { queuePaused: false }],
+		"select-repository": [{ pendingCount: 0 }, { pendingCount: 2 }],
+	};
+
+	test("every wording the catalogue's barLabels produce is one the rig reads", () => {
+		for (const control of allControls()) {
+			if (control.barLabel === undefined) continue;
+			for (const sample of SAMPLES[control.id] ?? [{}]) {
+				const painted = control.barLabel(sample as never);
+				if (painted === undefined) continue;
+				expect(
+					hintWordings(control).some((wording) => painted.startsWith(wording)),
+					`the bar paints "${painted}" for ${control.id}, and the rig's wordings read it back`,
+				).toBe(true);
+			}
+		}
+	});
+
+	test("every wording the rig carries is one the catalogue's barLabels produce", () => {
+		for (const [id, wordings] of Object.entries(BAR_LABEL_WORDINGS)) {
+			const control = controlById(id);
+			expect(
+				control.barLabel !== undefined,
+				`${id} carries wordings the rig reads for a barLabel the catalogue gives it none`,
+			).toBe(true);
+			for (const wording of wordings) {
+				const produced = (SAMPLES[id] ?? []).some((sample) =>
+					control.barLabel?.(sample as never)?.startsWith(wording),
+				);
+				expect(
+					produced,
+					`the rig carries "${wording}" for ${id}, and a catalogue branch paints it`,
+				).toBe(true);
+			}
+		}
+	});
+});
+
+describe("the frame rig names its timeouts", () => {
+	test("a wait stands named for the press that sent it", () => {
+		expect(namedWhat('the surface "Key guide" to open', 'the control "help"')).toBe(
+			'the surface "Key guide" to open, after the control "help"',
+		);
+		expect(namedWhat("the cursor to move", undefined)).toBe("the cursor to move");
+	});
+
+	test("a timeout on a press names the control in its message", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			// The press lands, the surface it opens never shows the named text, and
+			// the deadline fails the wait: the message names the outcome, the
+			// surface the outcome names, and the control whose press the wait
+			// stood behind.
+			await expect(
+				pressControl(setup, "help", { opens: "a surface the plane never paints" }),
+			).rejects.toThrow(/a surface the plane never paints" to open, after the control "help"/);
 		}, toOpenTicket);
 	});
 });

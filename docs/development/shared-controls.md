@@ -524,7 +524,7 @@ a control from the Control catalogue and one outcome from the closed set:
 
 ```ts
 await pressControl(setup, "override");
-await pressControl(setup, "hand-off", { refuses: "no Ticket is selected" });
+await pressControl(setup, "handoff", { refuses: "no Ticket is selected" });
 await pressControl(setup, "live-view", { opens: "Live" });
 ```
 

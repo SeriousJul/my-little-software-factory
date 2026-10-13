@@ -45,6 +45,8 @@ const RETIRED_SURFACE = [
 	"pressF1",
 	"pressF2",
 	"pressCtrlC",
+	"pressEnter",
+	"pressReturn",
 	"pressQuiet",
 	"pressEnterQuiet",
 	"openPanel",
