@@ -2696,7 +2696,8 @@ export async function pasteText(setup: Setup, text: string): Promise<void> {
  * which the plane dispatches itself and the Action bar names nowhere. The
  * named keys stand as the guide shows them, and the type closes on them: a
  * character the test wants in the field goes through `typeText`, not a key
- * the rig would have to invent.
+ * the rig would have to invent. Escape stands as the guide names it, the way
+ * the direct-render gallery's examples exit theirs.
  */
 export type FieldKey =
 	| "left"
@@ -2717,6 +2718,7 @@ export type FieldKey =
 	| "ctrl+z"
 	| "ctrl+y"
 	| "ctrl+a"
+	| "escape"
 	| "enter"
 	| "tab"
 	| "space"
@@ -2759,6 +2761,9 @@ export function fieldKey(setup: Setup, key: FieldKey): void {
 		case "BACKSPACE":
 			input.pressBackspace(mods);
 			return;
+		case "ESCAPE":
+			input.pressEscape();
+			return;
 		case "ENTER":
 			input.pressEnter();
 			return;
@@ -2781,7 +2786,7 @@ export function fieldKey(setup: Setup, key: FieldKey): void {
 		return;
 	}
 	throw new Error(
-		`the frame rig cannot send "${key}" to a field: name a field-editing key (an arrow, Home, End, Delete, Backspace, Enter, Tab, Space, a Ctrl plus a letter, or a function key); the field's characters go through \`typeText\``,
+		`the frame rig cannot send "${key}" to a field: name a field-editing key (an arrow, Home, End, Delete, Backspace, Escape, Enter, Tab, Space, a Ctrl plus a letter, or a function key); the field's characters go through \`typeText\``,
 	);
 }
 

@@ -30,14 +30,12 @@ import type { StubWorld } from "../src/stub/world.ts";
 import { StubWorldStore } from "../src/stub/world.ts";
 import { createTicketSource } from "../src/ticket-source.ts";
 import {
-	awaitFrame,
-	awaitNewKeyHandler,
 	frameText,
-	keyHandlerListeners,
+	frameUntil,
+	guideKey,
+	initRepository,
 	messageRowOf,
-	openMessageView,
-	press,
-	pressEnterQuiet,
+	pressControl,
 	withApp,
 } from "./app-harness.ts";
 import { agentListJson } from "./fake-runner.ts";
@@ -430,29 +428,29 @@ host = "github.com"
 				// marker stand in one render, and a frame captured mid-render can hold
 				// the marker over a Message line row that is still blank. Reading the
 				// row out of such a frame is the race this test hit on a loaded runner.
-				const marked = await awaitFrame(
+				const marked = await frameUntil(
 					setup,
+					"the uninit marker on the Group header with the note on the Message line",
 					(f) =>
 						f.includes("acme/factory") &&
 						f.includes("uninit") &&
 						messageRowOf(f).includes("Press i on one of their Group headers"),
-					"the uninit marker on the Group header with the note on the Message line",
 				);
 				expect(marked).toContain("acme/factory");
 				expect(messageRowOf(marked)).toContain("Press i on one of their Group headers");
 
 				// The cursor rests on the first row, the Group header: the `i`
 				// there opens the panel over the generator's plan.
-				const before = keyHandlerListeners(setup);
-				const panel = await press(setup, "i", "the init panel to open", (f) =>
+				await initRepository(setup, { quiet: true });
+				const panel = await frameUntil(setup, "the init panel to open", (f) =>
 					f.includes("Init acme/factory"),
 				);
-				await awaitNewKeyHandler(setup, before, "the init panel to take the keys");
 				expect(panel).toContain("Pushes to main with a throwaway worktree.");
 
 				// The confirm runs the act end to end: the result stands on the
 				// Message line.
-				const settled = await pressEnterQuiet(setup, "the init's result", (f) =>
+				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
+				const settled = await frameUntil(setup, "the init's result", (f) =>
 					f.includes("acme/factory: pushed"),
 				);
 				// The result names the branch and the labels the act created.
@@ -502,15 +500,10 @@ host = "github.com"
 				// longer than that, so the whole fact is read where the plane
 				// keeps it: the Message view on F2.
 				expect(messageRowOf(settled)).toContain("acme/factory: pushed");
-				const view = await openMessageView(setup);
+				const view = await pressControl(setup, "message", { opens: "Message view" });
 				expect(frameText(view)).toContain("registered 1 new source in");
 				expect(frameText(view)).toContain(configPath);
-				await press(
-					setup,
-					"escape",
-					"the Message view to close",
-					(f) => !f.includes("Message view"),
-				);
+				await pressControl(setup, "message-close", { closes: "Message view" });
 
 				// The init fact stands in the state file on the current settings.
 				const fact = state.repositoryInit.repositoryInitFact("github.com/acme/factory");
@@ -520,10 +513,10 @@ host = "github.com"
 				);
 
 				// The marker cleared off the Group header in the same read.
-				const cleared = await awaitFrame(
+				const cleared = await frameUntil(
 					setup,
-					(f) => f.includes("acme/factory") && !f.includes("uninit"),
 					"the marker to clear off the Group header",
+					(f) => f.includes("acme/factory") && !f.includes("uninit"),
 				);
 				expect(cleared).toContain("acme/factory");
 
@@ -533,24 +526,24 @@ host = "github.com"
 				// untouched, byte and timestamp alike, and no line reads
 				// "registered 0 new sources" (ADR 0103).
 				const savedStat = statSync(configPath);
-				const reInitBefore = keyHandlerListeners(setup);
-				await press(setup, "i", "the re-init's panel to open", (f) =>
+				await initRepository(setup, { quiet: true });
+				await frameUntil(setup, "the re-init's panel to open", (f) =>
 					f.includes("Init acme/factory"),
 				);
-				await awaitNewKeyHandler(setup, reInitBefore, "the re-init's panel to take the keys");
-				await pressEnterQuiet(
+				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
+				await frameUntil(
 					setup,
 					"the re-init's panel to close",
 					(f) => !f.includes("Init acme/factory"),
 				);
-				await openMessageView(setup);
+				await pressControl(setup, "message", { opens: "Message view" });
 				// The whole confirmation is read where the plane keeps it: the Message
 				// view on F2. The second skip is the re-init's own - the pull request
 				// feed the first init registered now covers that planned source.
-				const reInitLine = await awaitFrame(
+				const reInitLine = await frameUntil(
 					setup,
-					(f) => frameText(f).includes("covered by acme/factory-pull-requests"),
 					"the re-init's own confirmation on the Message view",
+					(f) => frameText(f).includes("covered by acme/factory-pull-requests"),
 				);
 				const reInitText = frameText(reInitLine);
 				expect(reInitText).toContain(
@@ -559,9 +552,9 @@ host = "github.com"
 				// The record keeps the first init's line above the re-init's own, and
 				// its count stands there (ADR 0119): the no-count rule is read on the
 				// fact the re-init itself wrote.
-				const closedOnReInit = await press(
+				await pressControl(setup, "message-close", { closes: "Message view" });
+				const closedOnReInit = await frameUntil(
 					setup,
-					"escape",
 					"the Message view to close on the re-init",
 					(f) => !f.includes("Message view"),
 				);
@@ -787,24 +780,23 @@ pull-request-facts = []
 
 		await withApp(
 			async (setup) => {
-				const boot = await awaitFrame(setup, (f) => f.includes("Tickets"), "the base view");
+				const boot = await frameUntil(setup, "the base view", (f) => f.includes("Tickets"));
 				expect(boot).not.toContain("an open issue");
 
-				const beforeSelect = keyHandlerListeners(setup);
-				const select = await press(setup, "o", "the select list to open", (f) =>
+				await guideKey(setup, "repository-select-open", "o", { quiet: true });
+				const select = await frameUntil(setup, "the select list to open", (f) =>
 					f.includes("acme/beta"),
 				);
-				await awaitNewKeyHandler(setup, beforeSelect, "the select list to take the keys");
 				expect(select).toContain("acme/beta");
 
-				const beforePanel = keyHandlerListeners(setup);
-				const panel = await pressEnterQuiet(setup, "the init panel", (f) =>
+				await pressControl(setup, "select-repository", { quiet: true });
+				const panel = await frameUntil(setup, "the init panel", (f) =>
 					f.includes("Init acme/beta"),
 				);
-				await awaitNewKeyHandler(setup, beforePanel, "the init panel to take the keys");
 				expect(panel).toContain("Pushes to main");
 
-				const settled = await pressEnterQuiet(setup, "the init's result", (f) =>
+				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
+				const settled = await frameUntil(setup, "the init's result", (f) =>
 					f.includes("acme/beta: pushed"),
 				);
 				expect(messageRowOf(settled)).toContain("pushed");
@@ -816,10 +808,10 @@ pull-request-facts = []
 
 				// The running plane polls them now: the feed it just registered
 				// carries its ticket into the list without a restart.
-				const listed = await awaitFrame(
+				const listed = await frameUntil(
 					setup,
-					(f) => f.includes("an open issue"),
 					"the registered feed's ticket to reach the list",
+					(f) => f.includes("an open issue"),
 				);
 				expect(listed).toContain("an open issue");
 				expect(listed).toContain("acme/beta");

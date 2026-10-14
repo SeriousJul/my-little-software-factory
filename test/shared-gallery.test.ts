@@ -21,9 +21,11 @@ import {
 	STANDALONE_THEME,
 } from "../src/components/shared/theme.ts";
 import {
-	awaitFrame,
 	cellColors,
+	fieldKey,
 	frameText,
+	frameUntil,
+	pasteText,
 	rgb,
 	roleColor,
 	rowSpans,
@@ -33,6 +35,7 @@ import {
 	settle,
 	spanColorAt,
 	spanColors,
+	typeText,
 } from "./app-harness.ts";
 
 /** A `[r, g, b]` triplet as the `#rrggbb` the contrast formula reads. */
@@ -156,11 +159,9 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("Model openai/gpt-5.1");
 		expect(frame).toContain("Context 272000");
 		expect(frame).toContain("Initial input");
-		setup.mockInput.pressTab();
-		const next = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes("invalid"),
-			"the next example's state word",
+		fieldKey(setup, "tab");
+		const next = await frameUntil(setup, "the next example's state word", (f) =>
+			frameText(f).includes("invalid"),
 		);
 		expect(frameText(next)).toContain("Error: Context: 0 is not a positive whole number");
 		expect(frameText(next)).toContain("(unavailable)");
@@ -273,7 +274,7 @@ describe("the shared control gallery", () => {
 	// names the keys the list answers to.
 	test("the repository select example holds its search, its rows, its mark, and its note", async () => {
 		const setup = await gallery("repository-select", 120, 34);
-		const frame = await awaitFrame(setup, (f) => f.includes("jul/notes"), "the list rows");
+		const frame = await frameUntil(setup, "the list rows", (f) => f.includes("jul/notes"));
 		expect(frame).toContain("Init a repository");
 		expect(frame).toContain("acme/factory");
 		expect(frame).toContain("acme/billing");
@@ -307,20 +308,16 @@ describe("the shared control gallery", () => {
 		// 0111), so the walk opens where the longest state the walk reaches
 		// stands whole.
 		const setup = await gallery("repository-select", 96);
-		await awaitFrame(setup, (f) => f.includes("jul/notes"), "the list rows");
+		await frameUntil(setup, "the list rows", (f) => f.includes("jul/notes"));
 		// Tab is the gallery's own key: the panel sits with its dispatch
 		// inactive, so the walk passes it the way it passes every other example.
-		setup.mockInput.pressTab();
-		await awaitFrame(
-			setup,
-			(f) => f.includes(stateLine("delete-key")),
-			"the Delete key example's state word",
+		fieldKey(setup, "tab");
+		await frameUntil(setup, "the Delete key example's state word", (f) =>
+			f.includes(stateLine("delete-key")),
 		);
-		setup.mockInput.pressTab();
-		await awaitFrame(
-			setup,
-			(f) => f.includes(stateLine("recovery-panel-opening")),
-			"the next example's state word",
+		fieldKey(setup, "tab");
+		await frameUntil(setup, "the next example's state word", (f) =>
+			f.includes(stateLine("recovery-panel-opening")),
 		);
 	});
 
@@ -329,18 +326,14 @@ describe("the shared control gallery", () => {
 		// The example opens on a value the Agent's list holds, with the search
 		// under it empty, because that is the row an operator meets first.
 		expect(frameText(setup.captureCharFrame())).toContain("Model openai/gpt-5.1 ");
-		await setup.mockInput.typeText("codex");
-		const matched = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes("Model openai/gpt-5.1-codex"),
-			"the search to name its match",
+		await typeText(setup, "codex");
+		const matched = await frameUntil(setup, "the search to name its match", (f) =>
+			frameText(f).includes("Model openai/gpt-5.1-codex"),
 		);
 		expect(frameText(matched)).toContain("Search codex");
-		await setup.mockInput.typeText("q");
-		const failed = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes("no match"),
-			"the no-match word",
+		await typeText(setup, "q");
+		const failed = await frameUntil(setup, "the no-match word", (f) =>
+			frameText(f).includes("no match"),
 		);
 		// The failed query stays on screen: an operator can see what to correct.
 		expect(frameText(failed)).toContain("codexq");
@@ -351,18 +344,14 @@ describe("the shared control gallery", () => {
 		const setup = await gallery("fields");
 		// The Context field is the focused one in this example, so a paste that
 		// carries a letter reaches it and nowhere else.
-		await setup.mockInput.pasteBracketedText("1e3");
-		const refused = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes("digits only"),
-			"the paste refusal",
+		await pasteText(setup, "1e3");
+		const refused = await frameUntil(setup, "the paste refusal", (f) =>
+			frameText(f).includes("digits only"),
 		);
 		expect(frameText(refused)).toContain("Context 272000");
-		await setup.mockInput.pressBackspace();
-		const edited = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes("Context 27200"),
-			"the field to take an edit",
+		await fieldKey(setup, "backspace");
+		const edited = await frameUntil(setup, "the field to take an edit", (f) =>
+			frameText(f).includes("Context 27200"),
 		);
 		expect(frameText(edited)).toContain("Context 27200");
 	});
@@ -371,27 +360,25 @@ describe("the shared control gallery", () => {
 		const setup = await gallery("search");
 		// The search is a Text field: a selection in it offers the same Copy
 		// control a selection in any other shared field offers.
-		await setup.mockInput.typeText("copy me");
-		setup.mockInput.pressKey("HOME");
+		await typeText(setup, "copy me");
+		fieldKey(setup, "home");
 		for (let step = 0; step < 4; step += 1) {
-			setup.mockInput.pressArrow("right", { shift: true });
+			fieldKey(setup, "shift+right");
 			await settle(setup);
 		}
 		expect(frameText(setup.captureCharFrame())).toContain("F3 Copy selection");
-		setup.mockInput.pressKey("F3");
-		const told = await awaitFrame(
-			setup,
-			(f) => /Copied|refused|Nothing is selected/u.test(frameText(f)),
-			"the copy result on the Message line",
+		fieldKey(setup, "F3");
+		const told = await frameUntil(setup, "the copy result on the Message line", (f) =>
+			/Copied|refused|Nothing is selected/u.test(frameText(f)),
 		);
 		expect(frameText(told)).toMatch(/Copied 4 cells|refused the copied text/u);
 		// A plain arrow collapses the selection, and the control leaves the bar:
 		// the bar never names a Copy that would find nothing to copy.
-		setup.mockInput.pressArrow("right");
-		const collapsed = await awaitFrame(
+		fieldKey(setup, "right");
+		const collapsed = await frameUntil(
 			setup,
-			(f) => !frameText(f).includes("F3 Copy selection"),
 			"the Copy control to leave the bar",
+			(f) => !frameText(f).includes("F3 Copy selection"),
 		);
 		expect(frameText(collapsed)).not.toContain("F3 Copy selection");
 	});
@@ -400,13 +387,11 @@ describe("the shared control gallery", () => {
 		const setup = await gallery("fields");
 		// Leave an edit and a selection in the focused field first: closing the
 		// guide must return exactly this field, not a fresh one.
-		await setup.mockInput.typeText("5");
+		await typeText(setup, "5");
 		await settle(setup);
-		setup.mockInput.pressKey("F1");
-		const guide = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes("Key guide"),
-			"the Key guide",
+		fieldKey(setup, "F1");
+		const guide = await frameUntil(setup, "the Key guide", (f) =>
+			frameText(f).includes("Key guide"),
 		);
 		const guideText = frameText(guide);
 		expect(guideText).toContain("Form field");
@@ -422,11 +407,11 @@ describe("the shared control gallery", () => {
 		await setup.flush();
 		// F1 in the guide closes it: the close control outranks the Help that
 		// would only reopen it.
-		setup.mockInput.pressKey("F1");
-		const back = await awaitFrame(
+		fieldKey(setup, "F1");
+		const back = await frameUntil(
 			setup,
-			(f) => !frameText(f).includes("Key guide"),
 			"the example under the guide",
+			(f) => !frameText(f).includes("Key guide"),
 		);
 		const backText = frameText(back);
 		expect(backText).toContain("Context 2720005");
@@ -702,19 +687,17 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("❯ review the auth design");
 		expect(frame).toContain("▸ bash: npm test");
 
-		setup.mockInput.pressTab();
-		const fallback = await awaitFrame(
+		fieldKey(setup, "tab");
+		const fallback = await frameUntil(
 			setup,
-			(f) => frameText(f).includes("Agent view:") && frameText(f).includes("src/auth.ts"),
 			"the Agent view fallback",
+			(f) => frameText(f).includes("Agent view:") && frameText(f).includes("src/auth.ts"),
 		);
 		expect(frameText(fallback)).toContain("Agent: reading src/auth.ts");
 		expect(frameText(fallback)).not.toContain("Session view:");
-		setup.mockInput.pressTab();
-		const captured = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes("Captured history:"),
-			"the Captured history fallback",
+		fieldKey(setup, "tab");
+		const captured = await frameUntil(setup, "the Captured history fallback", (f) =>
+			frameText(f).includes("Captured history:"),
 		);
 		expect(frameText(captured)).toContain("review the auth design");
 	});
@@ -740,12 +723,10 @@ describe("the shared control gallery", () => {
 		const rows = rowsOf(setup.captureCharFrame());
 		expect(rows.some((row) => row.includes("❯ Handoff: task-02"))).toBe(true);
 
-		setup.mockInput.pressTab();
+		fieldKey(setup, "tab");
 		frame = frameText(
-			await awaitFrame(
-				setup,
-				(f) => frameText(f).includes(stateLine("decision-region-pinned")),
-				"the pinned example",
+			await frameUntil(setup, "the pinned example", (f) =>
+				frameText(f).includes(stateLine("decision-region-pinned")),
 			),
 		);
 		// The short log fills none of the pane's window, and the region shows
@@ -756,12 +737,10 @@ describe("the shared control gallery", () => {
 		expect(frame).not.toContain("task-05");
 		expect(frame).toContain("❯ Close");
 
-		setup.mockInput.pressTab();
+		fieldKey(setup, "tab");
 		frame = frameText(
-			await awaitFrame(
-				setup,
-				(f) => frameText(f).includes(stateLine("decision-log-empty")),
-				"the empty log example",
+			await frameUntil(setup, "the empty log example", (f) =>
+				frameText(f).includes(stateLine("decision-log-empty")),
 			),
 		);
 		// The empty log states its reason inside the pane, and the pane keeps
@@ -784,31 +763,25 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("stop the Agent; the work stays");
 		expect(frame).toContain("Cancel");
 
-		setup.mockInput.pressTab();
-		const working = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes(stateLine("close-dialog-working")),
-			"the working state",
+		fieldKey(setup, "tab");
+		const working = await frameUntil(setup, "the working state", (f) =>
+			frameText(f).includes(stateLine("close-dialog-working")),
 		);
 		frame = frameText(working);
 		expect(frame).toContain("The Agent is working");
 		expect(frame).toContain("Close stops the Agent. The worktree and branch stay.");
 
-		setup.mockInput.pressTab();
-		const awaiting = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes(stateLine("close-dialog-awaiting-response")),
-			"the awaiting-response state",
+		fieldKey(setup, "tab");
+		const awaiting = await frameUntil(setup, "the awaiting-response state", (f) =>
+			frameText(f).includes(stateLine("close-dialog-awaiting-response")),
 		);
 		frame = frameText(awaiting);
 		expect(frame).toContain("The Agent has answered and is waiting for your reply");
 		expect(frame).toContain("Close stops the Agent. The worktree and branch stay.");
 
-		setup.mockInput.pressTab();
-		const closing = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes(stateLine("close-panel-closing")),
-			"the closing recovery panel",
+		fieldKey(setup, "tab");
+		const closing = await frameUntil(setup, "the closing recovery panel", (f) =>
+			frameText(f).includes(stateLine("close-panel-closing")),
 		);
 		frame = frameText(closing);
 		expect(frame).toContain("Close Consultation c1c1c1c1");
@@ -833,11 +806,9 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("stop the Agent; the close confirms");
 		expect(frame).not.toContain("Replace");
 
-		setup.mockInput.pressTab();
-		const missing = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes(stateLine("recovery-panel-missing")),
-			"the missing recovery panel",
+		fieldKey(setup, "tab");
+		const missing = await frameUntil(setup, "the missing recovery panel", (f) =>
+			frameText(f).includes(stateLine("recovery-panel-missing")),
 		);
 		frame = frameText(missing);
 		expect(frame).toContain("The Agent is gone from its pane.");
@@ -846,11 +817,9 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("launch a linked Consultation here");
 		expect(frame).toContain("close the record; nothing to stop");
 
-		setup.mockInput.pressTab();
-		const failed = await awaitFrame(
-			setup,
-			(f) => frameText(f).includes(stateLine("recovery-panel-failed")),
-			"the failed recovery panel",
+		fieldKey(setup, "tab");
+		const failed = await frameUntil(setup, "the failed recovery panel", (f) =>
+			frameText(f).includes(stateLine("recovery-panel-failed")),
 		);
 		frame = frameText(failed);
 		expect(frame).toContain("The launch failed before the Agent ran.");
@@ -998,7 +967,7 @@ describe("the shared control gallery", () => {
 		const setup = await gallery("fields", 80, 20, () => {
 			closed += 1;
 		});
-		setup.mockInput.pressEscape();
+		fieldKey(setup, "escape");
 		await settle(setup);
 		expect(closed).toBe(1);
 	});

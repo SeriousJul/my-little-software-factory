@@ -22,14 +22,12 @@ import { join } from "node:path";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import {
 	detailPaneText,
-	focusDetail,
-	focusList,
 	frameText,
-	press,
-	pressEnterQuiet,
+	pressControl,
 	rowsOf,
 	settle,
 	sleep,
+	toggleAutoHandoff,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -277,7 +275,7 @@ describe("the held turn through the real app flow", () => {
 				// The detail pane: the warning stands above the
 				// last-completion line and says what the control plane
 				// refuses to do.
-				await focusDetail(setup);
+				await pressControl(setup, "detail", { quiet: true });
 				const detail = detailPaneText(setup.captureCharFrame());
 				const causeAt = detail.indexOf(`Turn ended failed: ${QUOTA}`);
 				const refuseAt = detail.indexOf("no automatic decision runs on this turn");
@@ -292,22 +290,15 @@ describe("the held turn through the real app flow", () => {
 				// mode the factory decides a settled turn, so the operator
 				// turns auto-handoff off first: the held turn then answers
 				// to the operator's own Decide.
-				await focusList(setup);
-				await press(setup, "a", "auto-handoff to turn off", (f) => f.includes("● manual"));
-				const modal = await pressEnterQuiet(setup, "the decision modal", (f) =>
-					f.includes("Decision:"),
-				);
+				await pressControl(setup, "tickets", { quiet: true });
+				await toggleAutoHandoff(setup, { shows: "● manual" });
+				const modal = await pressControl(setup, "decide-completion", { opens: "Decision:" });
 				const modalRows = rowsOf(modal);
 				const holdAt = modalRows.findIndex((row) => row.includes("Turn ended failed"));
 				const closeAt = modalRows.findIndex((row) => row.includes("Close"));
 				expect(holdAt).toBeGreaterThanOrEqual(0);
 				expect(closeAt).toBeGreaterThan(holdAt);
-				await press(
-					setup,
-					"escape",
-					"the decision modal to close",
-					(f) => !f.includes("Decision:"),
-				);
+				await pressControl(setup, "cancel-action", { closes: "Decision:" });
 
 				// The same held header below sixty columns: the narrow form on
 				// the header's own full-width row. The brake's lamp never gives
