@@ -57,6 +57,7 @@ import {
 	workspaceListJson,
 	worktreeCreateJson,
 } from "./fake-runner.ts";
+import { appOn } from "./panel-app.ts";
 import { plane } from "./plane.ts";
 
 /**
@@ -470,16 +471,16 @@ async function pressEnterToHandoff(setup: Setup): Promise<string> {
 
 describe("the Enter handoff", () => {
 	test("hands the selected ticket off with the defaults, settles it, and records the command sequence", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-		const checkout = join(planeRecord.home, "src", "billing");
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
+				const checkout = join(planeRecord.home, "src", "billing");
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -513,25 +514,25 @@ describe("the Enter handoff", () => {
 					`herdr agent prompt ${firstAgent} ${firstPrompt}`,
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a failed herdr step leaves the ticket open and shows the reason", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: (fake, home2) => {
-				stubBillingCheckout(fake, home2);
-				fake.set("herdr", ["workspace", "list"], {
-					code: 1,
-					stderr: "error: herdr is not running\n",
-				});
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: (fake, home2) => {
+					stubBillingCheckout(fake, home2);
+					fake.set("herdr", ["workspace", "list"], {
+						code: 1,
+						stderr: "error: herdr is not running\n",
+					});
+				},
 			},
-		});
-		const _runner = planeRecord.fakeRunner;
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -550,22 +551,21 @@ describe("the Enter handoff", () => {
 				expect(row).toContain("[implement]");
 				expect(detailPaneText(frame)).toContain("Suggested task type: implement");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("an unreadable workspace list fails with a reason and creates no workspace", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: (fake, home2) => {
-				stubBillingCheckout(fake, home2);
-				fake.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: (fake, home2) => {
+					stubBillingCheckout(fake, home2);
+					fake.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
+				},
 			},
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -583,37 +583,36 @@ describe("the Enter handoff", () => {
 				// unreadable is not "no workspace".
 				expectNoCommand(runner.commands(), "workspace create");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
 	test("enter on a non-open ticket opens the Live view and issues no handoff command", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: (fake, home2) => {
-				const _path = join(home2, "src", "billing");
-				fake.set(
-					"herdr",
-					[
-						"agent",
-						"read",
-						"pane-implement",
-						"--lines",
-						"200",
-						"--source",
-						"recent-unwrapped",
-						"--format",
-						"text",
-					],
-					{ stdout: "the agent is editing the layout math\n" },
-				);
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: (fake, home2) => {
+					const _path = join(home2, "src", "billing");
+					fake.set(
+						"herdr",
+						[
+							"agent",
+							"read",
+							"pane-implement",
+							"--lines",
+							"200",
+							"--source",
+							"recent-unwrapped",
+							"--format",
+							"text",
+						],
+						{ stdout: "the agent is editing the layout math\n" },
+					);
+				},
 			},
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				// The second sample ticket is already handed off; the standing's
@@ -650,21 +649,18 @@ describe("the Enter handoff", () => {
 				expect(refused).not.toContain("❯ Agent");
 				expect(messageRowOf(refused)).toContain("only an open Ticket can be handed off");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a filesystem error on the clone path shows the reason and keeps the app alive", async () => {
 		// A file where ~/src should be: mkdir cannot create the clone parent.
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const runner = planeRecord.fakeRunner;
-		rmSync(join(planeRecord.home, "src"), { recursive: true, force: true });
-		writeFileSync(join(planeRecord.home, "src"), "a file");
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -714,23 +710,26 @@ describe("the Enter handoff", () => {
 				);
 				expect(selectedRow(moved)).toContain("Fix pan drift");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
+			(planeRecord) => {
+				rmSync(join(planeRecord.home, "src"), { recursive: true, force: true });
+				writeFileSync(join(planeRecord.home, "src"), "a file");
+			},
 		);
 	}, 20000);
 });
 
 describe("the in-flight guard", () => {
 	test("a second Enter while a handoff is in flight starts nothing", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			runner: (fake) => new DelayedRunner(fake, 400, 3),
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				runner: (fake) => new DelayedRunner(fake, 400, 3),
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -752,20 +751,19 @@ describe("the in-flight guard", () => {
 				// The status cleared after the handoff settled.
 				expect(frame).not.toContain("handing off");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("two Enters in one tick start one handoff", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			runner: (fake) => new DelayedRunner(fake, 400, 3),
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				runner: (fake) => new DelayedRunner(fake, 400, 3),
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -784,22 +782,21 @@ describe("the in-flight guard", () => {
 					),
 				).toHaveLength(1);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("j and k keep moving the selection while a handoff is in flight", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			// Every early command is delayed a beat, so the flight outlives the
-			// walk: whichever command the start waits on, the run itself
-			// stretches over the window the walk needs.
-			runner: (fake) => new DelayedRunner(fake, 800, 12),
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				// Every early command is delayed a beat, so the flight outlives the
+				// walk: whichever command the start waits on, the run itself
+				// stretches over the window the walk needs.
+				runner: (fake) => new DelayedRunner(fake, 800, 12),
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -833,26 +830,26 @@ describe("the in-flight guard", () => {
 				// The first handoff still settles, on the ticket it started on.
 				await frameUntil(setup, "the handoff to settle", handoffSettled);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	}, 20000);
 });
 
 describe("the override panel", () => {
 	test("`e` opens the panel, right changes options, enter confirms the handoff", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: (fake, home2) => {
-				const p = stubBillingCheckout(fake, home2);
-				stubWorktreeHandoff(fake, p);
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: (fake, home2) => {
+					const p = stubBillingCheckout(fake, home2);
+					stubWorktreeHandoff(fake, p);
+				},
 			},
-		});
-		const runner = planeRecord.fakeRunner;
-		const checkout = join(planeRecord.home, "src", "billing");
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
+				const checkout = join(planeRecord.home, "src", "billing");
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -905,22 +902,21 @@ describe("the override panel", () => {
 					`herdr agent start ${firstAgent} --kind codex --pane pane-wt`,
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("an override that differs from the suggestion rides on the handoff", async () => {
 		// The delay holds the pipeline before agent start, so the in-flight
 		// handoff is visible while it is not yet recorded.
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			runner: (fake) => new DelayedRunner(fake, 800, 3),
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				runner: (fake) => new DelayedRunner(fake, 800, 3),
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -968,26 +964,26 @@ describe("the override panel", () => {
 				const fixPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.fix), first);
 				expect(runner.commands()).toContain(`herdr agent prompt ${firstAgent} ${fixPrompt}`);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a failure after agent start keeps the actual task type on the row", async () => {
 		const fixPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.fix), first);
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: (fake, home2) => {
-				liveBillingCheckout(fake, home2);
-				fake.set("herdr", ["agent", "prompt", firstAgent, fixPrompt], {
-					code: 1,
-					stderr: "error: the agent is not accepting prompts\n",
-				});
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: (fake, home2) => {
+					liveBillingCheckout(fake, home2);
+					fake.set("herdr", ["agent", "prompt", firstAgent, fixPrompt], {
+						code: 1,
+						stderr: "error: the agent is not accepting prompts\n",
+					});
+				},
 			},
-		});
-		const _runner = planeRecord.fakeRunner;
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1016,18 +1012,18 @@ describe("the override panel", () => {
 				// The prompt failure still shows its reason.
 				expect(frame).toContain("the prompt failed");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("an unset thinking row cycles to the first option on the first right", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1058,7 +1054,7 @@ describe("the override panel", () => {
 				);
 				expect(cycled).not.toContain("(unset)");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
@@ -1082,15 +1078,14 @@ describe("the override panel", () => {
 				},
 			},
 		};
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1130,7 +1125,7 @@ describe("the override panel", () => {
 					"272000",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
@@ -1176,17 +1171,16 @@ describe("the override panel", () => {
 			},
 			handoffCount: 1,
 		};
-		const planeRecord = await plane({
-			groupingAxis: "none",
-			config: config,
-			sources: [{ config: billingSource, tickets: [secondCycle] }],
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				groupingAxis: "none",
+				config: config,
+				sources: [{ config: billingSource, tickets: [secondCycle] }],
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				const detail = detailPaneText(setup.captureCharFrame());
@@ -1220,7 +1214,7 @@ describe("the override panel", () => {
 					"pane-1",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
@@ -1237,33 +1231,33 @@ describe("the override panel", () => {
 				},
 			},
 		};
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-			commands: (fake, home2) => {
-				liveBillingCheckout(fake, home2);
-				fake.set(
-					"herdr",
-					[
-						"agent",
-						"start",
-						firstAgent,
-						"--kind",
-						"codex",
-						"--pane",
-						"pane-1",
-						"--",
-						"--model",
-						"rejected-model",
-					],
-					{ code: 1, stderr: "error: codex rejected model rejected-model\n" },
-				);
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+				commands: (fake, home2) => {
+					liveBillingCheckout(fake, home2);
+					fake.set(
+						"herdr",
+						[
+							"agent",
+							"start",
+							firstAgent,
+							"--kind",
+							"codex",
+							"--pane",
+							"pane-1",
+							"--",
+							"--model",
+							"rejected-model",
+						],
+						{ code: 1, stderr: "error: codex rejected model rejected-model\n" },
+					);
+				},
 			},
-		});
-		const _runner = planeRecord.fakeRunner;
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1274,7 +1268,7 @@ describe("the override panel", () => {
 				expect(selectedRow(frame)).toContain("[open]");
 				expect(detailPaneText(frame)).toContain("Agent: codex");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
@@ -1287,15 +1281,14 @@ describe("the override panel", () => {
 				implement: { ...BASE_CONFIG.taskTypes.implement, model: "task-model" },
 			},
 		};
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1322,7 +1315,7 @@ describe("the override panel", () => {
 				);
 				expect(start?.args).not.toContain("--model");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
@@ -1335,15 +1328,14 @@ describe("the override panel", () => {
 				implement: { ...BASE_CONFIG.taskTypes.implement, thinking: "low" },
 			},
 		};
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1368,7 +1360,7 @@ describe("the override panel", () => {
 				);
 				expect(start?.args).not.toContain("--thinking");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
@@ -1385,15 +1377,14 @@ describe("the override panel", () => {
 				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "cursor" },
 			},
 		};
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1412,7 +1403,7 @@ describe("the override panel", () => {
 					`git -C ${probePath} remote get-url origin`,
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
@@ -1427,15 +1418,14 @@ describe("the override panel", () => {
 				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "cursor" },
 			},
 		};
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1487,7 +1477,7 @@ describe("the override panel", () => {
 					"pane-1",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
@@ -1505,17 +1495,16 @@ describe("the override panel", () => {
 			},
 		};
 		const mergeTicket: Ticket = { ...first, labels: ["merge"] };
-		const planeRecord = await plane({
-			groupingAxis: "none",
-			config: config,
-			sources: [{ config: billingSource, tickets: [mergeTicket] }],
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				groupingAxis: "none",
+				config: config,
+				sources: [{ config: billingSource, tickets: [mergeTicket] }],
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await guideKey(setup, "override", "e", { quiet: true });
@@ -1541,7 +1530,7 @@ describe("the override panel", () => {
 					"low",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("switching the task type re-derives an untouched thinking row", async () => {
@@ -1558,17 +1547,17 @@ describe("the override panel", () => {
 			},
 		};
 		const mergeTicket: Ticket = { ...first, labels: ["merge"] };
-		const planeRecord = await plane({
-			groupingAxis: "none",
-			config: config,
-			sources: [{ config: billingSource, tickets: [mergeTicket] }],
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				groupingAxis: "none",
+				config: config,
+				sources: [{ config: billingSource, tickets: [mergeTicket] }],
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await guideKey(setup, "override", "e", { quiet: true });
@@ -1608,7 +1597,7 @@ describe("the override panel", () => {
 				);
 				expect(frameText(back)).toContain("Thinking low");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a touched thinking row survives a task type switch", async () => {
@@ -1625,17 +1614,16 @@ describe("the override panel", () => {
 			},
 		};
 		const mergeTicket: Ticket = { ...first, labels: ["merge"] };
-		const planeRecord = await plane({
-			groupingAxis: "none",
-			config: config,
-			sources: [{ config: billingSource, tickets: [mergeTicket] }],
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				groupingAxis: "none",
+				config: config,
+				sources: [{ config: billingSource, tickets: [mergeTicket] }],
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await guideKey(setup, "override", "e", { quiet: true });
@@ -1675,7 +1663,7 @@ describe("the override panel", () => {
 				expect(start?.args).toContain("--thinking");
 				expect(start?.args).toContain("medium");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	}, 20000);
 	test("the settings rows hide for an agent that does not map them", async () => {
@@ -1685,14 +1673,14 @@ describe("the override panel", () => {
 			maxParallelAgents: 3,
 			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 		};
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1718,18 +1706,18 @@ describe("the override panel", () => {
 				expect(frame).toContain("Environment");
 				expect(frame).toContain("Task type");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("the task type row cycles through the task types and wraps", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1761,18 +1749,18 @@ describe("the override panel", () => {
 				);
 				expect(frameText(wrapped)).toContain("Task type implement");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("the container environment is never offered", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1795,18 +1783,17 @@ describe("the override panel", () => {
 				);
 				expect(wrapped).not.toContain("container");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("escape cancels the panel without a handoff", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1829,7 +1816,7 @@ describe("the override panel", () => {
 					),
 				).toHaveLength(2);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
@@ -1854,15 +1841,15 @@ describe("the override panel", () => {
 				},
 			},
 		};
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1902,20 +1889,19 @@ describe("the override panel", () => {
 				);
 				expect(frameText(back)).toContain("Context 655368");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
 	test("the Context row carries the profile's count and takes digits only", async () => {
-		const planeRecord = await plane({
-			config: contextProfileConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: contextProfileConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -1977,20 +1963,19 @@ describe("the override panel", () => {
 					"model_context_window=1232720005",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	}, 20000);
 
 	test("the Context row folds a typed count to one spelling, the way the config does", async () => {
-		const planeRecord = await plane({
-			config: contextProfileConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: contextProfileConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2021,20 +2006,19 @@ describe("the override panel", () => {
 				);
 				expect(start?.args).toContain("model_context_window=7");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	}, 20000);
 
 	test("a Context row that holds no count says so, and the handoff refuses it", async () => {
-		const planeRecord = await plane({
-			config: contextProfileConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: contextProfileConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2076,7 +2060,7 @@ describe("the override panel", () => {
 				// boot probe of the checkout stands.
 				expect(handoffCommands(runner)).toHaveLength(2);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	}, 20000);
 
@@ -2094,15 +2078,14 @@ describe("the override panel", () => {
 				},
 			},
 		};
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2180,7 +2163,7 @@ describe("the override panel", () => {
 					"pane-1",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	}, 20000);
 
@@ -2201,15 +2184,14 @@ describe("the override panel", () => {
 				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "pi", thinking: "minimal" },
 			},
 		};
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2298,20 +2280,19 @@ describe("the override panel", () => {
 					"pane-1",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 
 	test("the free-text model row accepts typed text and confirms the handoff", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2345,18 +2326,18 @@ describe("the override panel", () => {
 					"gpt-5.6",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("the selected text field has a focused background and bright text", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2384,19 +2365,18 @@ describe("the override panel", () => {
 				expect(valueSpan?.fg.toInts().slice(0, 3)).toEqual(rgb(roleColor("text")));
 				expect(valueSpan?.bg.toInts().slice(0, 3)).toEqual(rgb(roleColor("active_row_bg")));
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a non-ASCII model name types into the free-text row and rides on the start", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2434,18 +2414,18 @@ describe("the override panel", () => {
 					"gpt-é",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a move and a cycle in the same tick act on the moved row", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2463,18 +2443,18 @@ describe("the override panel", () => {
 				expect(frameText(frame)).not.toContain("Agent codex");
 				expect(frame).toContain("❯ Environment");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("Tab and Shift+Tab move from list and text rows", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2506,49 +2486,49 @@ describe("the override panel", () => {
 				fieldKey(setup, "tab");
 				await frameUntil(setup, "Tab from a text row", (f) => f.includes("❯ Thinking"));
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a sibling clone hands off, warns, and writes the mapping back to the config file", async () => {
 		// The convention path holds a different repository.
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			commands: (fake, home2) => {
-				// No repos entry: the handoff resolves the convention path,
-				// which is the side of the mapping rule that heals.
-				const path = join(home2, "src", "billing");
-				const sibling = join(home2, "src", "billing_1");
-				mkdirSync(path, { recursive: true });
-				fake.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-				fake.set("git", ["-C", path, "remote", "get-url", "origin"], {
-					stdout: "https://github.com/acme/portal.git\n",
-				});
-				fake.set("git", ["clone", "https://github.com/acme/billing.git", sibling], {
-					code: 0,
-				});
-				fake.set("git", ["-C", sibling, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-				fake.set("git", ["-C", sibling, "remote", "get-url", "origin"], {
-					stdout: "https://github.com/acme/billing.git\n",
-				});
-				fake.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-				fake.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
-					stdout: workspaceCreateJson("ws-1"),
-				});
-				fake.set(
-					"herdr",
-					["tab", "create", "--workspace", "ws-1", "--cwd", sibling, "--no-focus"],
-					{
-						stdout: tabCreateJson("pane-1"),
-					},
-				);
+		await appOn(
+			{
+				config: seatOpenConfig,
+				commands: (fake, home2) => {
+					// No repos entry: the handoff resolves the convention path,
+					// which is the side of the mapping rule that heals.
+					const path = join(home2, "src", "billing");
+					const sibling = join(home2, "src", "billing_1");
+					mkdirSync(path, { recursive: true });
+					fake.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+					fake.set("git", ["-C", path, "remote", "get-url", "origin"], {
+						stdout: "https://github.com/acme/portal.git\n",
+					});
+					fake.set("git", ["clone", "https://github.com/acme/billing.git", sibling], {
+						code: 0,
+					});
+					fake.set("git", ["-C", sibling, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+					fake.set("git", ["-C", sibling, "remote", "get-url", "origin"], {
+						stdout: "https://github.com/acme/billing.git\n",
+					});
+					fake.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+					fake.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
+						stdout: workspaceCreateJson("ws-1"),
+					});
+					fake.set(
+						"herdr",
+						["tab", "create", "--workspace", "ws-1", "--cwd", sibling, "--no-focus"],
+						{
+							stdout: tabCreateJson("pane-1"),
+						},
+					);
+				},
 			},
-		});
-		const _path = join(planeRecord.home, "src", "billing");
-		const runner = planeRecord.fakeRunner;
-		const sibling = join(planeRecord.home, "src", "billing_1");
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
+				const _path = join(planeRecord.home, "src", "billing");
+				const sibling = join(planeRecord.home, "src", "billing_1");
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2576,22 +2556,21 @@ describe("the override panel", () => {
 				// The handoff ran at the sibling, not the conflicting path.
 				expect(runner.commands()).toContain(`herdr workspace create --cwd ${sibling} --no-focus`);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	}, 20000);
 	test("e opens the Override panel while a handoff is in flight (ADR 0064)", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			// Every early command is delayed a beat, so the flight outlives the
-			// walk, the ask, and the panel: whichever command the start waits on,
-			// the run itself stretches over the window the walk needs.
-			runner: (fake) => new DelayedRunner(fake, 800, 12),
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				// Every early command is delayed a beat, so the flight outlives the
+				// walk, the ask, and the panel: whichever command the start waits on,
+				// the run itself stretches over the window the walk needs.
+				runner: (fake) => new DelayedRunner(fake, 800, 12),
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2638,52 +2617,52 @@ describe("the override panel", () => {
 					messageRowOf(f).includes("started from the Work queue"),
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	}, 20000);
 	test("a failed mapping write-back warns on the Message line", async () => {
 		// The convention path holds a different repository: a sibling clone.
 		// The config file cannot be written: a directory sits at its path.
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			commands: (fake, home2) => {
-				// No repos entry: the handoff resolves the convention path,
-				// which is the side of the mapping rule that heals.
-				const path = join(home2, "src", "billing");
-				const sibling = join(home2, "src", "billing_1");
-				mkdirSync(path, { recursive: true });
-				fake.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-				fake.set("git", ["-C", path, "remote", "get-url", "origin"], {
-					stdout: "https://github.com/acme/portal.git\n",
-				});
-				fake.set("git", ["clone", "https://github.com/acme/billing.git", sibling], {
-					code: 0,
-				});
-				fake.set("git", ["-C", sibling, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-				fake.set("git", ["-C", sibling, "remote", "get-url", "origin"], {
-					stdout: "https://github.com/acme/billing.git\n",
-				});
-				fake.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
-				fake.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
-					stdout: workspaceCreateJson("ws-1"),
-				});
-				fake.set(
-					"herdr",
-					["tab", "create", "--workspace", "ws-1", "--cwd", sibling, "--no-focus"],
-					{
-						stdout: tabCreateJson("pane-1"),
-					},
-				);
+		await appOn(
+			{
+				config: seatOpenConfig,
+				commands: (fake, home2) => {
+					// No repos entry: the handoff resolves the convention path,
+					// which is the side of the mapping rule that heals.
+					const path = join(home2, "src", "billing");
+					const sibling = join(home2, "src", "billing_1");
+					mkdirSync(path, { recursive: true });
+					fake.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+					fake.set("git", ["-C", path, "remote", "get-url", "origin"], {
+						stdout: "https://github.com/acme/portal.git\n",
+					});
+					fake.set("git", ["clone", "https://github.com/acme/billing.git", sibling], {
+						code: 0,
+					});
+					fake.set("git", ["-C", sibling, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+					fake.set("git", ["-C", sibling, "remote", "get-url", "origin"], {
+						stdout: "https://github.com/acme/billing.git\n",
+					});
+					fake.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+					fake.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
+						stdout: workspaceCreateJson("ws-1"),
+					});
+					fake.set(
+						"herdr",
+						["tab", "create", "--workspace", "ws-1", "--cwd", sibling, "--no-focus"],
+						{
+							stdout: tabCreateJson("pane-1"),
+						},
+					);
+				},
 			},
-		});
-		const _path = join(planeRecord.home, "src", "billing");
-		const _runner = planeRecord.fakeRunner;
-		const _sibling = join(planeRecord.home, "src", "billing_1");
-		rmSync(planeRecord.configPath, { force: true });
-		mkdirSync(planeRecord.configPath, { recursive: true });
+			async (setup, planeRecord) => {
+				const _path = join(planeRecord.home, "src", "billing");
+				const _runner = planeRecord.fakeRunner;
+				const _sibling = join(planeRecord.home, "src", "billing_1");
+				rmSync(planeRecord.configPath, { force: true });
+				mkdirSync(planeRecord.configPath, { recursive: true });
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2697,19 +2676,18 @@ describe("the override panel", () => {
 				expect(startingFaceOf(selectedRow(frame))).not.toBeNull();
 				expect(messageRowOf(frame)).toContain("could not persist");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	}, 20000);
 	test("j, k, h, and l type into the selected free-text row", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2748,19 +2726,18 @@ describe("the override panel", () => {
 					"claude",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("the free-text row moves the caret and inserts at it", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2799,19 +2776,18 @@ describe("the override panel", () => {
 					"abcXd",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("the free-text row jumps to the ends with Home and End", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2852,19 +2828,18 @@ describe("the override panel", () => {
 					"YabcdZ",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("the free-text row deletes with backspace and forward delete", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2909,19 +2884,18 @@ describe("the override panel", () => {
 					"bc",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("the free-text row deletes a caret selection", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -2961,19 +2935,18 @@ describe("the override panel", () => {
 					"hel",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("the free-text row undoes with Ctrl+Z and redoes with Ctrl+Y", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -3021,19 +2994,18 @@ describe("the override panel", () => {
 					"hello",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("bracketed paste works in the free-text Model row of a kind with no model list", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -3069,19 +3041,18 @@ describe("the override panel", () => {
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toContain("gpt-5.1-codex");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a bracketed paste is sanitized of ANSI escapes and line breaks", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -3119,18 +3090,18 @@ describe("the override panel", () => {
 					"helloworld",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("pasting at the start, middle, end, and over a selection edits in place", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -3166,21 +3137,21 @@ describe("the override panel", () => {
 				);
 				expect(frameText(frame)).toContain("Model XMabE");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a long free-text value scrolls in its column and hands off whole", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
+				// biome-ignore lint/security/noSecrets: a fixed test fixture, not a credential
+				const longValue = "abcdefghijklmnopqrstuv9876543210";
 
-		// biome-ignore lint/security/noSecrets: a fixed test fixture, not a credential
-		const longValue = "abcdefghijklmnopqrstuv9876543210";
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -3220,18 +3191,18 @@ describe("the override panel", () => {
 					longValue,
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("word deletion removes a word in either direction", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -3258,18 +3229,18 @@ describe("the override panel", () => {
 				);
 				expect(frameText(frame)).toContain("Model (empty - query failed)");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("question mark and m type into a selected free-text row", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -3290,19 +3261,18 @@ describe("the override panel", () => {
 				);
 				expect(frameText(frame)).toContain("Model ?m");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("typing and confirming in one tick hands off the complete value", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -3323,7 +3293,7 @@ describe("the override panel", () => {
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toContain("gpt");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a text draft survives an agent change and terminal resize", async () => {
@@ -3331,14 +3301,14 @@ describe("the override panel", () => {
 			...BASE_CONFIG,
 			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 		};
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -3404,18 +3374,18 @@ describe("the override panel", () => {
 				);
 				expect(frameText(restored)).toContain("Model draft");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a short terminal scrolls the rows to keep the selected one on screen", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				// The list is not drawn below the minimum, so the walk goes
@@ -3445,24 +3415,24 @@ describe("the override panel", () => {
 				expect(frameText(frame)).toContain("❯ Thinking");
 				expect(frameText(frame)).not.toContain("Agent");
 			},
-			{ width: 24, height: 6, plane: planeRecord },
+			(planeRecord) => ({ width: 24, height: 6, plane: planeRecord }),
 		);
 	});
 	test("the shared Action bar documents the list-row controls", async () => {
 		// The canned list makes the Model row a list row, so its guide reads as a
 		// choice row rather than as a text field.
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: (fake, home2) => {
-				const _path = join(home2, "src", "billing");
-				fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: (fake, home2) => {
+					const _path = join(home2, "src", "billing");
+					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+				},
 			},
-		});
-		const _runner = planeRecord.fakeRunner;
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -3507,18 +3477,18 @@ describe("the override panel", () => {
 					"↑↓/jk Move ←→/hl Change ⌫ Clear Enter Hand off Esc Cancel F1 Help",
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 	test("a narrow terminal sizes the panel instead of corrupting rows", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-		});
-		const _runner = planeRecord.fakeRunner;
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
+				const _runner = planeRecord.fakeRunner;
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await blindWalkToFirstOpen(setup);
@@ -3544,10 +3514,14 @@ describe("the override panel", () => {
 				expect(bar).not.toContain("Change");
 				expect(bar).not.toContain("Hand off");
 			},
-			{ width: 30, height: 12, plane: planeRecord },
+			(planeRecord) => ({ width: 30, height: 12, plane: planeRecord }),
 		);
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+			},
+			async (setup, planeRecord) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await blindWalkToFirstOpen(setup);
@@ -3565,7 +3539,7 @@ describe("the override panel", () => {
 				expect(frameText(frame)).not.toContain("Model");
 				expect(frameText(frame)).not.toContain("Thinking");
 			},
-			{ width: 24, height: 7, plane: planeRecord },
+			(planeRecord) => ({ width: 24, height: 7, plane: planeRecord }),
 		);
 	});
 	/**
@@ -3579,22 +3553,21 @@ describe("the override panel", () => {
 		test(`the Model search names the first model that holds its text (${size.width}x${size.height})`, async () => {
 			// The panel keeps the order the agent reported: pi sorts the list itself.
 
-			const planeRecord = await plane({
-				config: seatOpenConfig,
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", [
-						"anthropic/claude-sonnet-4-5",
-						"openai/gpt-5.1",
-						"openai/gpt-5.1-codex",
-					]);
+			await appOn(
+				{
+					config: seatOpenConfig,
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", [
+							"anthropic/claude-sonnet-4-5",
+							"openai/gpt-5.1",
+							"openai/gpt-5.1-codex",
+						]);
+					},
 				},
-			});
-			const runner = planeRecord.fakeRunner;
-
-			await withApp(
-				async (setup) => {
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -3620,26 +3593,25 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("openai/gpt-5.1-codex");
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`a query that matches nothing keeps its text and says so (${size.width}x${size.height})`, async () => {
-			const planeRecord = await plane({
-				config: seatOpenConfig,
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", [
-						"anthropic/claude-sonnet-4-5",
-						"openai/gpt-5.1",
-						"openai/gpt-5.1-codex",
-					]);
+			await appOn(
+				{
+					config: seatOpenConfig,
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", [
+							"anthropic/claude-sonnet-4-5",
+							"openai/gpt-5.1",
+							"openai/gpt-5.1-codex",
+						]);
+					},
 				},
-			});
-			const runner = planeRecord.fakeRunner;
-
-			await withApp(
-				async (setup) => {
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -3679,22 +3651,21 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("openai/gpt-5.1");
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`Delete on an empty search gives the Model back to the agent (${size.width}x${size.height})`, async () => {
-			const planeRecord = await plane({
-				config: seatOpenConfig,
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+			await appOn(
+				{
+					config: seatOpenConfig,
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+					},
 				},
-			});
-			const runner = planeRecord.fakeRunner;
-
-			await withApp(
-				async (setup) => {
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -3718,23 +3689,23 @@ describe("the override panel", () => {
 					// A row the operator cleared names no model: the agent starts on its own.
 					expect(start?.args).not.toContain("--model");
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`an unset Model is not a warning with any available list (${size.width}x${size.height})`, async () => {
 			for (const models of [["anthropic/claude-sonnet-4-5"], []] as const) {
-				const planeRecord = await plane({
-					config: seatOpenConfig,
-					repos: BILLING_REPOS,
-					commands: (fake, home2) => {
-						liveBillingCheckout(fake, home2);
-						fake.setModelList("pi", [...models]);
+				await appOn(
+					{
+						config: seatOpenConfig,
+						repos: BILLING_REPOS,
+						commands: (fake, home2) => {
+							liveBillingCheckout(fake, home2);
+							fake.setModelList("pi", [...models]);
+						},
 					},
-				});
-				const _runner = planeRecord.fakeRunner;
+					async (setup, planeRecord) => {
+						const _runner = planeRecord.fakeRunner;
 
-				await withApp(
-					async (setup) => {
 						planeRecord.settleFirstFetch();
 						await waitSourceHealthy(planeRecord.state);
 						await walkToFirstOpen(setup);
@@ -3749,24 +3720,22 @@ describe("the override panel", () => {
 						expect(frameText(frame)).toContain(expected);
 						expect(spanColors(setup, placeholder)).not.toContainEqual(rgb(roleColor("yellow")));
 					},
-					{ width: size.width, height: size.height, plane: planeRecord },
+					(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 				);
 			}
 		});
 		test(`the Model row holds a loading marker while the control plane fetches the list (${size.width}x${size.height})`, async () => {
-			const planeRecord = await plane({
-				config: seatOpenConfig,
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			await appOn(
+				{
+					config: seatOpenConfig,
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+					},
 				},
-			});
-			const runner = planeRecord.fakeRunner;
-			runner.holdModelLists();
-
-			await withApp(
-				async (setup) => {
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -3801,22 +3770,24 @@ describe("the override panel", () => {
 						frameText(f).includes("anthropic/claude-sonnet-4-5"),
 					);
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
+				(planeRecord) => {
+					planeRecord.fakeRunner.holdModelLists();
+				},
 			);
 		});
 		test(`the Model row says so when the agent reports no models (${size.width}x${size.height})`, async () => {
-			const planeRecord = await plane({
-				config: seatOpenConfig,
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", []);
+			await appOn(
+				{
+					config: seatOpenConfig,
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", []);
+					},
 				},
-			});
-			const runner = planeRecord.fakeRunner;
-
-			await withApp(
-				async (setup) => {
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -3834,7 +3805,7 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).not.toContain("--model");
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`a Model the selected agent cannot run shows in the warning color (${size.width}x${size.height})`, async () => {
@@ -3847,18 +3818,18 @@ describe("the override panel", () => {
 				},
 			};
 
-			const planeRecord = await plane({
-				config: config,
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			await appOn(
+				{
+					config: config,
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+					},
 				},
-			});
-			const _runner = planeRecord.fakeRunner;
+				async (setup, planeRecord) => {
+					const _runner = planeRecord.fakeRunner;
 
-			await withApp(
-				async (setup) => {
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -3885,7 +3856,7 @@ describe("the override panel", () => {
 						rgb(roleColor("text")),
 					]);
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`a Model the config prefilled is not judged while its list loads (${size.width}x${size.height})`, async () => {
@@ -3898,19 +3869,17 @@ describe("the override panel", () => {
 				},
 			};
 
-			const planeRecord = await plane({
-				config: config,
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]);
+			await appOn(
+				{
+					config: config,
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]);
+					},
 				},
-			});
-			const runner = planeRecord.fakeRunner;
-			runner.holdModelLists();
-
-			await withApp(
-				async (setup) => {
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -3945,7 +3914,10 @@ describe("the override panel", () => {
 					// typed letters instead of j and k.
 					expect(frameText(setup.captureCharFrame())).toContain("Type Edit");
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
+				(planeRecord) => {
+					planeRecord.fakeRunner.holdModelLists();
+				},
 			);
 		});
 		test(`a Thinking level the selected agent does not declare shows in the warning color (${size.width}x${size.height})`, async () => {
@@ -3959,18 +3931,18 @@ describe("the override panel", () => {
 				},
 			};
 
-			const planeRecord = await plane({
-				config: config,
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			await appOn(
+				{
+					config: config,
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+					},
 				},
-			});
-			const _runner = planeRecord.fakeRunner;
+				async (setup, planeRecord) => {
+					const _runner = planeRecord.fakeRunner;
 
-			await withApp(
-				async (setup) => {
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -4001,7 +3973,7 @@ describe("the override panel", () => {
 					expect(spanColors(setup, "xhigh")).toEqual([]);
 					expect(spanColors(setup, "minimal")).toEqual([rgb(roleColor("text"))]);
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`switching the agent keeps an untouched Model and queries the new agent's list (${size.width}x${size.height})`, async () => {
@@ -4014,18 +3986,17 @@ describe("the override panel", () => {
 				},
 			};
 
-			const planeRecord = await plane({
-				config: config,
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			await appOn(
+				{
+					config: config,
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+					},
 				},
-			});
-			const runner = planeRecord.fakeRunner;
-
-			await withApp(
-				async (setup) => {
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -4040,7 +4011,7 @@ describe("the override panel", () => {
 					// codex reports no list, so no query runs for it.
 					expect(runner.modelListCalls).toEqual(["pi"]);
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`switching the task type re-derives an untouched Model row (${size.width}x${size.height})`, async () => {
@@ -4058,20 +4029,19 @@ describe("the override panel", () => {
 			};
 			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
 
-			const planeRecord = await plane({
-				groupingAxis: "none",
-				config: config,
-				sources: [{ config: billingSource, tickets: [mergeTicket] }],
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+			await appOn(
+				{
+					groupingAxis: "none",
+					config: config,
+					sources: [{ config: billingSource, tickets: [mergeTicket] }],
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+					},
 				},
-			});
-			const runner = planeRecord.fakeRunner;
-
-			await withApp(
-				async (setup) => {
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await guideKey(setup, "override", "e", { quiet: true });
@@ -4114,7 +4084,7 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("openai/gpt-5.1");
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`a Model wider than its column shows its end and rides on whole (${size.width}x${size.height})`, async () => {
@@ -4123,18 +4093,17 @@ describe("the override panel", () => {
 			const long =
 				"llama-server=http://127.0.0.1:8080/AtomicChat/DeepSeek-V4-Flash-0731-GGUF:IQ1_M_XL";
 
-			const planeRecord = await plane({
-				config: seatOpenConfig,
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", [long, `${long.slice(0, long.length - 1)}2`]);
+			await appOn(
+				{
+					config: seatOpenConfig,
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", [long, `${long.slice(0, long.length - 1)}2`]);
+					},
 				},
-			});
-			const runner = planeRecord.fakeRunner;
-
-			await withApp(
-				async (setup) => {
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -4154,20 +4123,18 @@ describe("the override panel", () => {
 					// The clip is display only: the handoff names the whole value.
 					expect(start?.args).toContain(long);
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`a failed model list query falls the Model row back to free text (${size.width}x${size.height})`, async () => {
-			const planeRecord = await plane({
-				config: seatOpenConfig,
-				repos: BILLING_REPOS,
-				commands: liveBillingCheckout,
-			});
-			const runner = planeRecord.fakeRunner;
-			runner.setModelListFailure("pi", "network unreachable");
-
-			await withApp(
-				async (setup) => {
+			await appOn(
+				{
+					config: seatOpenConfig,
+					repos: BILLING_REPOS,
+					commands: liveBillingCheckout,
+				},
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -4182,21 +4149,23 @@ describe("the override panel", () => {
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					expect(start?.args).toContain("gpt-4o");
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
+				(planeRecord) => {
+					planeRecord.fakeRunner.setModelListFailure("pi", "network unreachable");
+				},
 			);
 		});
 		test(`a Model row the agent's kind cannot list names that cause (${size.width}x${size.height})`, async () => {
 			const config: FactoryConfig = { ...BASE_CONFIG, defaultAgent: "codex" };
 
-			const planeRecord = await plane({
-				config: config,
-				repos: BILLING_REPOS,
-				commands: liveBillingCheckout,
-			});
-			const runner = planeRecord.fakeRunner;
-
-			await withApp(
-				async (setup) => {
+			await appOn(
+				{
+					config: config,
+					repos: BILLING_REPOS,
+					commands: liveBillingCheckout,
+				},
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToFirstOpen(setup);
@@ -4209,7 +4178,7 @@ describe("the override panel", () => {
 					// No query ran for a kind that has no list command.
 					expect(runner.modelListCalls).toEqual([]);
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`a Model the operator typed survives a task type switch (${size.width}x${size.height})`, async () => {
@@ -4227,20 +4196,20 @@ describe("the override panel", () => {
 			};
 			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
 
-			const planeRecord = await plane({
-				groupingAxis: "none",
-				config: config,
-				sources: [{ config: billingSource, tickets: [mergeTicket] }],
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+			await appOn(
+				{
+					groupingAxis: "none",
+					config: config,
+					sources: [{ config: billingSource, tickets: [mergeTicket] }],
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+					},
 				},
-			});
-			const _runner = planeRecord.fakeRunner;
+				async (setup, planeRecord) => {
+					const _runner = planeRecord.fakeRunner;
 
-			await withApp(
-				async (setup) => {
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					// Story 15 for the Model row: a typed value counts as the operator's
@@ -4266,7 +4235,7 @@ describe("the override panel", () => {
 					const backOnModel = await moveToModelRowFromTaskType(setup);
 					expect(frameText(backOnModel)).toContain("Model anthropic/claude-sonnet-4-5");
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`a Model the operator cleared survives a task type switch (${size.width}x${size.height})`, async () => {
@@ -4286,20 +4255,20 @@ describe("the override panel", () => {
 			};
 			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
 
-			const planeRecord = await plane({
-				groupingAxis: "none",
-				config: config,
-				sources: [{ config: billingSource, tickets: [mergeTicket] }],
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+			await appOn(
+				{
+					groupingAxis: "none",
+					config: config,
+					sources: [{ config: billingSource, tickets: [mergeTicket] }],
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+					},
 				},
-			});
-			const _runner = planeRecord.fakeRunner;
+				async (setup, planeRecord) => {
+					const _runner = planeRecord.fakeRunner;
 
-			await withApp(
-				async (setup) => {
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					// Story 15 for the Model row, with clearing as the only touch: the
@@ -4339,7 +4308,7 @@ describe("the override panel", () => {
 					expect(frameText(toMerge)).toContain("Model (unset)");
 					expect(frameText(toMerge)).not.toContain("Model openai/gpt-5.1");
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 		test(`switching the task type re-derives an untouched Agent row (${size.width}x${size.height})`, async () => {
@@ -4357,20 +4326,19 @@ describe("the override panel", () => {
 			};
 			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
 
-			const planeRecord = await plane({
-				groupingAxis: "none",
-				config: config,
-				sources: [{ config: billingSource, tickets: [mergeTicket] }],
-				repos: BILLING_REPOS,
-				commands: (fake, home2) => {
-					liveBillingCheckout(fake, home2);
-					fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			await appOn(
+				{
+					groupingAxis: "none",
+					config: config,
+					sources: [{ config: billingSource, tickets: [mergeTicket] }],
+					repos: BILLING_REPOS,
+					commands: (fake, home2) => {
+						liveBillingCheckout(fake, home2);
+						fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+					},
 				},
-			});
-			const runner = planeRecord.fakeRunner;
-
-			await withApp(
-				async (setup) => {
+				async (setup, planeRecord) => {
+					const runner = planeRecord.fakeRunner;
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					// The merge profile names claude, so the agent row starts there: the
@@ -4436,22 +4404,21 @@ describe("the override panel", () => {
 					// merge names claude, and the row the operator set keeps codex.
 					expect(frameText(toMerge)).toContain("Agent codex");
 				},
-				{ width: size.width, height: size.height, plane: planeRecord },
+				(planeRecord) => ({ width: size.width, height: size.height, plane: planeRecord }),
 			);
 		});
 	}
 	for (const size of PANEL_SIZES) modelListRowScenarios(size);
 	test("the Thinking row offers the selected agent's levels, and backspace clears it", async () => {
 		const config: FactoryConfig = { ...BASE_CONFIG, maxParallelAgents: 3, defaultAgent: "claude" };
-		const planeRecord = await plane({
-			config: config,
-			repos: BILLING_REPOS,
-			commands: liveBillingCheckout,
-		});
-		const runner = planeRecord.fakeRunner;
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{
+				config: config,
+				repos: BILLING_REPOS,
+				commands: liveBillingCheckout,
+			},
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -4488,27 +4455,27 @@ describe("the override panel", () => {
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).not.toContain("--effort");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	}, 20000);
 	test("a failed worktree handoff removes its residue and keeps the ticket open", async () => {
-		const planeRecord = await plane({
-			config: seatOpenConfig,
-			repos: BILLING_REPOS,
-			commands: (fake, home2) => {
-				const path = stubBillingCheckout(fake, home2);
-				stubWorktreeHandoff(fake, path);
-				fake.set("herdr", ["agent", "start", firstAgent, "--kind", "pi", "--pane", "pane-wt"], {
-					code: 1,
-					stderr: "agent name is already used\n",
-				});
+		await appOn(
+			{
+				config: seatOpenConfig,
+				repos: BILLING_REPOS,
+				commands: (fake, home2) => {
+					const path = stubBillingCheckout(fake, home2);
+					stubWorktreeHandoff(fake, path);
+					fake.set("herdr", ["agent", "start", firstAgent, "--kind", "pi", "--pane", "pane-wt"], {
+						code: 1,
+						stderr: "agent name is already used\n",
+					});
+				},
 			},
-		});
-		const runner = planeRecord.fakeRunner;
-		const checkout = join(planeRecord.home, "src", "billing");
+			async (setup, planeRecord) => {
+				const runner = planeRecord.fakeRunner;
+				const checkout = join(planeRecord.home, "src", "billing");
 
-		await withApp(
-			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToFirstOpen(setup);
@@ -4539,7 +4506,7 @@ describe("the override panel", () => {
 					`git -C ${checkout} branch -D factory/${first.externalKey.slice(1)}-${firstSlug}`,
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
+			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
 	});
 });
