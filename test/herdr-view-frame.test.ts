@@ -24,12 +24,13 @@ import { join } from "node:path";
 import type { TicketSourceConfig, TransitionOutcome } from "../src/config.ts";
 import type { EnvironmentKind, FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import {
-	awaitFrame,
+	FRAME_DEADLINE_MS,
 	frameText,
+	frameUntil,
+	guideKey,
 	messageRowOf,
-	press,
-	pressArrow,
-	pressEnterQuiet,
+	pressControl,
+	sleep,
 	WIDTH,
 	waitSourceHealthy,
 	withApp,
@@ -223,17 +224,22 @@ describe("the route close moves no view", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await awaitFrame(setup, (f) => f.includes("[awaiting]"), "the awaiting ticket");
-				await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
-				await pressArrow(setup, "down", "the Goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the route row", (f) =>
+				await frameUntil(setup, "the awaiting ticket", (f) => f.includes("[awaiting]"));
+				await pressControl(setup, "decide-completion", { shows: "Decision:" });
+				await pressControl(setup, "select-action", { via: "↓", shows: "❯ Goto" });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the route row", (f) =>
 					frameText(f).includes("❯ Handoff: implement"),
 				);
 				// The routed handoff started beside the workspace the ask took
 				// down; the egress list is the fact the rule reads.
-				await pressEnterQuiet(setup, "the routed handoff to start", () =>
-					runner.commands().some((c) => c.startsWith("herdr agent prompt")),
-				);
+				await pressControl(setup, "confirm-action", { quiet: true });
+				const startedDeadline = Date.now() + FRAME_DEADLINE_MS - 500;
+				for (;;) {
+					if (runner.commands().some((c) => c.startsWith("herdr agent prompt"))) break;
+					if (Date.now() >= startedDeadline) throw new Error("the routed handoff never started");
+					await sleep(50);
+				}
 				const commands = runner.commands();
 				// The ask takes the settled turn's workspace down, and the
 				// handoff builds its own beside it: the route ran.
@@ -323,23 +329,23 @@ describe("the route close moves no view", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await awaitFrame(setup, (f) => f.includes("[awaiting]"), "the awaiting ticket");
-				await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
-				await pressArrow(setup, "down", "the Goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the route row", (f) =>
+				await frameUntil(setup, "the awaiting ticket", (f) => f.includes("[awaiting]"));
+				await pressControl(setup, "decide-completion", { shows: "Decision:" });
+				await pressControl(setup, "select-action", { via: "↓", shows: "❯ Goto" });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the route row", (f) =>
 					frameText(f).includes("❯ Handoff: implement"),
 				);
 				// The route cannot take a seat: it waits in the Work queue,
 				// and nothing has closed yet.
-				await press(setup, "return", "the route to wait", (f) =>
+				await pressControl(setup, "confirm-action", { quiet: true });
+				await frameUntil(setup, "the route to wait", (f) =>
 					frameText(f).includes("is in the Work queue"),
 				);
 				// The close is the ask's own act, queued as cleanup work, so it
 				// runs while nothing starts (ADR 0046).
-				const waiting = await awaitFrame(
-					setup,
-					() => runner.commands().includes("herdr workspace close ws-1"),
-					"the queued route's close at the ask",
+				const waiting = await frameUntil(setup, "the queued route's close at the ask", () =>
+					runner.commands().includes("herdr workspace close ws-1"),
 				);
 				let commands = runner.commands();
 				expect(commands).toContain("herdr workspace close ws-1");
@@ -351,10 +357,8 @@ describe("the route close moves no view", () => {
 				// takes the item up, and the close with no keypress beside it
 				// still moves nothing.
 				runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-				await awaitFrame(
-					setup,
-					() => runner.commands().some((c) => c.startsWith("herdr agent prompt")),
-					"the freed seat to take the queued route up",
+				await frameUntil(setup, "the freed seat to take the queued route up", () =>
+					runner.commands().some((c) => c.startsWith("herdr agent prompt")),
 				);
 				commands = runner.commands();
 				expect(commands).toContain(`herdr workspace create --cwd ${checkout} --no-focus`);
@@ -396,11 +400,13 @@ describe("the Close cleanup moves no view", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await awaitFrame(setup, (f) => f.includes("missing"), "the in-flight ticket");
-				await press(setup, "delete", "the Close confirmation", (f) =>
+				await frameUntil(setup, "the in-flight ticket", (f) => f.includes("missing"));
+				await guideKey(setup, "consultation-close", "Delete", { quiet: true });
+				await frameUntil(setup, "the Close confirmation", (f) =>
 					f.includes("Close: Add a webhook retry policy"),
 				);
-				const frame = await press(setup, "return", "the close to end the cycle", (f) =>
+				await pressControl(setup, "confirm-action", { quiet: true });
+				const frame = await frameUntil(setup, "the close to end the cycle", (f) =>
 					f.includes("[open]"),
 				);
 				const commands = runner.commands();
@@ -450,18 +456,18 @@ describe("the Close cleanup moves no view", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await awaitFrame(setup, (f) => f.includes("missing"), "the in-flight ticket");
-				await press(setup, "delete", "the Close confirmation", (f) =>
+				await frameUntil(setup, "the in-flight ticket", (f) => f.includes("missing"));
+				await guideKey(setup, "consultation-close", "Delete", { quiet: true });
+				await frameUntil(setup, "the Close confirmation", (f) =>
 					f.includes("Close: Add a webhook retry policy"),
 				);
-				await press(setup, "return", "the close to run", (f) => f.includes("[open]"));
+				await pressControl(setup, "confirm-action", { quiet: true });
+				await frameUntil(setup, "the close to run", (f) => f.includes("[open]"));
 				expect(state.ticketWorkCycle.ticketState(FIRST)).toBe("open");
 				// The refusal line names the failure and herdr's own reason, so
 				// the read takes the wide terminal the status row truncates to.
-				const frame = await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("the close cleanup failed"),
-					"the refusal on the Message line",
+				const frame = await frameUntil(setup, "the refusal on the Message line", (f) =>
+					messageRowOf(f).includes("the close cleanup failed"),
 				);
 				expect(messageRowOf(frame)).toContain("dirty_worktree_requires_force");
 				expect(frame).toContain("leftover");
@@ -527,8 +533,9 @@ describe("Goto stays the one focus move", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await awaitFrame(setup, (f) => f.includes("[awaiting]"), "the awaiting ticket");
-				const frame = await press(setup, "g", "the Goto confirmation", (f) =>
+				await frameUntil(setup, "the awaiting ticket", (f) => f.includes("[awaiting]"));
+				await guideKey(setup, "consultation-goto", "g", { quiet: true });
+				const frame = await frameUntil(setup, "the Goto confirmation", (f) =>
 					messageRowOf(f).includes("focused the agent"),
 				);
 				const commands = runner.commands();
@@ -605,15 +612,19 @@ describe("the environment a handoff builds stays out of the view", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await awaitFrame(setup, (f) => f.includes("[open]"), "the open ticket");
+				await frameUntil(setup, "the open ticket", (f) => f.includes("[open]"));
 				// The boot read settles on the seeded snapshot; wait for its
 				// health to stand before the handoff, so the claim's
 				// actionability gate reads the settle, not the loading it left.
 				await waitSourceHealthy(state);
 				// Enter hands the row under the cursor off with the defaults.
-				await pressEnterQuiet(setup, "the handoff to run", () =>
-					runner.commands().some((c) => c.startsWith("herdr agent prompt")),
-				);
+				await pressControl(setup, "handoff", { quiet: true });
+				const ranDeadline = Date.now() + FRAME_DEADLINE_MS - 500;
+				for (;;) {
+					if (runner.commands().some((c) => c.startsWith("herdr agent prompt"))) break;
+					if (Date.now() >= ranDeadline) throw new Error("the handoff never ran");
+					await sleep(50);
+				}
 				const commands = runner.commands();
 				// The build created its workspace and its tab asking for no
 				// focus, and sent no focus command afterwards (story 11).

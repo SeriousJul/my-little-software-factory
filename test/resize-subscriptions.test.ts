@@ -12,9 +12,10 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type AppSetup,
+	frameUntil,
 	HEIGHT,
 	markerRowOf,
-	press,
+	pressControl,
 	settle,
 	sleep,
 	WIDTH,
@@ -54,9 +55,12 @@ async function settledListeners(setup: AppSetup): Promise<number> {
  * awaiting Ticket, and each press moves one row.
  */
 async function toFirstOpenTicket(setup: AppSetup): Promise<void> {
-	await press(setup, "j", "the running Ticket", (f) => markerRowOf(f) === 4);
-	await press(setup, "j", "the handed-off Ticket", (f) => markerRowOf(f) === 5);
-	await press(setup, "j", "the first open Ticket", (f) => markerRowOf(f) === 6);
+	await pressControl(setup, "move-list", { via: "j", quiet: true });
+	await frameUntil(setup, "the running Ticket", (f) => markerRowOf(f) === 4);
+	await pressControl(setup, "move-list", { via: "j", quiet: true });
+	await frameUntil(setup, "the handed-off Ticket", (f) => markerRowOf(f) === 5);
+	await pressControl(setup, "move-list", { via: "j", quiet: true });
+	await frameUntil(setup, "the first open Ticket", (f) => markerRowOf(f) === 6);
 }
 
 describe("the renderer's resize listeners", () => {
@@ -71,9 +75,9 @@ describe("the renderer's resize listeners", () => {
 				expect(base).toBeGreaterThan(0);
 
 				// The Key guide over the base frame: one component, one listener.
-				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				expect(await settledListeners(setup)).toBe(base + 1);
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
 				await settle(setup);
 				expect(await settledListeners(setup)).toBe(base);
 
@@ -81,9 +85,9 @@ describe("the renderer's resize listeners", () => {
 				// hands off an open Ticket, so the walk moves off the live rows
 				// to the open band first.
 				await toFirstOpenTicket(setup);
-				await press(setup, "e", "the override panel", (f) => f.includes("❯ Agent"));
+				await pressControl(setup, "override", { opens: "❯ Agent" });
 				expect(await settledListeners(setup)).toBe(base + 1);
-				await press(setup, "escape", "the panel to close", (f) => !f.includes("❯ Agent"));
+				await pressControl(setup, "cancel", { closes: "❯ Agent" });
 				await settle(setup);
 				expect(await settledListeners(setup)).toBe(base);
 
@@ -91,20 +95,23 @@ describe("the renderer's resize listeners", () => {
 				// open decision, over the base frame. The decision modal opens
 				// on the awaiting Ticket, so the walk climbs back up the live
 				// rows it moved down, and Decide opens the modal.
-				await press(setup, "k", "the handed-off Ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "k", "the running Ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "k", "the awaiting Ticket", (f) => markerRowOf(f) === 3);
-				await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
+				await pressControl(setup, "move-list", { via: "k", quiet: true });
+				await frameUntil(setup, "the handed-off Ticket", (f) => markerRowOf(f) === 5);
+				await pressControl(setup, "move-list", { via: "k", quiet: true });
+				await frameUntil(setup, "the running Ticket", (f) => markerRowOf(f) === 4);
+				await pressControl(setup, "move-list", { via: "k", quiet: true });
+				await frameUntil(setup, "the awaiting Ticket", (f) => markerRowOf(f) === 3);
+				await pressControl(setup, "decide-completion", { opens: "Decision:" });
 				expect(await settledListeners(setup)).toBe(base + 1);
-				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				const deepest = await settledListeners(setup);
 				expect(deepest).toBe(base + 2);
 				// Node warns at an eleventh listener of one emitter, and the
 				// warning lands in the frame the operator is reading.
 				expect(deepest).toBeLessThan(10);
 
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
-				await press(setup, "escape", "the decision to close", (f) => !f.includes("Decision:"));
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
+				await pressControl(setup, "cancel-action", { closes: "Decision:" });
 				await settle(setup);
 				expect(await settledListeners(setup)).toBe(base);
 			},
