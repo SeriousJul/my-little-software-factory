@@ -34,6 +34,7 @@ const OWNED_SURFACES = [
 	"test/decision-modal.test.ts",
 	"test/desktop-notification.test.ts",
 	"test/frame-rig.test.ts",
+	"test/handoff-frame.test.ts",
 	"test/herdr-view-frame.test.ts",
 	"test/ignored-ticket.test.ts",
 	"test/key-guide.test.ts",

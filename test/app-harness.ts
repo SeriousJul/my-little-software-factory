@@ -2721,6 +2721,8 @@ export type FieldKey =
 	| "escape"
 	| "enter"
 	| "tab"
+	| "shift+tab"
+	| "ctrl+delete"
 	| "space"
 	| `F${number}`;
 
@@ -2756,7 +2758,7 @@ export function fieldKey(setup: Setup, key: FieldKey): void {
 			input.pressKey("END");
 			return;
 		case "DELETE":
-			input.pressKey("DELETE");
+			input.pressKey("DELETE", mods);
 			return;
 		case "BACKSPACE":
 			input.pressBackspace(mods);
@@ -2768,7 +2770,7 @@ export function fieldKey(setup: Setup, key: FieldKey): void {
 			input.pressEnter();
 			return;
 		case "TAB":
-			input.pressTab();
+			input.pressTab(mods);
 			return;
 		case "SPACE":
 			input.pressKey(" ");
@@ -2786,7 +2788,7 @@ export function fieldKey(setup: Setup, key: FieldKey): void {
 		return;
 	}
 	throw new Error(
-		`the frame rig cannot send "${key}" to a field: name a field-editing key (an arrow, Home, End, Delete, Backspace, Escape, Enter, Tab, Space, a Ctrl plus a letter, or a function key); the field's characters go through \`typeText\``,
+		`the frame rig cannot send "${key}" to a field: name a field-editing key (an arrow, Home, End, Delete, Backspace, Escape, Enter, Tab, Space, a Ctrl plus a letter, or a function key; Ctrl+Delete and Shift+Tab ride the same names); the field's characters go through \`typeText\``,
 	);
 }
 
