@@ -281,7 +281,9 @@ the world, the way the world leaves the GitHub side unmodelled.
 | The `agent_session` and `session_id` fields of a 0.8.2 `agent list` with an Agent integration installed | no integration was installed in the isolated run | Incomplete: the world's session shape is unverified against a 0.8.2 answer (drift 7) |
 | The seven frame suites' move onto the world | the plane-boot migration (#366) re-landed them on the pin table; their herdr and git answers stand on the fake command runner's pins again, and their move onto the world needs a per-test rework of their standings, its own step | Incomplete, recorded in the migration table above |
 | The screen-reader path of the surfaces the suites touch | not verified in this branch's scope | Incomplete |
-| The machine state beside the full suite | the full `bun run test` runs on the merged tree as this branch's push gate, with the plane's own processes live | Pending this branch's gate run: the numbers land in the paragraph below the table when the run answers |
+| The machine state beside the full suite | the full `bun run test` ran on the merged tree as this branch's push gate, with the plane's own processes live | 3443 pass, 0 fail, 156 files, in 69.29 seconds with `bun run test`, on a machine with 32 cores, a load of 1.39 beside the run, and no other test process running. `bun run lint`, `bun run typecheck`, `bun run audit`, and `bun run docs:build` stood green beside it |
 
-The full `bun run test` for this branch's push gate runs on the merged tree
-when the branch pushes; its result stands beside this record when it lands.
+The push gate for this change ran on the merged tree after the rebase
+onto `origin/main`: the four checks and the documentation build all stood
+green, and the full suite passed with no red case, so the branch pushed
+beside the record that stands above.
