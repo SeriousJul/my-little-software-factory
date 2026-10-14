@@ -34,6 +34,7 @@ const OWNED_SURFACES = [
 	"test/main-view-frame.test.ts",
 	"test/message-line.test.ts",
 	"test/missing-modal.test.ts",
+	"test/placement-panel.test.ts",
 	"test/ticket-scroll-frame.test.ts",
 	"test/theme-frame.test.ts",
 	"test/work-queue-frame.test.ts",
