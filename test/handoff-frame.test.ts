@@ -481,7 +481,7 @@ async function pressEnterToHandoff(setup: Setup): Promise<string> {
  * is healthy, and the selection reached the open row, where the override
  * key opens the panel.
  */
-async function openPanel(setup: Setup, planeRecord: Plane): Promise<void> {
+async function panelOn(setup: Setup, planeRecord: Plane): Promise<void> {
 	planeRecord.settleFirstFetch();
 	await waitSourceHealthy(planeRecord.state);
 	await walkToFirstOpen(setup);
@@ -947,7 +947,7 @@ describe("the override panel", () => {
 				const runner = planeRecord.fakeRunner;
 				const checkout = join(planeRecord.home, "src", "billing");
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				const opened = await settle(setup);
 				// The panel covers the app: the ticket list is not visible.
 				expect(opened).not.toContain("[open]");
@@ -1113,7 +1113,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				// Move to the Thinking row (Agent, Environment, Task type, Model, Thinking).
 				await guideKey(setup, "move-list", "j", { quiet: true });
 				await frameUntil(setup, "the row selection to move on", (f) => f.includes("❯ Environment"));
@@ -1368,7 +1368,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await guideKey(setup, "move-list", "j", { quiet: true });
 				await frameUntil(setup, "the Environment row", (f) => f.includes("❯ Environment"));
 				await guideKey(setup, "move-list", "j", { quiet: true });
@@ -1405,7 +1405,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await guideKey(setup, "move-list", "j", { quiet: true });
 				await frameUntil(setup, "the Environment row", (f) => f.includes("❯ Environment"));
 				await guideKey(setup, "move-list", "j", { quiet: true });
@@ -1486,7 +1486,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				const opened = await settle(setup);
 				// The row is not hidden: the value needs a row to be cleared in, and
 				// it states in words why the Agent cannot take it, so the warning
@@ -1702,7 +1702,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				// pi maps both settings: both rows are offered.
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				await frameUntil(setup, "the agent to become codex", (f) =>
@@ -1736,7 +1736,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await guideKey(setup, "move-list", "j", { quiet: true });
 				await frameUntil(setup, "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -1776,7 +1776,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				// Move to the Environment row and cycle through every offered value.
 				await guideKey(setup, "move-list", "j", { quiet: true });
 				await frameUntil(setup, "the row selection to move to the environment", (f) =>
@@ -1806,7 +1806,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				await frameUntil(setup, "the agent to change", (f) => f.includes("codex"));
 				await pressControl(setup, "cancel", { quiet: true });
@@ -1859,7 +1859,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				const opened = await settle(setup);
 				expect(frameText(opened)).toContain("Context 272000");
 				// Cycle the Task type row: the untouched Context row takes the
@@ -1908,7 +1908,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				const opened = await settle(setup);
 				// The profile names the room and its agent maps it, so the row is
 				// there and holds the profile's count from the first frame.
@@ -1979,7 +1979,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await selectContextRow(setup);
 				// The profile's own count goes first, so the digits below are the
 				// only ones the row can hold: a frame that still carried them could
@@ -2019,7 +2019,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await selectContextRow(setup);
 				// The caret sits at the row's end, where the last key landed, so the
 				// deletes have to start at its other end. The empty row below is
@@ -2083,7 +2083,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				const opened = await settle(setup);
 				// The row is there because the value needs a row to be cleared in,
 				// and it warns because the chosen agent cannot carry the count.
@@ -2287,7 +2287,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				// Move to the Model row (Agent, Environment, Task type, then Model).
 				await guideKey(setup, "move-list", "j", { quiet: true });
 				await frameUntil(setup, "the row selection to move to the environment", (f) =>
@@ -2317,7 +2317,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await guideKey(setup, "move-list", "j", { quiet: true });
 				await frameUntil(setup, "the row selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2353,7 +2353,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await guideKey(setup, "move-list", "j", { quiet: true });
 				await frameUntil(setup, "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2387,7 +2387,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				// Both keys are queued before a render: the key parser delivers
 				// them in one tick, where a render-closure row would still
 				// point at the Agent row.
@@ -2413,7 +2413,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				// Both directions work on a list row.
 				fieldKey(setup, "tab");
 				await frameUntil(setup, "Tab to move down", (f) => f.includes("❯ Environment"));
@@ -2631,7 +2631,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await guideKey(setup, "move-list", "j", { quiet: true });
 				await frameUntil(setup, "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -2666,7 +2666,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				// A left arrow moves the caret one cell in, so the next typed
 				// character lands before the last one, not after it.
@@ -2692,7 +2692,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				await typeText(setup, "abcd");
 				// Home puts the caret at the start, so the next character lands
@@ -2720,7 +2720,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				await typeText(setup, "abcd");
 				// Backspace removes the character before the caret.
@@ -2752,7 +2752,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				await typeText(setup, "hello");
 				// Shift+left twice selects the last two characters, then
@@ -2779,7 +2779,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				const isShort = (f: string) =>
 					frameText(f).includes("Model hell ") && !frameText(f).includes("Model hello");
@@ -2814,7 +2814,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				// codex is an agent kind that reports no Model list, so its Model row
 				// stays the standard free-text field (ADR 0010).
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
@@ -2858,7 +2858,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				// The paste carries an ANSI color and a line break. The field
 				// keeps only the plain text: the color and the break are gone.
@@ -2883,7 +2883,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				await typeText(setup, "ab");
 				await fieldKey(setup, "home");
@@ -2921,7 +2921,7 @@ describe("the override panel", () => {
 				// biome-ignore lint/security/noSecrets: a fixed test fixture, not a credential
 				const longValue = "abcdefghijklmnopqrstuv9876543210";
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				// The value is wider than the column. The row keeps one line and
 				// scrolls the caret into view, showing the tail of the value.
@@ -2960,7 +2960,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				await typeText(setup, "hello world");
 				fieldKey(setup, "ctrl+backspace");
@@ -2986,7 +2986,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				await typeText(setup, "?m");
 				const frame = await frameUntil(setup, "the typed punctuation", (f) =>
@@ -3006,7 +3006,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				await typeText(setup, "gpt");
 				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
@@ -3030,7 +3030,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const _runner = planeRecord.fakeRunner;
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToModelRow(setup);
 				await typeText(setup, "draft");
 				await frameUntil(setup, "the draft text", (f) => frameText(f).includes("Model draft"));
@@ -3268,7 +3268,7 @@ describe("the override panel", () => {
 				},
 				async (setup, planeRecord) => {
 					const runner = planeRecord.fakeRunner;
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					expect(runner.modelListCalls).toEqual(["pi"]);
 					await moveToModelRow(setup);
 					// The task type names no model, so the row starts unset and the
@@ -3309,7 +3309,7 @@ describe("the override panel", () => {
 				},
 				async (setup, planeRecord) => {
 					const runner = planeRecord.fakeRunner;
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					await moveToModelRow(setup);
 					await typeModelSearch(setup, "gpt-5.1");
 					await frameUntil(setup, "the first match", (f) =>
@@ -3360,7 +3360,7 @@ describe("the override panel", () => {
 				},
 				async (setup, planeRecord) => {
 					const runner = planeRecord.fakeRunner;
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					await moveToModelRow(setup);
 					await typeModelSearch(setup, "gpt");
 					await frameUntil(setup, "the matched model", (f) =>
@@ -3397,7 +3397,7 @@ describe("the override panel", () => {
 					async (setup, planeRecord) => {
 						const _runner = planeRecord.fakeRunner;
 
-						await openPanel(setup, planeRecord);
+						await panelOn(setup, planeRecord);
 						const placeholder = models.length > 0 ? "(unset)" : "(no models available)";
 						const expected = `Model ${placeholder}`;
 						const frame = await frameUntil(
@@ -3424,7 +3424,7 @@ describe("the override panel", () => {
 				},
 				async (setup, planeRecord) => {
 					const runner = planeRecord.fakeRunner;
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					const opened = await settle(setup);
 					expect(frameText(opened)).toContain("Model (loading...)");
 					await moveToModelRow(setup);
@@ -3473,7 +3473,7 @@ describe("the override panel", () => {
 				},
 				async (setup, planeRecord) => {
 					const runner = planeRecord.fakeRunner;
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					const opened = await settle(setup);
 					expect(frameText(opened)).toContain("Model (no models available)");
 					await moveToModelRow(setup);
@@ -3505,7 +3505,7 @@ describe("the override panel", () => {
 				async (setup, planeRecord) => {
 					const _runner = planeRecord.fakeRunner;
 
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					const opened = await settle(setup);
 					// The task type names a model the agent's own list does not hold:
 					// the handoff would fail on it, so the row warns before it can, and
@@ -3545,7 +3545,7 @@ describe("the override panel", () => {
 				},
 				async (setup, planeRecord) => {
 					const runner = planeRecord.fakeRunner;
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					const opened = await settle(setup);
 					expect(runner.modelListCalls).toEqual(["pi"]);
 					// The row holds the config's own value. It is not judged: the list it
@@ -3597,7 +3597,7 @@ describe("the override panel", () => {
 				async (setup, planeRecord) => {
 					const _runner = planeRecord.fakeRunner;
 
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					const opened = await settle(setup);
 					expect(frameText(opened)).toContain("Thinking xhigh");
 					expect(paintedIn(setup, "xhigh", rgb(roleColor("text")))).toBe(true);
@@ -3641,7 +3641,7 @@ describe("the override panel", () => {
 				},
 				async (setup, planeRecord) => {
 					const runner = planeRecord.fakeRunner;
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					// Each setting resolves on its own chain: the agent row is the only
 					// thing cycling it changes, so the task type's model rides on.
 					await guideKey(setup, "cycle-choice", "→", { quiet: true });
@@ -3732,7 +3732,7 @@ describe("the override panel", () => {
 				},
 				async (setup, planeRecord) => {
 					const runner = planeRecord.fakeRunner;
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					await moveToModelRow(setup);
 					await typeModelSearch(setup, "IQ1_M_XL");
 					const shown = await frameUntil(setup, "the long model to show its tail", (f) =>
@@ -3760,7 +3760,7 @@ describe("the override panel", () => {
 				},
 				async (setup, planeRecord) => {
 					const runner = planeRecord.fakeRunner;
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					const onModel = await moveToModelRow(setup);
 					// The fallback keeps the whole input: the caret and the editing keys,
 					// and the empty field names the cause, so a kind that reports no
@@ -3788,7 +3788,7 @@ describe("the override panel", () => {
 				},
 				async (setup, planeRecord) => {
 					const runner = planeRecord.fakeRunner;
-					await openPanel(setup, planeRecord);
+					await panelOn(setup, planeRecord);
 					const onModel = await moveToModelRow(setup);
 					// The row is free text for the same reason the query failure makes it
 					// free text, and the empty field says which of the two it is.
@@ -3999,7 +3999,7 @@ describe("the override panel", () => {
 			},
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await moveToThinkingRow(setup);
 				expect(frameText(setup.captureCharFrame())).toContain("Thinking (unset)");
 				// claude declares low through max, in that order: its row starts on
@@ -4053,7 +4053,7 @@ describe("the override panel", () => {
 				const runner = planeRecord.fakeRunner;
 				const checkout = join(planeRecord.home, "src", "billing");
 
-				await openPanel(setup, planeRecord);
+				await panelOn(setup, planeRecord);
 				await guideKey(setup, "move-list", "j", { quiet: true });
 				await frameUntil(setup, "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
