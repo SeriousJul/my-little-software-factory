@@ -5,9 +5,13 @@
  * the auto dispatch of open tickets.
  *
  * Every test boots the real app with a real SQLite state seeded through the
- * state API, a fake ticket source, a fake command runner, and a pinned
- * poll interval, so the observation loop and the handoff pipeline run
- * without a herdr session or a source clock.
+ * state API, a fake ticket source, a pinned poll interval, and the Stub
+ * herdr world: the fixture builds the world's standing from the ticket's
+ * shape, its environment, and the agents and pane contents the test names,
+ * and the egress answers herdr and git from it. The GitHub side the world
+ * does not hold stays pinned on the suite's FakeRunner beside the world,
+ * which the egress routes every other command to, so the observation loop
+ * and the handoff pipeline run without a herdr session or a source clock.
  */
 
 import { Database } from "bun:sqlite";
@@ -56,13 +60,19 @@ import { DEFAULT_TICKET_TITLE, fetchedTicket } from "./fact-fixtures.ts";
 import { FakeRunner, herdrFocusCommands } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner as gateOnRunner } from "./gated-runner.ts";
-import type {
-	WorldBranchDescription,
-	WorldCheckoutDescription,
-	WorldPaneDescription,
-	WorldTabDescription,
-	WorldWorkspaceDescription,
-	WorldWorktreeDescription,
+import {
+	type HerdrWorldDescription,
+	type StubHerdrWorld,
+	stubHerdrWorld,
+	type WorldAgentDescription,
+	type WorldBranchDescription,
+	type WorldCheckoutDescription,
+	type WorldEgress,
+	type WorldPaneDescription,
+	type WorldTabDescription,
+	type WorldWorkspaceDescription,
+	type WorldWorktreeDescription,
+	worldEgress,
 } from "./herdr-world.ts";
 
 /** A checkout the standing names with its branches and worktrees held. */
@@ -71,14 +81,6 @@ type StandingCheckout = WorldCheckoutDescription & {
 	worktrees: WorldWorktreeDescription[];
 };
 
-import {
-	type HerdrWorldDescription,
-	type StubHerdrWorld,
-	stubHerdrWorld,
-	type WorldAgentDescription,
-	type WorldEgress,
-	worldEgress,
-} from "./herdr-world.ts";
 import { type Plane, plane, reopenState } from "./plane.ts";
 import { infoLine, type RecordedLine, recordLogger } from "./record-logger.ts";
 

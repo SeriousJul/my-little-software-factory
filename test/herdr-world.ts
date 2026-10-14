@@ -1635,7 +1635,9 @@ export function worldEgress(world: CommandRunner, fallback: CommandRunner): Worl
 				return result;
 			},
 			(error: unknown) => {
-				call.settled = true;
+				// A raised command has not answered: like the world's own record
+				// and the fake runner's, it stays in the call list and out of the
+				// settled list.
 				running -= 1;
 				throw error;
 			},

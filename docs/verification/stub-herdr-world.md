@@ -4,8 +4,9 @@ Status: the world module and its suite pass on the unit layer. The suite
 measures the world's answers to the plane's own command shapes, its stateful
 transitions, its refusals for the commands it does not hold, its recording
 shape, and the closed surface. The migration has moved the checkout
-verification and eight of the nine files that held a local copy of it onto the
-world; the ninth, the auto-mode suite, is held on the pin table (below). The
+verification and all nine files that held a local copy of it onto the world;
+the last of them, the auto-mode suite, moved with the per-test rework of its
+standings and its GitHub pins (issue #375). The
 Consultation launch then stood on the world, and the Agent interaction's text
 and key sends reached the world's own pane, so the tests read what the pane
 received from its send records instead of the commands that carried the
@@ -83,7 +84,7 @@ walk records the real answers and the world is checked against them.
 | --- | --- | --- | --- |
 | The checkout verification | the Consultation operations | its local `stubCheckout` copy | Moved |
 | The checkout verification | the Action bar, the Consultation frame, the Handoff frame, the Key guide, the Live view, the Message line, the Starting face | their seven local `stubCheckout` copies stood on the world, and the plane-boot migration re-landed them on the pin table | Re-landed on the pin table by #366: those seven suites boot from the Seeded plane's total record, and the checkout stands on the fake command runner's git pins again |
-| The checkout verification | the auto-mode suite | its `stubCheckout` copy | Held on the pin table |
+| The checkout verification | the auto-mode suite | its `stubCheckout` copy and its local launch builders | Moved: each test's standing builds the world from the ticket's shape, its environment, and the agents and pane contents the test names, and the egress answers herdr and git from the world; the GitHub side the world does not hold stays pinned on the suite's fallback runner (issue #375) |
 | The live-worktree Handoff | the Starting face and the Handoff frame's live-worktree Handoff tests | their `stubLiveHandoff` builders stood on the world, and the plane-boot migration re-landed them on the pin table | Re-landed on the pin table by #366 |
 | The live-worktree Handoff | the Handoff frame's worktree Handoff tests and its pin-table tests | - | Out of this flow: the worktree Handoff is the next flow, and the pin-table tests stay |
 | The worktree Handoff and its Worktree base read | the Handoff frame's worktree Handoff tests | its `stubWorktreeHandoff` builder stood on the world, and the plane-boot migration re-landed it on the pin table | Re-landed on the pin table by #366 |
@@ -95,21 +96,22 @@ walk records the real answers and the world is checked against them.
 | The Consultation launch, live conflict side and the remaining worktree tests | the Consultation operations' live-conflict tests and its worktree failure, leftover, serialize, and start-line tests | `stubLiveLaunch`, `stubWorktreeLaunch`, `stubOpening`, and the pre-seeded `worktreeLaunchWorld` and `liveLaunchWorld` standings | Moved: the conflict tests stand `liveConflictWorld` (the operator's workspace holds the checkout, and the operator's own Agent works in its pane), and the conflicts' identities come from the world's own `agent list`. The one pin each failure test keeps is the one herdr answer the world cannot give: a raw-SHA worktree base (the world checks a base against ref names), a create refusal the plane reads and acts on, or the Agent start failure whose cleanup the test measures. The serialize stands both sides on the world: the close's standing is the worktree workspace, its tab and pane, and its Agent. The start-line and the Work queue dispatch stand `worktreeLaunchStanding`, and the world's own launch builds each record's environment |
 | The Plane action merge and the Repository init | none: the Plane action merge's command-sequence tests and the Repository init's git writes stay on the pin table | - | The command is the subject: the merge's `commit-tree`, `update-ref`, and `push` sequence, and the init's commit stream, are pinned in full, so the pin table is the right adapter and the world is not. The world's own git write side (the same shapes) stands and is tested in the world's suite, so the plane's git writes are answered there whenever a flow's subject is the behaviour, not the command |
 
-The auto-mode suite is held because its tests' subjects are the auto dispatch,
-the Decision modal, the route, and the leftover environment, not the checkout
-verification. Their pinned launch sequences name the same handles the world
-would close and re-create, and their settled tickets write their labels through
-the GitHub side, which the world does not hold. Moving them onto the world
-needs a per-test rework of their standings and their GitHub pins, and that
-rework is its own step, recorded here rather than folded into the checkout
-verification's change.
+The auto-mode suite moved onto the world as its own step (issue #375): the
+per-test rework the hold named. Each test's standing now builds the world's
+description from the ticket's shape, its environment, and the agents and pane
+contents the test names, and the plane's herdr and git egress routes through
+the world. The suite's `stubCheckout` copy and its local launch builders are
+deleted, and a test that verifies a herdr refusal the world does not hold
+stands it on the world's own `set` override. The GitHub side the world does
+not hold stays pinned: the settled tickets' `gh` reads and writes, and the
+desktop notifications, fall through to the suite's fallback runner beside the
+world, the way the world leaves the GitHub side unmodelled.
 
 ## Not measured
 
 | Check | Why it could not run | Recorded as |
 | --- | --- | --- |
 | The answer-shape tracing to a recorded herdr 0.8.2 answer | it needs a live herdr binary to record the real answers; the contributor instructions keep the automated suite at the unit layer | Incomplete, with the shape table above as the acceptance target |
-| The auto-mode suite's move onto the world | its pinned flows need a per-test rework that is its own step | Incomplete, recorded in the migration table above |
 | The seven frame suites' move onto the world | the plane-boot migration (#366) re-landed them on the pin table; their herdr and git answers stand on the fake command runner's pins again, and their move onto the world needs a per-test rework of their standings, its own step | Incomplete, recorded in the migration table above |
 | The screen-reader path of the surfaces the suites touch | not verified in this branch's scope | Incomplete |
 | The machine state beside the full suite | the full `bun run test` ran on this branch's heads with the plane's own processes live | The gate run for this change passed with no red case on the head rebased onto the Seeded plane (#378): 3415 pass, 0 fail, 155 files, in 65.67 seconds with `bun run test`; the pushed head, which adds #391's frame-rig rework, passed its gate beside it: 3428 pass, 0 fail, 155 files, in 65.62 seconds, on a machine with 32 cores and no other test process running. The run before both, on the tree before the rebase, stood red on one case this change itself made: the dotfiles test recorded the old test-dup baseline, and the baseline rewrite moved it. The test now records the rewritten value, and the rerun beside it stood green |
