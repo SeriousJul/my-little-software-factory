@@ -25,10 +25,11 @@
  * unchanged and every shared "this run did not issue that command" claim keeps
  * its teeth.
  *
- * No answer shape is traced to a recorded real herdr answer yet: the shapes
- * derive from the plane's own readers, whose CLI contract the Handoff
- * contract suite pins, and the verification record holds the trace to a
- * recorded answer as the open acceptance target (issue #376).
+ * The answer shapes trace to recorded real answers: the herdr shapes to a
+ * recorded herdr 0.8.2 answer, and the git shapes to a recorded git answer,
+ * with the drifts between a world answer and its recorded answer recorded
+ * beside them (the answer-shape tracing in the verification record, issue
+ * #376). A shape the tracing could not measure stands unverified there.
  */
 import type {
 	CommandOptions,
