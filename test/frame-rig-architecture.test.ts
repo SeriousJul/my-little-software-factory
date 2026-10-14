@@ -33,6 +33,7 @@ const OWNED_SURFACES = [
 	"test/consultation-launcher.test.ts",
 	"test/decision-modal.test.ts",
 	"test/frame-rig.test.ts",
+	"test/ignored-ticket.test.ts",
 	"test/key-guide.test.ts",
 	"test/main-view-frame.test.ts",
 	"test/message-line.test.ts",
