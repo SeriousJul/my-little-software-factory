@@ -28,6 +28,7 @@ import { existsSync, readFileSync } from "node:fs";
  */
 const OWNED_SURFACES = [
 	"test/action-bar.test.ts",
+	"test/consultation-launcher-editing.test.ts",
 	"test/consultation-launcher.test.ts",
 	"test/decision-modal.test.ts",
 	"test/frame-rig.test.ts",

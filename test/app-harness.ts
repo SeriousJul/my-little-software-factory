@@ -2749,9 +2749,10 @@ export function fieldKey(setup: Setup, key: FieldKey): void {
 		return;
 	}
 	// The Ctrl plus a letter rows: undo, redo, and select all in the field's
-	// editor, which the plane dispatches off the terminal's own modifiers.
+	// editor, which the plane dispatches off the terminal's own modifiers. The
+	// mock resolves the base key name with the modifier, never the alias.
 	if (mods.ctrl && /^[a-z]$/.test(base)) {
-		input.pressKey(key, mods);
+		input.pressKey(base, mods);
 		return;
 	}
 	throw new Error(
