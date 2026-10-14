@@ -29,6 +29,7 @@ import type { FactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import {
+	type AppBootFields,
 	type AppSetup,
 	actionBarRowOf,
 	detailPaneText,
@@ -616,6 +617,29 @@ async function planeOf(app: SeededApp, runner?: CommandRunner): Promise<Plane> {
 }
 
 /**
+ * Boot the app on the plane the seeded app stands up, and run the body on
+ * the boot it answers. The body receives the rig's setup and the plane
+ * record beside it; the test's boot fields name the frame without the
+ * record, and the helper adds the record to them. The record comes back to
+ * the test, which decides whether the plane closes or keeps running.
+ */
+async function appOnSeeded(
+	app: SeededApp,
+	fn: (setup: AppSetup, planeRecord: Plane) => Promise<void>,
+	extra: Partial<AppBootFields>,
+	runner?: CommandRunner,
+): Promise<Plane> {
+	const record = await planeOf(app, runner);
+	await withApp(
+		async (setup) => {
+			await fn(setup, record);
+		},
+		{ ...extra, plane: record },
+	);
+	return record;
+}
+
+/**
  * A seeded app and the plane it boots from.
  *
  * The world answers the boot's agent list with the standing it holds, so the
@@ -726,9 +750,9 @@ describe("the mode cell and the a key", () => {
 		const app = seededApp("open");
 		const before = readFileSync(app.configPath, "utf8");
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
 				await toggleAutoHandoff(setup, { quiet: true });
@@ -742,7 +766,7 @@ describe("the mode cell and the a key", () => {
 				expect(app.state.handoff.autoHandoffMode()).toBe(false);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -750,16 +774,15 @@ describe("the mode cell and the a key", () => {
 	test("a restart on the same state file finds the mode where the operator left it", async () => {
 		const app = seededApp("open");
 		const statePath = app.state.path;
-		const planeRecord = await planeOf(app);
-
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
 				await toggleAutoHandoff(setup, { quiet: true });
 				await frameUntil(setup, "auto on", (f) => f.includes("○ auto 0/2"));
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		// The end of the run: the plane closes its state file, as a restart or a
 		// dev reload does.
@@ -812,9 +835,9 @@ describe("the mode cell and the a key", () => {
 	test("the a key leaves the mode flip in the record", async () => {
 		const app = seededApp("open");
 		const lines: RecordedLine[] = [];
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
 				await toggleAutoHandoff(setup, { quiet: true });
@@ -830,13 +853,7 @@ describe("the mode cell and the a key", () => {
 					infoLine("mode: auto-handoff is off"),
 				]);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: LOOP_60S,
-				logger: recordLogger(lines),
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S, logger: recordLogger(lines) },
 		);
 		planeRecord.close();
 	});
@@ -845,9 +862,9 @@ describe("the mode cell and the a key", () => {
 		const app = seededApp("open");
 		const lines: RecordedLine[] = [];
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
 				// The real write path, made to fail: the mode table is gone from the
@@ -879,13 +896,7 @@ describe("the mode cell and the a key", () => {
 				expect(recorded[0]?.message).toContain("mode: auto-handoff is on for this session only:");
 				expect(recorded[0]?.message).toContain(app.state.path);
 			},
-			{
-				width: WIDE_STATUS,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: LOOP_60S,
-				logger: recordLogger(lines),
-			},
+			{ width: WIDE_STATUS, height: HEIGHT, loopPolicy: LOOP_60S, logger: recordLogger(lines) },
 		);
 		planeRecord.close();
 	});
@@ -896,9 +907,9 @@ describe("the mode cell and the a key", () => {
 			agents: [{ name: AGENT, kind: "pi", status: "blocked", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the unlimited mode cell", (f) =>
 					f.includes("● manual 1"),
@@ -909,7 +920,7 @@ describe("the mode cell and the a key", () => {
 				// The blocked agent still holds its seat, with no limit to hold it to.
 				expect(ticketRow(frame)).toContain("blocked");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -949,15 +960,15 @@ describe("the mode cell and the a key", () => {
 			workspaceId: "ws-2",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				// The ticket seat and the Consultation seat fill the limit of
 				// two in one number on the mode cell.
 				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 2/2"));
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -969,9 +980,9 @@ describe("the failure markers", () => {
 			agents: [{ name: AGENT, kind: "pi", status: "blocked", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the blocked badge", (f) =>
 					ticketRow(f).includes("blocked"),
@@ -981,7 +992,7 @@ describe("the failure markers", () => {
 				expect(ticketRow(frame)).toContain("blocked");
 				expect(frame).toContain("● manual 1/2");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1044,9 +1055,9 @@ describe("the failure markers", () => {
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				await handoffEnter(setup, "the Missing modal", (f) => f.includes("Missing:"));
@@ -1068,7 +1079,7 @@ describe("the failure markers", () => {
 					}),
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1116,9 +1127,9 @@ describe("the failure markers", () => {
 			paneContent: { "pane-1": "the agent is waiting on a build\n" },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the blocked badge", (f) => ticketRow(f).includes("blocked"));
 				// Enter on the blocked ticket opens the Live view: the Goto is
@@ -1142,7 +1153,7 @@ describe("the failure markers", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(ticketRow(await settle(setup))).toContain("blocked");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1210,9 +1221,9 @@ describe("the Ticket Close key", () => {
 			agents: [{ name: AGENT, kind: "pi", status: "working", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the Close hint on the bar", (f) =>
 					actionBarRowOf(f).includes("Delete Close"),
@@ -1225,7 +1236,7 @@ describe("the Ticket Close key", () => {
 				expect(bar).toContain("g Goto");
 				expect(bar).toContain("Enter Live view");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1377,9 +1388,9 @@ describe("the Ticket Close key", () => {
 			);
 		}
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the Failed-start park marker", (f) =>
 					ticketRow(f).includes("failed starts"),
@@ -1396,7 +1407,7 @@ describe("the Ticket Close key", () => {
 					"Handoff starts failing: 2 in a row; the Top-up adds no automatic start",
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1429,9 +1440,9 @@ describe("the Ticket Close key", () => {
 				"which is no agent of this ticket: agent_name_taken",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the held Agent name marker", (f) =>
 					ticketRow(f).includes("name held"),
@@ -1453,7 +1464,7 @@ describe("the Ticket Close key", () => {
 				// And the Leftover block states its own fact beside it, never this one.
 				expect(detail).toContain("its cleanup runs in herdr");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1511,9 +1522,9 @@ describe("the Ticket Close key", () => {
 			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				// The pane herdr does not list wears the `missing` marker, which
 				// ADR 0030 puts before the Starting face: the Ticket is in flight
@@ -1542,7 +1553,7 @@ describe("the Ticket Close key", () => {
 				);
 				expect(messageRowOf(frame)).toContain("the close cleanup failed");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1562,9 +1573,9 @@ describe("the Ticket Close key", () => {
 			agents: [{ name: AGENT, kind: "pi", status: "working", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				// The poll sees the live pane and marks the Ticket running.
 				await frameUntil(setup, "the in-flight ticket", (f) =>
@@ -1595,12 +1606,7 @@ describe("the Ticket Close key", () => {
 				expect(frameText(refused)).not.toContain(`Close: ${DEFAULT_TICKET_TITLE}`);
 				expect(frameText(released)).toContain("[open]");
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 100 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 100 } },
 		);
 		planeRecord.close();
 	});
@@ -1672,9 +1678,9 @@ describe("the decision modal", () => {
 			detail: { transition: reviewRoute() },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1710,7 +1716,7 @@ describe("the decision modal", () => {
 				// the routed handoff started, not at the claim.
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1733,9 +1739,9 @@ describe("the decision modal", () => {
 				}),
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1744,7 +1750,7 @@ describe("the decision modal", () => {
 				// No position: no handoff row stands.
 				expect(panel).not.toContain("Handoff: review");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1761,9 +1767,9 @@ describe("the decision modal", () => {
 			environment: "live-worktree",
 			detail: { transition: reviewRoute() },
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1771,7 +1777,7 @@ describe("the decision modal", () => {
 				expect(panel).toContain("Handoff: review");
 				expect(panel).toContain("the Next step is held: the position no longer offers the task");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1793,9 +1799,9 @@ describe("the decision modal", () => {
 				transition: reviewRoute(),
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(landed);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1803,7 +1809,7 @@ describe("the decision modal", () => {
 				expect(panel).toContain("Handoff: review");
 				expect(panel).toContain("the Next step is held: the position is at the handoff limit");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1823,9 +1829,9 @@ describe("the decision modal", () => {
 			environment: "live-worktree",
 			detail: { transition: reviewRoute() },
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(landed);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1833,7 +1839,7 @@ describe("the decision modal", () => {
 				expect(panel).toContain("Handoff: review");
 				expect(panel).not.toContain("the Next step is held");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1859,9 +1865,9 @@ describe("the decision modal", () => {
 			detail: { transition: noFire },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1911,7 +1917,7 @@ describe("the decision modal", () => {
 				});
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1929,9 +1935,9 @@ describe("the decision modal", () => {
 				}),
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1940,7 +1946,7 @@ describe("the decision modal", () => {
 				// The write did not complete: the Re-fire row stands on it too.
 				expect(panel).toContain("Re-fire");
 			},
-			{ width: WIDE_STATUS, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDE_STATUS, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2014,9 +2020,9 @@ describe("the decision modal", () => {
 			const pull = app.pullSrc;
 			if (pull === undefined) throw new Error("the pull source is missing");
 
-			const planeRecord = await planeOf(app);
-			await withApp(
-				async (setup) => {
+			const planeRecord = await appOnSeeded(
+				app,
+				async (setup, planeRecord) => {
 					app.src.settle(success);
 					await frameUntil(setup, "the awaiting ticket", (f) =>
 						ticketRow(f).includes("[awaiting]"),
@@ -2038,7 +2044,7 @@ describe("the decision modal", () => {
 					expect(panel).toContain("Close");
 					expect(panel).toContain("Goto");
 				},
-				{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+				{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 			);
 			planeRecord.close();
 		});
@@ -2055,9 +2061,9 @@ describe("the decision modal", () => {
 			const pull = app.pullSrc;
 			if (pull === undefined) throw new Error("the pull source is missing");
 
-			const planeRecord = await planeOf(app);
-			await withApp(
-				async (setup) => {
+			const planeRecord = await appOnSeeded(
+				app,
+				async (setup, planeRecord) => {
 					app.src.settle(success);
 					await frameUntil(setup, "the awaiting ticket", (f) =>
 						ticketRow(f).includes("[awaiting]"),
@@ -2072,7 +2078,7 @@ describe("the decision modal", () => {
 					expect(panel).toContain("Handoff: review");
 					expect(panel).not.toContain("no handoff stands");
 				},
-				{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+				{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 			);
 			planeRecord.close();
 		});
@@ -2089,9 +2095,9 @@ describe("the decision modal", () => {
 			const pull = app.pullSrc;
 			if (pull === undefined) throw new Error("the pull source is missing");
 
-			const planeRecord = await planeOf(app);
-			await withApp(
-				async (setup) => {
+			const planeRecord = await appOnSeeded(
+				app,
+				async (setup, planeRecord) => {
 					app.src.settle(success);
 					await frameUntil(setup, "the awaiting ticket", (f) =>
 						ticketRow(f).includes("[awaiting]"),
@@ -2113,7 +2119,7 @@ describe("the decision modal", () => {
 					expect(after).not.toContain("Handoff: review");
 					expect(after).toContain("the position's ticket left its source; no handoff stands");
 				},
-				{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+				{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 			);
 			planeRecord.close();
 		});
@@ -2131,9 +2137,9 @@ describe("the decision modal", () => {
 			agents: [{ name: AGENT, kind: "pi", status: "idle", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2152,7 +2158,7 @@ describe("the decision modal", () => {
 				expect(app.state.handoff.leftoverEnvironment(identity)).toBe(null);
 				expect(ticketRow(setup.captureCharFrame())).not.toContain("leftover");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2175,9 +2181,9 @@ describe("the decision modal", () => {
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision panel", (f) => f.includes("Decision:"));
@@ -2197,7 +2203,7 @@ describe("the decision modal", () => {
 				expect(start).toContain("--kind pi --pane pane-2 -- --thinking low");
 				expect(start).not.toContain("--model");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2225,9 +2231,9 @@ describe("the decision modal", () => {
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision panel", (f) => f.includes("Decision:"));
@@ -2248,7 +2254,7 @@ describe("the decision modal", () => {
 					"--kind codex --pane pane-2 -- --model review-model -c model_reasoning_effort=high",
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2285,9 +2291,9 @@ describe("the decision modal", () => {
 			detail: { transition: reviewRoute({ agent: "pi" }) },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2347,7 +2353,7 @@ describe("the decision modal", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2386,9 +2392,9 @@ describe("the decision modal", () => {
 			environment: "live-worktree",
 			detail: { transition: reviewRoute({ agent: "claude" }) },
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2427,7 +2433,7 @@ describe("the decision modal", () => {
 					.find((command) => command.startsWith("herdr agent start"));
 				expect(start).toContain("--kind pi --pane pane-2 -- --model fix-model");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2439,9 +2445,9 @@ describe("the decision modal", () => {
 			environment: "live-worktree",
 			detail: { transition: reviewRoute() },
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2464,7 +2470,7 @@ describe("the decision modal", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2542,9 +2548,9 @@ describe("the decision modal", () => {
 		});
 		app.world.setModelList("pi", ["anthropic/claude-review-4"]);
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision panel", (f) => f.includes("Decision:"));
@@ -2564,7 +2570,7 @@ describe("the decision modal", () => {
 				expect(start).toContain("--model anthropic/claude-review-4");
 				expect(start).not.toContain("opus-4");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2592,9 +2598,9 @@ describe("the decision modal", () => {
 			environment: "worktree",
 			detail: { transition: reviewRoute({ agent: "codex", environment: "worktree" }) },
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2623,7 +2629,7 @@ describe("the decision modal", () => {
 				);
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2642,9 +2648,9 @@ describe("the decision modal", () => {
 			stderr: "the workspace is gone",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2679,7 +2685,7 @@ describe("the decision modal", () => {
 				// rewritten.
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2760,9 +2766,9 @@ describe("the decision modal", () => {
 		});
 		const thumbRowOf = (frame: string) => rowsOf(frame).findIndex((row) => row.includes("█"));
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2809,7 +2815,7 @@ describe("the decision modal", () => {
 				await guideKey(setup, "move-list", "↑", { quiet: true });
 				await frameUntil(setup, "back to close", (f) => frameText(f).includes("❯ Close"));
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2945,9 +2951,9 @@ describe("the herdr-unreachable line", () => {
 		// herdr cannot be reached: the agent list fails.
 		app.world.set("herdr", ["agent", "list"], { code: 1, stderr: "no herdr session" });
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the herdr-unreachable warning", (f) =>
 					f.includes("herdr is unreachable"),
@@ -2957,7 +2963,7 @@ describe("the herdr-unreachable line", () => {
 				expect(ticketRow(setup.captureCharFrame())).not.toContain("missing");
 				expect(ticketRow(setup.captureCharFrame())).not.toContain("blocked");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3082,9 +3088,9 @@ describe("the leftover environment", () => {
 			dirtyWorktree: true,
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3107,7 +3113,7 @@ describe("the leftover environment", () => {
 				expect(detail).toContain("Leftover: herdr workspace ws-1");
 				expect(detail).toContain("its cleanup runs in herdr");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3124,9 +3130,9 @@ describe("the leftover environment", () => {
 			dirtyWorktree: true,
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3157,7 +3163,7 @@ describe("the leftover environment", () => {
 				expect(detail).toContain("Leftover: herdr workspace ws-1");
 				expect(detail).toContain("its cleanup runs in herdr");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3173,10 +3179,9 @@ describe("the leftover environment", () => {
 					: app.runner.run(command, args, options),
 			listModels: (kind) => app.runner.listModels(kind),
 		};
-		const planeRecord = await planeOf(app, brokenRunner);
-
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3192,7 +3197,8 @@ describe("the leftover environment", () => {
 					"the close cleanup failed: the close cleanup did not run",
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
+			brokenRunner,
 		);
 		planeRecord.close();
 	});
@@ -3211,9 +3217,9 @@ describe("the leftover environment", () => {
 			stderr: "the checkout is dirty",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the leftover marker", (f) =>
 					ticketRow(f).includes("leftover"),
@@ -3235,7 +3241,7 @@ describe("the leftover environment", () => {
 				const row = frameText(ticketRow(frame).slice(0, Math.floor(WIDTH / 2))).trimEnd();
 				expect(row.endsWith("handoff limit leftover")).toBe(true);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3253,9 +3259,9 @@ describe("the leftover environment", () => {
 			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				await handoffEnter(setup, "the missing modal", (f) => f.includes("Missing:"));
@@ -3274,7 +3280,7 @@ describe("the leftover environment", () => {
 					}),
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3293,9 +3299,9 @@ describe("the leftover environment", () => {
 			stderr: '{"error":{"code":"agent_running","message":"running agent pi"}}\n',
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the leftover marker", (f) => ticketRow(f).includes("leftover"));
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
@@ -3308,12 +3314,7 @@ describe("the leftover environment", () => {
 					}),
 				);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 20 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 20 } },
 		);
 		planeRecord.close();
 	});
@@ -3442,9 +3443,9 @@ describe("the leftover environment", () => {
 			completedAt: "2026-09-02T10:30:00.000Z",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3457,7 +3458,7 @@ describe("the leftover environment", () => {
 					expect.objectContaining({ handoffId: first.handoffId, workspaceId: "ws-1" }),
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3470,9 +3471,9 @@ describe("the leftover environment", () => {
 			dirtyWorktree: true,
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3484,7 +3485,7 @@ describe("the leftover environment", () => {
 				]);
 				expect(spanColors(setup, "its cleanup runs in herdr")).toEqual([rgb(roleColor("yellow"))]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3595,10 +3596,9 @@ describe("the leftover environment", () => {
 					: app.runner.run(command, args, options),
 			listModels: (kind) => app.runner.listModels(kind),
 		};
-		const planeRecord = await planeOf(app, collisionRunner);
-
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3617,7 +3617,8 @@ describe("the leftover environment", () => {
 				);
 				expect(ticketRow(setup.captureCharFrame())).toContain("leftover");
 			},
-			{ width: WIDE_STATUS, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDE_STATUS, height: HEIGHT, loopPolicy: LOOP_60S },
+			collisionRunner,
 		);
 		planeRecord.close();
 	});
@@ -3740,9 +3741,9 @@ describe("the auto dispatch", () => {
 				},
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				// An open ticket already shows its profile's agent in the detail
 				// pane, so the wait resolves on the handoff itself: the pane's
@@ -3760,7 +3761,7 @@ describe("the auto dispatch", () => {
 					"--kind codex --pane pane-2 -- --model anthropic/claude-sonnet-4-5 -c model_reasoning_effort=high",
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3779,9 +3780,9 @@ describe("the auto dispatch", () => {
 		});
 		app.world.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the refused dispatch", (f) => f.includes("has no model"));
 				// The handoff never reached herdr: no workspace, no agent start.
@@ -3790,7 +3791,7 @@ describe("the auto dispatch", () => {
 				// The ticket stays open and dispatchable once the config is fixed.
 				expect(ticketRow(setup.captureCharFrame())).toContain("[open]");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3859,25 +3860,24 @@ describe("the auto dispatch", () => {
 		// The fixture holds no mapping, so the convention checkout is the one
 		// that resolves the repository, and it holds a different repository.
 		const app = seededAppInAutoMode("open", { extra: { repos: {} }, outcome: pairSuccess });
-		const planeRecord = await planeOf(app);
-		const home = planeRecord.home;
-		const convention = join(home, "src", "factory");
-		mkdirSync(convention, { recursive: true });
-		writeFileSync(join(convention, "marker"), "repo");
-		// The convention checkout the plane's home holds answers its git reads
-		// with another repository, so the discovery clones the ticket's
-		// repository beside it and maps the ticket's repository there.
-		app.world.set("git", ["-C", convention, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-		app.world.set("git", ["-C", convention, "remote", "get-url", "origin"], {
-			stdout: "https://github.com/acme/other.git\n",
-		});
-		// The sibling clone the discovery makes, and the handoff that runs in it:
-		// the world answers the clone, and the launch grows the workspace it
-		// names.
-		const sibling = join(home, "src", "factory_1");
-
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
+				const home = planeRecord.home;
+				const convention = join(home, "src", "factory");
+				mkdirSync(convention, { recursive: true });
+				writeFileSync(join(convention, "marker"), "repo");
+				// The convention checkout the plane's home holds answers its git reads
+				// with another repository, so the discovery clones the ticket's
+				// repository beside it and maps the ticket's repository there.
+				app.world.set("git", ["-C", convention, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+				app.world.set("git", ["-C", convention, "remote", "get-url", "origin"], {
+					stdout: "https://github.com/acme/other.git\n",
+				});
+				// The sibling clone the discovery makes, and the handoff that runs in it:
+				// the world answers the clone, and the launch grows the workspace it
+				// names.
+				const sibling = join(home, "src", "factory_1");
 				app.src.settle(pairSuccess);
 				// The config write-back re-runs the refresh too, and a fetch the
 				// test never settles would make every Ticket non-actionable. The
@@ -3909,12 +3909,7 @@ describe("the auto dispatch", () => {
 					`"github.com/acme/factory" = "${sibling}"`,
 				);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 25 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 25 } },
 		);
 		planeRecord.close();
 	});
@@ -3936,9 +3931,9 @@ describe("the auto dispatch", () => {
 				cause: "completed",
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(pairSuccess);
 				// The first cycles: the turn settles, the auto-close ends the
 				// cycle, and the pair takes the dispatch. The finished ticket
@@ -3966,12 +3961,7 @@ describe("the auto dispatch", () => {
 					`herdr agent start ${SECOND_AGENT} --kind pi --pane pane-2`,
 				]);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 20 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 20 } },
 		);
 		planeRecord.close();
 	});
@@ -3990,9 +3980,9 @@ describe("the auto dispatch", () => {
 				},
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				const failed = await frameUntil(setup, "the failed automatic handoff", (f) =>
 					frameText(f).includes("queued handoff for"),
@@ -4003,7 +3993,7 @@ describe("the auto dispatch", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(ticketRow(failed)).toContain("[open]");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4046,9 +4036,9 @@ describe("the auto decision", () => {
 			detail: { transition: reviewRoute() },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				// The refresh after the fire carries the labels the fire wrote:
 				// the position offers the review task, and the top-up's
 				// continuation takes it (ADR 0051).
@@ -4087,7 +4077,7 @@ describe("the auto decision", () => {
 				expect(prompt?.includes("The turn is done.")).toBe(true);
 				expect(commands).toContain("herdr tab close tab-1");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4115,9 +4105,9 @@ describe("the auto decision", () => {
 		});
 		app.world.setModelList("pi", ["anthropic/claude-review-4"]);
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				// The refresh after the fire carries the labels the fire wrote:
 				// the position offers the review task, and the top-up's
 				// continuation takes it (ADR 0051).
@@ -4143,7 +4133,7 @@ describe("the auto decision", () => {
 				// The settled handoff's own model never rides on the route.
 				expect(start).not.toContain("opus-4");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4222,9 +4212,9 @@ describe("the auto decision", () => {
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(
 					setup,
@@ -4241,7 +4231,7 @@ describe("the auto decision", () => {
 				// alone: no agent start ran.
 				expect(commands.filter((c) => c.startsWith("herdr agent start"))).toHaveLength(0);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4279,9 +4269,9 @@ describe("the auto decision", () => {
 			workspaceId: "ws-2",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(pairSuccess);
 				// The route waits for the free seat: the ticket stays awaiting.
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
@@ -4294,7 +4284,7 @@ describe("the auto decision", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4315,9 +4305,9 @@ describe("the auto decision", () => {
 			detail: { transition: reviewRoute() },
 		});
 		// No Agent works: the cycle's only fact is the settled turn it resolves.
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(pairSuccess);
 				await frameUntil(setup, "the held Next step on the Message line", (f) =>
 					messageRowOf(f).includes(
@@ -4329,7 +4319,7 @@ describe("the auto decision", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4365,9 +4355,9 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The park stands ahead of the outcome checks: a completion
@@ -4387,12 +4377,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(commands.filter((c) => c.startsWith("herdr tab close"))).toHaveLength(0);
 				expect(commands.filter((c) => c.startsWith("herdr agent start"))).toHaveLength(0);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 40 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 		planeRecord.close();
 	});
@@ -4404,9 +4389,9 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 			environment: "live-worktree",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the auto-closed ticket", (f) => ticketRow(f).includes("[open]"));
 				// implement carries the flag off, and no transition fired: the
@@ -4416,7 +4401,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4431,9 +4416,9 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The operator's close is the gate from the parked turn to
@@ -4453,7 +4438,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4472,9 +4457,9 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 			agents: [{ name: AGENT, kind: "pi", status: "idle", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The operator answers the agent's questions in the live
@@ -4495,12 +4480,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 					0,
 				);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 40 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 		planeRecord.close();
 	});
@@ -4600,9 +4580,9 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 		const pull = app.pullSrc;
 		if (pull === undefined) throw new Error("the pull source is missing");
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(bugOutcome);
 				pull.settle(pullOutcome);
 				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
@@ -4628,7 +4608,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("closed");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4665,9 +4645,9 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 	test("the machine never hands off a flagged type, and the operator's handoff starts it", async () => {
 		const app = seededAppInAutoMode("open", { extra: flaggedConfig, outcome: specSuccess });
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(specSuccess);
 				await frameUntil(setup, "the open ticket", (f) => ticketRow(f).includes("[open]"));
 				await settle(setup);
@@ -4691,12 +4671,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 					app.runner.commands().some((command) => command.startsWith("herdr agent start")),
 				).toBe(true);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 40 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 		planeRecord.close();
 	});
@@ -4725,9 +4700,9 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 				},
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(specSuccess);
 				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The hold stands: no decision, and the environment is untouched.
@@ -4762,12 +4737,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 					app.runner.commands().some((command) => command.startsWith("herdr agent start")),
 				).toBe(true);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 40 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 		planeRecord.close();
 	});
@@ -4784,9 +4754,9 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				await settle(setup);
@@ -4815,12 +4785,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 						),
 				).toBe(true);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 40 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 		planeRecord.close();
 	});
@@ -5145,9 +5110,9 @@ describe("the handoff queue", () => {
 			automatic: true,
 		});
 		if (!enqueued.ok) throw new Error(enqueued.reason);
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(pairSuccess);
 				await sleep(400);
 				const frame = await settle(setup, 1000);
@@ -5159,7 +5124,7 @@ describe("the handoff queue", () => {
 				expect(app.state.handoff.openAttemptTickets()).toEqual([]);
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -5241,9 +5206,9 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 		const pull = app.pullSrc;
 		if (pull === undefined) throw new Error("the pull source is missing");
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
 				app.src.settle(success);
 				// The awaiting rule reads the skip: it derives no position,
 				// so the cycle auto-closes the ticket. It rests open behind
@@ -5345,7 +5310,7 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 				// The issue stands open and covered behind the pull request.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
