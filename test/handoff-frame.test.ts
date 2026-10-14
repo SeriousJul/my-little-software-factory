@@ -94,6 +94,9 @@ const first = SAMPLE_TICKETS[0];
 const firstSlug = "retry-policy-for-webhooks";
 /** The herdr name the naming rule gives the first sample Ticket (ADR 0098). */
 const firstAgent = agentNameFor(first);
+
+/** The first ticket wearing the merge label, the switch tests' standing. */
+const mergeTicket: Ticket = { ...first, labels: ["merge"] };
 const firstPrompt = renderPrompt(templateOf(BASE_CONFIG.taskTypes.implement), first);
 
 const billingSource: TicketSourceConfig = {
@@ -524,6 +527,30 @@ function configWith(
 		taskTypes: {
 			...BASE_CONFIG.taskTypes,
 			implement: { ...BASE_CONFIG.taskTypes.implement, ...implement },
+		},
+	};
+}
+
+/**
+ * The standing config with a merge task type on the base's states.
+ *
+ * The switch tests stand the plane on one such config each; the helper
+ * keeps the shape in one place so a standing change moves one line.
+ */
+function mergeConfig(
+	merge: Partial<TaskTypeConfig>,
+	states: WorkflowState[] = [mergeState],
+): FactoryConfig {
+	return {
+		...BASE_CONFIG,
+		maxParallelAgents: 3,
+		workflowStates: [...BASE_CONFIG.workflowStates, ...states],
+		taskTypes: {
+			...BASE_CONFIG.taskTypes,
+			merge: {
+				template: "Merge pull request {external-key}.",
+				...merge,
+			},
 		},
 	};
 }
@@ -1506,19 +1533,7 @@ describe("the override panel", () => {
 	});
 
 	test("a task type thinking default shows in the panel and rides on the start", async () => {
-		const config: FactoryConfig = {
-			...BASE_CONFIG,
-			maxParallelAgents: 3,
-			workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
-			taskTypes: {
-				...BASE_CONFIG.taskTypes,
-				merge: {
-					template: "Merge pull request {external-key}.",
-					thinking: "low",
-				},
-			},
-		};
-		const mergeTicket: Ticket = { ...first, labels: ["merge"] };
+		const config = mergeConfig({ thinking: "low" });
 		await appOn(
 			{
 				groupingAxis: "none",
@@ -1558,19 +1573,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("switching the task type re-derives an untouched thinking row", async () => {
-		const config: FactoryConfig = {
-			...BASE_CONFIG,
-			maxParallelAgents: 3,
-			workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
-			taskTypes: {
-				...BASE_CONFIG.taskTypes,
-				merge: {
-					template: "Merge pull request {external-key}.",
-					thinking: "low",
-				},
-			},
-		};
-		const mergeTicket: Ticket = { ...first, labels: ["merge"] };
+		const config = mergeConfig({ thinking: "low" });
 		await appOn(
 			{
 				groupingAxis: "none",
@@ -1625,19 +1628,7 @@ describe("the override panel", () => {
 		);
 	});
 	test("a touched thinking row survives a task type switch", async () => {
-		const config: FactoryConfig = {
-			...BASE_CONFIG,
-			maxParallelAgents: 3,
-			workflowStates: [...BASE_CONFIG.workflowStates, mergeState, toImplementState],
-			taskTypes: {
-				...BASE_CONFIG.taskTypes,
-				merge: {
-					template: "Merge pull request {external-key}.",
-					thinking: "low",
-				},
-			},
-		};
-		const mergeTicket: Ticket = { ...first, labels: ["merge"] };
+		const config = mergeConfig({ thinking: "low" }, [mergeState, toImplementState]);
 		await appOn(
 			{
 				groupingAxis: "none",
@@ -3671,20 +3662,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`switching the task type re-derives an untouched Model row (${size.width}x${size.height})`, async () => {
-			const config: FactoryConfig = {
-				...BASE_CONFIG,
-				maxParallelAgents: 3,
-				workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
-				taskTypes: {
-					...BASE_CONFIG.taskTypes,
-					merge: {
-						template: "Merge pull request {external-key}.",
-						model: "openai/gpt-5.1",
-					},
-				},
-			};
-			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
-
+			const config = mergeConfig({ model: "openai/gpt-5.1" });
 			await appOn(
 				{
 					groupingAxis: "none",
@@ -3829,20 +3807,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`a Model the operator typed survives a task type switch (${size.width}x${size.height})`, async () => {
-			const config: FactoryConfig = {
-				...BASE_CONFIG,
-				maxParallelAgents: 3,
-				workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
-				taskTypes: {
-					...BASE_CONFIG.taskTypes,
-					merge: {
-						template: "Merge pull request {external-key}.",
-						model: "openai/gpt-5.1",
-					},
-				},
-			};
-			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
-
+			const config = mergeConfig({ model: "openai/gpt-5.1" });
 			await appOn(
 				{
 					groupingAxis: "none",
@@ -3888,20 +3853,7 @@ describe("the override panel", () => {
 		test(`a Model the operator cleared survives a task type switch (${size.width}x${size.height})`, async () => {
 			// A list that arrives late shows why an untouched row alone is not enough:
 			// the clear is the operator's decision either way.
-			const config: FactoryConfig = {
-				...BASE_CONFIG,
-				maxParallelAgents: 3,
-				workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
-				taskTypes: {
-					...BASE_CONFIG.taskTypes,
-					merge: {
-						template: "Merge pull request {external-key}.",
-						model: "openai/gpt-5.1",
-					},
-				},
-			};
-			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
-
+			const config = mergeConfig({ model: "openai/gpt-5.1" });
 			await appOn(
 				{
 					groupingAxis: "none",
@@ -3959,20 +3911,7 @@ describe("the override panel", () => {
 			);
 		});
 		test(`switching the task type re-derives an untouched Agent row (${size.width}x${size.height})`, async () => {
-			const config: FactoryConfig = {
-				...BASE_CONFIG,
-				maxParallelAgents: 3,
-				workflowStates: [...BASE_CONFIG.workflowStates, mergeState],
-				taskTypes: {
-					...BASE_CONFIG.taskTypes,
-					merge: {
-						template: "Merge pull request {external-key}.",
-						agent: "claude",
-					},
-				},
-			};
-			const mergeTicket: Ticket = { ...first, labels: ["merge"] };
-
+			const config = mergeConfig({ agent: "claude" });
 			await appOn(
 				{
 					groupingAxis: "none",
