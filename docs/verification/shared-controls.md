@@ -1881,12 +1881,12 @@ always held it. A skipped required check is not a pass.
 
 ## The frame rig runs the controls, not the keys (issue #365, ADR 0128)
 
-Status: the automated checks pass for the rig and the nine owned surfaces: its
-own suite, the Action bar, the Key guide, the Message line, the theme frame,
-the Ticket scroll frame, the merged Main view, the Work queue section, and
-the Decision modal. The remaining frame
-surfaces migrate one at a time, and the owned list in the architecture check
-is the record of what has landed.
+Status: the automated checks pass for the rig and every frame surface it
+owns. The frame suites that stood on raw keys now run the rig's controls
+and wait on its named outcomes, and the owned list in the architecture
+check, which grew one surface at a time and never shrinks, is the record
+of what has landed. Its head names every frame suite that boots the app
+on the plane.
 
 What was measured: the frame rig in `test/app-harness.ts` now resolves a
 control to the key the Action bar painted for it and owns the input end to
@@ -2157,17 +2157,31 @@ paragraph re-derive from the committed walk at the named heads: the
 script run at either head prints them, and a head that moves the suites
 re-records them here from the same script.
 
-What was not measured: the remaining frame surfaces have not been migrated, so
-the 683 press-family calls and 655 raw waits above stand in the suites that
-have not landed yet, and this change's effect on the whole plane is the nine
-owned surfaces plus the rig, not the surfaces that follow. The closed walk
-stands on the bar of the frame it walks, and at this head the rig's suite
-walks the base bar and the bars of the detail frames of the three sections,
-the response editor, the Agent interaction input, the Decision modal, the
-action panel, and the Message view: each walk boots the frame the bar stands
-on. The walk still does not boot the mode that owns each hinted catalogue id,
-the shape the spec's walk names. The remaining surfaces' bars walk as their
-migrations land. Two gaps the migration met are now closed: the panes' focus
+At the head that lands the last of the frame suites on the rig's
+controls, and the suites' shared boots and walks taken into the
+suites' own helpers - the panel's open, the in-flight walk's step and
+the delayed standing, the route's seeded standing, the decision suite's
+own standing, the seeded plane's app boot, and the queue-row world - the
+walk stands at no press-family call, no hand operation, and no handler
+probe on the owned surfaces, 23 raw waits, 498 inline containment
+predicates, 18 reaches to the renderer's input, and 24 helper copies, as
+the walk at that head prints. The test-tree duplication clone count,
+the Quality audit's own metric, measures 189 at that head, and this
+change rewrites the Quality baseline, which only shrinks, down to that
+count, which the audit then holds.
+
+What was not measured: every frame surface that boots the app on the plane
+has been migrated, so no press-family call, hand operation, or raw wait
+stands outside the rig's ownership on the owned surfaces, as the walk at
+the head that lands this record prints. The raw waits and the inline
+containment predicates the walk still counts are the named `frameUntil`
+waits and the stable-frame reads no named outcome names - the walk's own
+escape, kept closed. The closed walk still does not boot the mode that
+owns each hinted catalogue id, the shape the spec's walk names: it stands
+on the bar of the frame it walks, and each walk boots the frame the bar
+stands on. No screen reader has read any of the migrated surfaces, and no
+terminal walk has been re-run on the migrated frames, so both stand as
+unverified here as in every other entry of this record. Two gaps the migration met are now closed: the panes' focus
 moves stand in the catalogue as the pane's own controls the bar hints (the
 Detail hint and the list's Move keys), and the keys the bar paints nowhere,
 the guide's scroll keys among them, reach through `guideKey` - the Action
