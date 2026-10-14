@@ -13,7 +13,7 @@ import { testRender } from "@opentui/react/test-utils";
 
 import { ConsultationLauncher } from "../src/components/consultation-launcher.ts";
 import type { StandingFacts } from "../src/components/controls.ts";
-import { awaitFrame, frameText } from "./app-harness.ts";
+import { frameText, frameUntil, launchConsultationDraft } from "./app-harness.ts";
 
 const types = {
 	grill: { agent: "pi", environment: "worktree" as const, template: "/grill {input}" },
@@ -66,29 +66,6 @@ async function launcher(
 	return { setup, onLaunch };
 }
 
-/** Tab `count` slots forward and wait for the frame to name the new one. */
-async function tabUntil(
-	setup: Awaited<ReturnType<typeof testRender>>,
-	count: number,
-	what: string,
-): Promise<string> {
-	for (let step = 0; step < count; step += 1) setup.mockInput.pressTab();
-	return awaitFrame(setup, (f) => frameText(f).includes(what), `the focus on ${what}`);
-}
-
-/** Tab from the Type choice to the Draft field, waiting for each move. */
-async function focusDraft(setup: Awaited<ReturnType<typeof testRender>>): Promise<void> {
-	await tabUntil(setup, 1, "❯ Repository");
-	await tabUntil(setup, 1, "❯ Initial input");
-}
-
-/** Run the Launch action: Tab from the Draft field to it, then Enter. */
-async function pressLaunch(setup: Awaited<ReturnType<typeof testRender>>): Promise<void> {
-	await tabUntil(setup, 1, "❯ Launch Consultation");
-	setup.mockInput.pressEnter();
-	await setup.flush();
-}
-
 describe("Consultation launcher Repository choice", () => {
 	test("a draft Repository identity with other casing still selects its option", async () => {
 		// A record an older plane stored keeps the API's owner casing; the
@@ -118,8 +95,9 @@ describe("Consultation launcher Repository choice", () => {
 		);
 		try {
 			expect(frameText(setup.captureCharFrame())).toContain("Repository acme/factory");
-			await focusDraft(setup);
-			await pressLaunch(setup);
+			// The draft holds the input, so the typed input is the empty text: the
+			// route stands on the draft's own value.
+			await launchConsultationDraft(setup, "");
 			expect(onLaunch).toHaveBeenCalledWith("grill", options[1], "review the design");
 		} finally {
 			await setup.renderer.destroy();
@@ -134,9 +112,7 @@ describe("Consultation launcher input", () => {
 			const frame = frameText(setup.captureCharFrame());
 			expect(frame).toContain("Type grill");
 			expect(frame).toContain("Repository acme/factory");
-			await focusDraft(setup);
-			await setup.mockInput.typeText("review the design");
-			await pressLaunch(setup);
+			await launchConsultationDraft(setup, "review the design");
 			expect(onLaunch).toHaveBeenCalledWith("grill", repositories[0], "review the design");
 		} finally {
 			await setup.renderer.destroy();
@@ -146,8 +122,9 @@ describe("Consultation launcher input", () => {
 	test("refuses empty initial input on the visible action, and launches nothing", async () => {
 		const { setup, onLaunch } = await launcher();
 		try {
-			await focusDraft(setup);
-			await pressLaunch(setup);
+			// The draft's input stays empty: the route types nothing into it and
+			// runs the visible action on its empty value.
+			await launchConsultationDraft(setup, "");
 			await setup.flush();
 			expect(onLaunch).not.toHaveBeenCalled();
 			const frame = frameText(setup.captureCharFrame());
@@ -165,12 +142,11 @@ describe("Consultation launcher input", () => {
 			input: "a".repeat(bytes),
 		});
 		try {
-			await focusDraft(setup);
-			await pressLaunch(setup);
-			const frame = await awaitFrame(
-				setup,
-				(candidate) => frameText(candidate).includes(`initial input is ${bytes} UTF-8 bytes`),
-				"the oversized-input refusal",
+			// The draft holds the oversized input, so the route types nothing
+			// into it and runs the visible action on the draft's own value.
+			await launchConsultationDraft(setup, "");
+			const frame = await frameUntil(setup, "the oversized-input refusal", (candidate) =>
+				frameText(candidate).includes(`initial input is ${bytes} UTF-8 bytes`),
 			);
 			expect(frameText(frame)).toContain(`UTF-8 bytes: ${bytes}/65536`);
 			expect(onLaunch).not.toHaveBeenCalled();
