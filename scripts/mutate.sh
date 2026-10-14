@@ -61,7 +61,17 @@ temp_dir=".stryker-tmp/campaign-$$"
 keep_temp=0
 asked_for_never=0
 temp_dir_from_caller=0
+# The report the entry point stands in the repo, and the two names the sidecar
+# reads out of the caller's arguments when the caller does not name them: the
+# scope the campaign covers and the workers it stood on.
+report_file="$repo_root/reports/mutation/mutation.json"
+report_dir="$repo_root/docs/verification/mutation"
+DEFAULT_SCOPE="the config's whole-src scope (all of src, the gallery out)"
+DEFAULT_CONCURRENCY="the config's quarter of the machine's cores"
 args=("$@")
+dry_run=0
+scope=""
+concurrency=""
 for ((i = 0; i < ${#args[@]}; i++)); do
 	value=""
 	case "${args[i]}" in
@@ -83,6 +93,21 @@ for ((i = 0; i < ${#args[@]}; i++)); do
 			temp_dir="${args[i]:-}"
 			continue
 			;;
+		--dryRunOnly) dry_run=1 ;;
+		--mutate=*)
+			scope="${args[i]#--mutate=}"
+			;;
+		--mutate)
+			i=$((i + 1))
+			scope="${args[i]:-}"
+			;;
+		--concurrency=*)
+			concurrency="${args[i]#--concurrency=}"
+			;;
+		--concurrency)
+			i=$((i + 1))
+			concurrency="${args[i]:-}"
+			;;
 	esac
 	# Stryker lowercases the value before it reads it, so the match does too.
 	case "${value,,}" in
@@ -99,6 +124,14 @@ fi
 if [ "$temp_dir_from_caller" -eq 0 ]; then
 	args+=("--tempDirName=$temp_dir")
 fi
+
+# The mtime the report carries when this run starts, read before the campaign
+# touches anything: the copy below stands only a report the run itself wrote.
+report_epoch=""
+if [ -f "$report_file" ]; then
+	report_epoch="$(stat -c %Y "$report_file" 2>/dev/null)" || report_epoch=""
+fi
+run_started="$(date +%s)"
 
 # The tree the removal may name: this campaign's own, under the temp parent, and
 # nothing a caller located outside it. The test runs on the resolved path, not on
@@ -202,6 +235,47 @@ cp -R "$host_ts_shim" "$host_ts_dir"
 
 bash "$repo_root/scripts/crash-guard.sh" bun "$STRYKER_BIN" run "${args[@]}"
 status=$?
+# The campaign's raw report stands in the repo beside the verification record,
+# so the next reader starts from the data the last campaign measured instead of
+# re-running it: a re-run of a scoped campaign is 6 to 44 machine hours, and the
+# report the run leaves is the only machine-readable account of its mutants. The
+# entry point copies the reporter's `mutation.json` into the repo's
+# `docs/verification/mutation/` beside a sidecar naming the head the report
+# belongs to, the day it ran, the scope it covered, and the workers it stood on:
+# a report without its head is a number without its tree, and the record already
+# insists every score belongs to the head it measured. Only a run that is not a
+# dry run and that wrote a new report during the run reaches that place: a dry
+# run measures the budget, not the mutants, and its report would overwrite the
+# last campaign's survivors, and a run that dies in its initial run, or on a
+# native crash, never reaches the reporter, so the mtime read before the run is
+# what keeps its old report from masquerading as this run's. The html is working
+# space under `reports/mutation` for a human to read, and it is not copied.
+if [ "$dry_run" -eq 0 ] && [ -f "$report_file" ]; then
+	report_now="$(stat -c %Y "$report_file" 2>/dev/null)" || report_now=""
+	if [ -z "$report_epoch" ] || { [ -n "$report_now" ] && [ "$report_now" -gt "$run_started" ]; }; then
+		mkdir -p "$report_dir"
+		cp "$report_file" "$report_dir/last-campaign.json"
+		head_sha="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null)" || head_sha=""
+		[ -n "$head_sha" ] || head_sha="unknown"
+		scope_stated="${scope:-$DEFAULT_SCOPE}"
+		concurrency_stated="${concurrency:-$DEFAULT_CONCURRENCY}"
+		# The sidecar is JSON, and the scope comes off the caller's command line:
+		# the two characters that would break it are escaped, nothing else can.
+		scope_json=${scope_stated//\\/\\\\}
+		scope_json=${scope_json//\"/\\\"}
+		concurrency_json=${concurrency_stated//\\/\\\\}
+		concurrency_json=${concurrency_json//\"/\\\"}
+		cat > "$report_dir/last-campaign.meta.json" <<EOF
+{
+	"head": "$head_sha",
+	"date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+	"scope": "$scope_json",
+	"concurrency": "$concurrency_json"
+}
+EOF
+		echo "mutate: the campaign's raw report stands under docs/verification/mutation/ beside the verification record (head $head_sha)." >&2
+	fi
+fi
 if [ "$keep_temp" -eq 1 ]; then
 	echo "mutate: the campaign's sandbox is kept under $temp_dir for inspection." >&2
 fi

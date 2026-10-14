@@ -35,8 +35,17 @@ other's tree; they still share `reports/mutation`, where the last run to finish
 owns the report. The copy step ignores that whole temp tree, so a campaign reads
 none of what the campaigns before it left in it: Stryker excludes only the one
 temp directory it is handed, and the per-campaign name sits one level deeper.
-Reports are not committed - `mutation.html` to read and `mutation.json` for a
-program to diff. The run takes the machine: it spawns one
+Reports are not committed as working space: the raw `mutation.json` of the last
+campaign that is not a dry run and that reached its reporter stands committed
+under `docs/verification/mutation/` beside the verification record, with a
+sidecar naming the head it belongs to, the day it ran, the scope it covered,
+and the workers it stood on: `scripts/mutate.sh` writes both when a run ends,
+so a future reader starts from the data the last campaign measured instead of
+re-running a campaign that costs 6 to 44 machine hours. A report is data about
+the head its sidecar names; when the tree moves on, the report is stale data
+to re-run, not truth. The `mutation.html` stays in `reports/mutation`, working
+space for a human to read, and is not committed. The run takes the machine: it
+spawns one
 `bun test` process per worker, each about 250 MB, and `concurrency` in
 `stryker.config.mjs` sets how many run at once - a quarter of the machine's
 logical cores there, which is the measured 8 on a 32-core machine and scales down

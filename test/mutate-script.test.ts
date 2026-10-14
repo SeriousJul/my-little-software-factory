@@ -90,26 +90,33 @@ beforeAll(() => {
 if [ "\${1:-}" = "--version" ]; then echo "\${FAKE_BUN_VERSION}"; exit 0; fi
 echo "fake-bun-cwd: $(pwd)" >&2
 echo "fake-bun-call: $*" >&2
-args=("$@")
-temp=.stryker-tmp
-clean=always
-for ((i = 0; i < \${#args[@]}; i++)); do
-	a="\${args[i]}"
-	case "$a" in
-		--tempDirName=*) temp="\${a#--tempDirName=}" ;;
-		--tempDirName) temp="\${args[i + 1]:-}"; i=$((i + 1)) ;;
-		--cleanTempDir=*) clean="\${a#--cleanTempDir=}" ;;
-		--cleanTempDir) clean="\${args[i + 1]:-}"; i=$((i + 1)) ;;
-	esac
-done
-rm -f "$FAKE_SANDBOX_RECORD"
-mkdir -p "$temp/sandbox-fake"
-echo mutant > "$temp/sandbox-fake/src.ts"
-echo "$temp/sandbox-fake" > "$FAKE_SANDBOX_RECORD"
-# The campaign this one stands in for dies on a native fault: it never reaches
-# any JavaScript of its own, so nothing here is cleaned but by the entry point.
-if [ "\${FAKE_STYKER_CRASHES:-0}" = 1 ]; then kill -SEGV $$; fi
-# core's own cleanup, on the clean path only. parseCleanDirOption reads only
+				args=("$@")
+				temp=.stryker-tmp
+				clean=always
+				dry=0
+				for ((i = 0; i < \${#args[@]}; i++)); do
+					a="\${args[i]}"
+					case "$a" in
+						--tempDirName=*) temp="\${a#--tempDirName=}" ;;
+						--tempDirName) temp="\${args[i + 1]:-}"; i=$((i + 1)) ;;
+						--cleanTempDir=*) clean="\${a#--cleanTempDir=}" ;;
+						--cleanTempDir) clean="\${args[i + 1]:-}"; i=$((i + 1)) ;;
+						--dryRunOnly) dry=1 ;;
+					esac
+				done
+				rm -f "$FAKE_SANDBOX_RECORD"
+				mkdir -p "$temp/sandbox-fake"
+				echo mutant > "$temp/sandbox-fake/src.ts"
+				echo "$temp/sandbox-fake" > "$FAKE_SANDBOX_RECORD"
+				# The campaign this one stands in for dies on a native fault: it never reaches
+				# any JavaScript of its own, so nothing here is cleaned but by the entry point.
+				if [ "\${FAKE_STYKER_CRASHES:-0}" = 1 ]; then kill -SEGV $$; fi
+				# The reporter's half, on a run that reaches it: core writes the report for a
+				# dry run too, and the entry point must keep that report out of the repo's
+				# last-campaign artifact. A crashed run never reaches the reporter.
+				mkdir -p reports/mutation
+				printf '{"files":{},"dryRunOnly":%s}\\n' "$dry" > reports/mutation/mutation.json
+				# core's own cleanup, on the clean path only. parseCleanDirOption reads only
 # 'false' and '0' as false, and stryker.config.mjs ships 'always', so an absent
 # --cleanTempDir deletes too. core then drops the temp dir it was handed once
 # nothing else lives in it, which is what leaves the tree above it standing.
@@ -217,7 +224,24 @@ function scriptCampaignTempDir(): string {
 
 function clearTestTreeSandbox() {
 	rmSync(join(dir, ".stryker-tmp"), { recursive: true, force: true });
+	// The report's working space, the tree the entry point copies from: a report a
+	// case before this one wrote is not a report this case's run wrote, so the
+	// tree starts each case without one and the mtime check has nothing stale to
+	// mistake for a fresh report.
+	rmSync(join(dir, "reports"), { recursive: true, force: true });
 	rmSync(recordFile, { force: true });
+}
+
+/**
+ * The sidecar's default scope, read out of the script itself rather than
+ * repeated here: the two must agree, and this file is the check that they do.
+ */
+function scriptDefaultScope(): string {
+	const line = readFileSync(mutateScript, "utf8").match(/^DEFAULT_SCOPE="([^"]*)"/m);
+	if (!line?.[1]) {
+		throw new Error("mutate.sh names no default scope for the report's sidecar");
+	}
+	return line[1];
 }
 
 describe("the mutation campaign entry", () => {
@@ -508,5 +532,90 @@ describe("the mutation campaign entry", () => {
 				}
 			}
 		}
+	});
+
+	it("stands a finished campaign's raw report in the repo beside its provenance", () => {
+		// The convention a future reader starts from: the report the last campaign
+		// measured stands in the repo beside the verification record, raw and
+		// byte-for-byte the reporter's, with the sidecar that names the head it
+		// belongs to, the day it ran, the scope it covered, and the workers it
+		// stood on. This file's tree is not a checkout, so the head it cannot
+		// resolve is named `unknown`.
+		clearTestTreeSandbox();
+		const run = runMutate("1.4.2", ["--mutate=src/lines.ts", "--concurrency=4"]);
+		expect(run.status).toBe(0);
+		expect(run.stderr).toContain(
+			"the campaign's raw report stands under docs/verification/mutation/",
+		);
+		const committed = join(dir, "docs/verification/mutation", "last-campaign.json");
+		expect(existsSync(committed)).toBe(true);
+		expect(readFileSync(committed, "utf8")).toBe(
+			readFileSync(join(dir, "reports/mutation/mutation.json"), "utf8"),
+		);
+		const meta = JSON.parse(
+			readFileSync(join(dir, "docs/verification/mutation/last-campaign.meta.json"), "utf8"),
+		) as {
+			head: string;
+			date: string;
+			scope: string;
+			concurrency: string;
+		};
+		expect(meta.head).toBe("unknown");
+		expect(meta.date).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+		expect(meta.scope).toBe("src/lines.ts");
+		expect(meta.concurrency).toBe("4");
+		// A scope the caller does not name is stated the way the script states it,
+		// read out of the script rather than restated here.
+		clearTestTreeSandbox();
+		expect(runMutate("1.4.2", ["--mutate=src/lines.ts", "--dryRunOnly"]).status).toBe(0);
+		clearTestTreeSandbox();
+		expect(runMutate("1.4.2", []).status).toBe(0);
+		const metaAgain = JSON.parse(
+			readFileSync(join(dir, "docs/verification/mutation/last-campaign.meta.json"), "utf8"),
+		) as { scope: string; concurrency: string };
+		expect(metaAgain.scope).toBe(scriptDefaultScope());
+		expect(metaAgain.concurrency).toContain("config");
+		clearTestTreeSandbox();
+	});
+
+	it("a dry run measures the budget and never overwrites the last campaign's report", () => {
+		// The sentinel is the last campaign's committed artifact. A dry run writes
+		// its own report to the working space, the way core does, and the entry
+		// point must leave the committed artifact exactly where the last campaign
+		// left it: the dry run's data is coverage, not survivors, and standing it
+		// in the repo would falsify the next reader's triage.
+		const committed = join(dir, "docs/verification/mutation");
+		mkdirSync(committed, { recursive: true });
+		writeFileSync(join(committed, "last-campaign.json"), "the last campaign's data\n", "utf8");
+		writeFileSync(join(committed, "last-campaign.meta.json"), '{"head":"sentinel"}\n', "utf8");
+		clearTestTreeSandbox();
+		const run = runMutate("1.4.2", ["--dryRunOnly"]);
+		expect(run.status).toBe(0);
+		// The dry run's own report still lands in the working space, where a human
+		// reads it.
+		expect(existsSync(join(dir, "reports/mutation/mutation.json"))).toBe(true);
+		expect(readFileSync(join(committed, "last-campaign.json"), "utf8")).toBe(
+			"the last campaign's data\n",
+		);
+		expect(readFileSync(join(committed, "last-campaign.meta.json"), "utf8")).toBe(
+			'{"head":"sentinel"}\n',
+		);
+		clearTestTreeSandbox();
+	});
+
+	it("a campaign that dies before its reporter never overwrites the last campaign's report", () => {
+		// The initial run's death and a native crash both end a campaign without a
+		// report: the run rewrites nothing, its mtime stands where this run's
+		// pre-run read left it, and the last campaign's data stands for the next
+		// reader.
+		const committed = join(dir, "docs/verification/mutation");
+		mkdirSync(committed, { recursive: true });
+		writeFileSync(join(committed, "last-campaign.json"), "the last campaign's data\n", "utf8");
+		clearTestTreeSandbox();
+		expect(runMutate("1.4.2", [], true).status).not.toBe(0);
+		expect(readFileSync(join(committed, "last-campaign.json"), "utf8")).toBe(
+			"the last campaign's data\n",
+		);
+		clearTestTreeSandbox();
 	});
 });
