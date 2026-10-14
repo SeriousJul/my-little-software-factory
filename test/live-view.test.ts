@@ -56,6 +56,7 @@ import {
 	workspaceGetJson,
 	workspaceListJson,
 } from "./fake-runner.ts";
+import { appOn } from "./panel-app.ts";
 import { flushPassiveNow } from "./passive-flush-hold.ts";
 import { type Plane, plane } from "./plane.ts";
 
@@ -296,10 +297,9 @@ async function awaitFallbackToTheList(setup: AppSetup, base: BaseKeyHandlers): P
 describe("the Live view on the ticket list", () => {
 	test("g on an open ticket refuses with the Consultation section's words", async () => {
 		const fake = new FakeRunner();
-		const planeRecord = await plane({ runner: () => fake });
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{ runner: () => fake },
+			async (setup, planeRecord) => {
 				// The walk lands on the open ticket: it holds no agent and no
 				// pane, so `g` states the Consultation section's own refusal
 				// on the Message line and focuses nothing.
@@ -316,7 +316,12 @@ describe("the Live view on the ticket list", () => {
 				expect(frame).toContain("Warning:");
 				expect(fake.commands()).not.toContain("herdr agent focus");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
+			(planeRecord) => ({
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			}),
 		);
 	});
 
@@ -325,10 +330,9 @@ describe("the Live view on the ticket list", () => {
 		fake.set("herdr", [...READ("pane-implement")], {
 			stdout: "the layout math is off by one\n",
 		});
-		const planeRecord = await plane({ runner: () => fake });
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{ runner: () => fake },
+			async (setup, planeRecord) => {
 				// The walk lands on the Starting ticket: its handoff already
 				// records the pane the Live view streams.
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -356,7 +360,12 @@ describe("the Live view on the ticket list", () => {
 				expect(frame).toContain("Agent view");
 				expect(frame).toContain("Enter Goto");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
+			(planeRecord) => ({
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			}),
 		);
 	});
 
@@ -365,10 +374,9 @@ describe("the Live view on the ticket list", () => {
 		fake.set("herdr", [...READ("pane-implement")], {
 			stdout: "line one of the agent work\nline two of the agent work\n",
 		});
-		const planeRecord = await plane({ runner: () => fake });
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{ runner: () => fake },
+			async (setup, planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -389,7 +397,12 @@ describe("the Live view on the ticket list", () => {
 					rgb(roleColor("text")),
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
+			(planeRecord) => ({
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			}),
 		);
 	});
 
@@ -404,10 +417,9 @@ describe("the Live view on the ticket list", () => {
 				{ stdout: "first tick\nsecond tick\n" },
 			],
 		);
-		const planeRecord = await plane({ runner: () => fake });
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{ runner: () => fake },
+			async (setup, planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -425,7 +437,12 @@ describe("the Live view on the ticket list", () => {
 					fake.commands().filter((c) => c === READ_COMMAND("pane-implement")).length,
 				).toBeGreaterThanOrEqual(2);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
+			(planeRecord) => ({
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			}),
 		);
 	});
 
@@ -437,10 +454,9 @@ describe("the Live view on the ticket list", () => {
 			[...READ("pane-implement")],
 			[{ stdout: `${many(30)}\n` }, { stdout: `${many(35)}\n` }, { stdout: `${many(35)}\n` }],
 		);
-		const planeRecord = await plane({ runner: () => fake });
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{ runner: () => fake },
+			async (setup, planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -461,7 +477,12 @@ describe("the Live view on the ticket list", () => {
 				await frameUntil(setup, "the next read", (f) => f.includes("tick 35"));
 				expect(frameText(setup.captureCharFrame())).not.toContain("tick 10");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
+			(planeRecord) => ({
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			}),
 		);
 	});
 
@@ -473,10 +494,9 @@ describe("the Live view on the ticket list", () => {
 			[...READ("pane-implement")],
 			[{ stdout: `${many(30)}\n` }, { stdout: `${many(35)}\n` }, { stdout: `${many(35)}\n` }],
 		);
-		const planeRecord = await plane({ runner: () => fake });
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{ runner: () => fake },
+			async (setup, planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -507,7 +527,12 @@ describe("the Live view on the ticket list", () => {
 				).toBeGreaterThanOrEqual(2);
 				expect(frameText(setup.captureCharFrame())).not.toContain("tick 35");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
+			(planeRecord) => ({
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			}),
 		);
 	});
 
@@ -519,10 +544,9 @@ describe("the Live view on the ticket list", () => {
 			[...READ("pane-implement")],
 			[{ stdout: `${many(30)}\n` }, { stdout: `${many(35)}\n` }, { stdout: `${many(35)}\n` }],
 		);
-		const planeRecord = await plane({ runner: () => fake });
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{ runner: () => fake },
+			async (setup, planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -550,7 +574,12 @@ describe("the Live view on the ticket list", () => {
 				await frameUntil(setup, "the re-pinned stream", (f) => f.includes("tick 35"));
 				expect(frameText(setup.captureCharFrame())).not.toContain("tick 01");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
+			(planeRecord) => ({
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			}),
 		);
 	});
 
@@ -565,10 +594,9 @@ describe("the Live view on the ticket list", () => {
 				{ code: 1, stderr: "the pane is gone" },
 			],
 		);
-		const planeRecord = await plane({ runner: () => fake });
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{ runner: () => fake },
+			async (setup, planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -586,17 +614,21 @@ describe("the Live view on the ticket list", () => {
 				expect(frame).toContain("last good lines");
 				expect(spanColors(setup, "Stale Agent output")).toContainEqual(rgb(roleColor("subtext0")));
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
+			(planeRecord) => ({
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			}),
 		);
 	});
 
 	test("esc closes the Live view without side effects", async () => {
 		const fake = new FakeRunner();
 		fake.set("herdr", [...READ("pane-implement")], { stdout: "the agent works\n" });
-		const planeRecord = await plane({ runner: () => fake });
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{ runner: () => fake },
+			async (setup, planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -613,7 +645,12 @@ describe("the Live view on the ticket list", () => {
 				expect(fake.commands().join("\n")).not.toContain("agent focus");
 				expect(fake.commands().every((c) => c === READ_COMMAND("pane-implement"))).toBe(true);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
+			(planeRecord) => ({
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			}),
 		);
 	});
 
@@ -662,10 +699,9 @@ describe("the Live view on the ticket list", () => {
 	test("the Key guide names the live-view mode and its controls", async () => {
 		const fake = new FakeRunner();
 		fake.set("herdr", [...READ("pane-implement")], { stdout: "the agent works\n" });
-		const planeRecord = await plane({ runner: () => fake });
-
-		await withApp(
-			async (setup) => {
+		await appOn(
+			{ runner: () => fake },
+			async (setup, planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -691,7 +727,12 @@ describe("the Live view on the ticket list", () => {
 					"Enter Goto - the Agent's pane is not alive in the last poll",
 				]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "held" } },
+			(planeRecord) => ({
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			}),
 		);
 	});
 });
