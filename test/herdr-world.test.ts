@@ -12,8 +12,14 @@
  */
 import { describe, expect, test } from "bun:test";
 import { BYPASS_CONTRIBUTOR_PUSH_HOOK } from "../src/git-push.ts";
+import { FakeRunner } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
-import { type HerdrWorldDescription, type StubHerdrWorld, stubHerdrWorld } from "./herdr-world.ts";
+import {
+	type HerdrWorldDescription,
+	type StubHerdrWorld,
+	stubHerdrWorld,
+	worldEgress,
+} from "./herdr-world.ts";
 
 const CHECKOUT = "/home/jul/src/factory";
 const OTHER_CHECKOUT = "/home/jul/src/billing";
@@ -851,6 +857,20 @@ describe("the Agent side", () => {
 		expect(() => world.setAgentStatus("worker-gone", "done")).toThrow();
 	});
 
+	test("a removeAgent drop omits the agent from the next list, leaves its pane, and refuses an unknown name", async () => {
+		const world = healthyWorld();
+		world.removeAgent("worker-1");
+		const listed = await world.run("herdr", ["agent", "list"]);
+		const names = resultOf<{ agents: AgentRow[] }>(listed.stdout).agents.map((agent) => agent.name);
+		expect(names).not.toContain("worker-1");
+		// The drop stops the list, not the pane: the pane the agent stood in remains.
+		const panes = resultOf<{ panes: PaneRow[] }>(
+			(await world.run("herdr", ["pane", "list", "--workspace", "ws-1"])).stdout,
+		).panes;
+		expect(panes.some((pane) => pane.pane_id === "pane-1")).toBe(true);
+		expect(() => world.removeAgent("worker-gone")).toThrow();
+	});
+
 	test("a pane send-text and a send-keys answer the pane and record what reached it", async () => {
 		const world = healthyWorld();
 		const text = await world.run("herdr", ["pane", "send-text", "pane-1", "hello", "world"]);
@@ -1186,6 +1206,27 @@ describe("the recording", () => {
 		);
 		expect(world.commands()).toContain("herdr agent prompt worker-1 go");
 		expect(world.settledCommands()).not.toContain("herdr agent prompt worker-1 go");
+	});
+
+	test("a raised command on the egress never settles, on either side", async () => {
+		const world = healthyWorld();
+		const fallback = new FakeRunner();
+		const egress = worldEgress(world, fallback);
+		world.raise("herdr", ["agent", "prompt", "worker-1", "go"], "the world's raise");
+		fallback.reject("gh", ["api", "repos/acme/factory/issues/9"], "the fallback's raise");
+		await expect(egress.run("herdr", ["agent", "prompt", "worker-1", "go"])).rejects.toThrow(
+			"the world's raise",
+		);
+		await expect(egress.run("gh", ["api", "repos/acme/factory/issues/9"])).rejects.toThrow(
+			"the fallback's raise",
+		);
+		await egress.run("herdr", ["workspace", "list"]);
+		expect(egress.commands()).toEqual([
+			"herdr agent prompt worker-1 go",
+			"gh api repos/acme/factory/issues/9",
+			"herdr workspace list",
+		]);
+		expect(egress.settledCommands()).toEqual(["herdr workspace list"]);
 	});
 
 	test("a per-command sequence answers in call order", async () => {

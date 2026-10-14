@@ -1630,6 +1630,61 @@ the same suites, beside `repo-init-stub.test.ts` and `repo-init.test.ts` at
 | The frame suites' clones | Untouched by this stage |
 | The count on another machine | Measured on this machine only, the way the page's other cost rows stand |
 
+## Issue #375: the auto-mode suite moves onto the world (2026-10-13, the landing)
+
+The move is the campaign's next stage on `test/auto-mode.test.ts` (issue
+#375): the suite's tests read their herdr and git side through the Stub
+herdr world instead of the pin table's launch sequences, and the GitHub
+side stays pinned, the way the world leaves it unmodelled.
+
+### What was measured
+
+| Piece | Value |
+| --- | --- |
+| Heads | `55a32d5c`, the head of `origin/main` the landing re-merges, where the `test-dup` baseline stands at 197; `76f86309`, the head the move lands on; `c3a58b1d`, the head of `origin/main` the rework round re-merges, past the landing's base; `67cb8e95`, the rework head beside it |
+| jscpd | 5.4.0, pinned as a devDependency, run with the settings `.jscpd.json` holds (`minTokens: 100`, `minLines: 5`) |
+| The `test` scope, at `55a32d5c` (before) | **197 clones** (14 cross-file, 183 intra-file), 4,091 duplicated lines, re-measured on this branch's base |
+| The `test` scope, at `76f86309` (after) | **190 clones** (14 cross-file, 176 intra-file), 3,974 duplicated lines |
+| `test/auto-mode.test.ts`, at `55a32d5c` (before) | 28 clones, 457 duplicated lines, 5,404 file lines |
+| `test/auto-mode.test.ts`, at `76f86309` (after) | 21 clones, 340 duplicated lines, 5,294 file lines |
+| The baseline counts | `test-dup` lands at 190 in `.quality-baseline.json`, beside `measured-on` 76f86309, and stands at 190 on the rework head `67cb8e95` |
+
+### What the move changed
+
+- The suite's fixture builds the world from the ticket's shape, its
+  environment, and the agents and pane contents the test names, and the
+  plane's herdr and git egress routes through the world: the launch
+  sequences the pin table held stand once in the standing, and the test
+  reads the world's calls for the commands it verifies.
+- `test/herdr-world.ts` gains the routing egress the app-level suites
+  share, the described worktree workspace's binding to the worktree
+  herdr opened it from, and the `removeAgent` fact a test stands when an
+  agent dies beside its pane.
+- The suite's `stubCheckout` copy and its local launch builders are gone.
+  A test that verifies a herdr refusal the world does not hold stands it
+  on the world's override, and the settled tickets' `gh` reads and writes
+  stay pinned on the suite's fallback runner.
+- A standing agent now lists in the world the way herdr lists it, so a
+  started agent's row keeps its Starting window's face on the settle
+  instead of wearing the marker the older static pins left, and the tests
+  that waited for that marker wait for the face with the Working line
+  cleared.
+- The landing re-merges `origin/main` past the branch's base: the suite's
+  plane stands on the Seeded plane the `#378` stage landed, its fetched
+  ticket reads from the shared fact fixture, and the tests whose seeded
+  agent died stand their state clock past the startup grace the `#388`
+  stage put on the boot's poll.
+
+### The gate on this branch
+
+| Check | Result |
+| --- | --- |
+| `bun run lint` and `bun run typecheck`, on the merged tree | Pass, no findings, on the tree beside `origin/main` at `c3a58b1d`; the one info-level note the lint stands beside is pre-existing on `origin/main` |
+| `bun run audit`, on the merged tree | Pass at `67cb8e95`: `type` 0, `lint` 0, `duplicates` 0 / baseline 0, `test-dup` 190 / baseline 190, the 7 pre-existing CodeQL findings stand as open alerts |
+| `bun run test`, on the merged tree | Pass at `67cb8e95` beside `origin/main` at `c3a58b1d`: 3,434 tests, 0 fail, 17,423 `expect()` calls, across 155 files, in 70.00 seconds. The count stands on `origin/main`'s re-merge past the landing's base, which carries #392's frame-rig tests, and on the rework round's one egress test; the `expect()` count moves with the polling load the run stands in. No other `bun test` ran on this machine while the suite ran (32 cores) |
+| `test/auto-mode.test.ts`, the move's own suite | 94 pass, 0 fail, 461 `expect()` calls in the scoped run beside `67cb8e95`; the full run carries the suite green |
+| The gate's tree and this record's tree | The full run reads `67cb8e95` beside `origin/main` at `c3a58b1d`; the pushed head adds only this table's markdown, which no test reads |
+
 ## What was not measured
 
 | Item | State |
