@@ -851,6 +851,20 @@ describe("the Agent side", () => {
 		expect(() => world.setAgentStatus("worker-gone", "done")).toThrow();
 	});
 
+	test("a removeAgent drop omits the agent from the next list, leaves its pane, and refuses an unknown name", async () => {
+		const world = healthyWorld();
+		world.removeAgent("worker-1");
+		const listed = await world.run("herdr", ["agent", "list"]);
+		const names = resultOf<{ agents: AgentRow[] }>(listed.stdout).agents.map((agent) => agent.name);
+		expect(names).not.toContain("worker-1");
+		// The drop stops the list, not the pane: the pane the agent stood in remains.
+		const panes = resultOf<{ panes: PaneRow[] }>(
+			(await world.run("herdr", ["pane", "list", "--workspace", "ws-1"])).stdout,
+		).panes;
+		expect(panes.some((pane) => pane.pane_id === "pane-1")).toBe(true);
+		expect(() => world.removeAgent("worker-gone")).toThrow();
+	});
+
 	test("a pane send-text and a send-keys answer the pane and record what reached it", async () => {
 		const world = healthyWorld();
 		const text = await world.run("herdr", ["pane", "send-text", "pane-1", "hello", "world"]);

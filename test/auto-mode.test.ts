@@ -202,14 +202,24 @@ const WORKTREE_BRANCH: Record<string, string> = {
 };
 
 /**
- * The world the seeded app runs on: the repository's checkout, the stored
- * handles the shape carries, and the agents and pane contents the test names.
- *
- * The stored tab stands in herdr for a stored handoff unless the test says it
- * is gone: a launch then reuses the workspace the standing holds, and a launch
- * the standing leaves without one makes a fresh workspace, the way herdr hands
- * out its handles from the highest id it holds.
+ * The factory branches the stored tickets work on hold no open pull request:
+ * the cycle-end draft close and the launch's own-pull read both answer the
+ * honest empty list instead of the fake's blank answer.
  */
+function pinEmptyPullLists(github: FakeRunner): void {
+	for (const branch of Object.values(WORKTREE_BRANCH))
+		github.set(
+			"gh",
+			[
+				"api",
+				"--hostname",
+				"github.com",
+				`repos/acme/factory/pulls?state=open&head=${encodeURIComponent(`acme:${branch}`)}`,
+			],
+			{ stdout: "[]\n" },
+		);
+}
+
 /** The standing's lists, filled by the standing's parts. */
 interface StandingLists {
 	workspaces: WorldWorkspaceDescription[];
@@ -217,20 +227,33 @@ interface StandingLists {
 	panes: WorldPaneDescription[];
 }
 
-/** The second ticket's open worktree, beside the first: its branch, its path, and its standing workspace. */
-function secondWorktreeStanding(
-	checkout: StandingCheckout,
-	lists: StandingLists,
-	worktreesRoot: string,
-	tabStands: boolean,
+/** The second ticket's environment, beside the first's: its branch and worktree when it works a worktree, and its stored workspace, tab, and pane on the path its environment stands on. */
+function secondStanding(
+	environment: "live-worktree" | "worktree",
+	options: {
+		checkout: StandingCheckout;
+		lists: StandingLists;
+		worktreesRoot: string;
+		tabStands: boolean;
+	},
 ): void {
+	const { checkout, lists, worktreesRoot, tabStands } = options;
 	const branch = WORKTREE_BRANCH[secondIdentity];
-	const path = join(worktreesRoot, branch.slice("factory/".length));
-	checkout.branches.push({ name: branch, remote: true });
-	checkout.worktrees.push({ path, branch, linked: true });
+	const path =
+		environment === "worktree"
+			? join(worktreesRoot, branch.slice("factory/".length))
+			: checkout.path;
+	if (environment === "worktree") {
+		checkout.branches.push({ name: branch, remote: true });
+		checkout.worktrees.push({ path, branch, linked: true });
+	}
 	if (tabStands) {
 		// The standing carries the second ticket's tab in its own workspace.
-		lists.workspaces.push({ id: "ws-2", checkoutPath: path, isWorktree: true });
+		lists.workspaces.push({
+			id: "ws-2",
+			checkoutPath: path,
+			...(environment === "worktree" ? { isWorktree: true } : {}),
+		});
 		lists.tabs.push({ id: "tab-2", workspaceId: "ws-2", cwd: path });
 		lists.panes.push({ id: "pane-2", tabId: "tab-2", workspaceId: "ws-2" });
 	}
@@ -242,11 +265,9 @@ function worktreeStanding(
 	options: {
 		fields: SeededFields;
 		worktreesRoot: string;
-		tabStands: boolean;
-		lists: StandingLists;
 	},
 ): string {
-	const { fields, worktreesRoot, tabStands, lists } = options;
+	const { fields, worktreesRoot } = options;
 	const branch = WORKTREE_BRANCH[identity];
 	const path = join(worktreesRoot, branch.slice("factory/".length));
 	checkout.branches = [
@@ -261,7 +282,6 @@ function worktreeStanding(
 			...(fields.dirtyWorktree ? { dirty: true } : {}),
 		},
 	];
-	if (fields.secondWorktree) secondWorktreeStanding(checkout, lists, worktreesRoot, tabStands);
 	return path;
 }
 
@@ -319,6 +339,15 @@ function agentStands(
 	}
 }
 
+/**
+ * The world the seeded app runs on: the repository's checkout, the stored
+ * handles the shape carries, and the agents and pane contents the test names.
+ *
+ * The stored tab stands in herdr for a stored handoff unless the test says it
+ * is gone: a launch then reuses the workspace the standing holds, and a launch
+ * the standing leaves without one makes a fresh workspace, the way herdr hands
+ * out its handles from the highest id it holds.
+ */
 function worldStanding(
 	shape: "open" | "in-flight" | "awaiting",
 	environment: "live-worktree" | "worktree",
@@ -348,8 +377,10 @@ function worldStanding(
 	const tabStands = fields.tabStands ?? shape !== "open";
 	const standingPath =
 		environment === "worktree"
-			? worktreeStanding(checkout, { fields, worktreesRoot, tabStands, lists })
+			? worktreeStanding(checkout, { fields, worktreesRoot })
 			: checkoutPath;
+	if (fields.secondEnvironment !== undefined)
+		secondStanding(fields.secondEnvironment, { checkout, lists, worktreesRoot, tabStands });
 	if (tabStands) storedStanding(environment, standingPath, fields, lists);
 	agentStands(environment, standingPath, fields, lists);
 	return world;
@@ -491,10 +522,11 @@ interface SeededFields {
 	 */
 	tabStands?: boolean;
 	/**
-	 * The second ticket's worktree stands open in its own workspace beside the
-	 * first: the standing carries its branch, its checkout, and its stored tab.
+	 * The second ticket's environment stands open in its own workspace beside
+	 * the first's: the standing carries its branch and worktree when it works
+	 * a worktree, and its stored tab either way.
 	 */
-	secondWorktree?: boolean;
+	secondEnvironment?: "live-worktree" | "worktree";
 	/** The stored worktree's checkout is dirty: herdr will not remove it. */
 	dirtyWorktree?: boolean;
 	/** The content an `agent read` of one pane returns, by the pane's id. */
@@ -541,20 +573,7 @@ function seededApp(shape: "open" | "in-flight" | "awaiting", fields: SeededField
 	// The GitHub side the world does not hold: the `gh` writes and the desktop
 	// notifications fall through to the fake the suite keeps beside the world.
 	const github = new FakeRunner();
-	// The factory branches the stored tickets work on hold no open pull
-	// request: the cycle-end draft close and the launch's own-pull read both
-	// answer the honest empty list instead of the fake's blank answer.
-	for (const branch of Object.values(WORKTREE_BRANCH))
-		github.set(
-			"gh",
-			[
-				"api",
-				"--hostname",
-				"github.com",
-				`repos/acme/factory/pulls?state=open&head=${encodeURIComponent(`acme:${branch}`)}`,
-			],
-			{ stdout: "[]\n" },
-		);
+	pinEmptyPullLists(github);
 	const runner = worldEgress(world, github);
 	const src = new FakeSource("issues", "github-issues", outcome);
 	const pullSrc =
@@ -627,14 +646,9 @@ function seededAppInAutoMode(
 	shape: "open" | "in-flight" | "awaiting",
 	fields: SeededFields = {},
 ): SeededApp {
-	const { extra, outcome, environment, detail, pullOutcome } = fields;
 	return seededApp(shape, {
 		...fields,
-		extra,
-		outcome,
-		environment,
-		detail: { ...detail, autoMode: true },
-		pullOutcome,
+		detail: { ...fields.detail, autoMode: true },
 	});
 }
 
@@ -3295,7 +3309,7 @@ describe("the leftover environment", () => {
 			extra: {},
 			outcome: pairSuccess,
 			environment: "worktree",
-			secondWorktree: true,
+			secondEnvironment: "worktree",
 		});
 		const second = app.state.handoff.claimHandoff(
 			secondIdentity,
@@ -4209,11 +4223,11 @@ describe("the auto decision", () => {
 			outcome: pairSuccess,
 			environment: "live-worktree",
 			detail: { transition: reviewRoute() },
-			agents: [
-				// The working agent the second ticket's handoff started: the
-				// world lists it, so the route waits for the free seat.
-				{ name: "watch-agent-turns", kind: "pi", status: "working", paneId: "pane-1" },
-			],
+			// The second ticket's stored environment stands open in the world,
+			// its live Agent in its own pane: the seat it holds is the one the
+			// route waits for.
+			secondEnvironment: "live-worktree",
+			agents: [{ name: SECOND_AGENT, kind: "pi", status: "working", paneId: "pane-2" }],
 		});
 		// The second ticket holds the single parallel seat with a live agent,
 		// so the route waits and the ticket stays awaiting.
@@ -4231,9 +4245,9 @@ describe("the auto decision", () => {
 		);
 		if (!claim.ok) throw new Error(claim.reason);
 		app.state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-6",
-			tabId: "tab-6",
-			workspaceId: "ws-6",
+			paneId: "pane-2",
+			tabId: "tab-2",
+			workspaceId: "ws-2",
 		});
 
 		const planeRecord = await planeOf(app);
@@ -4854,19 +4868,7 @@ describe("the handoff queue", () => {
 			agents: [],
 		});
 		const github = new FakeRunner();
-		// The GitHub side the world does not model: the cycle-end draft close
-		// answers the empty pull list for the ticket's branch.
-		for (const branch of Object.values(WORKTREE_BRANCH))
-			github.set(
-				"gh",
-				[
-					"api",
-					"--hostname",
-					"github.com",
-					`repos/acme/factory/pulls?state=open&head=${encodeURIComponent(`acme:${branch}`)}`,
-				],
-				{ stdout: "[]\n" },
-			);
+		pinEmptyPullLists(github);
 		const runner = worldEgress(world, github);
 		// Gate the first handoff's agent start: the seat stays busy through
 		// the whole key sequence, and the test releases it after the last key,
@@ -4980,13 +4982,6 @@ describe("the handoff queue", () => {
 					fetchedAt: new Date(Date.now() + 60_000).toISOString(),
 					tickets: pairMoved.tickets,
 				});
-				// The settled handoff's row stands in the in-flight group's
-				// front: the world lists its started agent, so the row wears
-				// no missing marker.
-				// The settled handoff's row stands in the in-flight group's
-				// front: the world lists its started agent, so the Starting
-				// window's face keeps standing on the settle, and the face with
-				// the Working line cleared is the settle itself.
 				// The settled handoff's row stands in the in-flight group's
 				// front: the world lists its started agent, so the Starting
 				// window's face keeps standing on the settle, and the face with
