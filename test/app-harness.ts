@@ -2,10 +2,12 @@
  * The shared frame-test harness: boot the control plane at a fixed terminal
  * size, press keys, and wait for their effects.
  *
- * Both frame test suites (the shell's and the handoff's) import from here so
- * they wait on the same frame semantics: a stale frame can never pass an
- * assertion, because the wait ends only when the effect appears or the
- * deadline dumps the last frame.
+ * The frame suites import from here so they wait on the same frame semantics:
+ * a stale frame can never pass an assertion, because the wait ends only when
+ * the effect appears or the deadline dumps the last frame. The migrated
+ * suites drive the plane through the rig's named controls and the closed set
+ * of outcomes (ADR 0128); the rest still run the retired input surface and
+ * migrate one surface at a time.
  */
 
 import { afterEach, beforeEach, expect, spyOn } from "bun:test";
@@ -2773,16 +2775,27 @@ function textEntryFocused(setup: Setup): boolean {
 }
 
 /**
+ * The named input operations settle the app to quiet after their key when the
+ * test names no outcome: the app rests where the key left it, and the next
+ * read stands on a frame the plane owes. `pressControl` and `guideKey` hold
+ * the same default, and a test that names an outcome opts out of it.
+ */
+function quietUnlessNamed(fields: ControlOutcomeFields): ControlOutcomeFields {
+	return Object.keys(fields).length === 0 ? { ...fields, quiet: true } : fields;
+}
+
+/**
  * Press the controls the Action bar never hints, one named operation each:
  * the quit key, the emergency exit, the repository-init key, and the
  * auto-handoff toggle, whose key the rig reads off the mode the frame shows.
  */
 export async function quitApp(setup: Setup, fields: ControlOutcomeFields = {}): Promise<string> {
 	checkOutcomeFields(fields, false);
+	const effective = quietUnlessNamed(fields);
 	const key = catalogueKey("quit", "ticket-list");
 	const preFrame = await settle(setup);
 	sendKey(setup, key);
-	return runOutcomes(setup, fields, {
+	return runOutcomes(setup, effective, {
 		preFrame,
 		preLine: messageRowOf(preFrame),
 		press: "the quit key",
@@ -2794,9 +2807,10 @@ export async function emergencyExit(
 	fields: ControlOutcomeFields = {},
 ): Promise<string> {
 	checkOutcomeFields(fields, false);
+	const effective = quietUnlessNamed(fields);
 	const preFrame = await settle(setup);
 	sendKey(setup, "Ctrl+C");
-	return runOutcomes(setup, fields, {
+	return runOutcomes(setup, effective, {
 		preFrame,
 		preLine: messageRowOf(preFrame),
 		press: "the emergency exit",
@@ -2808,10 +2822,11 @@ export async function initRepository(
 	fields: ControlOutcomeFields = {},
 ): Promise<string> {
 	checkOutcomeFields(fields, false);
+	const effective = quietUnlessNamed(fields);
 	const key = catalogueKey("repository-init", "ticket-list");
 	const preFrame = await settle(setup);
 	sendKey(setup, key);
-	return runOutcomes(setup, fields, {
+	return runOutcomes(setup, effective, {
 		preFrame,
 		preLine: messageRowOf(preFrame),
 		press: "the repository-init key",
@@ -2823,10 +2838,11 @@ export async function toggleAutoHandoff(
 	fields: ControlOutcomeFields = {},
 ): Promise<string> {
 	checkOutcomeFields(fields, false);
+	const effective = quietUnlessNamed(fields);
 	const preFrame = await settle(setup);
 	const key = catalogueKey("auto-handoff", textEntryFocused(setup) ? "form-field" : "ticket-list");
 	sendKey(setup, key);
-	return runOutcomes(setup, fields, {
+	return runOutcomes(setup, effective, {
 		preFrame,
 		preLine: messageRowOf(preFrame),
 		press: "the auto-handoff toggle",
@@ -2842,7 +2858,9 @@ export type PageKey = "pageup" | "pagedown" | "home" | "end";
  * page or jump keys, so they resolve off the bar: the rig sends the terminal
  * sequence the plane parses for the key, after the pre-press settle, on the
  * rig's one deadline. The plane routes the key to whatever scroll surface the
- * frame focuses: the list, the detail, the body, or the guide's rows.
+ * frame focuses: the list, the detail, the body, or the guide's rows. Like
+ * its siblings on the escape list, it settles the app to quiet after the key
+ * when the test names no outcome.
  */
 export async function pageKey(
 	setup: Setup,
@@ -2850,9 +2868,10 @@ export async function pageKey(
 	fields: ControlOutcomeFields = {},
 ): Promise<string> {
 	checkOutcomeFields(fields, false);
+	const effective = quietUnlessNamed(fields);
 	const preFrame = await settle(setup);
 	sendKey(setup, displayKey(key));
-	return runOutcomes(setup, fields, {
+	return runOutcomes(setup, effective, {
 		preFrame,
 		preLine: messageRowOf(preFrame),
 		press: `the ${displayKey(key)} key`,
@@ -2881,8 +2900,7 @@ export async function guideKey(
 ): Promise<string> {
 	const control = catalogueControl(controlId);
 	checkOutcomeFields(fields, false);
-	const effective: ControlOutcomeFields =
-		Object.keys(fields).length === 0 ? { ...fields, quiet: true } : fields;
+	const effective = quietUnlessNamed(fields);
 	const preFrame = await settle(setup);
 	const aliases = new Set<string>();
 	for (const mode of control.modes) {

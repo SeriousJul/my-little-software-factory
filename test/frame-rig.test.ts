@@ -412,6 +412,16 @@ describe("the frame rig's escape list", () => {
 		}, toOpenTicket);
 	});
 
+	test("a named escape with no outcome settles the app to quiet after its key", async () => {
+		await withHealthyPlane(async (setup) => {
+			// No outcome named: the operation takes the quiet default, so the frame
+			// it hands back rests on the row the key landed, not on the press.
+			await pageKey(setup, "end");
+			const frame = await pageKey(setup, "home");
+			expect(frameText(frame)).toContain("Drop the legacy auth");
+		}, toOpenTicket);
+	});
+
 	test("reaches the key the guide names where the bar paints none", async () => {
 		const planeRecord = await plane({ runner: (fake) => fake, sources: [], groupingAxis: "none" });
 		await withApp(

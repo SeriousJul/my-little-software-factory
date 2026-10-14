@@ -321,7 +321,7 @@ surface - the base panes included - paints from the shared Theme module (ADR
 above), the terminal walks have not been re-run on the theme-inherited paint
 (see the inherited-Theme record above), inherited herdr theme pairs are not
 contrast-checked (limit recorded there), and the frame suites' move to the
-rig's named controls and outcomes lands one surface at a time - five are owned
+rig's named controls and outcomes lands one surface at a time - seven are owned
 now, the rest still run the retired surface - as the frame-rig record below
 measures.
 
@@ -1980,6 +1980,14 @@ before a step gives the plane the pass that commits the detail pane's
 identity reset before the cross's unmount saves the pane's offset, and a
 round trip through the other section loses the offset the operator left
 behind - and the rig's suite pins the walk across the boundary and back.
+The walk's back key goes out beside its walk keys as one literal: when the
+box the walk starts from holds no focus marker, the cursor stands where a
+named press resolves no hint - a detail, a section the walk steps away from,
+or a surface the frame's markers stand not on at all - and the step that
+brings it to the box the walk starts from sends the `h` the guide paints
+beside the pane-navigation arrows, waited on the walk's starting marker,
+because a frame the section markers name nowhere answers the back key to the
+section it leaves.
 `frameUntil` stands for a frame check no outcome names. A wait that still stands after the deadline names the
 outcome it waited on and the press that sent it, and the rig's suite pins the
 message on a press that runs to the deadline. The close proof is the set of

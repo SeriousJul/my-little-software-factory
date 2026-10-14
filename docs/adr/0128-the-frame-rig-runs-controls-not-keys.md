@@ -144,7 +144,14 @@ key read from the catalogue, and each step goes out straight after the frame
 it answers from: a settle before a step gives the plane the pass that commits
 the detail pane's identity reset before the cross's unmount saves the pane's
 offset, and a round trip through the other section loses the offset the
-operator left behind. A static check refuses
+operator left behind. The walk holds one blind key beside its walk keys: when
+the box the walk starts from holds no focus marker, the cursor stands where a
+named press resolves no hint - a detail, a section the walk steps away from,
+or a surface the frame's markers stand not on at all - and the step that
+brings it to the box the walk starts from goes out as the literal `h` the
+guide paints beside the pane-navigation arrows, waited on the walk's starting
+marker, because a frame the section markers name nowhere answers the back key
+to the section it leaves. A static check refuses
 a frame test that reaches for a raw key outside the list, in the shape of the
 assertion-architecture check and the shared-control check.
 
@@ -171,8 +178,12 @@ bar, that is a finding about the bar: it gets filed, not worked around.
 
 ## Consequences
 
-A key change lands in the Control catalogue and nowhere else. The suite follows
-at its next run, because it names the control and not the key.
+A key change lands in the Control catalogue and nowhere else, and the suite
+follows at its next run: a press that names no `via` takes the first key the
+bar painted, and the test names the control and not the key. A press that
+names a `via` token keeps that character: a re-key of the token the test names
+still fails the press at the resolution, and the suite pays for the alias it
+named in its own lines.
 
 A frame test reads as the operator's walk: one control and one outcome. A
 reviewer can check it against the Action bar and the Key guide without decoding a

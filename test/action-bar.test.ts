@@ -22,6 +22,7 @@ import type { FactoryState } from "../src/state.ts";
 import type { AppSetup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
+	crossCursor,
 	emergencyExit,
 	frameUntil,
 	guideKey,
@@ -129,9 +130,10 @@ async function walkToOpenTicket(setup: AppSetup): Promise<void> {
 }
 
 /**
- * Step the cursor with the list's Move control until the frame names the
- * target: crossing a section's boundary is a walk, and the rig sends every
- * step as a press of the named control.
+ * Step the cursor with the list's Move control until the frame names the row
+ * it waits for: a walk inside one section's list. Crossing a section's
+ * boundary goes out through the rig's own `crossCursor`, which owns the
+ * walk's key order and its back key.
  */
 async function moveCursorTo(
 	setup: AppSetup,
@@ -570,11 +572,7 @@ describe("the contextual Action bar", () => {
 			const planeRecord = await plane({});
 			await withApp(
 				async (setup) => {
-					await moveCursorTo(
-						setup,
-						"j",
-						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
-					);
+					await crossCursor(setup, "consultations");
 					// No types stand in the config, and the bar packs past the
 					// launch hint while it stands unavailable: the key is read
 					// from the guide, which names the control and its refusal.
@@ -975,11 +973,7 @@ describe("the contextual Action bar", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await moveCursorTo(
-						setup,
-						"j",
-						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
-					);
+					await crossCursor(setup, "consultations");
 					await emergencyExit(setup);
 					await destroyed(setup);
 				},
@@ -997,11 +991,7 @@ describe("the contextual Action bar", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await moveCursorTo(
-						setup,
-						"j",
-						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
-					);
+					await crossCursor(setup, "consultations");
 					// The Consultations bar packs past the launch hint, so the
 					// key is read from the guide the view names it in.
 					await guideKey(setup, "launch", "c", {
@@ -1024,11 +1014,7 @@ describe("the contextual Action bar", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await moveCursorTo(
-						setup,
-						"j",
-						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
-					);
+					await crossCursor(setup, "consultations");
 					await pressControl(setup, "help", {
 						via: "?",
 						opens: "Key guide - Consultation list",
