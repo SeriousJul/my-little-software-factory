@@ -18,13 +18,16 @@ import { agentNameFor } from "../src/naming.ts";
 import type { FactoryState } from "../src/state.ts";
 import {
 	actionBarRowOf,
-	awaitFrame,
 	detailPaneText,
+	FRAME_DEADLINE_MS,
+	frameUntil,
+	guideKey,
 	HEIGHT,
 	messageRowOf,
-	press,
+	pressControl,
 	rowsOf,
 	settle,
+	sleep,
 	WIDTH,
 	waitSourceHealthy,
 	withApp,
@@ -136,6 +139,46 @@ function listRowOf(frame: string, lead: string): number {
 }
 
 /** The Ticket section's header row. */
+/**
+ * Press the List filter's guide key until the frame holds the facts the press
+ * must leave, re-sending inside the rig's one deadline where a key can land
+ * mid-update and the plane drops it.
+ */
+async function filterTo(
+	setup: Parameters<Parameters<typeof withApp>[0]>[0],
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	const deadline = Date.now() + FRAME_DEADLINE_MS - 500;
+	for (;;) {
+		await guideKey(setup, "ticket-filter", "f", { quiet: true });
+		const frame = setup.captureCharFrame();
+		if (predicate(frame)) return settle(setup);
+		if (Date.now() >= deadline) throw new Error(`the filter key never left ${what}`);
+		await sleep(300);
+	}
+}
+
+/**
+ * Press the mute's guide key until the frame holds the facts the press must
+ * leave, re-sending inside the rig's one deadline where a key can land
+ * mid-update and the plane drops it.
+ */
+async function muteTo(
+	setup: Parameters<Parameters<typeof withApp>[0]>[0],
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	const deadline = Date.now() + FRAME_DEADLINE_MS - 500;
+	for (;;) {
+		await guideKey(setup, "ticket-mute", "u", { quiet: true });
+		const frame = setup.captureCharFrame();
+		if (predicate(frame)) return settle(setup);
+		if (Date.now() >= deadline) throw new Error(`the mute key never left ${what}`);
+		await sleep(300);
+	}
+}
+
 function headerRow(frame: string): string {
 	return rowsOf(frame).find((row) => row.includes("Tickets")) ?? "";
 }
@@ -150,7 +193,7 @@ async function listed(
 	// The settle lands on a later frame; wait for the health to stand, so a
 	// key that asks for an actionable row reads the settle, not the loading.
 	await waitSourceHealthy(setup.plane.state);
-	return await awaitFrame(setup, (f) => listRowOf(f, lead) >= 0, "the Ticket rows");
+	return await frameUntil(setup, "the Ticket rows", (f) => listRowOf(f, lead) >= 0);
 }
 
 /** Start a refresh with the `r` key and let its source fetch land. */
@@ -162,15 +205,10 @@ async function refreshed(
 	// The refresh control reaches the source on the next frame, and the fake
 	// holds that fetch until this test settles it.
 	const before = src.calls;
-	setup.mockInput.pressKey("r");
-	await awaitFrame(setup, () => src.calls > before, "the refresh to reach the source", 5_000);
+	await pressControl(setup, "refresh", { quiet: true });
+	await frameUntil(setup, "the refresh to reach the source", () => src.calls > before);
 	src.settle(outcome);
-	await awaitFrame(
-		setup,
-		(f) => !messageRowOf(f).includes("refreshing"),
-		"the refresh to land",
-		5_000,
-	);
+	await frameUntil(setup, "the refresh to land", (f) => !messageRowOf(f).includes("refreshing"));
 }
 
 describe("the mute key", () => {
@@ -186,9 +224,8 @@ describe("the mute key", () => {
 				// comment. The only command the frame runs after the key is
 				// the observation's own read-only agent list.
 				const commandsBefore = runner.commands().length;
-				const frame = await press(
+				const frame = await muteTo(
 					setup,
-					"u",
 					"the rows to leave the list",
 					(f) => listRowOf(f, FIRST_LEAD) < 0 && headerRow(f).includes("muted: 2"),
 				);
@@ -230,16 +267,15 @@ describe("the mute key", () => {
 				// The same key takes the mute back, from the row the ledger
 				// holds: the cycle walks the empty pile past, and the ledger's
 				// row is the act's own undo.
-				await press(
+				await filterTo(
 					setup,
-					"f",
 					"the empty pile",
 					(f) => listRowOf(f, FIRST_LEAD) < 0 && listRowOf(f, SECOND_LEAD) < 0,
 				);
-				await press(setup, "f", "the muted view", (f) => listRowOf(f, FIRST_LEAD) >= 0);
+				await filterTo(setup, "the muted view", (f) => listRowOf(f, FIRST_LEAD) >= 0);
 				// The key flips from the ledger's row: the ledger empties with the
 				// last act, and the rows come back to the view the cycle walks to.
-				const back = await press(setup, "u", "the unmute", (f) => f.includes("no muted Tickets"));
+				const back = await muteTo(setup, "the unmute", (f) => f.includes("no muted Tickets"));
 				expect(messageRowOf(back)).toContain(
 					"source issues is not muted: its rows come back from the list, and the machine may start them",
 				);
@@ -247,9 +283,8 @@ describe("the mute key", () => {
 				expect(state.ticketWorkCycle.projectedTickets([], "implement")[0]).toEqual(
 					expect.objectContaining({ muted: false, mutedAt: null }),
 				);
-				const rowsBack = await press(
+				const rowsBack = await filterTo(
 					setup,
-					"f",
 					"every row",
 					(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) >= 0,
 				);
@@ -268,40 +303,29 @@ describe("the mute key", () => {
 			async (setup) => {
 				await listed(setup, src);
 				setup.resize(wide, HEIGHT);
-				const bar = await awaitFrame(
-					setup,
-					(f) => actionBarRowOf(f).includes("u Mute issues"),
-					"the bar to name the mute",
+				const bar = await frameUntil(setup, "the bar to name the mute", (f) =>
+					actionBarRowOf(f).includes("u Mute issues"),
 				);
 				expect(actionBarRowOf(bar)).toContain("u Mute issues");
-				await press(setup, "u", "the mute", (f) => headerRow(f).includes("muted: 2"));
+				await muteTo(setup, "the mute", (f) => f.includes("muted: 2"));
 				// The ledger holds the rows the mute took, and the bar's hint
 				// flips on the row the ledger stands on.
-				await press(
+				await filterTo(
 					setup,
-					"f",
 					"the empty pile",
 					(f) => listRowOf(f, FIRST_LEAD) < 0 && listRowOf(f, SECOND_LEAD) < 0,
 				);
-				const ledger = await press(
+				const ledger = await filterTo(
 					setup,
-					"f",
 					"the muted view",
 					(f) => listRowOf(f, FIRST_LEAD) >= 0,
 				);
-				const flipped = await awaitFrame(
-					setup,
-					(f) => actionBarRowOf(f).includes("u Un-mute issues"),
-					"the bar to flip",
+				const flipped = await frameUntil(setup, "the bar to flip", (f) =>
+					actionBarRowOf(f).includes("u Un-mute issues"),
 				);
 				expect(actionBarRowOf(flipped)).toContain("u Un-mute issues");
 				// The detail pane's bar names the same key for the same source.
-				setup.mockInput.pressKey("l");
-				const detailed = await awaitFrame(
-					setup,
-					(f) => actionBarRowOf(f).includes("u Un-mute issues"),
-					"the detail bar to name the mute",
-				);
+				const detailed = await pressControl(setup, "detail", { shows: "u Un-mute issues" });
 				expect(actionBarRowOf(detailed)).toContain("u Un-mute issues");
 				expect(listRowOf(ledger, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
 			},
@@ -314,18 +338,16 @@ describe("the mute key", () => {
 		await withApp(
 			async (setup) => {
 				await listed(setup, src);
-				await press(setup, "u", "the mute", (f) => headerRow(f).includes("muted: 2"));
+				await muteTo(setup, "the mute", (f) => f.includes("muted: 2"));
 				// The cycle walks the empty pile past, and the ledger holds both
 				// rows, in the list's own order, each wearing the marker.
-				await press(
+				await filterTo(
 					setup,
-					"f",
 					"the empty pile",
 					(f) => listRowOf(f, FIRST_LEAD) < 0 && listRowOf(f, SECOND_LEAD) < 0,
 				);
-				const ledger = await press(
+				const ledger = await filterTo(
 					setup,
-					"f",
 					"the muted view",
 					(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) >= 0,
 				);
@@ -339,10 +361,9 @@ describe("the mute key", () => {
 				expect(firstRow).toContain("[open]");
 				// The every-row view holds them too, and back to the active
 				// rows, where they are gone.
-				await press(setup, "f", "every row", (f) => listRowOf(f, SECOND_LEAD) >= 0);
-				const active = await press(
+				await filterTo(setup, "every row", (f) => listRowOf(f, SECOND_LEAD) >= 0);
+				const active = await filterTo(
 					setup,
-					"f",
 					"the active rows",
 					(f) => listRowOf(f, FIRST_LEAD) < 0,
 				);
@@ -360,17 +381,15 @@ describe("the mute key", () => {
 		await withApp(
 			async (setup) => {
 				src.settle(fetchSuccess(twoTickets()));
-				const frame = await awaitFrame(
-					setup,
-					(f) => rowsOf(f).some((r) => r.startsWith("│") && r.includes("[running]")),
-					"the running badge",
+				const frame = await frameUntil(setup, "the running badge", (f) =>
+					rowsOf(f).some((r) => r.startsWith("│") && r.includes("[running]")),
 				);
 				// The live Agent holds a Parallel limit seat the mute rides over.
 				expect(frame).toContain("● manual 1/2");
 				// The cursor holds the live row. The mute takes the resting
 				// sibling out of the list and leaves the live row standing,
 				// wearing its own marker beside the badge.
-				const muted = await press(setup, "u", "the mute", (f) => {
+				const muted = await muteTo(setup, "the mute", (f) => {
 					const row = rowsOf(f).find((r) => r.startsWith("│") && r.includes("[running]"));
 					return row?.includes("muted") === true && listRowOf(f, SECOND_LEAD) < 0;
 				});
@@ -385,7 +404,7 @@ describe("the mute key", () => {
 					state.ticketWorkCycle.projectedTickets([], "implement").find((t) => t.identity === FIRST)
 						?.muted,
 				).toBe(true);
-				const taken = await press(setup, "u", "the unmute", (f) => {
+				const taken = await muteTo(setup, "the unmute", (f) => {
 					const row = rowsOf(f).find((r) => r.startsWith("│") && r.includes("[running]"));
 					return row !== undefined && !row.includes("muted");
 				});
@@ -413,11 +432,12 @@ describe("the mute key", () => {
 				// The running Ticket holds the one seat, so the second ticket's
 				// start waits in the queue.
 				expect(frame).toContain("● manual 1/1");
-				await press(setup, "j", "the open row", (f) => detailPaneText(f).includes(secondTitle));
-				await press(setup, "return", "the start to wait", (f) => f.includes("waiting: 1"));
+				await pressControl(setup, "move-list", { quiet: true, via: "j" });
+				await frameUntil(setup, "the open row", (f) => detailPaneText(f).includes(secondTitle));
+				await pressControl(setup, "handoff", { shows: "waiting: 1" });
 				// The act and its settle are one write: the waiting start leaves
 				// the queue, and the message states it beside the act.
-				const muted = await press(setup, "u", "the start to leave the queue", (f) =>
+				const muted = await muteTo(setup, "the start to leave the queue", (f) =>
 					messageRowOf(f).includes("waiting start left the Work queue"),
 				);
 				expect(messageRowOf(muted)).toContain(
@@ -444,7 +464,7 @@ describe("the mute key", () => {
 		await withApp(
 			async (setup) => {
 				await listed(setup, src);
-				await press(setup, "u", "the mute", (f) => headerRow(f).includes("muted: 2"));
+				await muteTo(setup, "the mute", (f) => f.includes("muted: 2"));
 				// The mute does not stop the read: a refresh reaches the source,
 				// its tickets keep their source facts fresh, and the resting
 				// rows stay withheld while the flag stands.
@@ -455,28 +475,25 @@ describe("the mute key", () => {
 				// The unmute rides on the ledger's row: the cycle walks the
 				// empty pile past, the key flips from the row that stands, and
 				// the rows come back to the view the cycle walks to.
-				await press(
+				await filterTo(
 					setup,
-					"f",
 					"the empty pile",
 					(f) => listRowOf(f, FIRST_LEAD) < 0 && listRowOf(f, SECOND_LEAD) < 0,
 				);
-				await press(
+				await filterTo(
 					setup,
-					"f",
 					"the muted view",
 					(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) >= 0,
 				);
-				const back = await press(setup, "u", "the unmute", (f) => f.includes("no muted Tickets"));
+				const back = await muteTo(setup, "the unmute", (f) => f.includes("no muted Tickets"));
 				expect(messageRowOf(back)).toContain(
 					"source issues is not muted: its rows come back from the list, and the machine may start them",
 				);
 				expect(state.ticketWorkCycle.projectedTickets([], "implement")[0]).toEqual(
 					expect.objectContaining({ muted: false }),
 				);
-				const rowsBack = await press(
+				const rowsBack = await filterTo(
 					setup,
-					"f",
 					"every row",
 					(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) >= 0,
 				);
@@ -491,7 +508,7 @@ describe("the mute key", () => {
 		await withApp(
 			async (setup) => {
 				await listed(setup, src);
-				const empty = await press(setup, "u", "the last rows to hide", (f) =>
+				const empty = await muteTo(setup, "the last rows to hide", (f) =>
 					rowsOf(f).some((r) => r.startsWith("│") && r.includes("no active Tickets")),
 				);
 				// The empty list names the count it hides and the key that
@@ -500,10 +517,9 @@ describe("the mute key", () => {
 				expect(headerRow(empty)).toContain("muted: 2");
 				// The ledger holds both rows, and the empty pile names its own
 				// emptiness on the way past.
-				await press(setup, "f", "the empty pile", (f) => listRowOf(f, FIRST_LEAD) < 0);
-				const ledger = await press(
+				await filterTo(setup, "the empty pile", (f) => listRowOf(f, FIRST_LEAD) < 0);
+				const ledger = await filterTo(
 					setup,
-					"f",
 					"the muted view",
 					(f) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) >= 0,
 				);
@@ -518,16 +534,14 @@ describe("the mute key", () => {
 		await withApp(
 			async (setup) => {
 				await listed(setup, src);
-				await press(setup, "u", "the mute", (f) => headerRow(f).includes("muted: 2"));
-				await press(
+				await muteTo(setup, "the mute", (f) => f.includes("muted: 2"));
+				await filterTo(
 					setup,
-					"f",
 					"the empty pile",
 					(f) => listRowOf(f, FIRST_LEAD) < 0 && listRowOf(f, SECOND_LEAD) < 0,
 				);
-				const ledger = await press(
+				const ledger = await filterTo(
 					setup,
-					"f",
 					"the muted view",
 					(f) => listRowOf(f, FIRST_LEAD) >= 0,
 				);

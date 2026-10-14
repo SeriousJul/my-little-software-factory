@@ -38,6 +38,7 @@ const OWNED_SURFACES = [
 	"test/main-view-frame.test.ts",
 	"test/message-line.test.ts",
 	"test/missing-modal.test.ts",
+	"test/muted-source.test.ts",
 	"test/override-panel.test.ts",
 	"test/placement-panel.test.ts",
 	"test/repository-select-panel.test.ts",
