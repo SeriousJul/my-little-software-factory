@@ -43,12 +43,15 @@ import {
 	BAR_LABEL_WORDINGS,
 	barControlIds,
 	barHintOwners,
+	crossCursor,
 	displayOnlyKeyLabels,
 	frameText,
+	guideKey,
 	HEIGHT,
 	hintWordings,
 	messageRowOf,
 	namedWhat,
+	pageKey,
 	parseBarText,
 	pressControl,
 	resolveControl,
@@ -397,6 +400,56 @@ describe("the frame rig's escape list", () => {
 				/the bar paints no hint that belongs to it/,
 			);
 		}, toOpenTicket);
+	});
+
+	test("sends the page and jump keys the bar's hint names nowhere", async () => {
+		await withHealthyPlane(async (setup) => {
+			// The bar's hint names `↑↓/jk`, never the page or jump keys: they stand
+			// on the escape list, and the key moves the cursor like the walk's do.
+			await pageKey(setup, "end", { moved: "Ticket id in the a" });
+			const frame = await pageKey(setup, "home", { moved: "Drop the legacy auth" });
+			expect(frameText(frame)).toContain("Drop the legacy auth");
+		}, toOpenTicket);
+	});
+
+	test("reaches the key the guide names where the bar paints none", async () => {
+		const planeRecord = await plane({ runner: (fake) => fake, sources: [], groupingAxis: "none" });
+		await withApp(
+			async (setup) => {
+				// The record is empty, so the bar leaves the Message hint off:
+				// the guide still names m, and the catalogue's own key sends it.
+				await guideKey(setup, "message", "m", {
+					refuses: "no message has been recorded",
+				});
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
+		);
+	});
+
+	test("guideKey refuses a key the guide names nowhere for the control", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			await expect(guideKey(setup, "help", "z")).rejects.toThrow(/the guide names F1, \? for it/);
+		});
+	});
+});
+
+describe("the frame rig's section walk", () => {
+	test("crosses the cursor across the section boundary, and back", async () => {
+		await withSeededPlane(
+			async (setup) => {
+				const across = await crossCursor(setup, "consultations");
+				expect(frameText(across)).toContain("❯ Consultations");
+				const back = await crossCursor(setup, "tickets");
+				expect(frameText(back)).toContain("❯ Tickets");
+			},
+			{ standing: "open", consultations: [REVIEW_RECORD] },
+		);
 	});
 });
 

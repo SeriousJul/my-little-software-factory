@@ -1318,64 +1318,99 @@ export async function openConsultationPanel(
 	await awaitNewKeyHandler(setup, before, "the confirmation panel to take the keys");
 }
 /**
- * Walk the unified cursor into the Consultation list, and wait for it there.
+ * Walk the unified cursor across the section boundary, and wait for it on
+ * the other side.
  *
  * The Main view is one visible flow: the Ticket rows, then the Consultation
- * rows. `j` from the last visible Ticket crosses the boundary and lands on
- * the first Consultation row (ADR 0019). The walk presses `j` until the
- * Consultation list shows the focus marker, so a test states that it is
- * across instead of counting the Ticket rows it crossed.
+ * rows, then the Work queue's. A step past the last row of a section lands
+ * on the first row of the next (ADR 0019), so the walk steps the list's own
+ * Move key until the target list shows the focus marker, and the test states
+ * the section it walks to instead of counting the rows it crossed.
+ *
+ * The walk keys go out straight after the frame they answer from. A settle
+ * before a key gives the plane the pass that commits the detail pane's
+ * identity reset before the cross's unmount saves the pane's offset, and a
+ * round trip through the other section loses the offset the operator left
+ * behind; the walk's one settle stands after each key, where it only waits
+ * for the step's own frame. The rig owns that order, and the test names the
+ * section it walks to.
  */
-export async function crossToConsultations(setup: Setup, maxSteps = 30): Promise<string> {
+/**
+ * The walk's starting box holds no focus marker: the cursor stands where the
+ * walk cannot reach it - a detail, a section the walk steps away from, or a
+ * section the frame's markers stand not on at all. The back key goes out
+ * blind, and the wait stands on the walk's starting marker: a frame the
+ * section markers name nowhere answers the back key to the section it
+ * leaves, and the cursor lands where the walk starts from.
+ */
+async function returnCursorToItsList(
+	setup: Setup,
+	target: "tickets" | "consultations",
+): Promise<void> {
+	const marker = target === "consultations" ? "┌─❯ Tickets" : "┌─❯ Consultations";
+	await press(setup, "h", "the list to take focus", (f) => f.includes(marker));
+}
+
+export async function crossCursor(
+	setup: Setup,
+	target: "tickets" | "consultations",
+	maxSteps = 30,
+): Promise<string> {
+	// The walk steps the move control's letter alias for its direction; the
+	// catalogue names it in every list mode the walk crosses, or the walk
+	// cannot run.
+	const letter = target === "consultations" ? "j" : "k";
+	for (const mode of ["ticket-list", "consultation-list", "work-queue-list"] as const) {
+		if (!controlById("move-list").keys(mode, DUMMY_FACTS).includes(letter))
+			throw new Error(
+				`the frame rig cannot walk the cursor to the ${target} list: the catalogue names no ${letter} key for the move control in ${mode}`,
+			);
+	}
 	// The frame marks each list's retained row at once, so the cursor is on
-	// the Consultation list only while the Consultation box title carries the
-	// focus marker, and on the Ticket list only while its box title does.
-	const onConsultations = (frame: string) =>
-		frame.includes("┌─❯ Consultations") && !frame.includes("┌─❯ Tickets");
-	if (!onConsultations(setup.captureCharFrame())) {
-		// The detail holds the cursor: bring it back to the Ticket list first.
-		if (!setup.captureCharFrame().includes("┌─❯ Tickets"))
-			await press(setup, "h", "the list to take focus", (f) => f.includes("┌─❯ Tickets"));
+	// the target list only while the target box title carries the focus
+	// marker and the other section's does not.
+	const onTarget =
+		target === "consultations"
+			? (frame: string) => frame.includes("┌─❯ Consultations") && !frame.includes("┌─❯ Tickets")
+			: (frame: string) => frame.includes("┌─❯ Tickets") && !frame.includes("┌─❯ Consultations");
+	if (!onTarget(setup.captureCharFrame())) {
+		// The walk starts from the section it steps across: `j` crosses from
+		// the Ticket list, `k` crosses from the Consultation list. The cursor
+		// stands elsewhere when that box holds no focus marker, and the back
+		// key brings it to the box the walk starts from.
+		const startingBox = target === "consultations" ? "┌─❯ Tickets" : "┌─❯ Consultations";
+		if (!setup.captureCharFrame().includes(startingBox)) await returnCursorToItsList(setup, target);
 	}
 	for (let step = 0; step < maxSteps; step += 1) {
 		const frame = setup.captureCharFrame();
-		if (onConsultations(frame)) return frame;
-		setup.mockInput.pressKey("j");
+		if (onTarget(frame)) return frame;
+		sendKey(setup, letter);
 		await settle(setup, 200);
 	}
 	throw new Error(
-		`the cursor never crossed to the Consultation list\nlast frame:\n${setup.captureCharFrame()}`,
+		`the cursor never crossed to the ${target === "consultations" ? "Consultation" : "Ticket"} list\nlast frame:\n${setup.captureCharFrame()}`,
 	);
+}
+
+/**
+ * Walk the unified cursor into the Consultation list, and wait for it there.
+ *
+ * The retired spelling of `crossCursor(setup, "consultations")`: the suites
+ * the rig owns walk with the named section, and the rest of the frame suites
+ * ride this name until they migrate.
+ */
+export async function crossToConsultations(setup: Setup, maxSteps = 30): Promise<string> {
+	return crossCursor(setup, "consultations", maxSteps);
 }
 /**
  * Walk the unified cursor back to the Ticket list, and wait for it there.
  *
- * `k` from the first visible Consultation crosses the boundary to the last
- * Ticket row, the same walk in reverse (ADR 0019).
- *
- * The frame shows the marker on two boxes at once: the Ticket box while the
- * cursor holds the Consultation list (its retained row), and the
- * Consultation box while it holds the Ticket list. The cursor is on the
- * Ticket list once the Consultation marker row holds no Consultation row of
- * its own, that is, once the Consultation box title carries no focus marker.
+ * The retired spelling of `crossCursor(setup, "tickets")`: the suites the rig
+ * owns walk with the named section, and the rest of the frame suites ride
+ * this name until they migrate.
  */
 export async function crossToTickets(setup: Setup, maxSteps = 30): Promise<string> {
-	const onTickets = (frame: string) =>
-		frame.includes("┌─❯ Tickets") && !frame.includes("┌─❯ Consultations");
-	if (!onTickets(setup.captureCharFrame())) {
-		// The detail holds the cursor: bring it back to the Consultation list first.
-		if (!setup.captureCharFrame().includes("┌─❯ Consultations"))
-			await press(setup, "h", "the list to take focus", (f) => f.includes("┌─❯ Consultations"));
-	}
-	for (let step = 0; step < maxSteps; step += 1) {
-		const frame = setup.captureCharFrame();
-		if (onTickets(frame)) return frame;
-		setup.mockInput.pressKey("k");
-		await settle(setup, 200);
-	}
-	throw new Error(
-		`the cursor never crossed back to the Ticket list\nlast frame:\n${setup.captureCharFrame()}`,
-	);
+	return crossCursor(setup, "tickets", maxSteps);
 }
 
 /**
@@ -1514,6 +1549,15 @@ export function spanColorAt(
 //   initRepository / toggleAutoHandoff   hints: the quit key, the emergency
 //                                     exit, the repository-init key, and the
 //                                     auto-handoff toggle (F5 in a field)
+//   pageKey                           the page and jump keys: the bar's hint
+//     names `↑↓/jk` and `j/k`, never PgUp, PgDn, Home, or End, so the list's
+//     and the body's page and jump keys stand here too
+//   guideKey                          the key the Key guide names but the bar
+//     paints nowhere in the frame: an alias the bar prints under one name
+//     only (F1 beside ?, F2 beside m), the primary key of a control whose
+//     hint the bar's own facts hold back (Message with nothing recorded), or
+//     a control the bar leaves off on this surface. The key is read from the
+//     catalogue, the guide's own source, never picked by the test
 //   frameUntil                        a custom frame check, named for what it
 //                                     waits for, where no named outcome fits
 //
@@ -2756,4 +2800,83 @@ export async function toggleAutoHandoff(
 		preLine: messageRowOf(preFrame),
 		press: "the auto-handoff toggle",
 	});
+}
+
+/** The page and jump keys the bar's hint names nowhere: the list's and the body's. */
+export type PageKey = "pageup" | "pagedown" | "home" | "end";
+
+/**
+ * Send a page or jump key to the focused scrollable surface, and wait for the
+ * outcome the test names. The bar's hint names `↑↓/jk` and `j/k`, never the
+ * page or jump keys, so they resolve off the bar: the rig sends the terminal
+ * sequence the plane parses for the key, after the pre-press settle, on the
+ * rig's one deadline. The plane routes the key to whatever scroll surface the
+ * frame focuses: the list, the detail, the body, or the guide's rows.
+ */
+export async function pageKey(
+	setup: Setup,
+	key: PageKey,
+	fields: ControlOutcomeFields = {},
+): Promise<string> {
+	checkOutcomeFields(fields, false);
+	const preFrame = await settle(setup);
+	sendKey(setup, displayKey(key));
+	return runOutcomes(setup, fields, {
+		preFrame,
+		preLine: messageRowOf(preFrame),
+		press: `the ${displayKey(key)} key`,
+	});
+}
+
+/**
+ * Send a control the key the Key guide names for it where the Action bar
+ * paints none in this frame: an alias the bar prints under one name only
+ * (F1 beside the painted ?, F2 beside the painted m), the primary key of a
+ * control whose hint the bar's own facts hold back (the Message view with
+ * nothing recorded), or a control the bar leaves off on this surface.
+ *
+ * The bar stays the first place a press reads its key from. The guide is the
+ * operator's second, and both read the one catalogue, so the key sent here
+ * is the control's own alias in the mode it runs in: the test names the
+ * control and the key as the guide names it, and never a character the plane
+ * might no longer accept. A key the guide names nowhere for the control fails
+ * the press, naming the aliases the guide does name (ADR 0128, addendum).
+ */
+export async function guideKey(
+	setup: Setup,
+	controlId: string,
+	key: string,
+	fields: ControlOutcomeFields = {},
+): Promise<string> {
+	const control = catalogueControl(controlId);
+	checkOutcomeFields(fields, false);
+	const effective: ControlOutcomeFields =
+		Object.keys(fields).length === 0 ? { ...fields, quiet: true } : fields;
+	const preFrame = await settle(setup);
+	const aliases = new Set<string>();
+	for (const mode of control.modes) {
+		try {
+			for (const raw of control.keys(mode, DUMMY_FACTS)) aliases.add(displayKey(raw));
+		} catch {
+			// A keys rule that reads facts the dummy carries none of states its
+			// aliases in no mode; the guide names that control's label alone.
+		}
+	}
+	if (!aliases.has(key))
+		throw new Error(
+			`the frame rig cannot send "${key}" to "${control.id}": the guide names ${[...aliases].join(", ") || "no key"} for it`,
+		);
+	const holding = effective.opens !== undefined ? startHolding(setup, effective.opens) : undefined;
+	sendKey(setup, key);
+	try {
+		return await runOutcomes(setup, effective, {
+			preFrame,
+			preLine: messageRowOf(preFrame),
+			holding,
+			press: `the ${key} key of the control "${control.id}"`,
+		});
+	} catch (error) {
+		holding?.stop();
+		throw error;
+	}
 }

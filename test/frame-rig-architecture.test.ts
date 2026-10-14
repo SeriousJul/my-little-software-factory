@@ -27,7 +27,12 @@ import { existsSync, readFileSync } from "node:fs";
  * list: it presses only through `pressControl` and the escape list.
  */
 const OWNED_SURFACES = [
+	"test/action-bar.test.ts",
 	"test/frame-rig.test.ts",
+	"test/key-guide.test.ts",
+	"test/main-view-frame.test.ts",
+	"test/message-line.test.ts",
+	"test/ticket-scroll-frame.test.ts",
 	"test/theme-frame.test.ts",
 	// The migration adds a surface here, one at a time, as its tests move to
 	// `pressControl` and the closed set of outcomes.

@@ -22,31 +22,23 @@ import type { FactoryState } from "../src/state.ts";
 import type { AppSetup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
-	awaitFrame,
-	closeOverlay,
-	crossToConsultations,
-	crossToTickets,
-	detailFocused,
+	emergencyExit,
+	frameUntil,
+	guideKey,
 	HEIGHT,
-	listFocused,
 	markerRowOf,
 	messageRowOf,
-	openGuide,
-	openLauncher,
-	openPanel,
-	openSurface,
-	press,
-	pressArrow,
-	pressCtrlC,
-	pressF2,
+	pressControl,
+	quitApp,
 	rgb,
 	roleColor,
 	rowsOf,
 	settle,
-	sleep,
 	spanColorAt,
 	startingFaceOf,
+	toggleAutoHandoff,
 	WIDTH,
+	waitFor,
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
@@ -65,7 +57,6 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-
 import { callsReached, plane, wrappedState } from "./plane.ts";
 
 /** The issues source the standing seeds, as its config stands in the file. */
@@ -132,10 +123,34 @@ function inFlightRow(fetched: FetchedTicket, environment: EnvironmentKind): Tick
  * open Ticket, where Hand off and Override stand available.
  */
 async function walkToOpenTicket(setup: AppSetup): Promise<void> {
-	await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
-	await press(setup, "j", "the starting ticket", (f) => markerRowOf(f) === 5);
-	await press(setup, "j", "the open ticket", (f) => markerRowOf(f) === 6);
+	await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
+	await pressControl(setup, "move-list", { via: "j", moved: "Fix pan drift" });
+	await pressControl(setup, "move-list", { via: "j", moved: "Retry policy" });
 }
+
+/**
+ * Step the cursor with the list's Move control until the frame names the
+ * target: crossing a section's boundary is a walk, and the rig sends every
+ * step as a press of the named control.
+ */
+async function moveCursorTo(
+	setup: AppSetup,
+	via: "j" | "k",
+	isThere: (frame: string) => boolean,
+	maxSteps = 30,
+): Promise<void> {
+	for (let step = 0; step < maxSteps; step += 1) {
+		if (isThere(setup.captureCharFrame())) return;
+		await pressControl(setup, "move-list", { via, quiet: true });
+	}
+	throw new Error(
+		`the cursor never reached its target after ${maxSteps} ${via} steps\nlast frame:\n${setup.captureCharFrame()}`,
+	);
+}
+
+/** The renderer's last act: its frame goes blank when the app exits. */
+const destroyed = (setup: AppSetup) =>
+	frameUntil(setup, "the renderer to destroy", (frame) => frame.trim() === "");
 
 describe("the contextual Action bar", () => {
 	test("shows the base hints with Help right-aligned, and colors availability", async () => {
@@ -194,7 +209,7 @@ describe("the contextual Action bar", () => {
 		await withApp(
 			async (setup) => {
 				await walkToOpenTicket(setup);
-				await press(setup, "l", "the detail to take focus", detailFocused);
+				await pressControl(setup, "detail", { via: "l", moved: "detail" });
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
 				expect(bar).toContain("←/h Tickets");
@@ -220,7 +235,7 @@ describe("the contextual Action bar", () => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToOpenTicket(setup);
-				await openPanel(setup);
+				await pressControl(setup, "override", { opens: "Override" });
 				const listBar = actionBarRowOf(await settle(setup));
 				expect(listBar).toContain("↑↓/jk Move");
 				expect(listBar).toContain("←→/hl Change");
@@ -229,9 +244,9 @@ describe("the contextual Action bar", () => {
 				expect(listBar).toContain("F1 Help");
 				expect(listBar).not.toContain("? Help");
 
-				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
-				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
-				await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
+				await pressControl(setup, "move-list", { via: "j", moved: "Environment" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Task type" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Model" });
 				const textBar = actionBarRowOf(await settle(setup));
 				expect(textBar).toContain("↑↓ Move");
 				expect(textBar).toContain("Type Edit");
@@ -255,19 +270,16 @@ describe("the contextual Action bar", () => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToOpenTicket(setup);
-				await openPanel(setup);
-				pressF2(setup);
-				// The panel owns the screen, and its own Message line states the
-				// refusal: the operator reads why the key did nothing while the
-				// surface is still in front of them.
-				const open = await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("no message has been recorded yet"),
-					"the refusal on the panel's Message line",
-				);
+				await pressControl(setup, "override", { opens: "Override" });
+				// The panel's bar never paints the F2 Message hint - the Message
+				// control's hint stands back while nothing is recorded - so the
+				// press reads its key from the guide the panel names it in.
+				const open = await guideKey(setup, "message", "F2", {
+					refuses: "no message has been recorded yet",
+				});
 				expect(rowsOf(open)).toHaveLength(HEIGHT);
 				expect(open).toContain("┌─Override");
-				await press(setup, "escape", "the panel to close", (f) => !f.includes("┌─Override"));
+				await pressControl(setup, "cancel", { closes: "Override" });
 				expect(messageRowOf(await settle(setup))).toContain(
 					"Warning: no message has been recorded yet",
 				);
@@ -286,21 +298,18 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// The selection stands on the awaiting Ticket that boots: Enter
 				// decides it, and the modal opens without a walk.
-				await openSurface(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
-				// Enter on a modal action that is not the selected row is not a
-				// control the modal will run: F2 refuses for the same reason the
-				// catalogue names, and says it where the operator can read it.
-				pressF2(setup);
-				const open = await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("no message has been recorded yet"),
-					"the refusal on the modal's Message line",
-				);
+				await pressControl(setup, "decide-completion", { opens: "Decision:" });
+				// The modal's bar names its own keys and none of them is the
+				// message key, whose hint stands back while nothing is recorded:
+				// the press reads F2 from the guide.
+				const open = await guideKey(setup, "message", "F2", {
+					refuses: "no message has been recorded yet",
+				});
 				// The refusal is on the surface, not only under it: the modal's
 				// box still owns its rows and the base frame stays covered.
 				expect(open).toContain("Decision:");
 				expect(messageRowOf(open).trim()).toBe("Warning: no message has been recorded yet");
-				await press(setup, "escape", "the modal to close", (f) => !f.includes("Decision:"));
+				await pressControl(setup, "cancel-action", { closes: "Decision:" });
 				expect(messageRowOf(await settle(setup))).toContain(
 					"Warning: no message has been recorded yet",
 				);
@@ -324,9 +333,7 @@ describe("the contextual Action bar", () => {
 				expect(awaitingBar).toContain("Enter Decide");
 				expect(awaitingBar).not.toContain("Hand off");
 
-				const panelFrame = await openSurface(setup, "return", "the decision panel", (f) =>
-					f.includes("Decision:"),
-				);
+				const panelFrame = await pressControl(setup, "decide-completion", { opens: "Decision:" });
 				const panelBar = actionBarRowOf(panelFrame);
 				for (const hint of [
 					"↑↓ Select action",
@@ -340,15 +347,13 @@ describe("the contextual Action bar", () => {
 				expect(panelFrame).not.toContain("up/down select");
 
 				// F2 is present in the catalogue but unavailable while the Message
-				// fits. The panel reports its catalogue reason like the base shell.
-				pressF2(setup);
-				await settle(setup);
-				await press(
-					setup,
-					"escape",
-					"the decision panel to close",
-					(f) => !f.includes("Decision:"),
-				);
+				// fits. The panel reports its catalogue reason like the base shell,
+				// and the panel's bar painting no Message hint, the key is read
+				// from the guide.
+				await guideKey(setup, "message", "F2", {
+					refuses: "no message has been recorded yet",
+				});
+				await pressControl(setup, "cancel-action", { closes: "Decision:" });
 				expect(messageRowOf(await settle(setup))).toContain(
 					"Warning: no message has been recorded yet",
 				);
@@ -374,21 +379,19 @@ describe("the contextual Action bar", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(fetchSuccess([issueTicket()]));
-				await awaitFrame(
-					setup,
-					(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
-					"the missing badge",
+				await frameUntil(setup, "the missing badge", (f) =>
+					rowsOf(f)[markerRowOf(f)].includes("missing"),
 				);
-				await openSurface(setup, "return", "the missing modal", (f) => f.includes("Missing:"));
-				pressF2(setup);
-				const open = await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("no message has been recorded yet"),
-					"the refusal on the modal's Message line",
-				);
+				// The bar stands the ticket's in-flight start under Live view: the
+				// press sends the key the bar painted, and the surface the plane
+				// answers with is the missing Agent's modal.
+				await pressControl(setup, "live-view", { opens: "Missing:" });
+				const open = await guideKey(setup, "message", "F2", {
+					refuses: "no message has been recorded yet",
+				});
 				expect(open).toContain("Missing:");
 				expect(messageRowOf(open).trim()).toBe("Warning: no message has been recorded yet");
-				await press(setup, "escape", "the modal to close", (f) => !f.includes("Missing:"));
+				await pressControl(setup, "cancel-action", { closes: "Missing:" });
 				expect(messageRowOf(await settle(setup))).toContain(
 					"Warning: no message has been recorded yet",
 				);
@@ -533,7 +536,7 @@ describe("the contextual Action bar", () => {
 				// no width may leave it blank and no width may cut a key: the one
 				// surface whose job is to name keys has to name its own way out
 				// (user stories 65 and 73).
-				await openGuide(setup, "?");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide - Ticket list" });
 				for (let width = 1; width <= 13; width += 1) {
 					setup.resize(width, 3);
 					const rows = rowsOf(await settle(setup));
@@ -545,8 +548,12 @@ describe("the contextual Action bar", () => {
 					if (width <= 2) expect(bar).toBe("?");
 					else expect(bar).toBe("Esc");
 				}
-				// And the key the row named is the key that ends the surface.
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				// And the key the row named is the key that ends the surface. The
+				// bar has packed away behind the width, so the key is read from
+				// the guide the surface still names it in.
+				await guideKey(setup, "guide-close", "Esc", {
+					closes: "Key guide - Ticket list",
+				});
 			},
 			{
 				width: WIDTH,
@@ -563,13 +570,17 @@ describe("the contextual Action bar", () => {
 			const planeRecord = await plane({});
 			await withApp(
 				async (setup) => {
-					await crossToConsultations(setup);
-					await crossToTickets(setup);
-					await press(setup, "c", "the refusal", (f) =>
-						messageRowOf(f).includes(
-							"no Consultation types configured; add [consultation-types.<name>] to the config file",
-						),
+					await moveCursorTo(
+						setup,
+						"j",
+						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
 					);
+					// No types stand in the config, and the bar packs past the
+					// launch hint while it stands unavailable: the key is read
+					// from the guide, which names the control and its refusal.
+					await guideKey(setup, "launch", "c", {
+						refuses: "no Consultation types configured",
+					});
 					expect(await settle(setup)).not.toContain("Consultation launcher");
 				},
 				{
@@ -590,7 +601,7 @@ describe("the contextual Action bar", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
+					await pressControl(setup, "launch", { opens: "Consultation launcher" });
 				},
 				{
 					width: 120,
@@ -620,7 +631,7 @@ describe("the contextual Action bar", () => {
 		await withApp(
 			async (setup) => {
 				source.settleCurrent();
-				await press(setup, "return", "the failure reason to appear", (f) => f.includes("无法连接"));
+				await pressControl(setup, "handoff", { shows: "无法连接" });
 				// The wide reason wraps the Message line, and the title the panes:
 				// every row still ends exactly at the terminal edge.
 				for (const row of rowsOf(setup.captureCharFrame())) expect(widthOf(row)).toBe(WIDTH);
@@ -650,33 +661,33 @@ describe("the contextual Action bar", () => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				// Move: j, k, and both arrows.
-				await press(setup, "j", "the selection to move on", (f) => markerRowOf(f) === 4);
-				await press(setup, "k", "the selection to move back", (f) => markerRowOf(f) === 3);
-				await pressArrow(setup, "down", "the selection to move down", (f) => markerRowOf(f) === 4);
-				await pressArrow(setup, "up", "the selection to move up", (f) => markerRowOf(f) === 3);
+				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
+				await pressControl(setup, "move-list", { via: "k", moved: "Drop the legacy auth" });
+				await pressControl(setup, "move-list", { via: "↓", moved: "Migrate scheduler" });
+				await pressControl(setup, "move-list", { via: "↑", moved: "Drop the legacy auth" });
 				// The walk lands on the open Ticket, where the panel and the
 				// handoff the aliases name stand available.
 				await walkToOpenTicket(setup);
 				// Detail: l and right focus it, h and left leave it.
-				await press(setup, "l", "the detail to take focus", detailFocused);
-				await press(setup, "h", "the list to take focus", listFocused);
-				await pressArrow(setup, "right", "the detail to take focus", detailFocused);
-				await pressArrow(setup, "left", "the list to take focus", listFocused);
+				await pressControl(setup, "detail", { via: "l", moved: "detail" });
+				await pressControl(setup, "tickets", { via: "h", moved: "tickets" });
+				await pressControl(setup, "detail", { via: "→", moved: "detail" });
+				await pressControl(setup, "tickets", { via: "←", moved: "tickets" });
 				// Override: e opens the panel, Esc closes it.
-				await openPanel(setup);
+				await pressControl(setup, "override", { opens: "Override" });
 				expect(await settle(setup)).toContain("❯ Agent");
-				await closeOverlay(setup, "❯ Agent", "the panel to close");
+				await pressControl(setup, "cancel", { closes: "Override" });
 				// Help: ? opens the guide, F1 closes it.
-				await openGuide(setup, "?");
-				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
+				await pressControl(setup, "help", { via: "?", opens: "Key guide - Ticket list" });
+				await pressControl(setup, "guide-close", { via: "F1", closes: "Key guide - Ticket list" });
 				// Hand off: Enter starts the handoff, and it settles. The row
 				// takes the Starting window's spinner face on the keypress
 				// (ADR 0030), and the face stays with the settled `handed-off`
 				// state: the settle is the Working line clearing.
 				const commandsBefore = planeRecord.fakeRunner.commands().length;
-				await press(
+				await pressControl(setup, "handoff");
+				await frameUntil(
 					setup,
-					"return",
 					"the handoff to settle",
 					(f) =>
 						startingFaceOf(rowsOf(f)[markerRowOf(f)] ?? "") !== null &&
@@ -699,37 +710,31 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
-				await awaitFrame(setup, (f) => f.includes("Retry policy for"), "the ticket");
+				await frameUntil(setup, "the ticket", (f) => f.includes("Retry policy for"));
 				// The standing holds two seats in flight: the mode cell counts
 				// them beside the limit it stands on.
-				await press(setup, "a", "auto on", (f) => f.includes("○ auto 2/2"));
-				await press(setup, "a", "auto off", (f) => f.includes("● manual 2/2"));
+				await toggleAutoHandoff(setup, { quiet: true });
+				expect(await settle(setup)).toContain("○ auto 2/2");
+				await toggleAutoHandoff(setup, { quiet: true });
+				expect(await settle(setup)).toContain("● manual 2/2");
 				// r refreshes the configured source, and the progress clears.
-				setup.mockInput.pressKey("r");
+				await pressControl(setup, "refresh", { shows: "Working: refreshing" });
 				await callsReached(source, 2);
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("Working: refreshing"),
-					"the refresh progress",
-				);
 				source.settleCurrent();
-				await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the refresh to clear");
+				await frameUntil(setup, "the refresh to clear", (f) => messageRowOf(f).trim() === "");
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
 	});
 
 	test("q quits from both base panes, and refuses while a Handoff is active", async () => {
-		const destroyed = (setup: AppSetup) =>
-			awaitFrame(setup, (f) => f.trim() === "", "the renderer to destroy");
-
 		// Ticket list.
 		{
 			const planeRecord = await plane({});
 			await withApp(
 				async (setup) => {
 					await settle(setup);
-					setup.mockInput.pressKey("q");
+					await quitApp(setup);
 					await destroyed(setup);
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -741,8 +746,8 @@ describe("the contextual Action bar", () => {
 			const planeRecord = await plane({});
 			await withApp(
 				async (setup) => {
-					await press(setup, "l", "the detail to focus", detailFocused);
-					setup.mockInput.pressKey("q");
+					await pressControl(setup, "detail", { via: "l", moved: "detail" });
+					await quitApp(setup);
 					await destroyed(setup);
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -769,24 +774,18 @@ describe("the contextual Action bar", () => {
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToOpenTicket(setup);
-					await press(setup, "return", "the handoff working", (f) =>
-						messageRowOf(f).startsWith("Working: handing off"),
-					);
+					await pressControl(setup, "handoff", { shows: "Working: handing off" });
 					// The refusal is recorded, but it does not erase the active
 					// progress: the spec ranks Working above an operation
 					// Warning, so the line keeps the Handoff's own progress.
-					setup.mockInput.pressKey("q");
-					await sleep(400);
+					await quitApp(setup, { quiet: true });
 					expect(messageRowOf(setup.captureCharFrame()).trim()).toContain("Working: handing off");
 					// The app is still up behind the refusal.
 					expect(actionBarRowOf(setup.captureCharFrame())).toContain("? Help");
 					// The start's fault stands on the queued start's warning the
 					// drop left the line (ADR 0118's split).
-					await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).startsWith("Warning: queued handoff"),
-						"the handoff's drop",
-						8000,
+					await frameUntil(setup, "the handoff's drop", (f) =>
+						messageRowOf(f).startsWith("Warning: queued handoff"),
 					);
 				},
 				{
@@ -805,9 +804,8 @@ describe("the contextual Action bar", () => {
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToOpenTicket(setup);
-					await openPanel(setup);
-					setup.mockInput.pressKey("q");
-					const frame = await settle(setup);
+					await pressControl(setup, "override", { opens: "Override" });
+					const frame = await quitApp(setup, { quiet: true });
 					expect(frame).toContain("┌─Override");
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -816,16 +814,13 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("Ctrl+C destroys the renderer from every interaction mode", async () => {
-		const destroyed = (setup: AppSetup) =>
-			awaitFrame(setup, (f) => f.trim() === "", "the renderer to destroy");
-
 		// Ticket list.
 		{
 			const planeRecord = await plane({});
 			await withApp(
 				async (setup) => {
 					await settle(setup);
-					pressCtrlC(setup);
+					await emergencyExit(setup);
 					await destroyed(setup);
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -836,8 +831,8 @@ describe("the contextual Action bar", () => {
 			const planeRecord = await plane({});
 			await withApp(
 				async (setup) => {
-					await press(setup, "l", "the detail to focus", detailFocused);
-					pressCtrlC(setup);
+					await pressControl(setup, "detail", { via: "l", moved: "detail" });
+					await emergencyExit(setup);
 					await destroyed(setup);
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -851,8 +846,8 @@ describe("the contextual Action bar", () => {
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToOpenTicket(setup);
-					await openPanel(setup);
-					pressCtrlC(setup);
+					await pressControl(setup, "override", { opens: "Override" });
+					await emergencyExit(setup);
 					await destroyed(setup);
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -866,11 +861,11 @@ describe("the contextual Action bar", () => {
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToOpenTicket(setup);
-					await openPanel(setup);
-					await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
-					await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
-					await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
-					pressCtrlC(setup);
+					await pressControl(setup, "override", { opens: "Override" });
+					await pressControl(setup, "move-list", { via: "j", moved: "Environment" });
+					await pressControl(setup, "move-list", { via: "j", moved: "Task type" });
+					await pressControl(setup, "move-list", { via: "j", moved: "Model" });
+					await emergencyExit(setup);
 					await destroyed(setup);
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -881,8 +876,8 @@ describe("the contextual Action bar", () => {
 			const planeRecord = await plane({});
 			await withApp(
 				async (setup) => {
-					await press(setup, "?", "the guide to open", (f) => f.includes("Key guide"));
-					pressCtrlC(setup);
+					await pressControl(setup, "help", { via: "?", opens: "Key guide - Ticket list" });
+					await emergencyExit(setup);
 					await destroyed(setup);
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -907,11 +902,9 @@ describe("the contextual Action bar", () => {
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToOpenTicket(setup);
-					await press(setup, "return", "the failure to appear", (f) =>
-						messageRowOf(f).includes("the daemon refused"),
-					);
-					await press(setup, "m", "the message view to open", (f) => f.includes("Message view"));
-					pressCtrlC(setup);
+					await pressControl(setup, "handoff", { shows: "the daemon refused" });
+					await pressControl(setup, "message", { opens: "Message view" });
+					await emergencyExit(setup);
 					await destroyed(setup);
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -934,8 +927,6 @@ describe("the contextual Action bar", () => {
 			cloneUrl: "https://github.com/acme/factory.git",
 			path: join(home, "src", "factory"),
 		});
-		const destroyed = (setup: AppSetup) =>
-			awaitFrame(setup, (f) => f.trim() === "", "the renderer to destroy");
 		// Seed a Consultation with a deterministic id so its recorded Agent
 		// handles match the pinned `agent list` entries.
 		const seed = (state: FactoryState, id: string, withAgent: boolean, home: string): void => {
@@ -984,13 +975,12 @@ describe("the contextual Action bar", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await crossToConsultations(setup);
-					await awaitFrame(
+					await moveCursorTo(
 						setup,
-						(f) => f.includes("no open Consultations"),
-						"the consultations view",
+						"j",
+						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
 					);
-					pressCtrlC(setup);
+					await emergencyExit(setup);
 					await destroyed(setup);
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -1007,16 +997,17 @@ describe("the contextual Action bar", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await crossToConsultations(setup);
-					await awaitFrame(
+					await moveCursorTo(
 						setup,
-						(f) => f.includes("no open Consultations"),
-						"the consultations view",
+						"j",
+						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
 					);
-					await press(setup, "c", "the launcher to open", (f) =>
-						f.includes("Consultation launcher"),
-					);
-					pressCtrlC(setup);
+					// The Consultations bar packs past the launch hint, so the
+					// key is read from the guide the view names it in.
+					await guideKey(setup, "launch", "c", {
+						opens: "Consultation launcher",
+					});
+					await emergencyExit(setup);
 					await destroyed(setup);
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -1033,14 +1024,16 @@ describe("the contextual Action bar", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await crossToConsultations(setup);
-					await awaitFrame(
+					await moveCursorTo(
 						setup,
-						(f) => f.includes("no open Consultations"),
-						"the consultations view",
+						"j",
+						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
 					);
-					await press(setup, "?", "the legacy guide to open", (f) => f.includes("Key guide"));
-					pressCtrlC(setup);
+					await pressControl(setup, "help", {
+						via: "?",
+						opens: "Key guide - Consultation list",
+					});
+					await emergencyExit(setup);
 					await destroyed(setup);
 				},
 				{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -1086,16 +1079,11 @@ describe("the contextual Action bar", () => {
 			try {
 				await withApp(
 					async (setup) => {
-						await crossToConsultations(setup);
-						await awaitFrame(
-							setup,
-							(f) => f.includes("State: awaiting-response"),
-							"the consultations view",
-						);
-						await press(setup, "return", "the response editor", (f) =>
-							f.includes("Response draft"),
-						);
-						pressCtrlC(setup);
+						await moveCursorTo(setup, "j", (f) => f.includes("State: awaiting-response"));
+						await pressControl(setup, "consultation-respond", {
+							opens: "Response draft",
+						});
+						await emergencyExit(setup);
 						await destroyed(setup);
 					},
 					{
@@ -1162,16 +1150,16 @@ describe("the contextual Action bar", () => {
 			try {
 				await withApp(
 					async (setup) => {
-						await crossToConsultations(setup);
-						await awaitFrame(
-							setup,
-							(f) => f.includes("State: awaiting-response"),
-							"the consultations view",
-						);
-						await press(setup, "return", "interaction mode", (f) =>
-							f.includes("F12 Exit interaction"),
-						);
-						pressCtrlC(setup);
+						await moveCursorTo(setup, "j", (f) => f.includes("State: awaiting-response"));
+						// The interaction mode stands over the base handler: it
+						// routes the keys through the plane's own bus rather than
+						// taking the key bus over, so the press settles the frame
+						// and the named hint stands in it.
+						const frame = await pressControl(setup, "consultation-interact", {
+							quiet: true,
+						});
+						expect(frame).toContain("F12 Exit interaction");
+						await emergencyExit(setup);
 						await destroyed(setup);
 					},
 					{
@@ -1205,12 +1193,13 @@ describe("the contextual Action bar", () => {
 			try {
 				await withApp(
 					async (setup) => {
-						await crossToConsultations(setup);
-						await awaitFrame(setup, (f) => f.includes("State: opening"), "the consultations view");
-						await press(setup, "delete", "the close confirmation", (f) =>
-							f.includes("Close Consultation"),
-						);
-						pressCtrlC(setup);
+						await moveCursorTo(setup, "j", (f) => f.includes("State: opening"));
+						// The opening Consultation's bar stands back from the Close
+						// hint, so the key is read from the guide.
+						await guideKey(setup, "consultation-close", "Delete", {
+							opens: "Close Consultation",
+						});
+						await emergencyExit(setup);
 						await destroyed(setup);
 					},
 					{
@@ -1238,23 +1227,23 @@ describe("the contextual Action bar", () => {
 				// Cross to the Consultation list, collapse its section, and
 				// come back to the empty Ticket list: nothing is left to move
 				// into.
-				await press(setup, "j", "the Consultation list", (f) => f.includes("┌─❯ Consultations"));
-				await press(setup, "x", "the Consultation section to collapse", (f) =>
-					f.includes("▸ Consultations"),
-				);
-				await press(setup, "k", "the Ticket list", (f) => f.includes("┌─❯ Tickets"));
+				await pressControl(setup, "move-list", { via: "j", moved: "consultations" });
+				// The Consultations bar packs past the section hint, so the key
+				// is read from the guide the section names it in.
+				await guideKey(setup, "section-toggle", "x", { quiet: true });
+				await pressControl(setup, "move-list", { via: "k", moved: "tickets" });
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
 				// No ticket rows, other section collapsed: Move cannot move.
 				expect(spanColorAt(setup, barRow, "↑↓/jk Move")).toEqual(rgb(roleColor("subtext0")));
-				await press(setup, "j", "the move refusal", (f) =>
-					messageRowOf(f).includes("the Ticket list has nowhere to move"),
-				);
+				await pressControl(setup, "move-list", {
+					refuses: "the Ticket list has nowhere to move",
+				});
 				// No sources: Refresh cannot run.
 				expect(spanColorAt(setup, barRow, "r Refresh")).toEqual(rgb(roleColor("subtext0")));
-				const refused = await press(setup, "r", "the refresh refusal", (f) =>
-					messageRowOf(f).includes("no Ticket sources exist"),
-				);
+				const refused = await pressControl(setup, "refresh", {
+					refuses: "no Ticket sources exist",
+				});
 				expect(messageRowOf(refused)).toContain("Warning: no Ticket sources exist");
 			},
 			{
@@ -1275,9 +1264,9 @@ describe("the contextual Action bar", () => {
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
 				expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(roleColor("subtext0")));
-				await press(setup, "return", "the refusal", (f) =>
-					messageRowOf(f).includes("no Ticket is selected"),
-				);
+				await pressControl(setup, "handoff", {
+					refuses: "no Ticket is selected",
+				});
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
@@ -1287,8 +1276,8 @@ describe("the contextual Action bar", () => {
 		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 5);
+				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
+				await pressControl(setup, "move-list", { via: "j", moved: "Fix pan drift" });
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
 				// The bar names the one meaning Enter runs on this ticket. Hand
@@ -1299,14 +1288,14 @@ describe("the contextual Action bar", () => {
 				expect(actionBarRowOf(frame)).not.toContain("Enter Hand off");
 				expect(spanColorAt(setup, barRow, "e Override")).toEqual(rgb(roleColor("subtext0")));
 				// e is refused with the handoff reason, and no panel opens.
-				setup.mockInput.pressKey("e");
-				const refused = await settle(setup);
+				const refused = await pressControl(setup, "override", {
+					refuses: "only an open Ticket can be handed off",
+				});
 				expect(refused).not.toContain("Live:");
-				expect(messageRowOf(refused)).toContain("only an open Ticket can be handed off");
 				// Enter opens the Live view instead of starting a handoff.
-				await press(setup, "return", "the Live view", (f) =>
-					f.includes("Live: Fix pan drift in split panes"),
-				);
+				await pressControl(setup, "live-view", {
+					opens: "Live: Fix pan drift in split panes",
+				});
 			},
 			{
 				width: WIDTH,
@@ -1323,26 +1312,22 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
-				await awaitFrame(setup, (f) => f.includes("Drop the legacy auth"), "the ticket");
+				await frameUntil(setup, "the ticket", (f) => f.includes("Drop the legacy auth"));
 				// A failed refresh makes the stored source stale: the ticket
 				// stays visible, but it is no longer actionable.
-				setup.mockInput.pressKey("r");
+				await pressControl(setup, "refresh", { shows: "Working: refreshing" });
 				await callsReached(source, 2);
 				source.settle(fetchRateLimited);
-				const frame = await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
-					"the stale health warning",
-				);
+				const frame = await waitFor(setup, {
+					shows: "issues: stale - GitHub rate limit exceeded",
+				});
 				// The open Ticket stands the bar the test measures, stale beside it.
 				await walkToOpenTicket(setup);
 				const barRow = rowsOf(frame).length - 1;
 				expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(roleColor("subtext0")));
-				await press(setup, "return", "the refusal", (f) =>
-					messageRowOf(f).includes(
-						"Ticket is not actionable because source data is stale, removed, or absent",
-					),
-				);
+				await pressControl(setup, "handoff", {
+					refuses: "Ticket is not actionable because source data is stale, removed, or absent",
+				});
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
@@ -1368,9 +1353,7 @@ describe("the contextual Action bar", () => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
 				await walkToOpenTicket(setup);
-				await press(setup, "return", "the handoff to start", (f) =>
-					messageRowOf(f).includes("handing off"),
-				);
+				await pressControl(setup, "handoff", { shows: "handing off" });
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
 				// The ask never waits on a run (ADR 0064): the hints stay lit
@@ -1390,18 +1373,13 @@ describe("the contextual Action bar", () => {
 				// keys, and the jump writes no line - active progress outranks
 				// an answer (user story 51), so the Handoff's Working keeps the
 				// line.
-				setup.mockInput.pressEnter();
-				await sleep(400);
-				const jumped = setup.captureCharFrame();
+				const jumped = await pressControl(setup, "queue-jump", { quiet: true });
 				expect(actionBarRowOf(jumped)).toContain("Force-dispatch");
 				expect(messageRowOf(jumped)).toContain("handing off");
 				// The clean settle clears the Working line, and the start's own
 				// answer then takes the line; the queue item leaves with it.
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("started from the Work queue"),
-					"the handoff to settle",
-					8000,
+				await frameUntil(setup, "the handoff to settle", (f) =>
+					messageRowOf(f).includes("started from the Work queue"),
 				);
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -1414,7 +1392,7 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				const before = actionBarRowOf(await settle(setup));
 				// k at the top of the list is a boundary no-op.
-				setup.mockInput.pressKey("k");
+				await pressControl(setup, "move-list", { via: "k", quiet: true });
 				const after = await settle(setup);
 				expect(actionBarRowOf(after)).toBe(before);
 			},

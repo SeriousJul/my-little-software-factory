@@ -126,7 +126,25 @@ evidence.
 bar: the auto-handoff toggle, the quit and the emergency exit, and the
 repository init. The field's twelve editing rows are guide-only: a field's
 editing keys, which the plane dispatches nowhere. Those routes stay, as named
-rig operations for typing and for the form's slot walk. A static check refuses
+rig operations for typing and for the form's slot walk. The page and jump keys
+stand on the same list: the bar's hint names `↑↓/jk` and `j/k`, never PgUp,
+PgDn, Home, or End, so the named `pageKey` operation sends them. And where the
+bar paints no hint for a key the plane accepts, the named `guideKey`
+operation sends the key the Key guide names for the control: an alias the bar
+prints under one name only (F1 beside `?`, F2 beside `m`), the primary key of
+a control whose hint the bar's own facts hold back (the Message key while the
+record holds nothing), and a control the bar leaves off on the surface. The
+key `guideKey` sends is read from the catalogue, the source the guide paints
+from, so the catalogue stays the single owner of key meaning, and a key the
+guide names nowhere for the control fails the press. The section cross-walk
+stands on the same list: crossing the unified cursor into another section is
+not one control press, it is the list's own Move keys walked to the boundary
+row and across, so the named `crossCursor` operation walks it with the walk
+key read from the catalogue, and each step goes out straight after the frame
+it answers from: a settle before a step gives the plane the pass that commits
+the detail pane's identity reset before the cross's unmount saves the pane's
+offset, and a round trip through the other section loses the offset the
+operator left behind. A static check refuses
 a frame test that reaches for a raw key outside the list, in the shape of the
 assertion-architecture check and the shared-control check.
 
