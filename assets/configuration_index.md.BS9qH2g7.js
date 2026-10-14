@@ -433,6 +433,17 @@ import{_ as e,o as t,c as a,a0 as i}from"./chunks/framework.D4fUSYzX.js";const c
 <span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">source-kind = </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">&quot;github-issue&quot;</span></span>
 <span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">labels-any = [</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">&quot;bug&quot;</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">]</span></span>
 <span class="line"></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D;"># The issue park (issue #396): an issue the machine has not placed. No</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D;"># task-type, so the plane suggests nothing for it, and the auto-handoff adds</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D;"># no row for it: a fresh issue is no candidate for the implementation until a</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D;"># workflow label lands on it, and a label write is the only engine that moves</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D;"># it. It orders after the ready-for-spec and bug states, the way the pull</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D;"># request park below parks a pull request the machine has not placed.</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">[[</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0;">states</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">]]</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">name = </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">&quot;issue-unlabeled&quot;</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">[</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0;">states</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">.</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0;">match</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">]</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">source-kind = </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">&quot;github-issue&quot;</span></span>
+<span class="line"></span>
 <span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">[[</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0;">states</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">]]</span></span>
 <span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">name = </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">&quot;needs-work&quot;</span></span>
 <span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8;">task-type = </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">&quot;rework&quot;</span></span>
