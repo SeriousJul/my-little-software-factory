@@ -1489,6 +1489,37 @@ export async function waitSourceHealthy(state: FactoryState): Promise<void> {
 	}
 }
 
+/**
+ * Wait for the runner's log to satisfy `check`, reading it on a short sleep
+ * the way `waitSourceHealthy` waits on state: the rig's own turn keeps the app
+ * moving while the wait sleeps, so a command the settled effect records lands
+ * in the log before the deadline names a slow plane.
+ *
+ * A painted frame can stand ahead of the commands the same effect records:
+ * the paint and the runner log are two facts one effect settles, and a tree
+ * that carries coverage hooks over its expressions widens the window between
+ * them. Measured on the mutation campaign's instrumented tree: the auto
+ * dispatch's first-cycle case painted its dispatch frame before the dispatch
+ * recorded its workspace create, and the re-fire's frame before its label
+ * write, where the clean tree stood the paint behind both. A test that reads
+ * the log the moment its frame wait ends races that window; it waits on the
+ * log instead, the frame facts it already pinned standing unchanged.
+ */
+export async function waitCommands(
+	commands: () => readonly string[],
+	check: (commands: readonly string[]) => boolean,
+	what: string,
+	deadlineMs: number = FRAME_DEADLINE_MS,
+): Promise<void> {
+	const deadline = Date.now() + deadlineMs;
+	for (;;) {
+		if (check(commands())) return;
+		if (Date.now() >= deadline)
+			throw new Error(`timed out waiting for ${what}\nlog:\n${commands().join("\n")}`);
+		await sleep(10);
+	}
+}
+
 /** One captured span with its foreground resolved to rgb. */
 export interface SpanInfo {
 	text: string;

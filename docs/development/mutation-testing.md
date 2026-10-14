@@ -123,6 +123,7 @@ Measured on a 32-core machine, Bun 1.4.2, the suite of this repository:
 | ----------------------------------------------------------------- | ---------------------------- |
 | `bun run test`                                                    | 65.67 s (3,415 tests over 155 files)   |
 | The campaign's initial run: the whole suite, instrumented, serial | 6 min 10 s (3,369 tests)               |
+| The campaign's initial run on the head behind #394, measured 2026-10-14 | 7 min 48 s (3,363 tests over 149 files, the suite minus the excluded files) |
 | Mutants in `src`                                                  | 39,111 over 127 files                |
 | Mutants in the campaign's scope (`src` without the gallery)       | 37,207 over 126 files                |
 | 814 mutants of session-record and domain logic, 8 workers         | 11 min, about 4,400 per hour         |
@@ -151,7 +152,7 @@ module-level constants are behavior the frames read. `bun run mutate` keeps them
 
 ## The score, and what is not in it
 
-Four files stay out of the campaign on purpose:
+One module and seven test files stay out of the campaign on purpose:
 
 - `src/components/shared/gallery.ts` is the shared control gallery's own example
   list. `bun run gallery` is its only caller, no shipped surface reads it, and it
@@ -178,8 +179,31 @@ Four files stay out of the campaign on purpose:
   Measured on this branch: with `src/handoff-dispatch.ts` in the scope, the
   campaign's initial run died on `every refusal shape the dispatch writes is on
   the page`. It stays in `bun run test` too.
+- `test/quality-audit.test.ts` (ADR 0120) runs `bun run audit` as a child, and
+  the audit measures the duplication of `src` against the baseline the clean
+  tree sets in `.quality-baseline.json`. Instrumentation rewrites the source
+  text the audit measures, so the child reports counts the baseline does not
+  hold and exits non-zero, and the campaign's initial run dies on the case. The
+  file's other cases measure the audit's payload and baseline rules, not the
+  tree's text, but the exclusion is per file, the way the others' is. It stays
+  in `bun run test` too.
+- `test/app-shell-architecture.test.ts` (issue #372) reads the App shell module
+  as text: it scans the `AppProps` interface's field list and the shell's boot
+  code for the shapes the total boot record refuses, and instrumentation
+  rewrites exactly those shapes, so under mutation the scan answers no fields.
+  It stays in `bun run test` too.
+- `test/git-push-architecture.test.ts` (ADR 0127) scans the source for a
+  `"git"` argv holding a `"push"` token and refuses a push that does not name
+  the bypass. The scan reads the call shapes instrumentation rewrites, so under
+  mutation it finds no pushing source at all. It stays in `bun run test` too.
+- `test/attempt-hold-architecture.test.ts` (ADR 0077 as extended by ADR 0101)
+  is the source tripwire of the attempt hold's rule: it reads the two state
+  modules' text and counts the shared module's call shapes, which
+  instrumentation rewrites. The rule's behavior half stays in
+  `test/attempt-hold.test.ts`, inside the campaign, and the tripwire stays in
+  `bun run test`.
 
-A fourth file reads production source as text and is deliberately **not** on
+One more file reads production source as text and is deliberately **not** on
 that list. `test/config-write-architecture.test.ts` (ADR 0103) counts call
 names - `writeConfigFile(`, `persistConfig(`, `writeConfigText(` - and
 instrumentation leaves those names whole, so the file passes against the

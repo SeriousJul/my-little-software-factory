@@ -53,6 +53,7 @@ import {
 	spanColors,
 	startingFaceOf,
 	WIDTH,
+	waitCommands,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -3676,6 +3677,15 @@ describe("the auto dispatch", () => {
 				// its startup grace counts against the parallel limit, from the
 				// same shared seat count the gates read.
 				expect(startingFaceOf(ticketRow(frame))).not.toBeNull();
+				// The frame the dispatch painted can stand ahead of the commands
+				// the dispatch records: on the campaign's instrumented tree the
+				// window between the two facts widens past the paint, so the log
+				// is waited for, not read at the frame.
+				await waitCommands(
+					() => app.runner.commands(),
+					(log) => log.some((command) => command.startsWith("herdr workspace create")),
+					"the dispatch's workspace create",
+				);
 				const commands = app.runner.commands();
 				expect(commands).toContain(`herdr workspace create --cwd ${path} --no-focus`);
 				expect(commands.some((c) => c.startsWith("herdr agent prompt"))).toBe(true);
@@ -5242,6 +5252,19 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 						f.includes("○ auto 1/2") &&
 						ticketRow(f, "Persist source facts in state").includes("starting"),
 					"the review route on the pull request",
+				);
+				// The frame the re-fire painted can stand ahead of its label write
+				// in the log, the way the dispatch's frame stands ahead of its
+				// create: the log is waited for, not read at the frame.
+				await waitCommands(
+					() => app.runner.commands(),
+					(log) =>
+						log.some(
+							(command) =>
+								command.startsWith("gh pr edit #12") &&
+								command.includes("--add-label ready-for-review"),
+						),
+					"the re-fire's label write",
 				);
 				const commands = app.runner.commands();
 				// The re-fire wrote the facts the skip left unwritten.

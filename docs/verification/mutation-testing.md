@@ -13,6 +13,21 @@ first on the tree before the rebase and again on the head rebased onto the
 Seeded plane (#378). The frame rig's rework (#391) landed on main after that
 run and changes the suite the campaign runs; the record's score belongs to the
 head the run measured.
+On this branch, on 2026-10-14, the whole-`src` campaign's initial run stood
+up to date with the suite: `test/quality-audit.test.ts` - the test whose
+child `bun run audit` measured this record's first whole-scope dry run dead -
+and three source-reading suites the suite has grown since the last campaign,
+`test/app-shell-architecture.test.ts`, `test/git-push-architecture.test.ts`,
+and the attempt hold's source tripwire, which moved out of
+`test/attempt-hold.test.ts` into `test/attempt-hold-architecture.test.ts`, each
+stand outside the campaign the way the record's exclusion rule names. The two
+auto-mode frame tests that read the runner's log the moment their frame wait
+ends now wait on the log through the harness's `waitCommands`, and their
+deterministic failures against the instrumented tree stood resolved. What the
+dry runs left was the serial initial-run profile's load flakes, recorded
+below as incomplete, not a source-reading failure. A campaign over the whole
+scope has still not run to its report, so the plane still has no whole-`src`
+score and no score gate.
 The first review's rows are the initial run's two bounds,
 the harness test's own tree, the `--cleanTempDir` values, the Stryker entry point
 lookup, and the JSON report. The second review's rows are the temp tree a campaign
@@ -70,25 +85,45 @@ for the question this answers.
 | The campaign starts on the typescript 7.0.2 this repository declares | The preprocessor's crash of issue #377 - `ts.parseConfigFileTextToJson is not a function` on the top-level line, at the campaign's first step, before the scope is applied - stood closed once the entry point staged the vendored shim ([ADR 0137](../adr/0137-the-mutation-campaign-host-runs-the-vendored-typescript-shim.md)) under the Stryker core's own `node_modules`: this branch's scoped campaign over the Handoff dispatch and the observation passed the preprocessor and ran its initial run. `test/stryker-host-typescript.test.ts` holds the shim's parse against the repository's own `tsconfig.json` and runs the campaign's host runtime over a tree that mirrors the checkout: a top-level typescript with no preprocessor API, the staged shim under core's own `node_modules`, and a control probe outside the core package that keeps the top-level line. `test/mutate-script.test.ts` holds the staging itself: the staged copy is byte-for-byte the shim the checkout ships, a stale staged copy is replaced before the run, and a checkout that lost the shim is refused with the tree named, before any campaign process starts | Passed |
 | The scoped campaign over the Handoff dispatch and the observation runs to its report | `bun run mutate -- --concurrency=4 "--mutate=src/handoff.ts,src/handoff-dispatch.ts,src/observation.ts"` on 2026-10-13: the campaign first ran to its report on the branch's head before the rebase, and re-ran on the head rebased onto the Seeded plane (#378), the head its score belongs to: 3 of 1,030 files, 4,835 mutants, 4 test runner processes on the machine-state ground the record's machine-state row names (the 8-worker run died in the same co-tenancy), the whole suite in the initial run, and the campaign's report written to `reports/mutation` | 76.73 percent: of 4,835 mutants, 3,701 killed, 8 timed out, 1 runtime error counted with the killed, 919 survived, and 206 with no coverage, so 3,710 of 4,835; the covered column reads 80.14 percent. On the tree before the rebase the same scope read 76.69 percent (3,708 of 4,835), the difference being the tests the Seeded plane changed. The pushed head adds #391's frame-rig rework, which changes the suite the campaign runs; its campaign score stands unmeasured (incomplete below) |
 | The initial run's bounds stand over the suite as it stands | The suite grew from the 1,905 tests that measured at 3 minutes 24 seconds to 3 minutes 31 seconds to 3,340 tests, and the previous 330 second plugin bound cut the grown run: on 2026-10-13 the first campaign attempt on this branch died with `Initial test run timed out!` at that bound. Re-measured with the bound lifted: 3,340 tests in 5 minutes 50 seconds, net 3 minutes 58 seconds. The config now sets `dryRunTimeoutMinutes: 15` and the plugin's child bound to 600 seconds, which is a 630 second bound on the initial run over the measured 350 seconds, 80 percent of headroom the way the previous 330 seconds stood over 205; on the head the campaign measured the initial run measures 6 minutes and 10 seconds (3,369 tests) and the same 630 second bound stands over it with 70 percent of headroom | Passed. The re-tuned initial run completed green inside the campaign's sandbox |
+| The whole-scope initial run clears the source-reading exclusion set | On this branch, on 2026-10-14, the campaign's exclusion set took `test/quality-audit.test.ts` - the case this record's own whole-scope dry run measured dead, its child `bun run audit` measuring the instrumented `src`'s duplication against the clean tree's baseline and exiting non-zero - and three suites the suite grew after the last campaign: `test/app-shell-architecture.test.ts`, whose interface scan answered zero fields against the instrumented App shell module, `test/git-push-architecture.test.ts`, whose push-token scan answered no pushing source against the instrumented tree, and the attempt hold's source tripwire, which this branch moved out of `test/attempt-hold.test.ts` into `test/attempt-hold-architecture.test.ts` so the behavior half stays inside the campaign. Measured across the branch's dry runs: with only the audit test out, the initial run died on the other six cases; after the three new exclusions stood, two further whole-scope dry runs died on no source-reading case, only on the load flakes recorded below, and a serial run of the kept dry-run sandbox's tree minus the excluded files (3,363 tests over 149 files, 431.89 s) failed no source-reading test either | Passed. No source-reading suite failed in any instrumented run after the exclusions stood; the remaining failures are the recorded load flakes |
+| The auto-mode frame tests wait on the runner's log, not the frame's moment | The two cases read `app.runner.commands()` the moment their `awaitFrame` returned. Against the instrumented tree the paint stands ahead of the record: the auto dispatch's first-cycle case failed deterministically in the kept sandbox (the frame showed the dispatch in progress, the log held no `workspace create`), and the re-fire's case failed in two of the branch's instrumented runs. Both now wait on the log through the harness's `waitCommands` before reading it. Measured: after the fix, the first-cycle case passed alone against the instrumented tree and in the two later dry-run initial runs; the re-fire's case passed alone against the instrumented tree and in those initial runs, and still failed once in the kept sandbox's serial run (the flake, recorded below) | Passed for the deterministic half; the re-fire's serial-profile flake stands recorded as incomplete |
+| The attempt hold's tripwire stands alone outside the campaign | The tripwire's `toContain("blockedUnrefreshedHold({")` count reads the call shapes instrumentation rewrites: measured, it failed against the instrumented tree and passed against the clean tree. The branch moved it into `test/attempt-hold-architecture.test.ts`, which is out of the campaign, and left the behavior half in `test/attempt-hold.test.ts`, in it. Both files pass on the clean tree, and the behavior file passed in the kept sandbox's serial run | Passed |
 | The campaign's test children run the suite's own per-test budget | Bun 1.4.2 takes the per-test timeout from the command line only: a six second test still dies at five under a `[test] timeout = 60000` bunfig, measured on this branch, and the plugin's sanitized bunfig for its children carries no timeout. The config's `bun.bunArgs` forwards the suite's sixty-second budget, the test script's `--timeout` (ADR 0128), onto each child's own `bun test`. Measured without it: in a kept-sandbox dry run the frame rig's timeout naming test, which waits out the rig's full twenty-second deadline, and the audit command's test, which runs the audit pipeline as a child, both died at the five-second default, and the runner's dry-run completeness gate then refused the run's data with `dry run data-completeness check failed`. With it, the initial run passes its completeness check and reports `Initial test run succeeded. Ran 3340 tests in 5 minutes and 50 seconds` | Passed |
 | The module map's path check stands inside the campaign | `test/shape-doc-paths.test.ts` checks every path `docs/agents/shape.md` names against the tree it runs in, and the campaign's sandbox copies the tree minus `ignorePatterns`; the map names `test/state-architecture.test.ts`, one of the files the campaign keeps out. The check now reads the tree's own `ignorePatterns` and exempts the claims the tree keeps out on purpose, so the same check holds in both trees. Measured both sides: before the exemption, a `--dryRunOnly --cleanTempDir=false` run failed inside its kept sandbox at exactly that claim - the failure named `test/state-architecture.test.ts (entry src/state/) names no file or directory` beside the probe's own moved claim - and the same run after it passed the initial run green | Passed |
 | A test that reads record lines out of source stays out of the campaign | `test/record-lines-doc.test.ts` (issue #223 review) reads the record-line words that live only in a module's source out of that source - the dispatch's refusal facts out of `src/handoff-dispatch.ts`, the checkout hold's lines out of `src/checkout-hold.ts`, and the rest out of the domain modules - and checks that the configuration reference states them. Instrumentation rewrites those string literals in the files it mutates, so under mutation the file fails on a text change rather than a behavior change: with `src/handoff-dispatch.ts` in the scope, this branch's first scoped-campaign attempt died in its initial run on `every refusal shape the dispatch writes is on the page`, 3,340 tests in. It is in `ignorePatterns` for the same reason the two architecture tests are there, and it stays in `bun run test`, which reads the uninstrumented tree | Passed. The exclusion took the file's 9 cases out of the campaign's initial run, which then reported the rest of the suite green |
 
 ## What is incomplete
 
-- **No whole-`src` mutation score.** A campaign over the scope's 37,207 mutants
-  was not run; it measures about 44 machine hours at this branch's measured
+- **No whole-`src` mutation score.** A campaign over the scope's 37,207 mutants has
+  not been run; it measures about 44 machine hours at this branch's measured
   scoped rate (848 mutants per hour, 4 workers on the busy machine), and the
-  extrapolation is labelled as such wherever it appears. It also cannot start
-  green on the head it measured: a whole-scope `--dryRunOnly` run (39,111 mutants
-  over `src`, measured 2026-10-14) died in its initial run on
-  `test/quality-audit.test.ts > the audit command`, whose child `bun run audit`
-  measures the duplication of the instrumented `src` against the baseline the
-  clean tree sets, the same class of fault the three excluded source-reading
-  tests stand out for. Until that test stands outside the campaign the same
-  way, no whole-`src` campaign can clear its initial run. The
-  baseline a score gate would need does not exist yet, so `thresholds.break` is
-  unset.
+  extrapolation is labelled as such wherever it appears. The initial-run blocker
+  this item recorded - `test/quality-audit.test.ts`, and the three source-reading
+  suites it took with it - stands resolved on this branch: all four stand outside
+  the campaign, and no source-reading suite failed in any of the instrumented
+  runs after that. What the dry runs left is the serial profile's load flake,
+  recorded in the next item. The baseline a score gate would need does not exist
+  yet, so `thresholds.break` is unset.
+- **The serial initial-run profile's load flakes, recorded.** Measured on this
+  branch on 2026-10-14, beside the model server, at a load of about 1.5: the
+  clean serial full run (`bun test` without `--parallel`, 3,434 tests over 155
+  files, 407.70 s) failed `test/state/dispatch-pause-invariant.test.ts > the
+  pause never stands with no row to answer it, and it agrees with the walk's own
+  ledger` on a `StateError: ... disk I/O error` opening its state file under
+  /tmp, an environmental failure of the machine. The serial run of the kept
+  dry-run sandbox's tree - the campaign's child profile, 3,363 tests over 149
+  files in 431.89 s - failed the same case on the same `disk I/O error`, and
+  failed `test/auto-mode.test.ts > the re-fire of a recorded skip (ADR 0042)`,
+  the case that passes alone on the instrumented tree and in the clean profile.
+  Two of the branch's dry-run initial runs also died on `test/consultation-
+  launcher-editing.test.ts > closing keeps the unfinished text and states that a
+  restart would not`, which read a closed database in the boot render's
+  header-facts read; the case passed alone on the instrumented tree twice and in
+  the clean serial run. The suite's normal profile is the parallel one (`bun
+  run test`), which this branch measured green twice (3,434 pass, 0 fail), and it
+  is the serial profile the campaign's initial run runs. None of the named cases
+  is claimed flake-free; on a co-tenanted machine the campaign's initial run may
+  need a restart, and a quiet machine is the cheaper adaptation.
 - **The pushed head's campaign score stands unmeasured.** The frame rig's
   rework (#391) landed on main after this branch's campaign finished, and it
   reworks `test/app-harness.ts` and `test/frame-rig.test.ts` - the campaign's

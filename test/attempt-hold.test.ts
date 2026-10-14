@@ -7,18 +7,18 @@
  * file. The two readers against each other: the Handoff aggregate over its
  * `handoff_attempts` rows and the Plane action aggregate over its
  * `plane_action_attempts` rows answer the same question, so on the same attempt
- * times and the same source reads they must agree at every point. And the source
- * half, over the real query the cycle-end re-verify gate runs, because that query
- * owns the wait's boundary and its multi-source rule. A second copy of the rule
- * in one aggregate shows up as a divergence here instead of staying invisible
- * until a failing start loops for five days.
+ * times and the same source reads they must agree at every point, over the real
+ * query the cycle-end re-verify gate runs, because that query owns the wait's
+ * boundary and its multi-source rule. The source half - both aggregates
+ * reaching the rule through the shared module - stands in
+ * `test/attempt-hold-architecture.test.ts`. A second copy of the rule in one
+ * aggregate shows up as a divergence here instead of staying invisible until a
+ * failing start loops for five days.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { type AttemptHoldFacts, blockedUnrefreshedHold } from "../src/domain/attempt-hold.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import { choice, cleanup, fetched, sourceA, sourceB, success } from "./state/harness.ts";
-import { sourceFiles } from "./static-checks.ts";
 
 afterEach(cleanup);
 
@@ -233,24 +233,5 @@ describe("the two holds read one rule (ADR 0077, ADR 0101)", () => {
 		});
 		expect(answers(state)).toEqual([false, false]);
 		state.close();
-	});
-
-	test("both aggregates reach the rule through the shared module", () => {
-		for (const file of ["src/state/handoff.ts", "src/state/plane-action.ts"]) {
-			const text = readFileSync(file, "utf8");
-			expect(text, file).toContain("blockedUnrefreshedHold({");
-			// The source half is the shared query, the same one the cycle-end
-			// re-verify gate runs. A hold that walked the source names itself would
-			// be the second copy this check is here to catch.
-			expect(text, file).toContain("hasUnrefreshedActiveMembershipSince");
-		}
-		// Tripwire, not proof: the agreement test above is what measures the rule.
-		// The "unrefreshed since T" comparison stands in one query, and the newest
-		// attempt's time is compared in one module.
-		const offenders = sourceFiles("src").filter((file) => {
-			const text = readFileSync(file, "utf8");
-			return /latest\.at\s*[<>]/u.test(text) || /last_success\s*[<>]/u.test(text);
-		});
-		expect(offenders).toEqual([]);
 	});
 });

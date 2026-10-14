@@ -80,6 +80,43 @@ export default {
 		// died on `every refusal shape the dispatch writes is on the page`. It stays
 		// in `bun run test`, which reads the uninstrumented tree.
 		"test/record-lines-doc.test.ts",
+		// The Quality audit's command case (ADR 0120) runs `bun run audit` as a
+		// child, and the audit measures the duplication of `src` against the
+		// baseline the clean tree sets (`.quality-baseline.json`). Instrumentation
+		// rewrites the source text the audit measures, so under mutation the child
+		// reports counts the baseline does not hold, exits non-zero, and the
+		// campaign's initial run dies on the case: measured on 2026-10-14, a
+		// whole-scope `--dryRunOnly` run (39,111 mutants over `src`) died in its
+		// initial run on `test/quality-audit.test.ts > the audit command`. It is a
+		// text change, not a behavior change, and it would kill every instrumented
+		// file for the wrong reason. It stays in `bun run test`, which reads the
+		// uninstrumented tree.
+		"test/quality-audit.test.ts",
+		// The app shell's architecture suite (issue #372) reads the App shell
+		// module as text: it scans the `AppProps` interface's field list and the
+		// shell's boot code for the shapes the total boot record refuses. Its
+		// interface scan answers zero fields on the instrumented copy, so under
+		// mutation the file fails on a text change rather than a behavior change.
+		// Measured on this branch: the whole-scope `--dryRunOnly` run's initial
+		// run died on its cases. It stays in `bun run test`, which reads the
+		// uninstrumented tree.
+		"test/app-shell-architecture.test.ts",
+		// The git-push architecture suite (ADR 0127) scans the source for a
+		// `"git"` argv holding a `"push"` token and refuses a push that does not
+		// name the bypass. The scan reads the call shapes instrumentation
+		// rewrites, so under mutation it finds no pushing source at all and fails
+		// on a text change rather than a behavior change. Measured on this
+		// branch: the whole-scope `--dryRunOnly` run's initial run died on it.
+		// It stays in `bun run test`, which reads the uninstrumented tree.
+		"test/git-push-architecture.test.ts",
+		// The attempt hold's source tripwire (ADR 0077 as extended by ADR 0101)
+		// reads the two state modules' text and counts the shared module's call
+		// shapes. Instrumentation rewrites those shapes, so under mutation the
+		// tripwire fails on a text change rather than a behavior change. Its
+		// behavior half stays in `test/attempt-hold.test.ts`, inside the
+		// campaign; the tripwire stands alone in this file, out of it, and in
+		// `bun run test`.
+		"test/attempt-hold-architecture.test.ts",
 		// Not an exclusion, and the note stands here because the file looks like one:
 		// `test/config-write-architecture.test.ts` (ADR 0103, issue #222) also reads
 		// production source as text, but it counts call names - `writeConfigFile(`,
