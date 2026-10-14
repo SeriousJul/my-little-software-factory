@@ -461,6 +461,17 @@ task-type = "diagnose"
 source-kind = "github-issue"
 labels-any = ["bug"]
 
+# The issue park (issue #396): an issue the machine has not placed. No
+# task-type, so the plane suggests nothing for it, and the auto-handoff adds
+# no row for it: a fresh issue is no candidate for the implementation until a
+# workflow label lands on it, and a label write is the only engine that moves
+# it. It orders after the ready-for-spec and bug states, the way the pull
+# request park below parks a pull request the machine has not placed.
+[[states]]
+name = "issue-unlabeled"
+[states.match]
+source-kind = "github-issue"
+
 [[states]]
 name = "needs-work"
 task-type = "rework"
