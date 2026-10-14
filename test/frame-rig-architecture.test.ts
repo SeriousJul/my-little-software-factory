@@ -41,6 +41,7 @@ const OWNED_SURFACES = [
 	"test/muted-source.test.ts",
 	"test/override-panel.test.ts",
 	"test/placement-panel.test.ts",
+	"test/plane-action-merge.test.ts",
 	"test/repository-select-panel.test.ts",
 	"test/ticket-grouping-frame.test.ts",
 	"test/ticket-scroll-frame.test.ts",

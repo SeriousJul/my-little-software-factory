@@ -38,11 +38,10 @@ import { createTicketSource, type FetchOutcome, SEARCH_QUERY } from "../src/tick
 import { firePlaneActionOutcome } from "../src/workflow.ts";
 import {
 	type AppSetup,
-	awaitFrame,
+	frameUntil,
 	messageRowOf,
 	mouseClick,
-	press,
-	pressArrow,
+	pressControl,
 	rowsOf,
 	settle,
 	WIDTH,
@@ -2151,19 +2150,21 @@ describe("the decision screen's merge", () => {
 
 		await withApp(
 			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
+				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
 				// The decision modal: the merge row stands beside Close and Goto.
-				await press(
+				await pressControl(setup, "decide-completion", { quiet: true });
+				await frameUntil(
 					setup,
-					"return",
 					"the decision modal",
 					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
 				);
-				await pressArrow(setup, "down", "the Goto row", () => true);
-				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
 				// The confirm closes the modal, the way the route's does, and
 				// the run's line lands on the Message line.
-				await press(setup, "return", "the run's line", (f) =>
+				await pressControl(setup, "confirm-action", { quiet: true });
+				await frameUntil(setup, "the run's line", (f) =>
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
@@ -2210,18 +2211,20 @@ describe("the decision screen's merge", () => {
 
 		await withApp(
 			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-				await press(
+				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+				await pressControl(setup, "decide-completion", { quiet: true });
+				await frameUntil(
 					setup,
-					"return",
 					"the decision modal",
 					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
 				);
 				const modal = await settle(setup);
 				expect(modal).toContain("the Next step is held: the task type carries Operator-decides");
-				await pressArrow(setup, "down", "the Goto row", () => true);
-				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
-				await press(setup, "return", "the run's line", (f) =>
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+				await pressControl(setup, "confirm-action", { quiet: true });
+				await frameUntil(setup, "the run's line", (f) =>
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
@@ -2256,15 +2259,16 @@ describe("the decision screen's merge", () => {
 
 			await withApp(
 				async (setup) => {
-					await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-					await press(setup, "return", "the decision modal", (f) =>
-						f.includes("Merge pull request"),
-					);
-					await pressArrow(setup, "down", "the Goto row", () => true);
-					await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
+					await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+					await pressControl(setup, "decide-completion", { quiet: true });
+					await frameUntil(setup, "the decision modal", (f) => f.includes("Merge pull request"));
+					await pressControl(setup, "select-action", { via: "↓", quiet: true });
+					await pressControl(setup, "select-action", { via: "↓", quiet: true });
+					await frameUntil(setup, "the merge row's focus", mergeRowFocused);
 					// The block keeps the ticket listed, open with the needs-work
 					// fact, and the run's line lands on the Message line.
-					const frame = await press(setup, "return", "the block's line", (f) =>
+					await pressControl(setup, "confirm-action", { quiet: true });
+					const frame = await frameUntil(setup, "the block's line", (f) =>
 						messageRowOf(f).includes(
 							`the merge of "${pullTitle}" was blocked: GraphQL: PullRequest is not mergeable.`,
 						),
@@ -2277,10 +2281,10 @@ describe("the decision screen's merge", () => {
 					await mouseClick(setup, 2, rowIndex);
 					// The reason wraps at the pane's width, so the wait takes the
 					// line's head, and the assertion takes the reason as facts.
-					await awaitFrame(
+					await frameUntil(
 						setup,
-						(f) => f.includes("Merge:") && f.includes("blocked - GraphQL: PullRequest"),
 						"the attempt's line",
+						(f) => f.includes("Merge:") && f.includes("blocked - GraphQL: PullRequest"),
 					);
 				},
 				{
@@ -2310,11 +2314,14 @@ describe("the decision screen's merge", () => {
 
 		await withApp(
 			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-				await press(setup, "return", "the decision modal", (f) => f.includes("Merge pull request"));
-				await pressArrow(setup, "down", "the Goto row", () => true);
-				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
-				await press(setup, "e", "the unavailable reason", (f) =>
+				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+				await pressControl(setup, "decide-completion", { quiet: true });
+				await frameUntil(setup, "the decision modal", (f) => f.includes("Merge pull request"));
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+				await pressControl(setup, "edit-action", { quiet: true });
+				await frameUntil(setup, "the unavailable reason", (f) =>
 					messageRowOf(f).includes("the plane action holds no settings"),
 				);
 			},
@@ -2347,12 +2354,12 @@ describe("the decision screen's merge", () => {
 
 		await withApp(
 			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
+				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
 				// The decision modal re-stands the merge row for the newer turn,
 				// and the earlier block's line does not stand in its place.
-				const frame = await press(
+				await pressControl(setup, "decide-completion", { quiet: true });
+				const frame = await frameUntil(
 					setup,
-					"return",
 					"the decision modal",
 					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
 				);
@@ -2388,18 +2395,20 @@ describe("the decision screen's merge", () => {
 
 		await withApp(
 			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-				await press(
+				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+				await pressControl(setup, "decide-completion", { quiet: true });
+				await frameUntil(
 					setup,
-					"return",
 					"the decision modal",
 					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
 				);
-				await pressArrow(setup, "down", "the Goto row", () => true);
-				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
 				// The confirm enters the queue like any start, and the run's
 				// line lands on the Message line past the full count.
-				await press(setup, "return", "the run's line", (f) =>
+				await pressControl(setup, "confirm-action", { quiet: true });
+				await frameUntil(setup, "the run's line", (f) =>
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
@@ -2457,16 +2466,17 @@ describe("the decision screen's merge", () => {
 
 			await withApp(
 				async (setup) => {
-					await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
+					await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
 					// The decision modal: the merge row stands beside Close and Goto.
-					await press(
+					await pressControl(setup, "decide-completion", { quiet: true });
+					await frameUntil(
 						setup,
-						"return",
 						"the decision modal",
 						(f) => f.includes("Decision:") && f.includes("Merge pull request"),
 					);
-					await pressArrow(setup, "down", "the Goto row", () => true);
-					await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
+					await pressControl(setup, "select-action", { via: "↓", quiet: true });
+					await pressControl(setup, "select-action", { via: "↓", quiet: true });
+					await frameUntil(setup, "the merge row's focus", mergeRowFocused);
 					// The confirm ended the ticket's cycle in the same write (ADR
 					// 0072): the ticket rests open, the wait stands in the Work
 					// queue, and the Decision screen - an awaiting screen again -
@@ -2474,9 +2484,9 @@ describe("the decision screen's merge", () => {
 					// The ask's line and the fallback are two renders, not one, and the
 					// frame that carries the line alone is quiet, so the wait takes the
 					// absence the assertion reads (issue #304).
-					const fallback = await press(
+					await pressControl(setup, "confirm-action", { quiet: true });
+					const fallback = await frameUntil(
 						setup,
-						"return",
 						"the ask's line and the fallen-back list",
 						(f) =>
 							messageRowOf(f).includes(`the merge of "${pullTitle}" is in the Work queue`) &&
@@ -2530,20 +2540,22 @@ describe("the decision screen's merge", () => {
 
 		await withApp(
 			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
+				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
 				// The decision modal: the merge row stands beside Close and Goto.
-				await press(
+				await pressControl(setup, "decide-completion", { quiet: true });
+				await frameUntil(
 					setup,
-					"return",
 					"the decision modal",
 					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
 				);
-				await pressArrow(setup, "down", "the Goto row", () => true);
-				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
 				// The confirm closes the modal and the run settles behind it:
 				// the run's line stands on the Message line, and the merged
 				// ticket's row leaves the list the moment the run settles.
-				const frame = await press(setup, "return", "the run's line", (f) =>
+				await pressControl(setup, "confirm-action", { quiet: true });
+				const frame = await frameUntil(setup, "the run's line", (f) =>
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 				// The run's line alone names the ticket still: the row and the
@@ -2620,10 +2632,8 @@ describe("the auto top-up merge", () => {
 			async (setup) => {
 				// The open walk's add and the run's line land on the Message
 				// line; the run's line is the one that settles the wait.
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
-					"the run's line",
+				await frameUntil(setup, "the run's line", (f) =>
+					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
 			(runner) => {
@@ -2664,10 +2674,10 @@ describe("the auto top-up merge", () => {
 					// handoff's working line, which the converged position asks
 					// on the next cycle, so the wait reads the attempt from the
 					// state the line would state.
-					await awaitFrame(
+					await frameUntil(
 						setup,
-						() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
 						"the block's attempt",
+						() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
 					);
 				},
 				(runner) => {
@@ -2722,10 +2732,10 @@ describe("the auto top-up merge", () => {
 		let heldRunner: FakeRunner;
 		const { state, runner } = await topUpApp(
 			async (setup) => {
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
 					"the block's attempt",
+					() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
 				);
 				// The failed write converged nothing (ADR 0079): the labels the
 				// source last fetched still wear the merge position, and the
@@ -2751,12 +2761,12 @@ describe("the auto top-up merge", () => {
 					pullsSource,
 					pullSuccess(new Date(Date.now() + 60_000).toISOString()),
 				);
-				await awaitFrame(
+				await frameUntil(
 					setup,
+					"the re-ask's merge",
 					() =>
 						heldRunner.commands().filter((command) => command.startsWith("gh pr merge ")).length >=
 						2,
-					"the re-ask's merge",
 				);
 			},
 			(runner) => {
@@ -2831,10 +2841,10 @@ describe("the auto top-up merge", () => {
 	test("the queue pause holds the merge item standing, and the row and detail name the action", async () => {
 		const { state } = await topUpApp(
 			async (setup) => {
-				const frame = await awaitFrame(
+				const frame = await frameUntil(
 					setup,
-					(f) => f.includes("Work") && f.includes("waiting: 1"),
 					"the waiting item's count",
+					(f) => f.includes("Work") && f.includes("waiting: 1"),
 				);
 				// The row carries the merge's word beside the title.
 				const rows = rowsOf(frame);
@@ -2848,10 +2858,8 @@ describe("the auto top-up merge", () => {
 					.slice(boxTop + 1)
 					.findIndex((row) => row.includes(pullTitle.slice(0, 3)));
 				await mouseClick(setup, 2, boxTop + 1 + rowIndex);
-				const detail = await awaitFrame(
-					setup,
-					(f) => f.includes("Task type: merge"),
-					"the item's detail",
+				const detail = await frameUntil(setup, "the item's detail", (f) =>
+					f.includes("Task type: merge"),
 				);
 				expect(detail).toContain("Origin: merge");
 				expect(detail).toContain("Method: squash");
@@ -2885,16 +2893,12 @@ describe("the auto top-up merge", () => {
 		// the way the route's wait wears the badge on the position's row.
 		const { state } = await topUpApp(
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => {
-						const rows = rowsOf(f);
-						return rows.some(
-							(row) => row.includes(pullTitle.slice(0, 3)) && row.includes("[queued]"),
-						);
-					},
-					"the position's row",
-				);
+				const frame = await frameUntil(setup, "the position's row", (f) => {
+					const rows = rowsOf(f);
+					return rows.some(
+						(row) => row.includes(pullTitle.slice(0, 3)) && row.includes("[queued]"),
+					);
+				});
 				const row = rowsOf(frame).find((row) => row.includes(pullTitle.slice(0, 3))) ?? "";
 				expect(row).toContain("[queued]");
 				expect(row).not.toContain("[open]");
@@ -2961,10 +2965,10 @@ describe("the auto top-up merge", () => {
 					decision: "closed",
 					decidedAt: new Date().toISOString(),
 				});
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "merged",
 					"the merge run",
+					() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "merged",
 				);
 			},
 			(runner) => {
