@@ -763,7 +763,7 @@ async function closeSurface(
  * fallback tests ask for. The record comes back to the test.
  */
 async function routeFallbackApp(
-	fn: (setup: Setup, planeRecord: Plane) => Promise<void>,
+	fn: (setup: AppSetup, planeRecord: Plane) => Promise<void>,
 ): Promise<Plane> {
 	const record = await seededPlane();
 	stubCheckoutInto(record.fakeRunner, record.home);
