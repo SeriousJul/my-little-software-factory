@@ -154,6 +154,13 @@ describe("the Default configuration", () => {
 				match: { sourceKind: "github-issue", labelsAny: ["bug"] },
 			},
 			{
+				// The issue park (issue #396): an issue the machine has not
+				// placed offers no task, so a fresh issue is no candidate for
+				// the implementation until a workflow label lands on it.
+				name: "issue-unlabeled",
+				match: { sourceKind: "github-issue" },
+			},
+			{
 				name: "needs-work",
 				taskType: "rework",
 				match: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] },
@@ -714,6 +721,10 @@ describe("validateConfig", () => {
 					name: "bug",
 					taskType: "diagnose",
 					match: { sourceKind: "github-issue", labelsAny: ["bug"] },
+				},
+				{
+					name: "issue-unlabeled",
+					match: { sourceKind: "github-issue" },
 				},
 				{
 					name: "needs-work",

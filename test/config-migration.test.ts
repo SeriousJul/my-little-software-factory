@@ -101,14 +101,16 @@ describe("the pure rewrite", () => {
 		const result = migrate(PRE_MACHINE_SEED);
 		// The rewrite validates, and it carries no old key.
 		const config = validateConfig(parseToml(result.configText));
-		// The three rules became three states, and the shipped machine's park
-		// came with them: the default source list now carries an open pull
-		// request before it holds a label, and the park is what suggests
-		// nothing for a pull request the machine never placed.
+		// The three rules became three states, and the shipped machine's parks
+		// came with them: the default source list carries an open pull request
+		// before it holds a label, and an issue lists before any workflow label
+		// lands on it, so the parks are what suggest nothing for a ticket the
+		// machine never placed.
 		expect(config.workflowStates.map((state) => state.name)).toEqual([
 			"rework",
 			"review",
 			"merge",
+			"issue-unlabeled",
 			"pull-request-unlabeled",
 		]);
 		expect(result.reportText).toContain("Parking states appended from the shipped machine");

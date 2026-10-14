@@ -201,8 +201,9 @@ function migrateStates(fields: {
 	}
 	// The shipped machine's parking states come over with the migration. The
 	// default source list carries an open pull request before it holds a label,
-	// so a config whose rules name only the labeled states would otherwise hand
-	// the default task type to a stranger's pull request.
+	// and an issue lists before any workflow label lands on it, so a config
+	// whose rules name only the labeled states would otherwise hand the default
+	// task type to a ticket the machine has not placed.
 	const shippedStates = (Array.isArray(shipped.states) ? shipped.states : []).filter(isRecord);
 	for (const shippedState of shippedStates) {
 		if (shippedState["task-type"] !== undefined) continue;
@@ -212,7 +213,7 @@ function migrateStates(fields: {
 		stateNames.add(name);
 		states.push({ ...shippedState });
 		installedParks.push(
-			`\`${name}\`: the shipped seed's parking state, appended so a pull request the machine has not placed suggests nothing.`,
+			`\`${name}\`: the shipped seed's parking state, appended so a ticket the machine has not placed suggests nothing.`,
 		);
 	}
 	return { states, stateNames, stateForTask, stateLines, installedParks };
