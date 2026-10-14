@@ -3380,7 +3380,11 @@ describe("the open dispatch", () => {
 	 * the item without a start clears the mark through the ask's own start
 	 * report: a dispatch refusal never took a row, and a pickup drop, an
 	 * operator remove, or a race cancel leaves a row that already went. A
-	 * restart that actually started keeps its mark until the episode ends.
+	 * restart that actually started keeps its mark until the episode ends. A
+	 * drop that ran a start settles its attempt failed, and that attempt
+	 * holds the re-ask until the ticket's sources re-read it (ADR 0101): the
+	 * re-ask on the refresh is the expected path, and ADR 0051's re-entry
+	 * stands on the real module the way it did on the seam (issue #370).
 	 */
 	test("a refused top-up restart is asked again, a started one is not", async () => {
 		const refused = rig({
@@ -3437,13 +3441,17 @@ describe("the open dispatch", () => {
 		accepted.state.close();
 	});
 
-	test("a top-up restart the pickup dropped holds no automatic re-ask (issue #370)", async () => {
+	test("a dropped top-up restart holds its re-ask until the source re-reads it, then re-asks (issue #370)", async () => {
 		// A free seat runs the restart's start on behind the ask, and herdr
-		// refuses the worktree open: the pickup's drop, ADR 0049. The old rig's
-		// seam drop recorded no failed attempt, so its newest handoff kept a
-		// pane and the walk re-asked; the real module's drop settles the
-		// attempt pane-less, and the restart walk's pane gate holds the
-		// ticket out (issue #370).
+		// refuses the worktree open: the pickup's drop, ADR 0049. The drop
+		// settles the attempt failed, and that attempt holds the walk's
+		// re-ask until the ticket's sources re-read it (ADR 0101): while
+		// they stand stale the hold states nothing, and the re-ask on the
+		// refresh is the expected path. Issue #370 read the hold as the
+		// restart walk's pane gate: the reading was wrong, and the test
+		// measures why - the failed settle writes no handoff row, so the
+		// ticket keeps the pane its earlier start settled, and the gate
+		// reads clear on it.
 		const seats = { current: 1 };
 		const { state, intents, statuses, coordinator, advance, runner, checkout } = rig({
 			autoOn: true,
@@ -3477,13 +3485,37 @@ describe("the open dispatch", () => {
 				text: 'queued handoff for "Persist source facts" was not run: Preparing worktree: the worktree path already exists',
 			}),
 		);
-		// The failed start settles a handoff that holds no pane, so the restart
-		// walk's pane gate holds the ticket out: no automatic re-ask, and the
-		// hold states nothing. The operator's Restart in the Missing modal is
-		// the path that answers it.
+		// The failed settle wrote no handoff row: the ticket still names the
+		// pane its earlier start settled, so the walk's pane gate reads clear.
+		// The brake is the failed attempt's hold on the sources, and it
+		// states nothing.
+		const inFlight = state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
+		expect(inFlight).toHaveLength(1);
+		expect(inFlight[0].paneId).toBe("pane-implement");
+		const lineCount = statuses.length;
 		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
 		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
+		expect(statuses).toHaveLength(lineCount);
+		// The sources re-read the ticket after the failure landed: the release.
+		// ADR 0051's re-entry follows on the real module - the walk asks the
+		// restart again, and the standing refusal fails it again.
+		state.sourceFact.applyFetch(source, {
+			status: "success" as const,
+			fetchedAt: "2026-08-31T12:00:00Z",
+			tickets: [fetched()],
+		});
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(2);
+		expect(state.handoff.handoffCount("github:github.com:I_5")).toBe(3);
+		expect(
+			statuses.filter(
+				(status) =>
+					status.kind === "warning" &&
+					status.text ===
+						'queued handoff for "Persist source facts" was not run: Preparing worktree: the worktree path already exists',
+			),
+		).toHaveLength(2);
 		state.close();
 	});
 

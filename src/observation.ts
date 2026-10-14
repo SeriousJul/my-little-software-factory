@@ -2232,6 +2232,11 @@ export class ObservationCoordinator {
 		// episode: the mark stands while the asked-for start holds its place in
 		// the queue or runs, and a refused ask clears it again, so the next
 		// empty-queue cycle reconsiders the restart the way ADR 0051 states.
+		// A drop that ran a start settles its attempt failed, and that attempt
+		// holds the re-ask until the sources re-read the ticket (ADR 0101):
+		// the re-ask on the refresh is the expected path, and the ticket keeps
+		// the pane its earlier start settled, so this walk's pane gate reads
+		// clear on it (issue #370).
 		const restartTickets = this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
 		// The start count each candidate needs arrives as one batched read for the
 		// in-flight list, the same shape the projection pays (issue #202, ADR 0095).
@@ -2354,7 +2359,10 @@ export class ObservationCoordinator {
 			// again. That is ADR 0051's re-entry rule read at the drop, and a
 			// gate that still holds the ticket parks it again there: the
 			// re-verify gate and the handoff limit stand in the claim, and the
-			// dispatch's warning names them (ADR 0049).
+			// dispatch's warning names them (ADR 0049). A drop whose start ran
+			// and failed settles its attempt failed (ADR 0101), and that
+			// attempt then holds the ask until the ticket's sources re-read it:
+			// the re-ask waits the read, and on it follows (issue #370).
 			onStarted: (started) => {
 				if (!started.ok) this.restarted.delete(ticket.ticketIdentity);
 			},
