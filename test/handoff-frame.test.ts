@@ -62,7 +62,7 @@ import {
 	worktreeCreateJson,
 } from "./fake-runner.ts";
 import { appOn } from "./panel-app.ts";
-import type { Plane } from "./plane.ts";
+import type { Plane, PlaneStanding } from "./plane.ts";
 
 /**
  * The runner's commands with the desktop notification's of one standing
@@ -488,6 +488,41 @@ async function openPanel(setup: Setup, planeRecord: Plane): Promise<void> {
 	await guideKey(setup, "override", "e", { quiet: true });
 }
 
+/**
+ * The standing the in-flight tests use: a delayed runner keeps the start
+ * pending across the window the test's walk needs.
+ */
+const delayedStanding = (delayMs: number, limit: number): PlaneStanding => ({
+	config: seatOpenConfig,
+	runner: (fake) => new DelayedRunner(fake, delayMs, limit),
+	repos: BILLING_REPOS,
+	commands: liveBillingCheckout,
+});
+
+/**
+ * One step of the selection walk while a handoff is in flight: settle first
+ * so the key never lands in a re-sort, and press again, a bounded number of
+ * times, until the named fact is painted.
+ */
+async function walkStep(
+	setup: Setup,
+	key: string,
+	pred: (f: string) => boolean,
+	what: string,
+): Promise<void> {
+	for (let i = 0; i < 5; i += 1) {
+		await settle(setup);
+		await guideKey(setup, "move-list", key, { quiet: true });
+		try {
+			await frameUntil(setup, what, pred);
+			return;
+		} catch {
+			// The step fell into a drop window; press again.
+		}
+	}
+	throw new Error(`never reached ${what}`);
+}
+
 /** The agent start call a settled handoff sent, with its argument list. */
 const startArgsOf = (runner: FakeRunner): readonly unknown[] | undefined => {
 	const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
@@ -806,12 +841,7 @@ describe("the Enter handoff", () => {
 describe("the in-flight guard", () => {
 	test("a second Enter while a handoff is in flight starts nothing", async () => {
 		await appOn(
-			{
-				config: seatOpenConfig,
-				runner: (fake) => new DelayedRunner(fake, 400, 3),
-				repos: BILLING_REPOS,
-				commands: liveBillingCheckout,
-			},
+			delayedStanding(400, 3),
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
@@ -840,12 +870,7 @@ describe("the in-flight guard", () => {
 	});
 	test("two Enters in one tick start one handoff", async () => {
 		await appOn(
-			{
-				config: seatOpenConfig,
-				runner: (fake) => new DelayedRunner(fake, 400, 3),
-				repos: BILLING_REPOS,
-				commands: liveBillingCheckout,
-			},
+			delayedStanding(400, 3),
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
@@ -892,25 +917,13 @@ describe("the in-flight guard", () => {
 				// back up onto it. Each step settles before pressing, a key
 				// sent into a re-sort being dropped, and re-presses a bounded
 				// number of times.
-				const step = async (
-					key: string,
-					pred: (f: string) => boolean,
-					what: string,
-				): Promise<void> => {
-					for (let i = 0; i < 5; i += 1) {
-						await settle(setup);
-						await guideKey(setup, "move-list", key, { quiet: true });
-						try {
-							await frameUntil(setup, what, pred);
-							return;
-						} catch {
-							// The step fell into a drop window; press again.
-						}
-					}
-					throw new Error(`never reached ${what}`);
-				};
-				await step("j", (f) => f.includes("Enter Recovery"), "the queue item's row");
-				await step("k", (f) => listHalfOf(selectedRow(f)).includes("starting"), "the flight row");
+				await walkStep(setup, "j", (f) => f.includes("Enter Recovery"), "the queue item's row");
+				await walkStep(
+					setup,
+					"k",
+					(f) => listHalfOf(selectedRow(f)).includes("starting"),
+					"the flight row",
+				);
 				// The first handoff still settles, on the ticket it started on.
 				await frameUntil(setup, "the handoff to settle", handoffSettled);
 			},
@@ -990,12 +1003,7 @@ describe("the override panel", () => {
 		// The delay holds the pipeline before agent start, so the in-flight
 		// handoff is visible while it is not yet recorded.
 		await appOn(
-			{
-				config: seatOpenConfig,
-				runner: (fake) => new DelayedRunner(fake, 800, 3),
-				repos: BILLING_REPOS,
-				commands: liveBillingCheckout,
-			},
+			delayedStanding(800, 3),
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
 				planeRecord.settleFirstFetch();
@@ -2533,24 +2541,12 @@ describe("the override panel", () => {
 				// onto an open ticket above. Each step settles before
 				// pressing, a key sent into a re-sort being dropped, and
 				// re-presses a bounded number of times.
-				const step = async (
-					key: string,
-					pred: (f: string) => boolean,
-					what: string,
-				): Promise<void> => {
-					for (let i = 0; i < 5; i += 1) {
-						await settle(setup);
-						await guideKey(setup, "move-list", key, { quiet: true });
-						try {
-							await frameUntil(setup, what, pred);
-							return;
-						} catch {
-							// The step fell into a drop window; press again.
-						}
-					}
-					throw new Error(`never reached ${what}`);
-				};
-				await step("k", (f) => listHalfOf(selectedRow(f)).includes("[open]"), "the open ticket");
+				await walkStep(
+					setup,
+					"k",
+					(f) => listHalfOf(selectedRow(f)).includes("[open]"),
+					"the open ticket",
+				);
 				await settle(setup);
 				await guideKey(setup, "override", "e", { quiet: true });
 				const opened = await frameUntil(setup, "the override panel", (f) =>
