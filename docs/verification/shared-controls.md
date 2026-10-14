@@ -2049,7 +2049,12 @@ the head reported one fail over its 3,409 tests, and the re-run at the same
 head reports none, so the first run's fail stands as a recorded load flake;
 the failing test's name did not survive the first run, whose output was cut
 to its tail, and the re-run is the measured pass. No wait in either run's
-passes reached the deadline, which a wait that stands past it would fail.
+passes reached the deadline, which a wait that stands past it would fail. At
+head `85c46225`, the head that lands the rework above, the scoped run over
+the branch's suites ran its 918 tests in 353.1 seconds, 0 fail, at that same
+head (this machine, 32 cores, 60 GB RAM, with the Quality audit's run
+concurrent at its start), and the push gate re-runs the full suite at the
+pushed head.
 
 The static architecture check, `test/frame-rig-architecture.test.ts`, owns the
 set of surfaces the rig drives and refuses the two ways a surface can opt out:
@@ -2101,7 +2106,14 @@ history, message, refresh, and override keys through the named press and
 its guide-named sibling, the page and jump keys through `pageKey`, the
 auto-handoff toggle through its named operation, and the guide's scroll and
 close keys through `guideKey` - waits through the rig's frame check and
-its named outcomes, and rides `crossCursor` for the section's cross-walk.
+its named outcomes, and rides `crossCursor` for the section's cross-walk. At
+the head that lands the review's rework (`85c46225`), one step further, the
+walk stands at 730 press-family calls, 166 hand operations, 720 raw waits,
+662 inline containment predicates, 396 reaches to the renderer's input, and
+36 helper copies over the rig's 110 exports: the Action bar's suite crosses
+to the Consultation list through the rig's own `crossCursor` instead of its
+local walk, which keeps the row walks the section walk does not reach, and
+the named escapes take the quiet default the press and the guide key hold.
 The seven owned surfaces
 press through the rig
 with none of the retired surface left: no hand-picked key, no hand operation,
@@ -2113,9 +2125,13 @@ builder - not input the rig should own. The escape list's named `frameUntil`
 check, which the closed set of outcomes does not reach, is invisible to the
 walk's line-based metric: its arrow and its containment test stand on
 different lines. The test-tree duplication clone count, the Quality audit's
-own metric, stands at 204 at the base head and at this head, and the Quality
-baseline, which only shrinks, holds that count. The walk counts in this
-paragraph re-derive from the committed walk at the two named heads: the
+own metric, stands at 211 at the base head `a5a947dd`, at 197 at the head
+this branch rebases onto - the Quality baseline, which only shrinks, holds
+that count, measured on `d2a380ff` - and at 196 at the head that lands the
+rework above: the branch's own work takes the count down by one, and this
+change rewrites the baseline down to the rework's 196, which the audit then
+holds. The walk counts in this
+paragraph re-derive from the committed walk at the named heads: the
 script run at either head prints them, and a head that moves the suites
 re-records them here from the same script.
 
