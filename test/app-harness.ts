@@ -1637,6 +1637,15 @@ export interface ControlOutcomeFields {
 	moved?: string;
 	/** The app is quiet after the input: the frame rests. */
 	quiet?: boolean;
+	/**
+	 * The key goes out at once, without the pre-press settle. The settle
+	 * guards a key that lands before a handler it waits for is live; a key
+	 * the test sends while the plane runs a live cycle - a handoff in
+	 * flight, an observation tick pending - must not wait the settle out,
+	 * because the plane's next tick can move the selection the key stands
+	 * on before the key lands.
+	 */
+	immediate?: boolean;
 }
 
 export interface PressControlFields extends ControlOutcomeFields {
@@ -1652,7 +1661,9 @@ const OUTCOME_FIELDS = new Set(["opens", "closes", "refuses", "shows", "hides", 
 
 /** The outcomes are a closed set: a misspelled one is a rig error, not a quiet no-op. */
 function checkOutcomeFields(fields: ControlOutcomeFields, viaAllowed: boolean): void {
-	const known = viaAllowed ? new Set([...OUTCOME_FIELDS, "via"]) : OUTCOME_FIELDS;
+	const known = viaAllowed
+		? new Set([...OUTCOME_FIELDS, "via", "immediate"])
+		: new Set([...OUTCOME_FIELDS, "immediate"]);
 	const words = [...OUTCOME_FIELDS, ...(viaAllowed ? ["via"] : [])].join(", ");
 	for (const key of Object.keys(fields)) {
 		if (!known.has(key))
@@ -2499,7 +2510,7 @@ export async function pressControl(
 		Object.keys(fields).filter((key) => key !== "via").length === 0
 			? { ...fields, quiet: true }
 			: fields;
-	const preFrame = await settle(setup);
+	const preFrame = fields.immediate ? setup.captureCharFrame() : await settle(setup);
 	const resolution = resolveControl(setup, controlId, effective.via);
 	if (effective.refuses !== undefined) {
 		// A hint the bar painted in its available ink will run the control,
@@ -2929,6 +2940,12 @@ export async function pageKey(
  * control and the key as the guide names it, and never a character the plane
  * might no longer accept. A key the guide names nowhere for the control fails
  * the press, naming the aliases the guide does name (ADR 0128, addendum).
+ *
+ * The key settles before it goes out, so a press right after a surface
+ * change lands on a handler that is live. A key the test sends while the
+ * plane runs a live cycle names `immediate` and goes out at once: the
+ * pre-press settle would wait the plane's next tick out, and that tick can
+ * move the selection the key stands on.
  */
 export async function guideKey(
 	setup: Setup,
@@ -2939,7 +2956,7 @@ export async function guideKey(
 	const control = catalogueControl(controlId);
 	checkOutcomeFields(fields, false);
 	const effective = quietUnlessNamed(fields);
-	const preFrame = await settle(setup);
+	const preFrame = fields.immediate ? setup.captureCharFrame() : await settle(setup);
 	const aliases = new Set<string>();
 	for (const mode of control.modes) {
 		try {

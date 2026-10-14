@@ -136,7 +136,15 @@ a control whose hint the bar's own facts hold back (the Message key while the
 record holds nothing), and a control the bar leaves off on the surface. The
 key `guideKey` sends is read from the catalogue, the source the guide paints
 from, so the catalogue stays the single owner of key meaning, and a key the
-guide names nowhere for the control fails the press. The section cross-walk
+guide names nowhere for the control fails the press, naming the aliases the
+guide does name. A key the test sends while the plane runs a live cycle - a
+handoff in flight, an observation tick pending - names the press
+`immediate` and the key goes out at once, without the settle the press
+otherwise waits first: that settle would stand the plane's next tick out, and
+the tick can move the selection the key stands on before the key lands, so a
+key that settles first presses the row the cycle left behind. The wait after
+the key stays the test's own named wait, and a key the guide names nowhere
+for the control fails the immediate press the same way. The section cross-walk
 stands on the same list: crossing the unified cursor into another section is
 not one control press, it is the list's own Move keys walked to the boundary
 row and across, so the named `crossCursor` operation walks it with the walk

@@ -33,17 +33,17 @@ import { MouseButtons } from "@opentui/core/testing";
 import stringWidth from "string-width";
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
-
+import type { Setup } from "./app-harness.ts";
 import {
 	agentRowOf,
-	awaitFrame,
 	bootApp,
 	cellColors,
 	detailFocused,
 	detailPaneText,
 	expectStateBadges,
-	focusDetail,
 	frameText,
+	frameUntil,
+	guideKey,
 	listFocused,
 	listHalfOf,
 	markerRowOf,
@@ -52,14 +52,13 @@ import {
 	mouseDrag,
 	mousePress,
 	mouseWheel,
-	openPanel,
+	pageKey,
 	paneRow,
-	press,
-	pressArrow,
+	pressControl,
+	quitApp,
 	rgb,
 	roleColor,
 	rowsOf,
-	scrollDetailUntil,
 	settle,
 	showsTicket,
 	sleep,
@@ -80,8 +79,24 @@ import {
 } from "./fact-fixtures.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import type { FakeSource } from "./fake-source.ts";
-
 import { plane, reopenState } from "./plane.ts";
+
+/** Scroll the detail pane down until the line shows, one catalogue key at a time. */
+async function detailLineUntil(
+	setup: Setup,
+	what: string,
+	predicate: (frame: string) => boolean,
+	maxSteps = 24,
+): Promise<string> {
+	for (let step = 0; step <= maxSteps; step += 1) {
+		const frame = setup.captureCharFrame();
+		if (predicate(frame)) return frame;
+		await guideKey(setup, "scroll-detail", "j", { quiet: true });
+	}
+	throw new Error(`the detail never showed ${what}
+last frame:
+${setup.captureCharFrame()}`);
+}
 
 /**
  * The braille glyph the spinner face stands on, as a character class.
@@ -105,10 +120,8 @@ describe("the control plane", () => {
 		});
 		await withApp(
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(candidate) => candidate.includes("no ticket sources configured"),
-					"the no-sources state",
+				const frame = await frameUntil(setup, "the no-sources state", (candidate) =>
+					candidate.includes("no ticket sources configured"),
 				);
 				expect(frame).not.toContain(SAMPLE_TICKETS[0].title);
 			},
@@ -188,10 +201,8 @@ describe("the control plane", () => {
 					// The row wears the missing badge, not the [running] state badge:
 					// the agent the last poll listed in the pane is not the
 					// ticket's own.
-					const frame = await awaitFrame(
-						setup,
-						(candidate) => frameText(candidate).includes("missing"),
-						"the missing failure badge",
+					const frame = await frameUntil(setup, "the missing failure badge", (candidate) =>
+						frameText(candidate).includes("missing"),
 					);
 					// The selected list row wears the failure badge in the state
 					// badge's place, so the row holds no [running] badge of its own. The
@@ -206,7 +217,7 @@ describe("the control plane", () => {
 					expect(detail).not.toContain("[running]");
 					// Goto refuses: the catalogue reads the pane as not alive, the
 					// refusal stands on the Message line, and the focus never runs.
-					setup.mockInput.pressKey("g");
+					await guideKey(setup, "ticket-goto", "g", { quiet: true });
 					const after = await settle(setup);
 					expect(messageRowOf(after)).toContain("the Agent's pane is not alive in the last poll");
 					expect(runner.commands()).not.toContain("herdr agent focus pane-1");
@@ -300,26 +311,26 @@ describe("the control plane", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await awaitFrame(
-						setup,
-						(candidate) => frameText(candidate).includes("[awaiting]"),
-						"the awaiting state badge",
+					await frameUntil(setup, "the awaiting state badge", (candidate) =>
+						frameText(candidate).includes("[awaiting]"),
 					);
 					// The base key refuses: the recorded pane holds a live agent
 					// that is not the ticket's own, so the focus never runs.
-					setup.mockInput.pressKey("g");
+					await guideKey(setup, "ticket-goto", "g", { quiet: true });
 					let frame = await settle(setup);
 					expect(messageRowOf(frame)).toContain("the Agent's pane is not alive in the last poll");
 					expect(runner.commands()).not.toContain("herdr agent focus pane-1");
 					// The decision's own Goto row refuses the same focus: open the
 					// decision, walk down to the Goto row, and confirm it.
-					await press(setup, "return", "the decision to open", (candidate) =>
+					await guideKey(setup, "handoff", "Enter", { quiet: true });
+					await frameUntil(setup, "the decision to open", (candidate) =>
 						candidate.includes("Decision:"),
 					);
-					await pressArrow(setup, "down", "the Goto row to be selected", (candidate) =>
+					await guideKey(setup, "select-action", "↓", { quiet: true });
+					await frameUntil(setup, "the Goto row to be selected", (candidate) =>
 						candidate.includes("❯ Goto"),
 					);
-					setup.mockInput.pressEnter();
+					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					frame = await settle(setup);
 					expect(messageRowOf(frame)).toContain(
 						"the pane the handoff recorded is no longer the agent's pane",
@@ -429,16 +440,15 @@ describe("the control plane", () => {
 			await withApp(
 				async (setup) => {
 					planeRecord.settleFirstFetch();
-					await awaitFrame(
-						setup,
-						(candidate) => frameText(candidate).includes("[awaiting]"),
-						"the awaiting state badge",
+					await frameUntil(setup, "the awaiting state badge", (candidate) =>
+						frameText(candidate).includes("[awaiting]"),
 					);
 					// The Close row: the decision's first row, selected by default.
-					await press(setup, "return", "the decision to open", (candidate) =>
+					await guideKey(setup, "handoff", "Enter", { quiet: true });
+					await frameUntil(setup, "the decision to open", (candidate) =>
 						candidate.includes("Decision:"),
 					);
-					setup.mockInput.pressEnter();
+					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					await settle(setup);
 					// The cycle ends decided: the draft the ticket still wears is
 					// read off its factory branch and closed.
@@ -548,21 +558,21 @@ describe("the control plane", () => {
 			await withApp(
 				async (setup) => {
 					planeRecord.settleFirstFetch();
-					await awaitFrame(
-						setup,
-						(candidate) => frameText(candidate).includes("missing"),
-						"the missing failure badge",
+					await frameUntil(setup, "the missing failure badge", (candidate) =>
+						frameText(candidate).includes("missing"),
 					);
 					// The missing agent's recovery screen: Enter on the in-flight
 					// ticket opens the modal, down selects the Abandon, and the
 					// confirm ends the cycle.
-					await press(setup, "return", "the missing modal", (candidate) =>
+					await guideKey(setup, "handoff", "Enter", { quiet: true });
+					await frameUntil(setup, "the missing modal", (candidate) =>
 						candidate.includes("Missing:"),
 					);
-					await pressArrow(setup, "down", "the Abandon row", (candidate) =>
+					await guideKey(setup, "select-action", "↓", { quiet: true });
+					await frameUntil(setup, "the Abandon row", (candidate) =>
 						candidate.includes("❯ Abandon"),
 					);
-					setup.mockInput.pressEnter();
+					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					const frame = await settle(setup);
 					// The cycle ends abandoned: the draft the ticket still wears is
 					// read off its factory branch and closed.
@@ -649,7 +659,7 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				const frame = await awaitFrame(setup, (f) => f.includes("[parked]"), "the parked row");
+				const frame = await frameUntil(setup, "the parked row", (f) => f.includes("[parked]"));
 				// The park is a machine fact, not a missing one: it wears no
 				// warning color, unlike `unknown`.
 				expect(detailPaneText(frame)).toContain("Suggested task type: parked");
@@ -684,15 +694,15 @@ describe("the control plane", () => {
 		await withApp(async (setup) => {
 			// The attention band stands the selection on the awaiting ticket,
 			// the list's first row.
-			await press(
+			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await frameUntil(
 				setup,
-				"j",
 				"the selection to move to the running ticket",
 				(f) => showsTicket(f, SAMPLE_TICKETS[2]) && !showsTicket(f, SAMPLE_TICKETS[3]),
 			);
-			await press(
+			await guideKey(setup, "move-list", "↑", { quiet: true });
+			await frameUntil(
 				setup,
-				"k",
 				"the selection to move back to the awaiting ticket",
 				(f) => showsTicket(f, SAMPLE_TICKETS[3]) && !showsTicket(f, SAMPLE_TICKETS[2]),
 			);
@@ -703,12 +713,13 @@ describe("the control plane", () => {
 		await withApp(async (setup) => {
 			// The attention band stands the selection on the awaiting ticket,
 			// the list's first row.
-			await pressArrow(setup, "down", "the selection to move to the running ticket", (f) =>
+			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await frameUntil(setup, "the selection to move to the running ticket", (f) =>
 				showsTicket(f, SAMPLE_TICKETS[2]),
 			);
-			await pressArrow(
+			await guideKey(setup, "move-list", "↑", { quiet: true });
+			await frameUntil(
 				setup,
-				"up",
 				"the selection to move back to the awaiting ticket",
 				(f) => showsTicket(f, SAMPLE_TICKETS[3]) && !showsTicket(f, SAMPLE_TICKETS[2]),
 			);
@@ -723,22 +734,21 @@ describe("the control plane", () => {
 			expect(frame).not.toContain("❯ Detail");
 
 			// l moves the focus to the detail pane.
-			frame = await focusDetail(setup);
+			frame = await guideKey(setup, "detail", "l", { quiet: true });
 
 			// j with the detail focused cannot scroll at this size. The
 			// catalogue reports its unavailable reason on the Message line;
 			// it does not move the selected Ticket.
-			setup.mockInput.pressKey("j");
-			const after = await awaitFrame(
-				setup,
-				(frame) => frame.includes("the Ticket detail has nowhere to scroll"),
-				"the unavailable Scroll reason",
+			await guideKey(setup, "move-list", "↓", { quiet: true });
+			const after = await frameUntil(setup, "the unavailable Scroll reason", (frame) =>
+				frame.includes("the Ticket detail has nowhere to scroll"),
 			);
 			expect(markerRowOf(after)).toBe(3);
 
 			// h moves the focus back to the list pane; the selection is
 			// preserved.
-			frame = await press(setup, "h", "the list pane to take focus", listFocused);
+			frame = await guideKey(setup, "tickets", "h", { quiet: true });
+			await frameUntil(setup, "the list pane to take focus", listFocused);
 			expect(markerRowOf(frame)).toBe(3);
 			expect(showsTicket(frame, SAMPLE_TICKETS[3])).toBe(true);
 		});
@@ -748,9 +758,9 @@ describe("the control plane", () => {
 		await withApp(async (setup) => {
 			// Move the selection to the list's second row while the list is
 			// focused.
-			await press(
+			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await frameUntil(
 				setup,
-				"j",
 				"the selection to move to the second row",
 				(f) => showsTicket(f, SAMPLE_TICKETS[2]) && markerRowOf(f) === 4,
 			);
@@ -758,18 +768,15 @@ describe("the control plane", () => {
 			// The right arrow focuses the detail pane. The selection is
 			// preserved: the marker stays on the second row and the detail
 			// still shows the second ticket.
-			const right = await pressArrow(
-				setup,
-				"right",
-				"the detail pane to take focus",
-				detailFocused,
-			);
+			await guideKey(setup, "detail", "→", { quiet: true });
+			const right = await frameUntil(setup, "the detail pane to take focus", detailFocused);
 			expect(markerRowOf(right)).toBe(4);
 			expect(showsTicket(right, SAMPLE_TICKETS[2])).toBe(true);
 
 			// The left arrow focuses the list pane. The selection is
 			// preserved.
-			const left = await pressArrow(setup, "left", "the list pane to take focus", listFocused);
+			await guideKey(setup, "tickets", "←", { quiet: true });
+			const left = await frameUntil(setup, "the list pane to take focus", listFocused);
 			expect(markerRowOf(left)).toBe(4);
 			expect(showsTicket(left, SAMPLE_TICKETS[2])).toBe(true);
 		});
@@ -784,7 +791,7 @@ describe("the control plane", () => {
 			// Click the detail pane: it takes the app focus and paints its
 			// border with the focused color; the list border relaxes.
 			await mouseClick(setup, detailX + 10, paneRow(5));
-			await awaitFrame(setup, detailFocused, "the detail pane to take click focus");
+			await frameUntil(setup, "the detail pane to take click focus", detailFocused);
 			expect(cellColors(setup, detailX, paneRow(0)).fg).toEqual(rgb(roleColor("accent")));
 			expect(cellColors(setup, 0, paneRow(0)).fg).toEqual(rgb(roleColor("surface_dim")));
 
@@ -793,7 +800,7 @@ describe("the control plane", () => {
 			// OpenTUI's own focus; the deactivated border must not keep the
 			// focused color.
 			await mouseClick(setup, 10, paneRow(5));
-			await awaitFrame(setup, listFocused, "the list pane to take click focus");
+			await frameUntil(setup, "the list pane to take click focus", listFocused);
 			expect(cellColors(setup, 0, paneRow(0)).fg).toEqual(rgb(roleColor("accent")));
 			expect(cellColors(setup, detailX, paneRow(0)).fg).toEqual(rgb(roleColor("surface_dim")));
 		});
@@ -814,16 +821,16 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				// Focus the detail pane; the list keeps its selection.
-				await focusDetail(setup);
+				await guideKey(setup, "detail", "l", { quiet: true });
 				const agentRow = agentRowOf(setup.captureCharFrame());
 				expect(agentRow).toBeGreaterThan(0);
 				expect(markerRowOf(setup.captureCharFrame())).toBe(3);
 
 				// j translates the native surface one terminal row. The top padding
 				// scrolls away first, and every mounted content row moves together.
-				const scrolled = await press(
+				await guideKey(setup, "move-list", "↓", { quiet: true });
+				const scrolled = await frameUntil(
 					setup,
-					"j",
 					"the detail to scroll down one row",
 					(f) => agentRowOf(f) === agentRow - 1 && f.includes("Drop the legacy auth shim"),
 				);
@@ -831,9 +838,9 @@ describe("the control plane", () => {
 				expect(markerRowOf(scrolled)).toBe(3);
 
 				// k scrolls back to the top. The title is back.
-				const back = await press(
+				await guideKey(setup, "move-list", "↑", { quiet: true });
+				const back = await frameUntil(
 					setup,
-					"k",
 					"the detail to scroll back to the top",
 					(f) => agentRowOf(f) === agentRow && f.includes("Drop the legacy auth shim"),
 				);
@@ -846,11 +853,11 @@ describe("the control plane", () => {
 	test("the detail scroll stays within its bounds", async () => {
 		await withApp(
 			async (setup) => {
-				await focusDetail(setup);
+				await guideKey(setup, "detail", "l", { quiet: true });
 
 				// At the top edge, k cannot scroll up.
 				const before = setup.captureCharFrame();
-				setup.mockInput.pressKey("k");
+				await guideKey(setup, "move-list", "↑", { quiet: true });
 				const afterTop = await settle(setup);
 				expect(stillFrame(afterTop)).toBe(stillFrame(before));
 
@@ -858,17 +865,17 @@ describe("the control plane", () => {
 				// settles on its last page: the final description line is
 				// visible and the title is out of view.
 				for (let i = 0; i < 30; i += 1) {
-					setup.mockInput.pressKey("j");
+					await guideKey(setup, "move-list", "↓", { quiet: true });
 					await sleep(25);
 				}
-				const atBottom = await awaitFrame(
+				const atBottom = await frameUntil(
 					setup,
-					(f) => frameText(f).includes("feature flag.") && !f.includes("Drop the legacy auth shim"),
 					"the detail to reach its bottom",
+					(f) => frameText(f).includes("feature flag.") && !f.includes("Drop the legacy auth shim"),
 				);
 
 				// One more j at the bottom edge changes nothing.
-				setup.mockInput.pressKey("j");
+				await guideKey(setup, "move-list", "↓", { quiet: true });
 				const afterBottom = await settle(setup);
 				expect(stillFrame(afterBottom)).toBe(stillFrame(atBottom));
 
@@ -887,7 +894,7 @@ describe("the control plane", () => {
 			setup.renderer.once(CliRenderEvents.DESTROY, () => resolve(true));
 			setTimeout(() => resolve(false), 2000).unref();
 		});
-		setup.mockInput.pressKey("q");
+		await quitApp(setup, { quiet: true });
 		expect(await destroyed).toBe(true);
 	});
 
@@ -908,14 +915,15 @@ describe("the control plane", () => {
 				// Moving the selection slides the window: enough slides bring
 				// the later tickets in and drop the oldest rows out.
 				for (let i = 0; i < 6; i += 1) {
-					setup.mockInput.pressKey("j");
+					await guideKey(setup, "move-list", "↓", { quiet: true });
 					frame = frameText(await settle(setup));
 				}
 				expect(frame).toContain("[open]");
 				expect(frame).not.toContain("[awaiting]");
 				expect(frame).not.toContain("Drop the lega");
 
-				frame = await press(setup, "end", "the window to slide to the last tickets", (f) =>
+				frame = await pageKey(setup, "end", { quiet: true });
+				await frameUntil(setup, "the window to slide to the last tickets", (f) =>
 					(rowsOf(f).find((row) => row.startsWith("│ ❯")) ?? "").includes("Ticket id"),
 				);
 				expect(frame).toContain("Observe the agent");
@@ -928,9 +936,9 @@ describe("the control plane", () => {
 	test("resizing the terminal keeps the panes on the grid and the selection", async () => {
 		await withApp(async (setup) => {
 			// Move the selection so the resize has something to preserve.
-			await press(
+			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await frameUntil(
 				setup,
-				"j",
 				"the selection to move to the second row",
 				(f) => showsTicket(f, SAMPLE_TICKETS[2]) && markerRowOf(f) === 4,
 			);
@@ -944,32 +952,28 @@ describe("the control plane", () => {
 			// and the repository have dropped from the list rows, and the
 			// short [fix] badge still rides.
 			setup.resize(60, 27);
-			const small = await awaitFrame(
-				setup,
-				(f) => {
-					const rows = rowsOf(f);
-					if (
-						rows.length !== 27 ||
-						!rows.every((row) => row.length === 60) ||
-						!f.includes("Tickets") ||
-						!f.includes("Detail") ||
-						!f.includes("[fix] Migrat")
-					)
-						return false;
-					// The ticket list's own rows only: the box between its top
-					// border and its bottom border. The section headers below
-					// carry no pane-divider, so a whole-row check would read
-					// the detail pane's text into the list.
-					const top = rows.findIndex((row) => row.includes("❯ Tickets"));
-					const bottom = rows.slice(top).findIndex((row) => row.startsWith("└"));
-					const listRows = rows.slice(top, top + bottom);
-					return listRows.every((row) => {
-						const half = listHalfOf(row);
-						return !half.includes("[implement]") && !half.includes("acme/");
-					});
-				},
-				"the frame to take the new size",
-			);
+			const small = await frameUntil(setup, "the frame to take the new size", (f) => {
+				const rows = rowsOf(f);
+				if (
+					rows.length !== 27 ||
+					!rows.every((row) => row.length === 60) ||
+					!f.includes("Tickets") ||
+					!f.includes("Detail") ||
+					!f.includes("[fix] Migrat")
+				)
+					return false;
+				// The ticket list's own rows only: the box between its top
+				// border and its bottom border. The section headers below
+				// carry no pane-divider, so a whole-row check would read
+				// the detail pane's text into the list.
+				const top = rows.findIndex((row) => row.includes("❯ Tickets"));
+				const bottom = rows.slice(top).findIndex((row) => row.startsWith("└"));
+				const listRows = rows.slice(top, top + bottom);
+				return listRows.every((row) => {
+					const half = listHalfOf(row);
+					return !half.includes("[implement]") && !half.includes("acme/");
+				});
+			});
 			// Both panes and the selection survive the resize.
 			expect(small).toContain("Tickets");
 			expect(small).toContain("Detail");
@@ -978,13 +982,14 @@ describe("the control plane", () => {
 			expect(small).not.toContain("[implement]");
 
 			// The detail pane keeps its focus, and its scroll survives.
-			await press(setup, "l", "the focus to move to the detail pane", detailFocused);
+			await guideKey(setup, "detail", "l", { quiet: true });
+			await frameUntil(setup, "the focus to move to the detail pane", detailFocused);
 			const selectedAgentRow = (frame: string) =>
 				rowsOf(frame).findIndex((row) => row.includes("Agent: pi"));
 			const agentBeforeScroll = selectedAgentRow(setup.captureCharFrame());
-			await press(
+			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await frameUntil(
 				setup,
-				"j",
 				"the detail surface to translate by one row",
 				(f) => selectedAgentRow(f) === agentBeforeScroll - 1,
 			);
@@ -996,15 +1001,15 @@ describe("the control plane", () => {
 			// layout rides the badge and the repository in the open ticket's
 			// row.
 			setup.resize(120, 30);
-			const large = await awaitFrame(
+			const large = await frameUntil(
 				setup,
+				"the frame to take the original size",
 				(f) =>
 					rowsOf(f).length === 30 &&
 					rowsOf(f).every((row) => row.length === 120) &&
 					f.includes("Tickets") &&
 					f.includes("Detail") &&
 					f.includes("[implement] Retry policy for  acme/billing"),
-				"the frame to take the original size",
 			);
 			expect(large).toContain("Tickets");
 			expect(large).toContain("Detail");
@@ -1307,7 +1312,8 @@ describe("the control plane", () => {
 				// The detail says so for the selected, blocked ticket.
 				expect(detailPaneText(frame)).toContain("Suggested task type: review");
 
-				await press(setup, "j", "the selection to move to the recovery ticket", (f) =>
+				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await frameUntil(setup, "the selection to move to the recovery ticket", (f) =>
 					detailPaneText(f).includes("Handoff: recovery required"),
 				);
 				const detail = detailPaneText(setup.captureCharFrame());
@@ -1372,10 +1378,12 @@ describe("the control plane", () => {
 				// cells.
 				const faceOnMarkerRow = (f: string) =>
 					startingFaceOf(listHalfOf(rowsOf(f).find((r) => r.startsWith("│ ❯")) as string)) !== null;
-				await press(setup, "j", "the selection to pass the running ticket", (f) =>
+				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await frameUntil(setup, "the selection to pass the running ticket", (f) =>
 					showsTicket(f, SAMPLE_TICKETS[2]),
 				);
-				await press(setup, "j", "the selection to reach the Starting window", faceOnMarkerRow);
+				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await frameUntil(setup, "the selection to reach the Starting window", faceOnMarkerRow);
 				const frame = setup.captureCharFrame();
 				const rows = rowsOf(frame);
 				const line = listHalfOf(rows.find((r) => startingFaceOf(listHalfOf(r)) !== null) as string);
@@ -1384,8 +1392,8 @@ describe("the control plane", () => {
 				// The detail carries the full value the row dropped. Its profile
 				// rows take the short viewport first, so scroll down to the Task
 				// type row instead of assuming it is initially visible.
-				await focusDetail(setup);
-				const detail = await scrollDetailUntil(setup, "the handoff task type line", (candidate) =>
+				await guideKey(setup, "detail", "l", { quiet: true });
+				const detail = await detailLineUntil(setup, "the handoff task type line", (candidate) =>
 					detailPaneText(candidate, 60).includes("Handoff task type: implement"),
 				);
 				expect(detailPaneText(detail, 60)).toContain("Handoff task type: implement");
@@ -1471,8 +1479,8 @@ describe("the control plane", () => {
 				// The detail keeps the full value the row dropped. Its profile
 				// rows take the short viewport first, so scroll down to the Task
 				// type row instead of assuming it is initially visible.
-				await focusDetail(setup);
-				await scrollDetailUntil(setup, "the suggested task type line", (candidate) =>
+				await guideKey(setup, "detail", "l", { quiet: true });
+				await detailLineUntil(setup, "the suggested task type line", (candidate) =>
 					detailPaneText(candidate, 60).includes("Suggested task type: consultation"),
 				);
 			},
@@ -1489,15 +1497,17 @@ describe("the control plane", () => {
 			expect(detail).not.toContain("Suggested task type:");
 
 			// The open ticket: the suggestion, labeled as a suggestion.
-			await press(setup, "j", "the selection to pass the running ticket", (f) =>
+			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await frameUntil(setup, "the selection to pass the running ticket", (f) =>
 				showsTicket(f, SAMPLE_TICKETS[2]),
 			);
-			await press(setup, "j", "the selection to pass the Starting window", (f) =>
+			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await frameUntil(setup, "the selection to pass the Starting window", (f) =>
 				showsTicket(f, SAMPLE_TICKETS[1]),
 			);
-			await press(
+			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await frameUntil(
 				setup,
-				"j",
 				"the selection to reach the open ticket",
 				(f) => showsTicket(f, SAMPLE_TICKETS[0]) && !showsTicket(f, SAMPLE_TICKETS[1]),
 			);
@@ -1506,10 +1516,12 @@ describe("the control plane", () => {
 			expect(detail).not.toContain("Handoff task type:");
 
 			// The running ticket: the live handoff's value, labeled as a handoff.
-			await press(setup, "k", "the selection back past the Starting window", (f) =>
+			await guideKey(setup, "move-list", "↑", { quiet: true });
+			await frameUntil(setup, "the selection back past the Starting window", (f) =>
 				showsTicket(f, SAMPLE_TICKETS[1]),
 			);
-			await press(setup, "k", "the selection back to the running ticket", (f) =>
+			await guideKey(setup, "move-list", "↑", { quiet: true });
+			await frameUntil(setup, "the selection back to the running ticket", (f) =>
 				showsTicket(f, SAMPLE_TICKETS[2]),
 			);
 			detail = detailPaneText(setup.captureCharFrame());
@@ -1521,23 +1533,25 @@ describe("the control plane", () => {
 	test("detail keyboard paging and direct edges use the native viewport", async () => {
 		await withApp(
 			async (setup) => {
-				await focusDetail(setup);
+				await guideKey(setup, "detail", "l", { quiet: true });
 				const top = setup.captureCharFrame();
-				const page = await press(
+				await pageKey(setup, "pagedown", { quiet: true });
+				const page = await frameUntil(
 					setup,
-					"pagedown",
 					"the detail to move one viewport with context",
 					(frame) => !frame.includes("Drop the legacy auth shim"),
 				);
 				expect(page).toContain("❯ [awaiting]");
-				const end = await press(setup, "end", "the detail to reach its end", (frame) =>
+				await pageKey(setup, "end", { quiet: true });
+				const end = await frameUntil(setup, "the detail to reach its end", (frame) =>
 					frameText(frame).includes("feature flag."),
 				);
 				expect(end).toContain("❯ [awaiting]");
-				const home = await press(setup, "home", "the detail to return to its start", (frame) =>
+				await pageKey(setup, "home", { quiet: true });
+				const home = await frameUntil(setup, "the detail to return to its start", (frame) =>
 					frame.includes("Drop the legacy auth shim"),
 				);
-				setup.mockInput.pressKey("HOME");
+				await pageKey(setup, "home", { quiet: true });
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(home));
 				expect(stillFrame(top)).not.toBe(stillFrame(page));
 			},
@@ -1552,13 +1566,16 @@ describe("the control plane", () => {
 					rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "";
 				// One page is six visible rows at this height: the page lands
 				// on the seventh ticket.
-				await press(setup, "pagedown", "the list to move one visible page", (frame) =>
+				await pageKey(setup, "pagedown", { quiet: true });
+				await frameUntil(setup, "the list to move one visible page", (frame) =>
 					selectedState(frame).includes("Run the con"),
 				);
-				await press(setup, "end", "the list to select its last ticket", (frame) =>
+				await pageKey(setup, "end", { quiet: true });
+				await frameUntil(setup, "the list to select its last ticket", (frame) =>
 					selectedState(frame).includes("Ticket id i"),
 				);
-				await press(setup, "home", "the list to select its first ticket", (frame) =>
+				await pageKey(setup, "home", { quiet: true });
+				await frameUntil(setup, "the list to select its first ticket", (frame) =>
 					selectedState(frame).includes("Drop"),
 				);
 			},
@@ -1572,31 +1589,31 @@ describe("the control plane", () => {
 				// A visible list row is a direct selection target: the
 				// Starting window's row.
 				await mouseClick(setup, 4, paneRow(4));
-				await awaitFrame(
+				await frameUntil(
 					setup,
+					"the clicked Ticket to become selected",
 					(frame) =>
 						listFocused(frame) &&
 						startingFaceOf(rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "") !== null,
-					"the clicked Ticket to become selected",
 				);
 				// List wheels select exactly one adjacent Ticket. They have no
 				// detail speed profile or acceleration.
 				await mouseWheel(setup, { x: 4, y: paneRow(4), direction: "down" });
-				await awaitFrame(
+				await frameUntil(
 					setup,
+					"one list wheel event to select one Ticket",
 					(frame) =>
 						listFocused(frame) &&
 						(rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "").includes("[open]"),
-					"one list wheel event to select one Ticket",
 				);
 
 				// Detail content receives a normal wheel event and takes focus.
 				const before = setup.captureCharFrame();
 				await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "down" });
-				const scrolled = await awaitFrame(
+				const scrolled = await frameUntil(
 					setup,
-					(frame) => detailFocused(frame) && stillFrame(frame) !== stillFrame(before),
 					"the detail wheel event to move its surface",
+					(frame) => detailFocused(frame) && stillFrame(frame) !== stillFrame(before),
 				);
 				expect(markerRowOf(scrolled)).toBe(6);
 
@@ -1630,18 +1647,16 @@ describe("the control plane", () => {
 				// The panes sit above the Message line and Action bar, so the
 				// track spans the detail's inner rows below the thumb.
 				await mouseClick(setup, 58, paneRow(4));
-				const trackJump = await awaitFrame(
+				const trackJump = await frameUntil(
 					setup,
-					(frame) => detailFocused(frame) && frame !== initial,
 					"a scrollbar track click to jump to a proportional detail position",
+					(frame) => detailFocused(frame) && frame !== initial,
 				);
 				expect(markerRowOf(trackJump)).toBe(3);
 				const thumbRow = rowsOf(trackJump).findIndex((row) => /[▀▄█]/.test(row.slice(58, 59)));
 				await mouseDrag(setup, [58, thumbRow], [58, paneRow(1)]);
-				await awaitFrame(
-					setup,
-					(frame) => frame.includes("Drop the legacy auth shim"),
-					"a scrollbar thumb drag to move toward the start",
+				await frameUntil(setup, "a scrollbar thumb drag to move toward the start", (frame) =>
+					frame.includes("Drop the legacy auth shim"),
 				);
 			},
 			{ width: 60, height: 27 },
@@ -1656,11 +1671,11 @@ describe("the control plane", () => {
 		const planeRecord = await plane({ config });
 		await withApp(
 			async (setup) => {
-				await focusDetail(setup);
+				await guideKey(setup, "detail", "l", { quiet: true });
 				const before = agentRowOf(setup.captureCharFrame());
-				await press(
+				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await frameUntil(
 					setup,
-					"j",
 					"the detail to move by the configured two rows",
 					(frame) => agentRowOf(frame) === before - 2,
 				);
@@ -1679,10 +1694,10 @@ describe("the control plane", () => {
 			async (setup) => {
 				const before = agentRowOf(setup.captureCharFrame());
 				await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "down" });
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => detailFocused(frame) && agentRowOf(frame) === before - 2,
 					"the configured linear wheel step to move two rows",
+					(frame) => detailFocused(frame) && agentRowOf(frame) === before - 2,
 				);
 			},
 			{ width: 60, height: 27, plane: planeRecord, loopPolicy: { kind: "held" } },
@@ -1702,16 +1717,16 @@ describe("the control plane", () => {
 				};
 				const start = agentRowOf(setup.captureCharFrame());
 				await wheelAt(1_000);
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => detailFocused(frame) && agentRowOf(frame) === start - 1,
 					"the precise first wheel step",
+					(frame) => detailFocused(frame) && agentRowOf(frame) === start - 1,
 				);
 				await wheelAt(1_050);
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(frame) => agentRowOf(frame) === start - 3,
 					"the accelerated second wheel step",
+					(frame) => agentRowOf(frame) === start - 3,
 				);
 			},
 			{ width: 60, height: 27 },
@@ -1763,16 +1778,19 @@ describe("the control plane", () => {
 				// detail's fold, so the walk reads the selected row, not the
 				// detail.
 				const selectedRow = (f: string) => rowsOf(f).find((row) => row.startsWith("│ ❯")) ?? "";
-				await press(setup, "j", "the selection to pass the running ticket", (f) =>
+				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await frameUntil(setup, "the selection to pass the running ticket", (f) =>
 					selectedRow(f).includes("Migrat"),
 				);
-				await press(setup, "j", "the selection to pass the Starting window", (f) =>
+				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await frameUntil(setup, "the selection to pass the Starting window", (f) =>
 					selectedRow(f).includes("Fix pan dri"),
 				);
-				await press(setup, "j", "the selection to reach the open ticket", (f) =>
+				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await frameUntil(setup, "the selection to reach the open ticket", (f) =>
 					selectedRow(f).includes("Retry polic"),
 				);
-				await openPanel(setup);
+				await guideKey(setup, "override", "e", { quiet: true });
 				const before = setup.captureCharFrame();
 				await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "down" });
 				await mouseClick(setup, 4, paneRow(3));
@@ -1796,9 +1814,7 @@ describe("the control plane", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					const frame = await press(setup, "?", "the Key guide", (candidate) =>
-						candidate.includes("Key guide"),
-					);
+					const frame = await pressControl(setup, "help", { shows: "Key guide" });
 					// The guide opens on this mode's section, and the sections
 					// keep the catalogue's order on screen. A hint priority
 					// that moves reorders these rows. The current section runs
@@ -1842,11 +1858,11 @@ describe("the control plane", () => {
 							rowsOf(setup.captureCharFrame()).some((row) => row.includes("Control plane controls"))
 						)
 							break;
-						setup.mockInput.pressKey("j");
+						await guideKey(setup, "move-list", "↓", { quiet: true });
 						await settle(setup);
 					}
 					for (let step = 0; step < 12 && !seen.includes("Control plane controls"); step += 1) {
-						setup.mockInput.pressKey("j");
+						await guideKey(setup, "move-list", "↓", { quiet: true });
 						await settle(setup);
 						noteSections();
 					}
@@ -1862,11 +1878,11 @@ describe("the control plane", () => {
 						.join("\n");
 					expect(globalSection).toContain("Quit");
 					// Closing the guide returns to the tickets view.
-					setup.mockInput.pressEscape();
-					await awaitFrame(
+					await guideKey(setup, "guide-close", "Esc", { quiet: true });
+					await frameUntil(
 						setup,
-						(candidate) => !candidate.includes("Key guide"),
 						"the Key guide to close",
+						(candidate) => !candidate.includes("Key guide"),
 					);
 				},
 				{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "production" } },

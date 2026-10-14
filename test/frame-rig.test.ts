@@ -447,6 +447,28 @@ describe("the frame rig's escape list", () => {
 			await expect(guideKey(setup, "help", "z")).rejects.toThrow(/the guide names F1, \? for it/);
 		});
 	});
+
+	test("an immediate guide key sends the key the guide names, without the pre-press settle", async () => {
+		const planeRecord = await plane({ runner: (fake) => fake, sources: [], groupingAxis: "none" });
+		await withApp(
+			async (setup) => {
+				// The record is empty, so the bar leaves the Message hint off:
+				// the guide still names m, and the immediate press sends the
+				// catalogue's own key at once, settling nowhere before it goes
+				// out, and reads the control's own refusal for it.
+				await guideKey(setup, "message", "m", {
+					immediate: true,
+					refuses: "no message has been recorded",
+				});
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
+		);
+	});
 });
 
 describe("the frame rig's section walk", () => {
