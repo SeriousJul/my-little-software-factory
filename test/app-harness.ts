@@ -1850,9 +1850,14 @@ function titledSurfaceModes(frame: string, barLabels: string[]): InteractionMode
 	if (frame.includes("┌─Missing: ")) return ["missing-modal"];
 	if (frame.includes("┌─Close: ")) return ["action-panel"];
 	// Two panels share the Init a repository title: the repository-select
-	// panel and the repository-init panel. The bar's hints split them.
+	// panel and the repository-init panel. The bar's hints split them. The
+	// select list's confirm rewords its hint to Start queue on a marking of
+	// two or more, so the read stands on the list's own Toggle hint first and
+	// keeps the Select hint for a marking of one.
 	if (frame.includes("┌─Init a repository"))
-		return barLabels.includes("Select") ? ["repository-select"] : ["action-panel"];
+		return barLabels.includes("Toggle") || barLabels.includes("Select")
+			? ["repository-select"]
+			: ["action-panel"];
 	// The launcher is the one shared form surface: its frame stands on the
 	// form's three slot modes at once, the slot the focus holds naming one.
 	if (frame.includes("┌─Consultation launcher"))

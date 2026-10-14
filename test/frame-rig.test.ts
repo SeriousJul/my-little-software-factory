@@ -567,6 +567,11 @@ describe("the frame rig owns a painted hint one control paints (issue #387)", ()
 		expect(
 			surfaceModes(titled("Init a repository", "↑↓/jk Move  Enter Select  Esc Cancel")),
 		).toEqual(["repository-select"]);
+		// A marking of two rewords the confirm hint to Start queue: the read
+		// still stands on the list, through its own Toggle hint.
+		expect(
+			surfaceModes(titled("Init a repository", "↑↓/jk Move  Enter Start queue  Tab Toggle")),
+		).toEqual(["repository-select"]);
 		expect(
 			surfaceModes(
 				titled("Init a repository", "↑↓ Select action  Enter Confirm action  Esc Cancel"),

@@ -20,13 +20,15 @@ import { RepositorySelectPanel } from "../src/components/repository-select-panel
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import { type InitableRepository, VIEWER_REPOSITORIES_QUERY } from "../src/repository-list.ts";
 import {
-	awaitFrame,
-	closeOverlay,
+	frameUntil,
+	guideKey,
 	HEIGHT,
 	messageRowOf,
-	pressScrollKey,
+	pageKey,
+	pressControl,
 	rowsOf,
 	settle,
+	typeText,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -112,17 +114,13 @@ describe("the repository select panel", () => {
 		const runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("o");
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("Init a repository"),
-					"the select list to open",
-				);
+				await guideKey(setup, "repository-select-open", "o", { shows: "Init a repository" });
+
 				// The read settles: the list rows stand, own repositories first.
-				const settled = await awaitFrame(
+				const settled = await frameUntil(
 					setup,
-					(f) => f.includes("acme/billing") && f.includes("SeriousJul/my-little-software-factory"),
 					"the list rows to settle",
+					(f) => f.includes("acme/billing") && f.includes("SeriousJul/my-little-software-factory"),
 				);
 				const rows = rowsOf(settled);
 				expect(rows.findIndex((row) => row.includes("acme/factory"))).toBeLessThan(
@@ -130,7 +128,6 @@ describe("the repository select panel", () => {
 				);
 				// The read is one call.
 				expect(runner.calls.filter((call) => call.command === "gh")).toHaveLength(1);
-				void frame;
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
@@ -146,23 +143,22 @@ describe("the repository select panel", () => {
 		const _runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("o");
-				await awaitFrame(setup, (f) => f.includes("Init a repository"), "the panel to open");
-				await awaitFrame(setup, (f) => f.includes("acme/billing"), "the list rows to settle");
+				await guideKey(setup, "repository-select-open", "o", { shows: "Init a repository" });
+				await frameUntil(setup, "the list rows to settle", (f) => f.includes("acme/billing"));
 				// The query filters by substring of the display name.
-				for (const letter of "billing") setup.mockInput.pressKey(letter);
-				const filtered = await awaitFrame(
+				await typeText(setup, "billing");
+				const filtered = await frameUntil(
 					setup,
-					(f) => !f.includes("acme/factory") && f.includes("acme/billing"),
 					"the list to filter",
+					(f) => !f.includes("acme/factory") && f.includes("acme/billing"),
 				);
 				expect(filtered).not.toContain("my-little-software-factory");
 				// Del clears the whole query in one key.
-				setup.mockInput.pressKey("DELETE");
-				await awaitFrame(
+				await pressControl(setup, "repository-select-clear", { quiet: true });
+				await frameUntil(
 					setup,
-					(f) => f.includes("acme/factory") && f.includes("acme/billing"),
 					"the list to clear back",
+					(f) => f.includes("acme/factory") && f.includes("acme/billing"),
 				);
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
@@ -178,10 +174,8 @@ describe("the repository select panel", () => {
 		});
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("o");
-				await awaitFrame(setup, (f) => f.includes("Init a repository"), "the list to open");
-				setup.mockInput.pressKey("escape");
-				await closeOverlay(setup, "Init a repository", "the list to close");
+				await guideKey(setup, "repository-select-open", "o", { opens: "Init a repository" });
+				await pressControl(setup, "repository-select-cancel", { closes: "Init a repository" });
 				const frame = await settle(setup);
 				expect(frame).not.toContain("Init a repository");
 			},
@@ -237,9 +231,8 @@ describe("the repository select panel", () => {
 				const handFlushesBack = withholdPassiveFlushes();
 				let bodyFailed = false;
 				try {
-					setup.mockInput.pressKey("o");
-					await awaitFrame(setup, (f) => f.includes("Init a repository"), "the list to open");
-					await closeOverlay(setup, "Init a repository", "the list to close");
+					await guideKey(setup, "repository-select-open", "o", { opens: "Init a repository" });
+					await pressControl(setup, "repository-select-cancel", { closes: "Init a repository" });
 					const frame = await settle(setup);
 					expect(frame).not.toContain("Init a repository");
 				} catch (error) {
@@ -267,8 +260,7 @@ describe("the repository select panel", () => {
 		});
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("o");
-				await awaitFrame(setup, (f) => f.includes("Not logged in"), "the failure line");
+				await guideKey(setup, "repository-select-open", "o", { shows: "Not logged in" });
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
@@ -283,15 +275,17 @@ describe("the repository select panel", () => {
 		});
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("o");
-				await awaitFrame(setup, (f) => f.includes("acme/billing"), "the list rows");
-				for (const letter of "billing") setup.mockInput.pressKey(letter);
-				await awaitFrame(setup, (f) => !f.includes("acme/factory"), "the filter to settle");
-				setup.mockInput.pressEnter();
-				await awaitFrame(
+				await guideKey(setup, "repository-select-open", "o", { shows: "acme/billing" });
+				await typeText(setup, "billing");
+				await frameUntil(setup, "the filter to settle", (f) => !f.includes("acme/factory"));
+				// The bar states the act available: the row stands, so the press
+				// runs the control and the refusal lands on the act's own read,
+				// after the key.
+				await pressControl(setup, "select-repository", { quiet: true });
+				await frameUntil(
 					setup,
-					(f) => f.includes("no local checkout at") && f.includes("src/billing"),
 					"the refusal with the path",
+					(f) => f.includes("no local checkout at") && f.includes("src/billing"),
 				);
 				expect(messageRowOf(await settle(setup))).toContain("no local checkout at");
 			},
@@ -324,35 +318,34 @@ describe("the repository select panel", () => {
 		});
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("o");
-				await awaitFrame(setup, (f) => f.includes("1-12/40"), "the list rows");
+				await guideKey(setup, "repository-select-open", "o", { shows: "1-12/40" });
 				// End lands the cursor on the last row, and the window rides to it.
-				const frame = await pressScrollKey(
+				await pageKey(setup, "end", { quiet: true });
+				const frame = await frameUntil(
 					setup,
-					"end",
 					"the window at the end",
 					(f) => f.includes("acme/repo-39") && !f.includes("acme/repo-00"),
 				);
 				expect(frame).toContain("40/40");
 				// Home takes the cursor back to the first row.
-				await pressScrollKey(
+				await pageKey(setup, "home", { quiet: true });
+				await frameUntil(
 					setup,
-					"home",
 					"the window at the start",
 					(f) => f.includes("acme/repo-00") && !f.includes("acme/repo-39"),
 				);
 				// A page down is a window of rows: the first row leaves, and the
 				// cursor's row stands on the window's last row.
-				await pressScrollKey(
+				await pageKey(setup, "pagedown", { quiet: true });
+				await frameUntil(
 					setup,
-					"pagedown",
 					"the window after the page",
 					(f) => !f.includes("acme/repo-00") && f.includes("acme/repo-12"),
 				);
 				// A page up is a window of rows back, clamped at the start.
-				await pressScrollKey(
+				await pageKey(setup, "pageup", { quiet: true });
+				await frameUntil(
 					setup,
-					"pageup",
 					"the window back at the start",
 					(f) => f.includes("acme/repo-00") && !f.includes("acme/repo-39"),
 				);
@@ -438,21 +431,17 @@ describe("the repository select panel", () => {
 		});
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("o");
-				await awaitFrame(setup, (f) => f.includes("acme/factory"), "the list rows");
-				for (const letter of "acme/fac") setup.mockInput.pressKey(letter);
-				await awaitFrame(
+				await guideKey(setup, "repository-select-open", "o", { shows: "acme/factory" });
+				await typeText(setup, "acme/fac");
+				await frameUntil(
 					setup,
-					(f) => !f.includes("acme/billing") && !f.includes("my-little"),
 					"the filter to settle",
+					(f) => !f.includes("acme/billing") && !f.includes("my-little"),
 				);
-				setup.mockInput.pressEnter();
 				// The plan settles and the confirmation panel opens on the row.
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("Init acme/factory"),
-					"the confirmation panel",
-				);
+				const frame = await pressControl(setup, "select-repository", {
+					opens: "Init acme/factory",
+				});
 				expect(frame).toContain("run the act now");
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "production" } },
@@ -480,28 +469,22 @@ describe("the repository select panel", () => {
 		});
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("o");
-				await awaitFrame(setup, (f) => f.includes("acme/factory"), "the list rows");
-				for (const letter of "acme/factory") setup.mockInput.pressKey(letter);
-				await awaitFrame(
+				await guideKey(setup, "repository-select-open", "o", { shows: "acme/factory" });
+				await typeText(setup, "acme/factory");
+				await frameUntil(
 					setup,
-					(f) => f.includes("acme/factory") && !f.includes("acme/billing"),
 					"the filter to settle",
+					(f) => f.includes("acme/factory") && !f.includes("acme/billing"),
 				);
-				await new Promise((r) => setTimeout(r, 25));
-				setup.mockInput.pressEnter();
+				await pressControl(setup, "select-repository", { quiet: true });
 				// The plan holds on its first read: the open is in flight, and a
 				// new open is refused with the init that holds.
-				await new Promise((r) => setTimeout(r, 25));
-				setup.mockInput.pressKey("o");
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("the init for acme/factory is running"),
-					"the refusal line",
-				);
+				const frame = await guideKey(setup, "repository-select-open", "o", {
+					refuses: "the init for acme/factory is running",
+				});
 				expect(frame).not.toContain("Init a repository");
 				// The plan lands, and the panel stands where the open asked for.
-				await awaitFrame(setup, (f) => f.includes("Init acme/factory"), "the confirmation");
+				await frameUntil(setup, "the confirmation", (f) => f.includes("Init acme/factory"));
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "production" } },
 		);
@@ -518,12 +501,9 @@ describe("the repository select panel", () => {
 		});
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("o");
-				await awaitFrame(setup, (f) => f.includes("acme/factory"), "the list rows");
-				setup.mockInput.pressTab();
-				await awaitFrame(setup, (f) => f.includes("queued"), "the queue mark");
-				setup.mockInput.pressTab();
-				await awaitFrame(setup, (f) => !f.includes("queued"), "the mark to lift");
+				await guideKey(setup, "repository-select-open", "o", { shows: "acme/factory" });
+				await pressControl(setup, "repository-select-toggle", { shows: "queued" });
+				await pressControl(setup, "repository-select-toggle", { hides: "queued" });
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
@@ -548,41 +528,36 @@ describe("the repository select panel", () => {
 		});
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("o");
-				await awaitFrame(setup, (f) => f.includes("acme/factory"), "the list rows");
-				for (const letter of "acme") setup.mockInput.pressKey(letter);
-				await awaitFrame(
+				await guideKey(setup, "repository-select-open", "o", { shows: "acme/factory" });
+				await typeText(setup, "acme");
+				await frameUntil(
 					setup,
-					(f) => f.includes("acme/factory") && f.includes("acme/billing"),
 					"the filter to settle",
+					(f) => f.includes("acme/factory") && f.includes("acme/billing"),
 				);
 				// A short rest lets the last typed character settle before the
 				// Tab: the keys arrive in separate reads, the way an operator's
 				// do. Mark both rows, in list order.
 				await new Promise((r) => setTimeout(r, 25));
-				setup.mockInput.pressTab();
-				await awaitFrame(setup, (f) => f.includes("queued"), "the first mark");
-				setup.mockInput.pressKey("j");
-				await awaitFrame(
+				await pressControl(setup, "repository-select-toggle", { shows: "queued" });
+				await pressControl(setup, "move-list", { via: "j", quiet: true });
+				await frameUntil(
 					setup,
-					(f) => f.includes("❯ acme/billing") && f.includes("queued"),
 					"the cursor on the second row",
+					(f) => f.includes("❯ acme/billing") && f.includes("queued"),
 				);
-				setup.mockInput.pressTab();
-				await awaitFrame(setup, (f) => (f.match(/queued/gu) ?? []).length === 2, "the second mark");
-				setup.mockInput.pressEnter();
+				await pressControl(setup, "repository-select-toggle", { quiet: true });
+				await frameUntil(setup, "the second mark", (f) => (f.match(/queued/gu) ?? []).length === 2);
 				// The queue runs in list order: the first marked row opens first.
-				await awaitFrame(setup, (f) => f.includes("Init acme/factory"), "the first confirmation");
+				await pressControl(setup, "select-repository", { opens: "Init acme/factory" });
 				// Cancel skips the entry, and the next row's panel stands in its place.
-				setup.mockInput.pressEscape();
-				await awaitFrame(setup, (f) => f.includes("Init acme/billing"), "the second confirmation");
+				await pressControl(setup, "cancel-action", { closes: "Init acme/factory" });
+				await frameUntil(setup, "the second confirmation", (f) => f.includes("Init acme/billing"));
 				// The drained queue leaves its settled line on the Message line.
-				setup.mockInput.pressEscape();
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("the init queue settled: 0 ran, 2 skipped, 0 refused"),
-					"the settled line",
-				);
+				await pressControl(setup, "cancel-action", {
+					shows: "the init queue settled: 0 ran, 2 skipped, 0 refused",
+				});
+				const frame = await settle(setup);
 				expect(frame).not.toContain("Init acme");
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "production" } },
@@ -607,45 +582,35 @@ describe("the repository select panel", () => {
 		});
 		await withApp(
 			async (setup) => {
-				setup.mockInput.pressKey("o");
-				await awaitFrame(setup, (f) => f.includes("acme/factory"), "the list rows");
-				for (const letter of "acme") setup.mockInput.pressKey(letter);
-				await awaitFrame(
+				await guideKey(setup, "repository-select-open", "o", { shows: "acme/factory" });
+				await typeText(setup, "acme");
+				await frameUntil(
 					setup,
-					(f) => f.includes("acme/factory") && f.includes("acme/billing"),
 					"the filter to settle",
+					(f) => f.includes("acme/factory") && f.includes("acme/billing"),
 				);
 				// A short rest lets the last typed character settle before the
 				// Tab: the keys arrive in separate reads, the way an
 				// operator's do.
 				await new Promise((r) => setTimeout(r, 25));
-				setup.mockInput.pressTab();
-				await awaitFrame(setup, (f) => f.includes("queued"), "the first mark");
-				setup.mockInput.pressKey("j");
-				await awaitFrame(
-					setup,
-					(f) => f.includes("❯ acme/billing"),
-					"the cursor on the second row",
+				await pressControl(setup, "repository-select-toggle", { shows: "queued" });
+				await pressControl(setup, "move-list", { via: "j", quiet: true });
+				await frameUntil(setup, "the cursor on the second row", (f) =>
+					f.includes("❯ acme/billing"),
 				);
-				setup.mockInput.pressTab();
-				await awaitFrame(setup, (f) => (f.match(/queued/gu) ?? []).length === 2, "the second mark");
-				setup.mockInput.pressEnter();
+				await pressControl(setup, "repository-select-toggle", { quiet: true });
+				await frameUntil(setup, "the second mark", (f) => (f.match(/queued/gu) ?? []).length === 2);
 				// The head has no checkout: the refusal names its path, and the
 				// next row's confirmation stands in its place.
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("Init acme/billing"),
-					"the next confirmation",
-				);
+				const frame = await pressControl(setup, "select-repository", {
+					shows: "Init acme/billing",
+				});
 				expect(frame).toContain(
 					`acme/factory has no local checkout at ${join(planeRecord.home, "src", "factory")}`,
 				);
-				setup.mockInput.pressEscape();
-				const settled = await awaitFrame(
-					setup,
-					(f) => f.includes("the init queue settled: 0 ran, 1 skipped, 1 refused"),
-					"the settled line",
-				);
+				const settled = await pressControl(setup, "cancel-action", {
+					shows: "the init queue settled: 0 ran, 1 skipped, 1 refused",
+				});
 				expect(settled).not.toContain("Init acme");
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "production" } },
@@ -688,36 +653,28 @@ describe("the repository select panel", () => {
 				// The bound source stands on its empty snapshot: the boot's read
 				// settles on it, so the standing is complete before the keys land.
 				planeRecord.settleFirstFetch();
-				setup.mockInput.pressKey("o");
-				await awaitFrame(setup, (f) => f.includes("acme/factory"), "the list rows");
-				for (const letter of "acme") setup.mockInput.pressKey(letter);
-				await awaitFrame(
+				await guideKey(setup, "repository-select-open", "o", { shows: "acme/factory" });
+				await typeText(setup, "acme");
+				await frameUntil(
 					setup,
-					(f) => f.includes("acme/factory") && f.includes("acme/billing"),
 					"the filter to settle",
+					(f) => f.includes("acme/factory") && f.includes("acme/billing"),
 				);
 				// A short rest lets the last typed character settle before the
 				// Tab: the keys arrive in separate reads, the way an
 				// operator's do.
 				await new Promise((r) => setTimeout(r, 25));
-				setup.mockInput.pressTab();
-				await awaitFrame(setup, (f) => f.includes("queued"), "the first mark");
-				setup.mockInput.pressKey("j");
-				await awaitFrame(
-					setup,
-					(f) => f.includes("❯ acme/billing"),
-					"the cursor on the second row",
+				await pressControl(setup, "repository-select-toggle", { shows: "queued" });
+				await pressControl(setup, "move-list", { via: "j", quiet: true });
+				await frameUntil(setup, "the cursor on the second row", (f) =>
+					f.includes("❯ acme/billing"),
 				);
-				setup.mockInput.pressTab();
-				await awaitFrame(setup, (f) => (f.match(/queued/gu) ?? []).length === 2, "the second mark");
-				setup.mockInput.pressEnter();
-				await awaitFrame(setup, (f) => f.includes("Init acme/factory"), "the first confirmation");
-				setup.mockInput.pressEnter();
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("a source named acme/factory-issues is already configured"),
-					"the failure line",
-				);
+				await pressControl(setup, "repository-select-toggle", { quiet: true });
+				await frameUntil(setup, "the second mark", (f) => (f.match(/queued/gu) ?? []).length === 2);
+				await pressControl(setup, "select-repository", { opens: "Init acme/factory" });
+				const frame = await pressControl(setup, "confirm-action", {
+					shows: "a source named acme/factory-issues is already configured",
+				});
 				// The queue stopped: the next row's panel never opens.
 				expect(frame).not.toContain("Init acme/billing");
 			},
