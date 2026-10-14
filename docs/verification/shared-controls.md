@@ -1881,9 +1881,10 @@ always held it. A skipped required check is not a pass.
 
 ## The frame rig runs the controls, not the keys (issue #365, ADR 0128)
 
-Status: the automated checks pass for the rig and the seven owned surfaces: its
+Status: the automated checks pass for the rig and the nine owned surfaces: its
 own suite, the Action bar, the Key guide, the Message line, the theme frame,
-the Ticket scroll frame, and the merged Main view. The remaining frame
+the Ticket scroll frame, the merged Main view, the Work queue section, and
+the Decision modal. The remaining frame
 surfaces migrate one at a time, and the owned list in the architecture check
 is the record of what has landed.
 
@@ -2114,7 +2115,26 @@ walk stands at 730 press-family calls, 166 hand operations, 720 raw waits,
 to the Consultation list through the rig's own `crossCursor` instead of its
 local walk, which keeps the row walks the section walk does not reach, and
 the named escapes take the quiet default the press and the guide key hold.
-The seven owned surfaces
+At the head that lands the Work queue section (`49dc1d1a`), one step
+further, the walk stands at 692 press-family calls, 166 hand operations,
+665 raw waits, 653 inline containment predicates, 391 reaches to the
+renderer's input, and 36 helper copies: the suite's queue presses ride the
+rig's named presses - pause and removal through the bar, the order moves
+and the packed hints beside the guide - and its waits take the closed
+outcomes, the scroll's named waits among them; the Mute key the bar
+withholds on the queue frame refuses in the Ticket section's words, retiring
+the premise that the key was silent there. At the head that lands the
+Decision modal (`cae09f97`), one step further, the walk stands at 683
+press-family calls, 166 hand operations, 655 raw waits, 644 inline
+containment predicates, 387 reaches to the renderer's input, and 33 helper
+copies: the suite's frames stand below the plane's declared minimum, where
+the base bar stands down to its Help hint and the packed bar leaves the
+Decide hint off, so the key goes out beside the guide - the rig's escape
+for the bar's packed hint - the one wide frame reading its key from the
+bar, and the pop-in's rest, which a scrollbar-less log gives the frame no
+fact to read, stands a 250 ms grace over the animation's 120 ms budget: the
+effect's end is time-limited, and it cannot land outside a grace that
+bounds its maximum duration. The nine owned surfaces
 press through the rig
 with none of the retired surface left: no hand-picked key, no hand operation,
 no raw wait, and no reach to the renderer's input, as the architecture check
@@ -2130,14 +2150,16 @@ this branch rebases onto - the Quality baseline, which only shrinks, holds
 that count, measured on `d2a380ff` - and at 196 at the head that lands the
 rework above: the branch's own work takes the count down by one, and this
 change rewrites the baseline down to the rework's 196, which the audit then
-holds. The walk counts in this
+holds. At the head that lands the Work queue section above, the count
+measures 195, and this change rewrites the baseline down to that count,
+which the audit then holds. The walk counts in this
 paragraph re-derive from the committed walk at the named heads: the
 script run at either head prints them, and a head that moves the suites
 re-records them here from the same script.
 
 What was not measured: the remaining frame surfaces have not been migrated, so
-the 730 press-family calls and 720 raw waits above stand in the suites that
-have not landed yet, and this change's effect on the whole plane is the seven
+the 683 press-family calls and 655 raw waits above stand in the suites that
+have not landed yet, and this change's effect on the whole plane is the nine
 owned surfaces plus the rig, not the surfaces that follow. The closed walk
 stands on the bar of the frame it walks, and at this head the rig's suite
 walks the base bar and the bars of the detail frames of the three sections,
