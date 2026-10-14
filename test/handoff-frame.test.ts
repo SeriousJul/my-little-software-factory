@@ -49,7 +49,6 @@ import {
 	unfitTones,
 	WIDTH,
 	waitSourceHealthy,
-	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
@@ -64,7 +63,6 @@ import {
 } from "./fake-runner.ts";
 import { appOn } from "./panel-app.ts";
 import type { Plane } from "./plane.ts";
-import { plane } from "./plane.ts";
 
 /**
  * The runner's commands with the desktop notification's of one standing

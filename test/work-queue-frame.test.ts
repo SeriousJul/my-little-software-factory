@@ -21,7 +21,6 @@ import type { Logger } from "../src/logging.ts";
 import { workQueueIdentityOf } from "../src/state/work-queue.ts";
 import {
 	actionBarRowOf,
-	detailFocused,
 	detailPaneText,
 	frameText,
 	frameUntil,

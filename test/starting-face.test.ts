@@ -28,7 +28,6 @@ import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
-	frameText,
 	frameUntil,
 	HEIGHT,
 	listHalfOf,

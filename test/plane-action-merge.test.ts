@@ -2139,6 +2139,33 @@ describe("the decision screen's merge", () => {
 		});
 	}
 
+	/**
+	 * Boot the app on the decision plane, and run the body on that boot. The
+	 * body receives the rig's setup and the plane record beside it; the boot
+	 * stands at the decision frame's own size with the minute poll, and the
+	 * record comes back to the test.
+	 */
+	async function appOnDecision(
+		state: FactoryState,
+		runner: FakeRunner,
+		fn: (setup: AppSetup, planeRecord: Plane) => Promise<void>,
+		extra: Partial<FactoryConfig> = {},
+	): Promise<Plane> {
+		const record = await decisionPlane(state, runner, extra);
+		await withApp(
+			async (setup) => {
+				await fn(setup, record);
+			},
+			{
+				width: WIDTH,
+				height: 30,
+				plane: record,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
+		return record;
+	}
+
 	test("the confirm runs the merge with no agent and no worktree, and the record stands", async () => {
 		const state = planeState();
 		seed(state, "awaiting", mergeRoute());
@@ -2146,35 +2173,25 @@ describe("the decision screen's merge", () => {
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const planeRecord = await decisionPlane(state, runner);
-
-		await withApp(
-			async (setup) => {
-				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
-				// The decision modal: the merge row stands beside Close and Goto.
-				await pressControl(setup, "decide-completion", { quiet: true });
-				await frameUntil(
-					setup,
-					"the decision modal",
-					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
-				);
-				await pressControl(setup, "select-action", { via: "↓", quiet: true });
-				await pressControl(setup, "select-action", { via: "↓", quiet: true });
-				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
-				// The confirm closes the modal, the way the route's does, and
-				// the run's line lands on the Message line.
-				await pressControl(setup, "confirm-action", { quiet: true });
-				await frameUntil(setup, "the run's line", (f) =>
-					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
-				);
-			},
-			{
-				width: WIDTH,
-				height: 30,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 60_000 },
-			},
-		);
+		await appOnDecision(state, runner, async (setup, _planeRecord) => {
+			await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+			// The decision modal: the merge row stands beside Close and Goto.
+			await pressControl(setup, "decide-completion", { quiet: true });
+			await frameUntil(
+				setup,
+				"the decision modal",
+				(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+			);
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+			// The confirm closes the modal, the way the route's does, and
+			// the run's line lands on the Message line.
+			await pressControl(setup, "confirm-action", { quiet: true });
+			await frameUntil(setup, "the run's line", (f) =>
+				messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
+			);
+		});
 
 		// The record: the operator's decision word, the merged outcome, and
 		// the settled turn's decision in the trace.
@@ -2255,45 +2272,35 @@ describe("the decision screen's merge", () => {
 			// the fire's fresh read still reads it open: the needs-work branch holds.
 			stubReadSequence(runner, [{ state: "open" }, { state: "open" }]);
 			stubMerge(runner, 1, "GraphQL: PullRequest is not mergeable.\n");
-			const planeRecord = await decisionPlane(state, runner);
-
-			await withApp(
-				async (setup) => {
-					await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
-					await pressControl(setup, "decide-completion", { quiet: true });
-					await frameUntil(setup, "the decision modal", (f) => f.includes("Merge pull request"));
-					await pressControl(setup, "select-action", { via: "↓", quiet: true });
-					await pressControl(setup, "select-action", { via: "↓", quiet: true });
-					await frameUntil(setup, "the merge row's focus", mergeRowFocused);
-					// The block keeps the ticket listed, open with the needs-work
-					// fact, and the run's line lands on the Message line.
-					await pressControl(setup, "confirm-action", { quiet: true });
-					const frame = await frameUntil(setup, "the block's line", (f) =>
-						messageRowOf(f).includes(
-							`the merge of "${pullTitle}" was blocked: GraphQL: PullRequest is not mergeable.`,
-						),
-					);
-					// The ticket's row: the click lands the cursor on it, and the
-					// detail pane stands beside the list.
-					const rows = rowsOf(frame);
-					const rowIndex = rows.findIndex((row) => row.includes(pullTitle.slice(0, 3)));
-					expect(rowIndex).toBeGreaterThanOrEqual(0);
-					await mouseClick(setup, 2, rowIndex);
-					// The reason wraps at the pane's width, so the wait takes the
-					// line's head, and the assertion takes the reason as facts.
-					await frameUntil(
-						setup,
-						"the attempt's line",
-						(f) => f.includes("Merge:") && f.includes("blocked - GraphQL: PullRequest"),
-					);
-				},
-				{
-					width: WIDTH,
-					height: 30,
-					plane: planeRecord,
-					loopPolicy: { kind: "polled", intervalMs: 60_000 },
-				},
-			);
+			await appOnDecision(state, runner, async (setup, _planeRecord) => {
+				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+				await pressControl(setup, "decide-completion", { quiet: true });
+				await frameUntil(setup, "the decision modal", (f) => f.includes("Merge pull request"));
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+				// The block keeps the ticket listed, open with the needs-work
+				// fact, and the run's line lands on the Message line.
+				await pressControl(setup, "confirm-action", { quiet: true });
+				const frame = await frameUntil(setup, "the block's line", (f) =>
+					messageRowOf(f).includes(
+						`the merge of "${pullTitle}" was blocked: GraphQL: PullRequest is not mergeable.`,
+					),
+				);
+				// The ticket's row: the click lands the cursor on it, and the
+				// detail pane stands beside the list.
+				const rows = rowsOf(frame);
+				const rowIndex = rows.findIndex((row) => row.includes(pullTitle.slice(0, 3)));
+				expect(rowIndex).toBeGreaterThanOrEqual(0);
+				await mouseClick(setup, 2, rowIndex);
+				// The reason wraps at the pane's width, so the wait takes the
+				// line's head, and the assertion takes the reason as facts.
+				await frameUntil(
+					setup,
+					"the attempt's line",
+					(f) => f.includes("Merge:") && f.includes("blocked - GraphQL: PullRequest"),
+				);
+			});
 
 			// The line the pane painted is the block the run recorded: the record
 			// beside the handoff facts names the reason the source gave.
@@ -2310,28 +2317,18 @@ describe("the decision screen's merge", () => {
 		seed(state, "awaiting", mergeRoute());
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const planeRecord = await decisionPlane(state, runner);
-
-		await withApp(
-			async (setup) => {
-				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
-				await pressControl(setup, "decide-completion", { quiet: true });
-				await frameUntil(setup, "the decision modal", (f) => f.includes("Merge pull request"));
-				await pressControl(setup, "select-action", { via: "↓", quiet: true });
-				await pressControl(setup, "select-action", { via: "↓", quiet: true });
-				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
-				await pressControl(setup, "edit-action", { quiet: true });
-				await frameUntil(setup, "the unavailable reason", (f) =>
-					messageRowOf(f).includes("the plane action holds no settings"),
-				);
-			},
-			{
-				width: WIDTH,
-				height: 30,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 60_000 },
-			},
-		);
+		await appOnDecision(state, runner, async (setup, _planeRecord) => {
+			await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+			await pressControl(setup, "decide-completion", { quiet: true });
+			await frameUntil(setup, "the decision modal", (f) => f.includes("Merge pull request"));
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+			await pressControl(setup, "edit-action", { quiet: true });
+			await frameUntil(setup, "the unavailable reason", (f) =>
+				messageRowOf(f).includes("the plane action holds no settings"),
+			);
+		});
 	});
 
 	test("a blocked attempt from an earlier turn does not hold the row the newer turn offers", async () => {
@@ -2350,28 +2347,18 @@ describe("the decision screen's merge", () => {
 		});
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const planeRecord = await decisionPlane(state, runner);
-
-		await withApp(
-			async (setup) => {
-				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
-				// The decision modal re-stands the merge row for the newer turn,
-				// and the earlier block's line does not stand in its place.
-				await pressControl(setup, "decide-completion", { quiet: true });
-				const frame = await frameUntil(
-					setup,
-					"the decision modal",
-					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
-				);
-				expect(frame).not.toContain("the merge was blocked");
-			},
-			{
-				width: WIDTH,
-				height: 30,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 60_000 },
-			},
-		);
+		await appOnDecision(state, runner, async (setup, _planeRecord) => {
+			await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+			// The decision modal re-stands the merge row for the newer turn,
+			// and the earlier block's line does not stand in its place.
+			await pressControl(setup, "decide-completion", { quiet: true });
+			const frame = await frameUntil(
+				setup,
+				"the decision modal",
+				(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+			);
+			expect(frame).not.toContain("the merge was blocked");
+		});
 	});
 
 	test("the operator's confirm passes the Handoff limit the top-up's ask obeys", async () => {
@@ -2391,10 +2378,10 @@ describe("the decision screen's merge", () => {
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const planeRecord = await decisionPlane(state, runner, { maxHandoffsPerTicket: 1 });
-
-		await withApp(
-			async (setup) => {
+		await appOnDecision(
+			state,
+			runner,
+			async (setup, _planeRecord) => {
 				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
 				await pressControl(setup, "decide-completion", { quiet: true });
 				await frameUntil(
@@ -2412,12 +2399,7 @@ describe("the decision screen's merge", () => {
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
-			{
-				width: WIDTH,
-				height: 30,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 60_000 },
-			},
+			{ maxHandoffsPerTicket: 1 },
 		);
 
 		// The confirm passed the full count: the run's attempt stands as the
@@ -2462,60 +2444,50 @@ describe("the decision screen's merge", () => {
 			// each take one read, in that order.
 			stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 			stubMerge(runner, 0);
-			const planeRecord = await decisionPlane(state, runner);
-
-			await withApp(
-				async (setup) => {
-					await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
-					// The decision modal: the merge row stands beside Close and Goto.
-					await pressControl(setup, "decide-completion", { quiet: true });
-					await frameUntil(
-						setup,
-						"the decision modal",
-						(f) => f.includes("Decision:") && f.includes("Merge pull request"),
-					);
-					await pressControl(setup, "select-action", { via: "↓", quiet: true });
-					await pressControl(setup, "select-action", { via: "↓", quiet: true });
-					await frameUntil(setup, "the merge row's focus", mergeRowFocused);
-					// The confirm ended the ticket's cycle in the same write (ADR
-					// 0072): the ticket rests open, the wait stands in the Work
-					// queue, and the Decision screen - an awaiting screen again -
-					// fell back to the list with the ask's line on the Message line.
-					// The ask's line and the fallback are two renders, not one, and the
-					// frame that carries the line alone is quiet, so the wait takes the
-					// absence the assertion reads (issue #304).
-					await pressControl(setup, "confirm-action", { quiet: true });
-					const fallback = await frameUntil(
-						setup,
-						"the ask's line and the fallen-back list",
-						(f) =>
-							messageRowOf(f).includes(`the merge of "${pullTitle}" is in the Work queue`) &&
-							!f.includes("Decision:"),
-					);
-					expect(fallback).not.toContain("Decision:");
-					expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
-					// The attempt stands in the state before the fire's fresh read
-					// answers, and the run's settle waits on that read.
-					const attemptDeadline = Date.now() + 5000;
-					for (;;) {
-						if (state.planeAction.latestPlaneActionAttempt(pullIdentity) !== null) break;
-						if (Date.now() >= attemptDeadline)
-							throw new Error("the attempt did not stand in the state");
-						await new Promise((resolve) => setTimeout(resolve, 20));
-					}
-					// The run settles on the list, the way every other settle does:
-					// the outcome's line stands, and no decision screen stands for
-					// the open ticket.
-					const list = await settle(setup);
-					expect(list).not.toContain("Decision:");
-				},
-				{
-					width: WIDTH,
-					height: 30,
-					plane: planeRecord,
-					loopPolicy: { kind: "polled", intervalMs: 60_000 },
-				},
-			);
+			await appOnDecision(state, runner, async (setup, _planeRecord) => {
+				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+				// The decision modal: the merge row stands beside Close and Goto.
+				await pressControl(setup, "decide-completion", { quiet: true });
+				await frameUntil(
+					setup,
+					"the decision modal",
+					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+				);
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+				// The confirm ended the ticket's cycle in the same write (ADR
+				// 0072): the ticket rests open, the wait stands in the Work
+				// queue, and the Decision screen - an awaiting screen again -
+				// fell back to the list with the ask's line on the Message line.
+				// The ask's line and the fallback are two renders, not one, and the
+				// frame that carries the line alone is quiet, so the wait takes the
+				// absence the assertion reads (issue #304).
+				await pressControl(setup, "confirm-action", { quiet: true });
+				const fallback = await frameUntil(
+					setup,
+					"the ask's line and the fallen-back list",
+					(f) =>
+						messageRowOf(f).includes(`the merge of "${pullTitle}" is in the Work queue`) &&
+						!f.includes("Decision:"),
+				);
+				expect(fallback).not.toContain("Decision:");
+				expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
+				// The attempt stands in the state before the fire's fresh read
+				// answers, and the run's settle waits on that read.
+				const attemptDeadline = Date.now() + 5000;
+				for (;;) {
+					if (state.planeAction.latestPlaneActionAttempt(pullIdentity) !== null) break;
+					if (Date.now() >= attemptDeadline)
+						throw new Error("the attempt did not stand in the state");
+					await new Promise((resolve) => setTimeout(resolve, 20));
+				}
+				// The run settles on the list, the way every other settle does:
+				// the outcome's line stands, and no decision screen stands for
+				// the open ticket.
+				const list = await settle(setup);
+				expect(list).not.toContain("Decision:");
+			});
 
 			// The record stands for the outcome the screen read: the operator's
 			// decision word on the merged outcome.
@@ -2536,41 +2508,31 @@ describe("the decision screen's merge", () => {
 		// each take one read, in that order.
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const planeRecord = await decisionPlane(state, runner);
-
-		await withApp(
-			async (setup) => {
-				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
-				// The decision modal: the merge row stands beside Close and Goto.
-				await pressControl(setup, "decide-completion", { quiet: true });
-				await frameUntil(
-					setup,
-					"the decision modal",
-					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
-				);
-				await pressControl(setup, "select-action", { via: "↓", quiet: true });
-				await pressControl(setup, "select-action", { via: "↓", quiet: true });
-				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
-				// The confirm closes the modal and the run settles behind it:
-				// the run's line stands on the Message line, and the merged
-				// ticket's row leaves the list the moment the run settles.
-				await pressControl(setup, "confirm-action", { quiet: true });
-				const frame = await frameUntil(setup, "the run's line", (f) =>
-					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
-				);
-				// The run's line alone names the ticket still: the row and the
-				// detail pane both left it.
-				const naming = rowsOf(frame).filter((row) => row.includes(pullTitle.slice(0, 3)));
-				expect(naming).toHaveLength(1);
-				expect(naming[0]).toContain("ran from the Work queue");
-			},
-			{
-				width: WIDTH,
-				height: 30,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 60_000 },
-			},
-		);
+		await appOnDecision(state, runner, async (setup, _planeRecord) => {
+			await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+			// The decision modal: the merge row stands beside Close and Goto.
+			await pressControl(setup, "decide-completion", { quiet: true });
+			await frameUntil(
+				setup,
+				"the decision modal",
+				(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+			);
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+			// The confirm closes the modal and the run settles behind it:
+			// the run's line stands on the Message line, and the merged
+			// ticket's row leaves the list the moment the run settles.
+			await pressControl(setup, "confirm-action", { quiet: true });
+			const frame = await frameUntil(setup, "the run's line", (f) =>
+				messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
+			);
+			// The run's line alone names the ticket still: the row and the
+			// detail pane both left it.
+			const naming = rowsOf(frame).filter((row) => row.includes(pullTitle.slice(0, 3)));
+			expect(naming).toHaveLength(1);
+			expect(naming[0]).toContain("ran from the Work queue");
+		});
 
 		// The record stands for the outcome the line read: the operator's
 		// decision word on the merged outcome, and the ticket's membership

@@ -299,7 +299,7 @@ describe("the Live view on the ticket list", () => {
 		const fake = new FakeRunner();
 		await appOn(
 			{ runner: () => fake },
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				// The walk lands on the open ticket: it holds no agent and no
 				// pane, so `g` states the Consultation section's own refusal
 				// on the Message line and focuses nothing.
@@ -332,7 +332,7 @@ describe("the Live view on the ticket list", () => {
 		});
 		await appOn(
 			{ runner: () => fake },
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				// The walk lands on the Starting ticket: its handoff already
 				// records the pane the Live view streams.
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -376,7 +376,7 @@ describe("the Live view on the ticket list", () => {
 		});
 		await appOn(
 			{ runner: () => fake },
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -419,7 +419,7 @@ describe("the Live view on the ticket list", () => {
 		);
 		await appOn(
 			{ runner: () => fake },
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -456,7 +456,7 @@ describe("the Live view on the ticket list", () => {
 		);
 		await appOn(
 			{ runner: () => fake },
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -496,7 +496,7 @@ describe("the Live view on the ticket list", () => {
 		);
 		await appOn(
 			{ runner: () => fake },
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -546,7 +546,7 @@ describe("the Live view on the ticket list", () => {
 		);
 		await appOn(
 			{ runner: () => fake },
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -596,7 +596,7 @@ describe("the Live view on the ticket list", () => {
 		);
 		await appOn(
 			{ runner: () => fake },
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -628,7 +628,7 @@ describe("the Live view on the ticket list", () => {
 		fake.set("herdr", [...READ("pane-implement")], { stdout: "the agent works\n" });
 		await appOn(
 			{ runner: () => fake },
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });
@@ -701,7 +701,7 @@ describe("the Live view on the ticket list", () => {
 		fake.set("herdr", [...READ("pane-implement")], { stdout: "the agent works\n" });
 		await appOn(
 			{ runner: () => fake },
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the running ticket", (f) => markerRowOf(f) === 4);
 				await guideKey(setup, "move-list", "↓", { quiet: true });

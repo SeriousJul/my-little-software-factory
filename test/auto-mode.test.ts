@@ -752,7 +752,7 @@ describe("the mode cell and the a key", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
 				await toggleAutoHandoff(setup, { quiet: true });
@@ -776,7 +776,7 @@ describe("the mode cell and the a key", () => {
 		const statePath = app.state.path;
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
 				await toggleAutoHandoff(setup, { quiet: true });
@@ -837,7 +837,7 @@ describe("the mode cell and the a key", () => {
 		const lines: RecordedLine[] = [];
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
 				await toggleAutoHandoff(setup, { quiet: true });
@@ -864,7 +864,7 @@ describe("the mode cell and the a key", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
 				// The real write path, made to fail: the mode table is gone from the
@@ -909,7 +909,7 @@ describe("the mode cell and the a key", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the unlimited mode cell", (f) =>
 					f.includes("● manual 1"),
@@ -962,7 +962,7 @@ describe("the mode cell and the a key", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				// The ticket seat and the Consultation seat fill the limit of
 				// two in one number on the mode cell.
@@ -982,7 +982,7 @@ describe("the failure markers", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the blocked badge", (f) =>
 					ticketRow(f).includes("blocked"),
@@ -1057,7 +1057,7 @@ describe("the failure markers", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				await handoffEnter(setup, "the Missing modal", (f) => f.includes("Missing:"));
@@ -1129,7 +1129,7 @@ describe("the failure markers", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the blocked badge", (f) => ticketRow(f).includes("blocked"));
 				// Enter on the blocked ticket opens the Live view: the Goto is
@@ -1223,7 +1223,7 @@ describe("the Ticket Close key", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the Close hint on the bar", (f) =>
 					actionBarRowOf(f).includes("Delete Close"),
@@ -1390,7 +1390,7 @@ describe("the Ticket Close key", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the Failed-start park marker", (f) =>
 					ticketRow(f).includes("failed starts"),
@@ -1442,7 +1442,7 @@ describe("the Ticket Close key", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the held Agent name marker", (f) =>
 					ticketRow(f).includes("name held"),
@@ -1524,7 +1524,7 @@ describe("the Ticket Close key", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				// The pane herdr does not list wears the `missing` marker, which
 				// ADR 0030 puts before the Starting face: the Ticket is in flight
@@ -1575,7 +1575,7 @@ describe("the Ticket Close key", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				// The poll sees the live pane and marks the Ticket running.
 				await frameUntil(setup, "the in-flight ticket", (f) =>
@@ -1680,7 +1680,7 @@ describe("the decision modal", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1741,7 +1741,7 @@ describe("the decision modal", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1769,7 +1769,7 @@ describe("the decision modal", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1801,7 +1801,7 @@ describe("the decision modal", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(landed);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1831,7 +1831,7 @@ describe("the decision modal", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(landed);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1867,7 +1867,7 @@ describe("the decision modal", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -1937,7 +1937,7 @@ describe("the decision modal", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2022,7 +2022,7 @@ describe("the decision modal", () => {
 
 			const planeRecord = await appOnSeeded(
 				app,
-				async (setup, planeRecord) => {
+				async (setup, _planeRecord) => {
 					app.src.settle(success);
 					await frameUntil(setup, "the awaiting ticket", (f) =>
 						ticketRow(f).includes("[awaiting]"),
@@ -2063,7 +2063,7 @@ describe("the decision modal", () => {
 
 			const planeRecord = await appOnSeeded(
 				app,
-				async (setup, planeRecord) => {
+				async (setup, _planeRecord) => {
 					app.src.settle(success);
 					await frameUntil(setup, "the awaiting ticket", (f) =>
 						ticketRow(f).includes("[awaiting]"),
@@ -2097,7 +2097,7 @@ describe("the decision modal", () => {
 
 			const planeRecord = await appOnSeeded(
 				app,
-				async (setup, planeRecord) => {
+				async (setup, _planeRecord) => {
 					app.src.settle(success);
 					await frameUntil(setup, "the awaiting ticket", (f) =>
 						ticketRow(f).includes("[awaiting]"),
@@ -2139,7 +2139,7 @@ describe("the decision modal", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2183,7 +2183,7 @@ describe("the decision modal", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision panel", (f) => f.includes("Decision:"));
@@ -2233,7 +2233,7 @@ describe("the decision modal", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision panel", (f) => f.includes("Decision:"));
@@ -2293,7 +2293,7 @@ describe("the decision modal", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2394,7 +2394,7 @@ describe("the decision modal", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2447,7 +2447,7 @@ describe("the decision modal", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2550,7 +2550,7 @@ describe("the decision modal", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision panel", (f) => f.includes("Decision:"));
@@ -2600,7 +2600,7 @@ describe("the decision modal", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2650,7 +2650,7 @@ describe("the decision modal", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2768,7 +2768,7 @@ describe("the decision modal", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -2953,7 +2953,7 @@ describe("the herdr-unreachable line", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the herdr-unreachable warning", (f) =>
 					f.includes("herdr is unreachable"),
@@ -3090,7 +3090,7 @@ describe("the leftover environment", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3132,7 +3132,7 @@ describe("the leftover environment", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3181,7 +3181,7 @@ describe("the leftover environment", () => {
 		};
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3219,7 +3219,7 @@ describe("the leftover environment", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				const frame = await frameUntil(setup, "the leftover marker", (f) =>
 					ticketRow(f).includes("leftover"),
@@ -3261,7 +3261,7 @@ describe("the leftover environment", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				await handoffEnter(setup, "the missing modal", (f) => f.includes("Missing:"));
@@ -3301,7 +3301,7 @@ describe("the leftover environment", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the leftover marker", (f) => ticketRow(f).includes("leftover"));
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
@@ -3445,7 +3445,7 @@ describe("the leftover environment", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3473,7 +3473,7 @@ describe("the leftover environment", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3598,7 +3598,7 @@ describe("the leftover environment", () => {
 		};
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
@@ -3743,7 +3743,7 @@ describe("the auto dispatch", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				// An open ticket already shows its profile's agent in the detail
 				// pane, so the wait resolves on the handoff itself: the pane's
@@ -3782,7 +3782,7 @@ describe("the auto dispatch", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the refused dispatch", (f) => f.includes("has no model"));
 				// The handoff never reached herdr: no workspace, no agent start.
@@ -3933,7 +3933,7 @@ describe("the auto dispatch", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(pairSuccess);
 				// The first cycles: the turn settles, the auto-close ends the
 				// cycle, and the pair takes the dispatch. The finished ticket
@@ -3982,7 +3982,7 @@ describe("the auto dispatch", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				const failed = await frameUntil(setup, "the failed automatic handoff", (f) =>
 					frameText(f).includes("queued handoff for"),
@@ -4038,7 +4038,7 @@ describe("the auto decision", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				// The refresh after the fire carries the labels the fire wrote:
 				// the position offers the review task, and the top-up's
 				// continuation takes it (ADR 0051).
@@ -4107,7 +4107,7 @@ describe("the auto decision", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				// The refresh after the fire carries the labels the fire wrote:
 				// the position offers the review task, and the top-up's
 				// continuation takes it (ADR 0051).
@@ -4214,7 +4214,7 @@ describe("the auto decision", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(
 					setup,
@@ -4271,7 +4271,7 @@ describe("the auto decision", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(pairSuccess);
 				// The route waits for the free seat: the ticket stays awaiting.
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
@@ -4307,7 +4307,7 @@ describe("the auto decision", () => {
 		// No Agent works: the cycle's only fact is the settled turn it resolves.
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(pairSuccess);
 				await frameUntil(setup, "the held Next step on the Message line", (f) =>
 					messageRowOf(f).includes(
@@ -4357,7 +4357,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The park stands ahead of the outcome checks: a completion
@@ -4391,7 +4391,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the auto-closed ticket", (f) => ticketRow(f).includes("[open]"));
 				// implement carries the flag off, and no transition fired: the
@@ -4418,7 +4418,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The operator's close is the gate from the parked turn to
@@ -4459,7 +4459,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The operator answers the agent's questions in the live
@@ -4582,7 +4582,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(bugOutcome);
 				pull.settle(pullOutcome);
 				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
@@ -4647,7 +4647,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(specSuccess);
 				await frameUntil(setup, "the open ticket", (f) => ticketRow(f).includes("[open]"));
 				await settle(setup);
@@ -4702,7 +4702,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 		});
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(specSuccess);
 				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The hold stands: no decision, and the environment is untouched.
@@ -4756,7 +4756,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				await settle(setup);
@@ -5112,7 +5112,7 @@ describe("the handoff queue", () => {
 		if (!enqueued.ok) throw new Error(enqueued.reason);
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(pairSuccess);
 				await sleep(400);
 				const frame = await settle(setup, 1000);
@@ -5208,7 +5208,7 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 
 		const planeRecord = await appOnSeeded(
 			app,
-			async (setup, planeRecord) => {
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				// The awaiting rule reads the skip: it derives no position,
 				// so the cycle auto-closes the ticket. It rests open behind
