@@ -52,6 +52,8 @@ import {
 	tabUntilSlot,
 	typeText,
 	WIDTH,
+	waitCommands,
+	waitUntil,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -522,15 +524,6 @@ function countBells(): { count: () => number; restore: () => void } {
 	}) as typeof process.stdout.write);
 	return { count: () => bells, restore: () => spy.mockRestore() };
 }
-/** Poll a condition until it holds or the deadline passes. */
-async function waitFor(condition: () => boolean, what: string, deadlineMs = 4000): Promise<void> {
-	const deadline = Date.now() + deadlineMs;
-	for (;;) {
-		if (condition()) return;
-		if (Date.now() >= deadline) throw new Error(`timed out waiting for ${what}`);
-		await sleep(5);
-	}
-}
 /** Cross into the Consultation list, then wait for the detail the test names. */
 async function toConsultations(
 	setup: Setup,
@@ -538,25 +531,6 @@ async function toConsultations(
 	predicate: (f: string) => boolean,
 ): Promise<string> {
 	await crossCursor(setup, "consultations");
-	return frameUntil(setup, what, predicate);
-}
-/** Wait until every needle shows up in the recorded commands. */
-async function waitForCommands(runner: ConsultationRunner, needles: string[], what: string) {
-	const deadline = Date.now() + 4000;
-	for (;;) {
-		const recorded = runner.commands().join("\n");
-		if (needles.every((needle) => recorded.includes(needle))) return;
-		if (Date.now() >= deadline)
-			throw new Error(`timed out waiting for ${what}:\n${runner.commands().join("\n")}`);
-		await sleep(25);
-	}
-}
-async function pressF12(
-	setup: Setup,
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	await pressControl(setup, "interact-exit", { quiet: true });
 	return frameUntil(setup, what, predicate);
 }
 describe("Consultation launch and monitoring through the UI", () => {
@@ -601,8 +575,8 @@ describe("Consultation launch and monitoring through the UI", () => {
 					// Move to the initial input field and type the request.
 					await launchConsultationDraft(setup, "review auth");
 					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
@@ -803,8 +777,8 @@ describe("Consultation recovery and replacement through the UI", () => {
 					// The action bar offers recovery for an opening Consultation.
 					expect(frameText(setup.captureCharFrame())).toContain("r Recover");
 					await pressControl(setup, "recover", { shows: "State: working" });
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
@@ -910,8 +884,8 @@ describe("Consultation recovery and replacement through the UI", () => {
 					// action and run it there.
 					await tabUntilSlot(setup, "❯ Launch Consultation");
 					await pressControl(setup, "confirm-choice", { shows: "Replaced by:" });
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[`herdr agent prompt ${AGENT} /grill ${expectedInput}`],
 						"the replacement prompt",
 					);
@@ -968,8 +942,8 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					// The panel's first row is the retry the interrupted opening needs:
 					// it runs the same recovery the `r` key runs.
 					await pressControl(setup, "confirm-action", { shows: "State: working" });
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
@@ -1048,8 +1022,8 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					expect(frameText(launcher)).toContain("Original input:");
 					await tabUntilSlot(setup, "❯ Launch Consultation");
 					await pressControl(setup, "confirm-choice", { shows: "Replaced by:" });
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[`herdr agent prompt ${AGENT} /grill ${expectedInput}`],
 						"the replacement prompt",
 					);
@@ -1190,8 +1164,8 @@ describe("Consultation responses through the UI", () => {
 					expect(frameText(editor)).toContain("Response draft");
 					await sendResponseDraft(setup);
 					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[`herdr agent prompt ${AGENT} follow up`],
 						"the response prompt",
 					);
@@ -1288,8 +1262,8 @@ describe("Consultation responses through the UI", () => {
 					await typeText(setup, "then ship it");
 					await sendResponseDraft(setup);
 					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[`herdr agent prompt ${AGENT} then ship it`],
 						"the operator's response",
 					);
@@ -1353,8 +1327,8 @@ describe("Agent interaction through the UI", () => {
 					await frameUntil(setup, "the frame to stay in interaction", (f) =>
 						f.includes("F12 Exit interaction"),
 					);
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[`herdr pane send-text ${paneId} h\u00e9`, `herdr pane send-keys ${paneId} enter`],
 						"the serialized interaction input",
 					);
@@ -1364,9 +1338,9 @@ describe("Agent interaction through the UI", () => {
 					expect(textAt).toBeGreaterThan(-1);
 					expect(keyAt).toBeGreaterThan(textAt);
 					// The configured exit key leaves the mode.
-					await pressF12(setup, "the exit from interaction mode", (f) =>
-						f.includes("left Agent interaction mode"),
-					);
+					await pressControl(setup, "interact-exit", {
+						shows: "left Agent interaction mode",
+					});
 				},
 				{ width: WIDTH, height: 32, plane: planeRecord },
 			);
@@ -2021,8 +1995,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					await launchConsultationDraft(setup, "review auth");
 					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[
 							"herdr workspace list",
 							`herdr tab create --workspace ws-live --cwd ${checkout} --no-focus`,
@@ -2099,8 +2073,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					await launchConsultationDraft(setup, "review auth");
 					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[`herdr agent start ${AGENT} --kind pi --pane pane-c1 -- --context 131072`],
 						"the live start with the count",
 					);
@@ -2475,8 +2449,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.state).toBe("opening");
 					// Confirm once: the launch proceeds and the override is recorded.
 					await pressControl(setup, "confirm-action", { shows: "State: working" });
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[
 							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
@@ -2702,9 +2676,9 @@ describe("Consultation response gating by observed Agent status", () => {
 					// No input is forwarded until the operator sends keys.
 					expect(runner.commands().join("\n")).not.toContain("send-text");
 					expect(runner.commands().join("\n")).not.toContain("send-keys");
-					await pressF12(setup, "the exit from interaction mode", (f) =>
-						f.includes("left Agent interaction mode"),
-					);
+					await pressControl(setup, "interact-exit", {
+						shows: "left Agent interaction mode",
+					});
 				},
 				{
 					width: WIDTH,
@@ -2795,17 +2769,21 @@ describe("Consultation response gating by observed Agent status", () => {
 					const ansiReads = () =>
 						runner.commands().filter((c) => c.includes("--format ansi")).length;
 					// The mount read plus one 250 ms tick: the timer is in phase.
-					await waitFor(() => ansiReads() >= 2, "the first interval refresh");
+					await waitUntil(() => ansiReads() >= 2, "the first interval refresh");
 					await typeText(setup, "h");
-					await waitForCommands(runner, [`herdr pane send-text ${paneId} h`], "the forwarded key");
+					await waitCommands(
+						() => runner.commands(),
+						[`herdr pane send-text ${paneId} h`],
+						"the forwarded key",
+					);
 					const sentAt = Date.now();
 					// The input must not wait for the next 250 ms tick: a new
 					// read arrives well before it could.
 					while (ansiReads() < 3 && Date.now() - sentAt < 150) await sleep(5);
 					expect(ansiReads()).toBeGreaterThanOrEqual(3);
-					await pressF12(setup, "the exit from interaction mode", (f) =>
-						f.includes("left Agent interaction mode"),
-					);
+					await pressControl(setup, "interact-exit", {
+						shows: "left Agent interaction mode",
+					});
 				},
 				{
 					width: WIDTH,
@@ -2943,8 +2921,8 @@ describe("The full Consultation operator flow", () => {
 					await typeText(setup, "answer one");
 					await sendResponseDraft(setup);
 					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[`herdr agent prompt ${AGENT} answer one`],
 						"the response prompt",
 					);
@@ -2959,14 +2937,18 @@ describe("The full Consultation operator flow", () => {
 					// Enter now opens interaction, not the response editor.
 					await pressControl(setup, "consultation-interact", { shows: "F12 Exit interaction" });
 					await typeText(setup, "h");
-					await waitForCommands(runner, [`herdr pane send-text pane-c1 h`], "the forwarded key");
-					await pressF12(setup, "the exit from interaction mode", (f) =>
-						f.includes("left Agent interaction mode"),
+					await waitCommands(
+						() => runner.commands(),
+						[`herdr pane send-text pane-c1 h`],
+						"the forwarded key",
 					);
+					await pressControl(setup, "interact-exit", {
+						shows: "left Agent interaction mode",
+					});
 					// The Agent finishes on its own: the external turn opens and
 					// settles, and rings once more.
 					runner.agentListJson = agentListJson([{ ...launchedAgent, status: "idle", seq: 3 }]);
-					await waitFor(
+					await waitUntil(
 						() =>
 							state.consultationRecord.consultationTurns(id).length === 3 &&
 							state.consultationRecord.consultationTurns(id).at(-1)?.settledAt !== null,
@@ -2984,7 +2966,11 @@ describe("The full Consultation operator flow", () => {
 					expect(dialog).toContain("Close stops the Agent. The worktree and branch stay.");
 					expect(dialog).toContain("stop the Agent; the work stays");
 					await pressControl(setup, "confirm-action", { shows: `${id.slice(0, 8)} closed` });
-					await waitForCommands(runner, ["herdr workspace close ws-new"], "the workspace cleanup");
+					await waitCommands(
+						() => runner.commands(),
+						["herdr workspace close ws-new"],
+						"the workspace cleanup",
+					);
 					expect(state.consultationRecord.consultation(id)?.state).toBe("closed");
 					// The captured history keeps every turn in order.
 					await pressControl(setup, "history", { shows: "State: closed" });
@@ -3459,8 +3445,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						detailPaneText(f).includes("State: working"),
 					);
 					// The pickup ran the launch, the way a direct start does.
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
@@ -3674,8 +3660,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					await frameUntil(setup, "the picked-up Consultation working", (f) =>
 						detailPaneText(f).includes("State: working"),
 					);
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
@@ -3754,8 +3740,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(messageRowOf(setup.captureCharFrame())).toContain(
 						`force-dispatched Consultation ${id8} over the Parallel limit`,
 					);
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
@@ -3963,8 +3949,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// The seat count stands over the limit: the seed's seat plus
 					// the seat the start took over the cap.
 					await frameUntil(setup, "the seat over the cap", (f) => f.includes("● manual 2/1"));
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
@@ -4022,8 +4008,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(line).not.toContain("over the Parallel limit");
 					// The start took the only free seat.
 					await frameUntil(setup, "the start's seat", (f) => f.includes("● manual 1/1"));
-					await waitForCommands(
-						runner,
+					await waitCommands(
+						() => runner.commands(),
 						[
 							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,

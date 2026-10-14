@@ -34,8 +34,8 @@ import {
 	pressControl,
 	rowsOf,
 	settle,
-	sleep,
 	WIDTH,
+	waitUntil,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -123,20 +123,18 @@ const HANDOFF_CHOICE = {
 };
 
 /**
- * Wait until the source has started its `calls`-th fetch.
+ * Wait until the source has started its `calls`-th fetch, on the rig's one
+ * deadline.
  *
  * A key press is dispatched on the next frame, so a test must not settle
  * before the refresh it started has actually called the source: an early
  * settle has no in-flight fetch to resolve and the refresh hangs forever.
  */
 async function callsReached(source: FakeSource, calls: number): Promise<void> {
-	const deadline = Date.now() + 2000;
-	for (;;) {
-		if (source.calls >= calls) return;
-		if (Date.now() >= deadline)
-			throw new Error(`the source was called ${source.calls} times, wanted ${calls}`);
-		await sleep(5);
-	}
+	await waitUntil(
+		() => source.calls >= calls,
+		`the source's ${calls}-th fetch to start (it stood ${source.calls})`,
+	);
 }
 
 /** The row of a title inside the list pane only, so the detail pane cannot hide it. */

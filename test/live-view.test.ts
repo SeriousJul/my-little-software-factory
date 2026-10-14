@@ -45,6 +45,7 @@ import {
 	staleKeyClaim,
 	startingFaceOf,
 	WIDTH,
+	waitUntil,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -1023,14 +1024,10 @@ describe("the Live view against a running factory", () => {
 						},
 					]),
 				});
-				const deadline = Date.now() + 2000;
-				while (
-					planeRecord.state.ticketWorkCycle.ticketState(identity) !== "awaiting" &&
-					Date.now() < deadline
-				) {
-					await sleep(20);
-				}
-				expect(planeRecord.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+				await waitUntil(
+					() => planeRecord.state.ticketWorkCycle.ticketState(identity) === "awaiting",
+					"the turn to settle to awaiting",
+				);
 				const frame = setup.captureCharFrame();
 				// The mode owns the body, not the outcome: the stream stands where
 				// the operator left it, and no decision rows appear at all while the

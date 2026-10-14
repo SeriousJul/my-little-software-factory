@@ -26,16 +26,15 @@ import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	actionBarRowOf,
 	detailPaneText,
-	FRAME_DEADLINE_MS,
 	frameText,
 	frameUntil,
 	guideKey,
 	HEIGHT,
 	messageRowOf,
 	pressControl,
+	pressUntil,
 	rowsOf,
 	settle,
-	sleep,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -180,48 +179,6 @@ function groupWithOneRow(frame: string, value: string): boolean {
 /** The Ticket section's header row. */
 function headerRow(frame: string): string {
 	return rowsOf(frame).find((row) => row.includes("Tickets")) ?? "";
-}
-
-/**
- * Press the List filter's guide key until the frame holds the row facts the
- * press must leave, re-sending inside the rig's one deadline where a key can
- * land mid-update and the plane drops it. At this suite's width the bar packs
- * the filter hint off, so the view is read from its rows, not the bar.
- */
-async function filterTo(
-	setup: Parameters<Parameters<typeof withApp>[0]>[0],
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	const deadline = Date.now() + FRAME_DEADLINE_MS - 500;
-	for (;;) {
-		await guideKey(setup, "ticket-filter", "f", { quiet: true });
-		const frame = setup.captureCharFrame();
-		if (predicate(frame)) return settle(setup);
-		if (Date.now() >= deadline) throw new Error(`the filter key never left ${what}`);
-		await sleep(50);
-	}
-}
-
-/**
- * Step the list cursor down with the move control until the frame names the
- * marker the step must reach, re-sending inside the rig's one deadline where
- * a key can land mid-update and the plane drops it.
- */
-async function stepTo(
-	setup: Parameters<Parameters<typeof withApp>[0]>[0],
-	what: string,
-	marker: string,
-): Promise<string> {
-	const deadline = Date.now() + FRAME_DEADLINE_MS - 500;
-	for (;;) {
-		await pressControl(setup, "move-list", { via: "j", quiet: true });
-		const frame = setup.captureCharFrame();
-		if (frame.includes(marker)) return settle(setup);
-		if (Date.now() >= deadline)
-			throw new Error(`the move key never left ${what} (the frame held back ${marker})`);
-		await sleep(50);
-	}
 }
 
 /**
@@ -494,7 +451,14 @@ describe("the ignore key", () => {
 							(f: string) => listRowOf(f, FIRST_LEAD) >= 0 && listRowOf(f, SECOND_LEAD) < 0,
 						],
 					] as const) {
-						const frame = await filterTo(setup, what, predicate);
+						// The key rides the rig's `pressUntil`: a key that lands
+						// mid-update is dropped by the plane, so the press re-sends
+						// inside the rig's one deadline, the bar where it is painted
+						// and the catalogue's guide key where the bar packs it off.
+						const frame = await pressUntil(setup, "ticket-filter", {
+							what,
+							check: predicate,
+						});
 						// The same counts in every view: the ignored row leaves the open
 						// count, and the held turn is counted wherever the screen stands.
 						expect(headerRow(frame)).toContain("open: 0");
@@ -1112,8 +1076,18 @@ describe("the ignore and the machine", () => {
 				// The cursor walks out of the Ticket list and down the visible flow: the
 				// empty Consultation section is a row, and down from it crosses into the
 				// Work queue, where Delete removes the item (ADR 0034).
-				await stepTo(setup, "the Consultation row", "\u276f Consultations");
-				await stepTo(setup, "the queue cursor", "\u250c\u2500\u276f Work queue");
+				// The step names its token with `via`: the bar's `Move` hint wears
+				// both directions, and the step is the down one.
+				await pressUntil(setup, "move-list", {
+					what: "the Consultation row",
+					via: "j",
+					check: (f) => f.includes("\u276f Consultations"),
+				});
+				await pressUntil(setup, "move-list", {
+					what: "the queue cursor",
+					via: "j",
+					check: (f) => f.includes("\u250c\u2500\u276f Work queue"),
+				});
 				await guideKey(setup, "queue-remove", "Delete", { quiet: true });
 				const line = await frameUntil(setup, "the item removed", (f) =>
 					messageRowOf(f).includes("was removed"),

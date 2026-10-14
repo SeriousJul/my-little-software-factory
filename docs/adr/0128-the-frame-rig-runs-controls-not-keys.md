@@ -197,8 +197,11 @@ A frame test reads as the operator's walk: one control and one outcome. A
 reviewer can check it against the Action bar and the Key guide without decoding a
 screen substring.
 
-The rig's interface shrinks and its implementation absorbs the waits, the flush,
-the key bus, and the deadline. The 42 frame suites lose their preamble.
+The rig's interface deepens where its raw input leaves: the hand-picked
+key operations and the per-poll bus waits go, and the named operations
+stand in their place, so the rig's export count grows rather than falls,
+and its implementation absorbs the waits, the flush, the key bus, and the
+deadline. The 42 frame suites lose their preamble.
 
 The flake class gets one home, which is what makes it fixable. Whether it closes
 the CI item is a measurement and not a claim: the migration records the counts
@@ -311,6 +314,53 @@ thirteen-hint rows, and pins the plane's dispatch of the key to the on-bar
 owner: the press of the record removal runs it, and the removal panel opens.
 The guard's throw is pinned in the rig's own suite on the shape the Seeded
 plane stands not: a bar that paints a hint's text twice.
+
+## Addendum: the delivered interface, and the flake class it reaches
+
+The decision above states that the key-ownership apparatus becomes
+internal. As delivered, it is internal to the frame suites and not fully
+internal to the rig: `keyBase`, `leftKeyHandler`, `staleKeyClaim`, and
+`releaseKeys` stay exported from the rig, and their callers are named and
+kept. The Live view's window test, the guard for the key that lands in the
+open window between a surface's last frame and its key release (issue
+#317), measures that window on the key bus, and the rig's own suite pins
+the close proof and the stale-line guard through the same reads. The rule
+that a frame suite names a control and an outcome, and never the bus,
+stands beside the kept exports: the architecture check reaches every suite
+that drives the bus or a raw key outside the closed escape list, and no
+owned surface reads either.
+
+The delivered interface does not shrink in export count. As the raw input
+operations leave, the named operations grow in their place, and the walk
+that commits with the campaign prints the count at each head it lands on:
+it stands above the base head's count at every landed head, this one
+included. The depth the decision names is enforced by the static
+architecture check, which refuses the two shapes a suite can opt out by -
+a hand-picked key outside the closed escape list, and a private press,
+open, close, or wait the rig should own - not by the count.
+
+The escape list reads every key from the catalogue with the pull that
+lands this addendum: the emergency exit, the last escape that sent a blind
+literal, takes its key from the catalogue the way the quit and the
+repository-init escapes do. The per-suite deadline loops the campaign left
+in the suites' own lines stand on the rig's one deadline through the
+rig's `waitCommands` and `waitUntil`, the consultation frame's local copy
+of the command-log wait among them, and the press re-send loops the suites
+carried on the deadline minus its margin ride the rig's `pressUntil`: the
+bar is read first, and a bar that paints no hint for the control takes the
+one key the catalogue names for the control on the surface, the way the
+rig's escapes read theirs, a control that wears more than one key taking
+the press's named token. The rig's interface loses the cross-walk exports
+no owned suite drives, `crossToConsultations` and `crossToTickets`.
+
+The flake class the context lists stands closed, issue by issue, or
+merged, pull by pull, by its own fixes at the head this addendum lands on,
+and the pull that carries it closes none of the twelve anew. It reaches
+the class in its mechanism: the one deadline, the named outcomes, and the
+loops above. The class-level CI item stays open in the quality gate's
+record: the load evidence on file shows the deadline miss surviving the
+earlier fixes under a loaded runner, and this pull runs no loaded runner
+of its own.
 
 The pull that lands this rule changes one line of production code: the export
 of `omitFromOtherSection` from the Control catalogue, the catalogue's own

@@ -27,6 +27,7 @@ import {
 	settle,
 	WIDTH,
 	waitSourceHealthy,
+	waitUntil,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -412,11 +413,7 @@ describe("the Message line's fact to the desktop", () => {
 			async (setup) => {
 				// The boot's own refresh runs first; settle it, so the manual
 				// refresh the key starts is the one the test drives.
-				const deadline = Date.now() + 4000;
-				while (source.calls < 1) {
-					if (Date.now() >= deadline) throw new Error("timed out: the initial refresh to start");
-					await new Promise((resolve) => setTimeout(resolve, 5));
-				}
+				await waitUntil(() => source.calls >= 1, "the initial refresh to start");
 				source.settle(empty);
 				// The `r` control writes the refresh's Working line...
 				await pressControl(setup, "refresh", { quiet: true });

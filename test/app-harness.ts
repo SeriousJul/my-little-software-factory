@@ -1449,27 +1449,6 @@ export async function crossCursor(
 }
 
 /**
- * Walk the unified cursor into the Consultation list, and wait for it there.
- *
- * The retired spelling of `crossCursor(setup, "consultations")`: the suites
- * the rig owns walk with the named section, and the rest of the frame suites
- * ride this name until they migrate.
- */
-export async function crossToConsultations(setup: Setup, maxSteps = 30): Promise<string> {
-	return crossCursor(setup, "consultations", maxSteps);
-}
-/**
- * Walk the unified cursor back to the Ticket list, and wait for it there.
- *
- * The retired spelling of `crossCursor(setup, "tickets")`: the suites the rig
- * owns walk with the named section, and the rest of the frame suites ride
- * this name until they migrate.
- */
-export async function crossToTickets(setup: Setup, maxSteps = 30): Promise<string> {
-	return crossCursor(setup, "tickets", maxSteps);
-}
-
-/**
  * Confirm an open action panel on Enter, and wait until the panel
  * releases the keys. A key sent while the panel's unsubscribe is still
  * pending reaches the stale handler, which would run the panel's own action
@@ -1546,10 +1525,12 @@ export async function waitSourceHealthy(state: FactoryState): Promise<void> {
 }
 
 /**
- * Wait for the runner's log to satisfy `check`, reading it on a short sleep
+ * Wait for the runner's log to satisfy the check, reading it on a short sleep
  * the way `waitSourceHealthy` waits on state: the rig's own turn keeps the app
  * moving while the wait sleeps, so a command the settled effect records lands
- * in the log before the deadline names a slow plane.
+ * in the log before the deadline names a slow plane. The check is the test's
+ * own read of the log, or the needles the test names, each of which must show
+ * up in the log as a line of it.
  *
  * A painted frame can stand ahead of the commands the same effect records:
  * the paint and the runner log are two facts one effect settles, and a tree
@@ -1560,18 +1541,60 @@ export async function waitSourceHealthy(state: FactoryState): Promise<void> {
  * write, where the clean tree stood the paint behind both. A test that reads
  * the log the moment its frame wait ends races that window; it waits on the
  * log instead, the frame facts it already pinned standing unchanged.
+ *
+ * The wait stands on the rig's one deadline, `FRAME_DEADLINE_MS`: a per-suite
+ * deadline for the runner's log would be the same wall-clock stand-in the
+ * change removes from the frame waits (ADR 0128).
  */
+export async function waitCommands(
+	commands: () => readonly string[],
+	needles: readonly string[],
+	what: string,
+	deadlineMs?: number,
+): Promise<void>;
 export async function waitCommands(
 	commands: () => readonly string[],
 	check: (commands: readonly string[]) => boolean,
 	what: string,
+	deadlineMs?: number,
+): Promise<void>;
+export async function waitCommands(
+	commands: () => readonly string[],
+	needlesOrCheck: readonly string[] | ((commands: readonly string[]) => boolean),
+	what: string,
 	deadlineMs: number = FRAME_DEADLINE_MS,
 ): Promise<void> {
+	let check: (commands: readonly string[]) => boolean;
+	if (typeof needlesOrCheck === "function") {
+		check = needlesOrCheck;
+	} else {
+		const needles = needlesOrCheck;
+		check = (log) => {
+			const text = log.join("\n");
+			return needles.every((needle) => text.includes(needle));
+		};
+	}
 	const deadline = Date.now() + deadlineMs;
 	for (;;) {
 		if (check(commands())) return;
 		if (Date.now() >= deadline)
 			throw new Error(`timed out waiting for ${what}\nlog:\n${commands().join("\n")}`);
+		await sleep(10);
+	}
+}
+
+/**
+ * Wait for a fact no frame read names: the state's rows, the source's calls,
+ * the dispatch's recorder. The same shape as `frameUntil` off the frame: one
+ * check, one name, the rig's one deadline, and a miss that names the wait.
+ * A wait that stood on the suite's own deadline would be the same wall-clock
+ * stand-in the change removes from the frame waits (ADR 0128).
+ */
+export async function waitUntil(check: () => boolean, what: string): Promise<void> {
+	const deadline = Date.now() + FRAME_DEADLINE_MS;
+	for (;;) {
+		if (check()) return;
+		if (Date.now() >= deadline) throw new Error(`timed out waiting for ${what}`);
 		await sleep(10);
 	}
 }
@@ -1647,6 +1670,21 @@ export function spanColorAt(
 //     catalogue, the guide's own source, never picked by the test
 //   frameUntil                        a custom frame check, named for what it
 //                                     waits for, where no named outcome fits
+//   waitUntil                         a fact no frame read names - the state's
+//                                     rows, the source's calls, the dispatch's
+//                                     recorder - waited on the rig's one deadline
+//   waitCommands                      the runner's log: the needles the test names, or
+//                                     its own read of the log, on the rig's one deadline
+//   pressUntil                        press a control, and re-send it inside the rig's
+//                                     one deadline until the frame holds the fact the
+//                                     test names: a key that lands mid-update is dropped
+//                                     by the plane, so a press that left no frame the wait
+//                                     names goes out again. The bar is read first, the way
+//                                     `pressControl` reads it, the `via` token the press
+//                                     names when the control wears more than one key, and a
+//                                     bar that paints no hint for the control takes the key
+//                                     from the catalogue, the way the rig's escapes read
+//                                     theirs
 //
 // `opens` and `closes` pair: the opening press records the key bus as it was
 // and watches it; the closing press waits for the surface's handlers to give
@@ -2890,7 +2928,10 @@ function quietUnlessNamed(fields: ControlOutcomeFields): ControlOutcomeFields {
 /**
  * Press the controls the Action bar never hints, one named operation each:
  * the quit key, the emergency exit, the repository-init key, and the
- * auto-handoff toggle, whose key the rig reads off the mode the frame shows.
+ * auto-handoff toggle. Each reads its key from the catalogue, the source the
+ * Key guide paints from, never a literal the rig stands blind on: the
+ * auto-handoff toggle off the mode the frame shows, the rest off the mode
+ * the control runs in.
  */
 export async function quitApp(setup: Setup, fields: ControlOutcomeFields = {}): Promise<string> {
 	checkOutcomeFields(fields, false);
@@ -2911,8 +2952,9 @@ export async function emergencyExit(
 ): Promise<string> {
 	checkOutcomeFields(fields, false);
 	const effective = quietUnlessNamed(fields);
+	const key = catalogueKey("emergency-exit", "ticket-list");
 	const preFrame = await settle(setup);
-	sendKey(setup, "Ctrl+C");
+	sendKey(setup, key);
 	return runOutcomes(setup, effective, {
 		preFrame,
 		preLine: messageRowOf(preFrame),
@@ -3036,5 +3078,98 @@ export async function guideKey(
 	} catch (error) {
 		holding?.stop();
 		throw error;
+	}
+}
+
+/**
+ * The key the catalogue names for a control on the surface the frame stands
+ * on, for a press whose bar paints no hint for the control: the guide
+ * paints the control's own key, and the key the catalogue names in the
+ * surface's modes is the key the plane accepts there. A control that names
+ * no key on the surface, or more than one, fails the read and names the
+ * labels it found, so a press never stands on a key the catalogue does not
+ * name (ADR 0128).
+ */
+function catalogueGuideKey(control: ControlDefinition, modes: InteractionMode[] | null): string {
+	const candidates = modes ?? control.modes;
+	const labels = new Set<string>();
+	for (const mode of candidates) {
+		try {
+			const label = keyLabelFor(mode, control, DUMMY_FACTS);
+			if (label !== "") labels.add(label);
+		} catch {
+			// A key rule that reads facts the dummy carries none of names no
+			// alias in that mode; the press fails on the empty read.
+		}
+	}
+	if (labels.size === 0)
+		throw new Error(
+			`the frame rig cannot press "${control.id}": the bar paints no hint for it, and the catalogue names no key for it on the surface`,
+		);
+	if (labels.size > 1)
+		throw new Error(
+			`the frame rig cannot press "${control.id}": the catalogue names ${[...labels].join(", ")} for it on the surface; name the key you mean in the press's fields`,
+		);
+	return [...labels][0];
+}
+
+/** The fields a re-sending press of a control waits out. */
+export interface PressUntilFields {
+	/** The frame fact the wait names: the deadline error reads it back. */
+	what: string;
+	/** The frame fact, read off the frame, in the shape `frameUntil` reads. */
+	check: (frame: string) => boolean;
+	/**
+	 * The key token the press sends where the control wears more than one:
+	 * one the control's hint names, the way `pressControl`'s `via` names it.
+	 * Unnamed, the bar route sends the hint's first token, and a bar that
+	 * paints no hint for the control takes the one key the catalogue names
+	 * for it on the surface.
+	 */
+	via?: string;
+}
+
+/**
+ * Press a control, and re-send it until the frame holds the fact the test
+ * names: a key that lands mid-update is dropped by the plane, so a press that
+ * left no frame the wait names goes out again, inside the rig's one deadline
+ * minus the margin that keeps it ahead of the press's own settle deadline.
+ *
+ * The test names the control and the frame fact, and the rig reads every key
+ * from the catalogue, the source the Key guide paints from: a painted bar
+ * hint the control owns sends the hint's key, the way `pressControl` sends
+ * it, or the `via` token the press names, and a bar that paints no hint for
+ * the control takes the key from the catalogue, the way the rig's escapes
+ * read theirs, so a packed bar withholds no key the guide names. A control
+ * the catalogue names no key for on the surface fails the press, naming the
+ * control, and the deadline names the control and the fact it waited for.
+ * The check is the same shape as `frameUntil`'s: a frame fact no named
+ * outcome names, named for the frame it waits for.
+ */
+export async function pressUntil(
+	setup: Setup,
+	controlId: string,
+	fields: PressUntilFields,
+): Promise<string> {
+	const control = catalogueControl(controlId);
+	const deadline = Date.now() + FRAME_DEADLINE_MS - 500;
+	for (;;) {
+		const preFrame = await settle(setup);
+		const modes = surfaceModes(preFrame);
+		const owned = barHints(setup).filter((hint) => hintOwnedBy(setup, control, hint, modes));
+		const press: PressControlFields = { quiet: true };
+		if (fields.via !== undefined) press.via = fields.via;
+		const frame =
+			owned.length > 0
+				? await pressControl(setup, controlId, press)
+				: await guideKey(setup, controlId, fields.via ?? catalogueGuideKey(control, modes), {
+						quiet: true,
+					});
+		if (fields.check(frame)) return frame;
+		if (Date.now() >= deadline)
+			throw new Error(
+				`the control "${controlId}" never left ${fields.what}: the rig re-sent it inside its one deadline, and the frame still stands without it\nlast frame:\n${frame}`,
+			);
+		await sleep(50);
 	}
 }

@@ -28,6 +28,7 @@ import {
 	settle,
 	sleep,
 	toggleAutoHandoff,
+	waitUntil,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -184,10 +185,12 @@ describe("the held turn through the real app flow", () => {
 				});
 				// The auto-handoffs settle: two of the three open tickets
 				// are running; the third waits on the agent limit.
-				await waitUntil("the auto-handoffs to be running", () =>
-					[identityB, identityC].every(
-						(identity) => state.ticketWorkCycle.ticketState(identity) === "running",
-					),
+				await waitUntil(
+					() =>
+						[identityB, identityC].every(
+							(identity) => state.ticketWorkCycle.ticketState(identity) === "running",
+						),
+					"the auto-handoffs to be running",
 				);
 				// Let the stable cycles settle, then count the dispatch
 				// commands: after the turn is held, nothing new may start an
@@ -221,8 +224,8 @@ describe("the held turn through the real app flow", () => {
 					]),
 				});
 				await waitUntil(
-					"the held ticket to rest in awaiting",
 					() => state.ticketWorkCycle.ticketState(identityA) === "awaiting",
+					"the held ticket to rest in awaiting",
 				);
 				// Give the paused factory several full cycles to do nothing.
 				await sleep(300);
@@ -319,11 +322,3 @@ describe("the held turn through the real app flow", () => {
 		);
 	});
 });
-
-async function waitUntil(label: string, check: () => boolean): Promise<void> {
-	const deadline = Date.now() + 5_000;
-	while (!check()) {
-		if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
-		await sleep(20);
-	}
-}

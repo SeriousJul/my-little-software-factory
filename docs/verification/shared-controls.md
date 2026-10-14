@@ -1885,8 +1885,7 @@ Status: the automated checks pass for the rig and every frame surface it
 owns. The frame suites that stood on raw keys now run the rig's controls
 and wait on its named outcomes, and the owned list in the architecture
 check, which grew one surface at a time and never shrinks, is the record
-of what has landed. Its head names every frame suite that boots the app
-on the plane.
+of what has landed. Its head names every frame suite that drives input.
 
 What was measured: the frame rig in `test/app-harness.ts` now resolves a
 control to the key the Action bar painted for it and owns the input end to
@@ -2169,6 +2168,55 @@ the walk at that head prints. The test-tree duplication clone count,
 the Quality audit's own metric, measures 189 at that head, and this
 change rewrites the Quality baseline, which only shrinks, down to that
 count, which the audit then holds.
+
+The rework of this record (pull request #395) moves the last of the
+suites' own deadline loops onto the rig's one deadline, and it reads the
+last of the escape keys from the catalogue:
+
+- The emergency exit reads its key from the catalogue, the way the quit
+  and the repository-init escapes do: the blind literal it sent before is
+  gone, and every key the rig's named operations send is read from the
+  catalogue, the source the Key guide paints from.
+- The suites' command-log and state deadline loops stand on the rig's
+  `waitCommands` and `waitUntil`: the consultation frame's local copy of
+  the command-log wait, with its own four-second deadline, is deleted, and
+  the per-suite loops of the desktop-notification, the live-view, the
+  plane-action-merge, the source-frame, and the turn-end-cause suites take
+  the rig's deadline with the rig's named error. The plane-action-merge
+  suite's per-test timeouts that stood below the rig's deadline stand above
+  twice of it now, the way the rig's suite keeps its own pin.
+- The press re-send loops the suites carried on the deadline minus its
+  margin ride the rig's `pressUntil`: the ignored-ticket, the
+  muted-source, and the ticket-grouping suites name the control and the
+  frame fact, and the rig re-sends inside the one deadline. The bar is
+  read first, the way `pressControl` reads it, and a bar that paints no
+  hint for the control takes the one key the catalogue names for it on
+  the surface, a control that wears more than one key taking the press's
+  named token.
+- The rig's interface loses the cross-walk exports no owned suite drives,
+  `crossToConsultations` and `crossToTickets`.
+
+The walk at the head that lands this rework stands at no press-family
+call, no hand operation, and no handler probe on the owned surfaces, 23
+raw waits, 500 inline containment predicates, 18 reaches to the renderer's
+input, and 20 helper copies over the rig's 118 exports, against the base
+head's 79: the export count grows with the named operations as the raw
+input leaves, and the depth is enforced by the architecture check, not by
+the count. The inline containment the walk still counts stands on the
+named `frameUntil` checks the walk keeps, and the helper copies it still
+counts are the domain fixtures the named stems reach not.
+
+The twelve flake issues the ADR lists - #302, #303, #304, #310, #311,
+#312, #314, #316, #318, #323, #326, and #342 - stand closed, issue by
+issue, or merged, pull by pull, by their own fixes at the head this
+rework lands on, and the rework closes none of them anew. It reaches the
+class in its mechanism: the one deadline, the named outcomes, and the
+loops above. The class-level CI flake item stays open in the quality
+gate's record: the load evidence on file shows the deadline miss
+surviving the earlier fixes under a loaded runner, and this rework runs
+no loaded runner of its own; the push gate's full-suite run at the pushed
+head is this round's measurement, and a file that fails it and passes
+alone is named as a load flake in the pull.
 
 What was not measured: every frame surface that boots the app on the plane
 has been migrated, so no press-family call, hand operation, or raw wait

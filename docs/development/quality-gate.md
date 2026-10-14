@@ -119,12 +119,6 @@ tree, in this order:
 7. `bun run docs:build`, when the change touches `docs/`, `GLOSSARY.md`, or an
    ADR. CI runs the same build and blocks on it.
 
-CI runs the same `bun run test` step. The serial variant was measured on
-this checkout and rejected on 2026-10-15: on the runner's two vCPUs the
-parallel pool is no slower than the serial step, and a steady co-tenant load
-red both the same way, so the split would have bought wall time for no
-robustness (issue #398, [the verification record](../verification/quality-gate.md)).
-
 A branch that falls behind `origin/main` again during a rework round rebases and
 runs the gate again. A suite result measured on a tree that is not the tree that
 merges says nothing about the tree that merges.
@@ -223,15 +217,14 @@ is recorded beside it. The runner's own budget, which the test script
 carries as one timeout of sixty seconds, local and CI alike, stands above
 twice the frame rig's one deadline of twenty seconds, so a test's waits
 fail on the rig's deadline, which dumps the last frame, before the runner's
-budget can end the test without one. The CI frame-test flake the rule named
-was investigated on 2026-10-15 and answered in three parts (issue #398, in
-[the verification record](../verification/quality-gate.md)): the three fixable
-classes - the audit test's ref its runner does not hold, the log read at the
-painted frame, and a Consultation operation settling after the run's state
-closed - were fixed; the serial CI step was measured and rejected; and the two
-Live view walks that stall past any deadline on a loaded runner were removed,
-the case for the stall mechanism standing open on issue #302, which owns the
-rig's remaining wall-clock exposure.
+budget can end the test without one. The frame rig's one deadline owns the
+frame tests' waits, local and CI alike (ADR 0128), and the rework of that
+rule moves the suites' remaining deadline loops onto it; a loaded runner can
+still miss the deadline, so the CI frame-test flake stays open in
+[the verification record](../verification/quality-gate.md), and the
+frame-rig section of
+[the shared-control record](../verification/shared-controls.md) names the
+twelve filed issues of the class and which of them the rule reaches.
 
 ## A fake carries every field of the seam it stands for
 
