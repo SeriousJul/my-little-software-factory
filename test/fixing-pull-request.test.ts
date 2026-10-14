@@ -18,7 +18,7 @@ import type { FetchedTicket, IssueReference } from "../src/domain/ticket.ts";
 import { withHeadBranch, withIssueReferences } from "../src/domain/ticket.ts";
 
 import { isCoveredByFixingPullRequest } from "../src/workflow.ts";
-import { awaitFrame, HEIGHT, rowsOf, WIDTH, withApp } from "./app-harness.ts";
+import { frameUntil, HEIGHT, rowsOf, WIDTH, withApp } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { DEFAULT_TICKET_TITLE, fetchSuccess, issueTicket } from "./fact-fixtures.ts";
 import type { FakeSource } from "./fake-source.ts";
@@ -372,11 +372,11 @@ describe("the section header counts", () => {
 				const [issuesSource, pullsSource] = setup.plane.sources as readonly FakeSource[];
 				issuesSource.settle(fetchSuccess([issueTicket(issueIdentity)]));
 				pullsSource.settle(fetchSuccess([closingPullTicket({ title: DEFAULT_TICKET_TITLE })]));
-				const frame = await awaitFrame(
+				const frame = await frameUntil(
 					setup,
+					"the pull request row",
 					// The list row truncates the title: match on its lead.
 					(f) => listRowOf(f, "Persist source fa") >= 0,
-					"the pull request row",
 				);
 				// The covered issue is not listed, and the header count does
 				// not count it: one open ticket stands, the pull request's.

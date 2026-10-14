@@ -49,15 +49,19 @@ import {
 	guideKey,
 	HEIGHT,
 	hintWordings,
+	keyBase,
+	leftKeyHandler,
 	messageRowOf,
 	namedWhat,
 	pageKey,
 	parseBarText,
 	pressControl,
+	releaseKeys,
 	resolveControl,
 	type SurfaceFamily,
 	settle,
 	sharedHintGuard,
+	staleKeyClaim,
 	surfaceFamily,
 	surfaceModes,
 	toggleAutoHandoff,
@@ -998,6 +1002,38 @@ describe("the frame rig names its timeouts", () => {
 			await expect(
 				pressControl(setup, "help", { opens: "a surface the plane never paints" }),
 			).rejects.toThrow(/a surface the plane never paints" to open, after the control "help"/);
+		}, toOpenTicket);
+	});
+});
+
+describe("the frame rig's key release", () => {
+	test("the base snapshot names the bus the mode the walk returns to holds", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			const base = keyBase(setup);
+			expect(base.base.length).toBeGreaterThan(0);
+			// The base mode holds nothing outside its own base: a closed surface
+			// with no handler to release names that out loud.
+			expect(() => leftKeyHandler(setup, base)).toThrow(/holds 0 outside the base/);
+			base.stop();
+		});
+	});
+
+	test("the stale claim dispatches the walk's Enter, and reports the handler's word", () => {
+		expect(staleKeyClaim(() => true)).toBe(true);
+		expect(staleKeyClaim(() => false)).toBe(false);
+	});
+
+	test("the release wait takes the bus back to the base after a surface lets the keys go", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			const base = keyBase(setup);
+			await pressControl(setup, "help", { quiet: true });
+			// The guide's mode is the one handler outside the base the rig names.
+			const stale = leftKeyHandler(setup, base);
+			await pressControl(setup, "guide-close", { quiet: true });
+			await releaseKeys(setup, base, "the Key guide to release the keys");
+			void stale;
 		}, toOpenTicket);
 	});
 });

@@ -789,10 +789,8 @@ describe("the Ticket section's Groups", () => {
 			expect(messageRowOf(first)).toContain("no Ticket is selected");
 			for (const control of ["ticket-goto", "override", "handoff"] as const) {
 				await pressControl(setup, control, { quiet: true });
-				const refused = await frameUntil(
-					setup,
-					"the refusal",
-					(f) => messageRowOf(f).includes("no Ticket is selected"),
+				const refused = await frameUntil(setup, "the refusal", (f) =>
+					messageRowOf(f).includes("no Ticket is selected"),
 				);
 				expect(messageRowOf(refused)).toContain("no Ticket is selected");
 			}

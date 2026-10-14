@@ -1079,6 +1079,60 @@ export async function awaitBaseKeyHandlers(
 }
 
 /**
+ * The key release of a closed surface, by its own name: the bus is taken back
+ * to exactly the set the walk's base mode held.
+ */
+export async function releaseKeys(
+	setup: Setup,
+	snapshot: BaseKeyHandlers,
+	what: string,
+): Promise<void> {
+	return await awaitBaseKeyHandlers(setup, snapshot, what);
+}
+
+/**
+ * Snapshot the key bus at rest in the base mode, by its own name.
+ */
+export function keyBase(setup: Setup): BaseKeyHandlers {
+	return baseKeyHandlers(setup);
+}
+
+/**
+ * The one key handler a closed surface left on the bus, taken before the
+ * release wait removes it: the handler the surface mounted, outside the base
+ * the walk returns to.
+ */
+export function leftKeyHandler(setup: Setup, snapshot: BaseKeyHandlers): (key: unknown) => boolean {
+	const stale = keyHandlerListeners(setup).filter((handler) => !snapshot.base.includes(handler));
+	if (stale.length !== 1) {
+		throw new Error(
+			`the closed surface is expected to leave one key handler on the bus, and the bus holds ${stale.length} outside the base`,
+		);
+	}
+	return stale[0] as (key: unknown) => boolean;
+}
+
+/**
+ * The walk's Enter, dispatched to the handler a closed surface left on the
+ * bus: the guard of the undrawn surface must refuse the key and run nothing
+ * (issue #317). Returns whether the stale handler claimed it.
+ *
+ * The walk's key is read off the same fields the dispatch loop reads: a plain
+ * Enter with no modifier, the key the route rows confirm on.
+ */
+export function staleKeyClaim(handler: (key: unknown) => boolean): boolean {
+	const key = {
+		name: "return",
+		ctrl: false,
+		meta: false,
+		shift: false,
+		option: false,
+		preventDefault(): void {},
+	};
+	return handler(key);
+}
+
+/**
  * Press a key, wait for its effect, then wait for the app to go quiet.
  *
  * A key that lands while an update chain is still in flight - an observation

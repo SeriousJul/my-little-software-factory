@@ -13,9 +13,9 @@ import { describe, expect, test } from "bun:test";
 
 import {
 	type AppSetup,
-	awaitFrame,
 	detailPaneText,
 	frameText,
+	frameUntil,
 	markerRowOf,
 	messageRowOf,
 	mouseClick,
@@ -113,10 +113,10 @@ describe("Auto copy", () => {
 				expect(clipboard.writes).toHaveLength(1);
 				// The refusal is the shared warning the field Copy control says,
 				// carried on the Message line with its warning prefix.
-				const warned = await awaitFrame(
+				const warned = await frameUntil(
 					setup,
-					(frame) => frameText(frame).includes(COPY_REFUSED_TEXT),
 					"the refused-copy warning on the Message line",
+					(frame) => frameText(frame).includes(COPY_REFUSED_TEXT),
 				);
 				expect(messageRowOf(warned)).toContain(`Warning: ${COPY_REFUSED_TEXT}`);
 			} finally {
@@ -150,10 +150,10 @@ describe("Auto copy", () => {
 				const pressRow = paneRow(3);
 				const releaseRow = paneRow(6);
 				await mouseDrag(setup, [4, pressRow], [4, releaseRow]);
-				const frame = await awaitFrame(
+				const frame = await frameUntil(
 					setup,
-					(frame) => markerRowOf(frame) === pressRow,
 					"the selection to stay on the pressed row",
+					(frame) => markerRowOf(frame) === pressRow,
 				);
 				expect(markerRowOf(frame)).toBe(pressRow);
 				// The release lifted off a different row, so if it had fired a
