@@ -43,6 +43,7 @@ const OWNED_SURFACES = [
 	"test/placement-panel.test.ts",
 	"test/plane-action-merge.test.ts",
 	"test/repository-select-panel.test.ts",
+	"test/shared-field-editing.test.ts",
 	"test/ticket-grouping-frame.test.ts",
 	"test/ticket-scroll-frame.test.ts",
 	"test/theme-frame.test.ts",
