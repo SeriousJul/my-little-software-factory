@@ -70,7 +70,7 @@ describe("the Missing modal", () => {
 				setup,
 				"the reason to scroll up",
 				(frame) => frame.includes("reason line 23") && !frame.includes("reason line 24"),
-				);
+			);
 			expect(up).toContain("❯ Abandon");
 
 			await pressControl(setup, "scroll-message", { via: "j", quiet: true });

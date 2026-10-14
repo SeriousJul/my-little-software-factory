@@ -32,20 +32,16 @@ import type { FactoryState } from "../src/state.ts";
 import type { AppSetup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
-	awaitFrame,
-	closeOverlay,
-	confirmPanel,
-	crossToConsultations,
-	crossToTickets,
+	crossCursor,
 	detailPaneText,
+	fieldKey,
 	frameText,
+	frameUntil,
+	guideKey,
 	launchConsultationDraft,
 	messageRowOf,
 	mouseClick,
-	openConsultationPanel,
-	openLauncher,
-	press,
-	pressArrow,
+	pressControl,
 	rgb,
 	rowsOf,
 	type Setup,
@@ -54,6 +50,7 @@ import {
 	sleep,
 	spanColors,
 	tabUntilSlot,
+	typeText,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -113,10 +110,10 @@ async function closeConsultationStep(
 	i: number,
 	state: FactoryState,
 ): Promise<string> {
-	const selected = await awaitFrame(
+	const selected = await frameUntil(
 		setup,
-		(f) => /Agent: pi \(consultation-[0-9a-f]{8}\)/.test(detailPaneText(f)),
 		`a working Consultation ${i + 1} of 3 to be selected`,
+		(f) => /Agent: pi \(consultation-[0-9a-f]{8}\)/.test(detailPaneText(f)),
 	);
 	const id8 = detailPaneText(selected).match(/Agent: pi \(consultation-([0-9a-f]{8})\)/)?.[1];
 	if (id8 === undefined) throw new Error("no Consultation agent selected");
@@ -127,26 +124,20 @@ async function closeConsultationStep(
 		if (current === undefined) throw new Error(`no record for ${id8}`);
 		// The confirmation names the live Agent and the work the
 		// close keeps; a cancel leaves the state unchanged.
-		await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
-			f.includes("Close Consultation"),
-		);
+		await guideKey(setup, "consultation-close", "Delete", { opens: "Close Consultation" });
 		const dialog = await settle(setup);
 		expect(dialog).toContain(
 			current.state === "opening" ? "The Agent is still opening" : "The Agent is working",
 		);
 		expect(dialog).toContain("Close stops the Agent. The worktree and branch stay.");
-		await press(setup, "escape", "the panel to close", (f) => !f.includes("Close Consultation"));
+		await pressControl(setup, "cancel-action", { closes: "Close Consultation" });
 		expect(state.consultationRecord.consultation(current.id)?.state).toBe(current.state);
 		// Reopen the dialog for the confirm.
-		await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
-			f.includes("Close Consultation"),
-		);
+		await guideKey(setup, "consultation-close", "Delete", { opens: "Close Consultation" });
 	} else {
-		await openConsultationPanel(setup, "delete", "the close panel", (f) =>
-			f.includes("Close Consultation"),
-		);
+		await guideKey(setup, "consultation-close", "Delete", { opens: "Close Consultation" });
 	}
-	await confirmPanel(setup, `the close status for ${id8}`, (f) => f.includes(`${id8} closed`));
+	await pressControl(setup, "confirm-action", { shows: `${id8} closed` });
 	return id8;
 }
 const repository = {
@@ -546,8 +537,8 @@ async function toConsultations(
 	what: string,
 	predicate: (f: string) => boolean,
 ): Promise<string> {
-	await crossToConsultations(setup);
-	return awaitFrame(setup, predicate, what);
+	await crossCursor(setup, "consultations");
+	return frameUntil(setup, what, predicate);
 }
 /** Wait until every needle shows up in the recorded commands. */
 async function waitForCommands(runner: ConsultationRunner, needles: string[], what: string) {
@@ -560,22 +551,13 @@ async function waitForCommands(runner: ConsultationRunner, needles: string[], wh
 		await sleep(25);
 	}
 }
-/** The harness press() only types AppKeys; these cover the rest. */
-async function pressEnter(
-	setup: Setup,
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	setup.mockInput.pressEnter();
-	return awaitFrame(setup, predicate, what);
-}
 async function pressF12(
 	setup: Setup,
 	what: string,
 	predicate: (frame: string) => boolean,
 ): Promise<string> {
-	setup.mockInput.pressKey("F12");
-	return awaitFrame(setup, predicate, what);
+	await pressControl(setup, "interact-exit", { quiet: true });
+	return frameUntil(setup, what, predicate);
 }
 describe("Consultation launch and monitoring through the UI", () => {
 	test("the launcher resolves an unmapped selected Ticket Repository before the pinned launch sequence", async () => {
@@ -612,15 +594,13 @@ describe("Consultation launch and monitoring through the UI", () => {
 			await withApp(
 				async (setup) => {
 					planeRecord.settleFirstFetch();
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					// Move to the initial input field and type the request.
 					await launchConsultationDraft(setup, "review auth");
-					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
+					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
 					await waitForCommands(
 						runner,
 						[
@@ -630,7 +610,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 						],
 						"the launch command sequence",
 					);
-					await awaitFrame(setup, (f) => f.includes("Agent: auth review"), "the live Agent output");
+					await frameUntil(setup, "the live Agent output", (f) => f.includes("Agent: auth review"));
 					const started = state.consultationRecord.consultations("open");
 					expect(started).toHaveLength(1);
 					expect(started[0].state).toBe("working");
@@ -778,7 +758,7 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await awaitFrame(setup, (f) => f.includes("● manual 2/2"), "the combined seat count");
+				await frameUntil(setup, "the combined seat count", (f) => f.includes("● manual 2/2"));
 				// The Consultation settles to awaiting-response on the idle
 				// poll: that state holds no seat, and the line drops to the
 				// ticket's seat alone.
@@ -789,7 +769,7 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 				await toConsultations(setup, "the settled Consultation", (f) =>
 					f.includes("State: awaiting-response"),
 				);
-				await awaitFrame(setup, (f) => f.includes("● manual 1/2"), "the dropped seat");
+				await frameUntil(setup, "the dropped seat", (f) => f.includes("● manual 1/2"));
 			},
 			{
 				width: WIDTH,
@@ -822,9 +802,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 					);
 					// The action bar offers recovery for an opening Consultation.
 					expect(frameText(setup.captureCharFrame())).toContain("r Recover");
-					await press(setup, "r", "the recovered launch to reach working", (f) =>
-						f.includes("State: working"),
-					);
+					await pressControl(setup, "recover", { shows: "State: working" });
 					await waitForCommands(
 						runner,
 						[
@@ -871,7 +849,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 					await toConsultations(setup, "the consultations view", (f) =>
 						f.includes("State: opening"),
 					);
-					await press(setup, "r", "the refused recovery", (f) => f.includes("State: failed"));
+					await pressControl(setup, "recover", { shows: "State: failed" });
 					const failed = state.consultationRecord.consultation(OPENING_ID);
 					expect(failed?.failure).toContain(
 						'agent type "pi" defines no context window setting, so the count of 131072 tokens cannot reach it',
@@ -905,49 +883,43 @@ describe("Consultation recovery and replacement through the UI", () => {
 					await toConsultations(setup, "the consultations view", (f) =>
 						detailPaneText(f).includes("State: "),
 					);
-					const failed = await awaitFrame(
-						setup,
-						(f) => f.includes("State: failed"),
-						"the failed detail",
+					const failed = await frameUntil(setup, "the failed detail", (f) =>
+						f.includes("State: failed"),
 					);
 					expect(frameText(failed)).toContain("herdr refused the launch");
 					// r refreshes but never resumes a failed Consultation.
-					await press(setup, "r", "the frame to stay failed", (f) => f.includes("State: failed"));
+					await pressControl(setup, "refresh", { shows: "State: failed" });
 					await settle(setup);
 					const joined = runner.commands().join("\n");
 					expect(joined).not.toContain("worktree create");
 					expect(joined).not.toContain("agent start");
 					expect(joined).not.toContain("agent prompt");
 					// c opens the Replacement launcher with the retained context.
-					const launcher = await openLauncher(setup, "Replacement Consultation");
+					const launcher = await guideKey(setup, "launch", "c", {
+						opens: "Replacement Consultation",
+					});
 					expect(frameText(launcher)).toContain("Original input:");
-					await closeOverlay(setup, "┌─Replacement Consultation", "the launcher to close");
+					await pressControl(setup, "close-form", { closes: "Replacement Consultation" });
 					// Relaunch: the replacement carries the failed id forward.
-					await openLauncher(setup, "Replacement Consultation");
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Replacement Consultation" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					// The Replacement launcher opens on the retained context, so the
 					// flow is the same one any launcher takes: Tab to the visible
 					// action and run it there.
 					await tabUntilSlot(setup, "❯ Launch Consultation");
-					setup.mockInput.pressEnter();
-					await awaitFrame(
-						setup,
-						(f) => f.includes("Replaced by:"),
-						"the failed detail to record the replacement",
-					);
+					await pressControl(setup, "confirm-choice", { shows: "Replaced by:" });
 					await waitForCommands(
 						runner,
 						[`herdr agent prompt ${AGENT} /grill ${expectedInput}`],
 						"the replacement prompt",
 					);
 					// The replacement itself points back at the failed record.
-					await press(setup, "j", "the replacement detail with its origin", (f) =>
-						f.includes(`Replacement of: ${FAILED_ID.slice(0, 8)}`),
-					);
+					await pressControl(setup, "move-list", {
+						via: "j",
+						shows: `Replacement of: ${FAILED_ID.slice(0, 8)}`,
+					});
 					expect(frameText(setup.captureCharFrame())).toContain("State: working");
 					const replacements = state.consultationRecord
 						.consultations("open")
@@ -986,18 +958,16 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					);
 					// The bar names the meaning Enter carries on this row.
 					expect(actionBarRowOf(setup.captureCharFrame())).toContain("Enter Recovery");
-					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
-						f.includes("Recover Consultation"),
-					);
+					await pressControl(setup, "consultation-recovery", {
+						opens: "Recover Consultation",
+					});
 					const panel = await settle(setup);
 					expect(frameText(panel)).toContain("The Agent never finished opening.");
 					expect(frameText(panel)).toContain("Recover");
 					expect(frameText(panel)).toContain("Close");
 					// The panel's first row is the retry the interrupted opening needs:
 					// it runs the same recovery the `r` key runs.
-					await confirmPanel(setup, "the recovered opening to reach working", (f) =>
-						f.includes("State: working"),
-					);
+					await pressControl(setup, "confirm-action", { shows: "State: working" });
 					await waitForCommands(
 						runner,
 						[
@@ -1027,25 +997,18 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					await toConsultations(setup, "the interrupted opening", (f) =>
 						f.includes("State: opening"),
 					);
-					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
-						f.includes("Recover Consultation"),
-					);
+					await pressControl(setup, "consultation-recovery", {
+						opens: "Recover Consultation",
+					});
 					// The Close row is the close path, dialog and all: an opening
 					// record still holds an Agent the close must stop.
-					await pressArrow(setup, "down", "the Close row to be selected", (f) =>
-						f.includes("❯ Close"),
-					);
-					const dialog = await confirmPanel(setup, "the close dialog", (f) =>
-						f.includes("Close Consultation"),
-					);
+					await pressControl(setup, "select-action", { via: "↓", shows: "❯ Close" });
+					const dialog = await pressControl(setup, "confirm-action", {
+						opens: "Close Consultation",
+					});
 					expect(frameText(dialog)).toContain("The Agent is still opening");
 					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("opening");
-					await press(
-						setup,
-						"escape",
-						"the dialog to close",
-						(f) => !f.includes("Close Consultation"),
-					);
+					await pressControl(setup, "cancel-action", { closes: "Close Consultation" });
 					expect(state.consultationRecord.consultation(OPENING_ID)?.state).toBe("opening");
 				},
 				{ width: WIDTH, height: 32, plane: planeRecord },
@@ -1070,26 +1033,21 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					await toConsultations(setup, "the missing Consultation", (f) =>
 						f.includes("State: missing"),
 					);
-					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
-						f.includes("Recover Consultation"),
-					);
+					await pressControl(setup, "consultation-recovery", {
+						opens: "Recover Consultation",
+					});
 					const panel = await settle(setup);
 					expect(frameText(panel)).toContain("The Agent is gone from its pane.");
 					expect(frameText(panel)).toContain("the Agent pane is gone");
 					expect(frameText(panel)).toContain("Replace");
 					// Replace opens the launcher on the record's durable recovery
 					// context, not on an empty form.
-					const launcher = await confirmPanel(setup, "the Replacement launcher", (f) =>
-						f.includes("Replacement Consultation"),
-					);
+					const launcher = await pressControl(setup, "confirm-action", {
+						opens: "Replacement Consultation",
+					});
 					expect(frameText(launcher)).toContain("Original input:");
 					await tabUntilSlot(setup, "❯ Launch Consultation");
-					setup.mockInput.pressEnter();
-					await awaitFrame(
-						setup,
-						(f) => f.includes("Replaced by:"),
-						"the missing detail to record the replacement",
-					);
+					await pressControl(setup, "confirm-choice", { shows: "Replaced by:" });
 					await waitForCommands(
 						runner,
 						[`herdr agent prompt ${AGENT} /grill ${expectedInput}`],
@@ -1125,17 +1083,15 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					await toConsultations(setup, "the failed Consultation", (f) =>
 						f.includes("State: failed"),
 					);
-					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
-						f.includes("Recover Consultation"),
-					);
-					await pressArrow(setup, "down", "the Close row to be selected", (f) =>
-						f.includes("❯ Close"),
-					);
+					await pressControl(setup, "consultation-recovery", {
+						opens: "Recover Consultation",
+					});
+					await pressControl(setup, "select-action", { via: "↓", shows: "❯ Close" });
 					// A failed record holds no Agent, so the close runs on the row:
 					// no confirmation stands between it and the result.
-					const frame = await confirmPanel(setup, "the direct close", (f) =>
-						messageRowOf(f).includes(`${short} closed`),
-					);
+					const frame = await pressControl(setup, "confirm-action", {
+						shows: `${short} closed`,
+					});
 					expect(frame).not.toContain("Close Consultation");
 					expect(state.consultationRecord.consultation(FAILED_ID)?.state).toBe("closed");
 				},
@@ -1161,9 +1117,7 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					);
 					// The stuck cleanup is the record's recovery, so Enter opens the
 					// close panel that already carries its retry rows.
-					await openConsultationPanel(setup, "return", "the close recovery panel", (f) =>
-						f.includes("Close Consultation"),
-					);
+					await pressControl(setup, "consultation-recovery", { opens: "Close Consultation" });
 					const panel = await settle(setup);
 					expect(frameText(panel)).toContain("Cleanup is already in progress");
 					expect(frameText(panel)).toContain("Retry");
@@ -1194,10 +1148,10 @@ describe("Consultation Enter reaches the recovery surface its state needs", () =
 					await toConsultations(setup, "the consultations view without open history", (f) =>
 						f.includes("no open Consultations"),
 					);
-					await press(setup, "f", "the closed history filter", (f) => f.includes("State: closed"));
-					await press(setup, "return", "the Enter refusal", (f) =>
-						f.includes("the selected Consultation is already closed"),
-					);
+					await pressControl(setup, "history", { shows: "State: closed" });
+					await pressControl(setup, "consultation-recovery", {
+						refuses: "the selected Consultation is already closed",
+					});
 					expect(state.consultationRecord.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
 				},
 				{ width: WIDTH, height: 32, plane: planeRecord },
@@ -1229,15 +1183,13 @@ describe("Consultation responses through the UI", () => {
 					await toConsultations(setup, "the consultations view", (f) =>
 						detailPaneText(f).includes("State: "),
 					);
-					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
-					const editor = await awaitFrame(
-						setup,
-						(f) => f.includes("follow up"),
-						"the saved draft in the editor",
+					await pressControl(setup, "consultation-respond", { opens: "Response draft" });
+					const editor = await frameUntil(setup, "the saved draft in the editor", (f) =>
+						f.includes("follow up"),
 					);
 					expect(frameText(editor)).toContain("Response draft");
 					await sendResponseDraft(setup);
-					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
+					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
 					await waitForCommands(
 						runner,
 						[`herdr agent prompt ${AGENT} follow up`],
@@ -1279,12 +1231,10 @@ describe("Consultation responses through the UI", () => {
 					await toConsultations(setup, "the consultations view", (f) =>
 						detailPaneText(f).includes("State: "),
 					);
-					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
+					await pressControl(setup, "consultation-respond", { opens: "Response draft" });
 					await sendResponseDraft(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("response failed: refused"),
-						"the failure status and the reopened editor",
+					await frameUntil(setup, "the failure status and the reopened editor", (f) =>
+						f.includes("response failed: refused"),
 					);
 					expect(state.consultationRecord.consultation(RESPONSE_ID)).toMatchObject({
 						state: "awaiting-response",
@@ -1325,23 +1275,19 @@ describe("Consultation responses through the UI", () => {
 						detailPaneText(f).includes("State: awaiting-response"),
 					);
 					// The Agent's last message stays readable until the operator answers.
-					const settled = await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes("Agent: the design holds"),
-						"the settled Agent output",
+					const settled = await frameUntil(setup, "the settled Agent output", (f) =>
+						detailPaneText(f).includes("Agent: the design holds"),
 					);
 					expect(detailPaneText(settled)).toContain("Agent view:");
 					expect(detailPaneText(settled)).toContain("the design holds");
 					expect(actionBarRowOf(settled)).toContain("Enter Respond");
 					expect(actionBarRowOf(settled)).not.toContain("Enter/r Respond");
 					// `r` remains Refresh even when Enter can open the response editor.
-					await press(setup, "r", "refresh instead of response", (f) =>
-						messageRowOf(f).includes("no Ticket sources exist"),
-					);
-					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
-					setup.mockInput.typeText("then ship it");
+					await pressControl(setup, "refresh", { shows: "no Ticket sources exist" });
+					await pressControl(setup, "consultation-respond", { opens: "Response draft" });
+					await typeText(setup, "then ship it");
 					await sendResponseDraft(setup);
-					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
+					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
 					await waitForCommands(
 						runner,
 						[`herdr agent prompt ${AGENT} then ship it`],
@@ -1386,13 +1332,9 @@ describe("Agent interaction through the UI", () => {
 					await toConsultations(setup, "the consultations view", (f) =>
 						detailPaneText(f).includes("State: "),
 					);
-					await pressEnter(setup, "interaction mode with its exit key", (f) =>
-						f.includes("F12 Exit interaction"),
-					);
-					const frame = await awaitFrame(
-						setup,
-						(f) => f.includes("ERROR: authz"),
-						"the rendered pane output",
+					await pressControl(setup, "consultation-interact", { shows: "F12 Exit interaction" });
+					const frame = await frameUntil(setup, "the rendered pane output", (f) =>
+						f.includes("ERROR: authz"),
 					);
 					// The escape bytes never reach the control plane frame.
 					expect(frame).not.toContain("\u001b");
@@ -1400,10 +1342,15 @@ describe("Agent interaction through the UI", () => {
 					expect(spanColors(setup, "ERROR: authz").map((color) => color.join(","))).toContain(
 						rgb("#cd3131").join(","),
 					);
-					// Literal text and a semantic key keep terminal order.
-					setup.mockInput.pressKey("h");
-					setup.mockInput.pressKey("\u00e9");
-					await pressEnter(setup, "the frame to stay in interaction", (f) =>
+					// Literal text and a semantic key keep terminal order: both characters
+					// reach the terminal in one batch, so the plane serializes
+					// them into the one send the operator's keys stand for.
+					await typeText(setup, "h\u00e9");
+					// In the interaction mode the terminal forwards every key to the
+					// Agent, so the plane's Enter meaning stands nowhere: the newline
+					// goes out through the rig's field keys.
+					fieldKey(setup, "enter");
+					await frameUntil(setup, "the frame to stay in interaction", (f) =>
 						f.includes("F12 Exit interaction"),
 					);
 					await waitForCommands(
@@ -1554,30 +1501,27 @@ describe("Consultation close and cleanup through the UI", () => {
 					await toConsultations(setup, "the consultations view", (f) =>
 						detailPaneText(f).includes("State: "),
 					);
-					await openConsultationPanel(setup, "delete", "the close panel", (f) =>
-						f.includes("Close Consultation"),
-					);
-					await confirmPanel(setup, "the failed cleanup status", (f) =>
-						f.includes("close needs recovery: refused"),
-					);
+					await guideKey(setup, "consultation-close", "Delete", { opens: "Close Consultation" });
+					await pressControl(setup, "confirm-action", {
+						shows: "close needs recovery: refused",
+					});
 					expect(state.consultationRecord.consultation(FORCE_ID)?.state).toBe("closing");
 					// Retry offers force-close once the cleanup is stuck.
-					await openConsultationPanel(setup, "delete", "the recovery close panel", (f) =>
-						f.includes("Close Consultation"),
-					);
-					await pressArrow(setup, "down", "the force-close action to be selected", (f) =>
-						f.includes("Force-close"),
-					);
-					await confirmPanel(setup, "the force-close confirmation", (f) =>
-						f.includes("Force-close Consultation"),
-					);
-					await pressEnter(setup, "the force-close status", (f) =>
-						f.includes("force-closed; recovery resources remain recorded"),
-					);
+					await guideKey(setup, "consultation-close", "Delete", { opens: "Close Consultation" });
+					await pressControl(setup, "select-action", {
+						via: "↓",
+						shows: "Force-close",
+					});
+					await pressControl(setup, "confirm-action", {
+						opens: "Force-close Consultation",
+					});
+					await pressControl(setup, "confirm-action", {
+						shows: "force-closed; recovery resources remain recorded",
+					});
 					// The closed record moves out of the open history.
-					const frame = await press(setup, "f", "the closed detail", (f) =>
-						f.includes("Close result: force-closed"),
-					);
+					const frame = await pressControl(setup, "history", {
+						shows: "Close result: force-closed",
+					});
 					expect(frameText(frame)).toContain("Remaining resources");
 					expect(frameText(frame)).toContain(`workspace ws-${short}`);
 					const remaining = state.consultationRecord.consultationRemainingResources(FORCE_ID);
@@ -1633,17 +1577,17 @@ describe("Consultation close and cleanup through the UI", () => {
 						messageRowOf(frame).includes(`${failed8} closed`);
 					// The first row closes the moment the key lands: no dialog
 					// stands between the key and the result.
-					await press(setup, "delete", "the direct close", closed);
+					await guideKey(setup, "consultation-close", "Delete", { quiet: true });
+					await frameUntil(setup, "the direct close", closed);
 					// The closed row leaves the open list, so the cursor holds the
 					// other one: it closes directly the same way.
 					const otherMissing =
 						state.consultationRecord.consultation(MISSING_DIRECT_ID)?.state === "closed";
-					await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes(`State: ${otherMissing ? "failed" : "missing"}`),
-						"the other Consultation under the cursor",
+					await frameUntil(setup, "the other Consultation under the cursor", (f) =>
+						detailPaneText(f).includes(`State: ${otherMissing ? "failed" : "missing"}`),
 					);
-					const frame = await press(setup, "delete", "the second direct close", (f) =>
+					await guideKey(setup, "consultation-close", "Delete", { quiet: true });
+					const frame = await frameUntil(setup, "the second direct close", (f) =>
 						messageRowOf(f).includes(`${otherMissing ? failed8 : missing8} closed`),
 					);
 					expect(state.consultationRecord.consultation(MISSING_DIRECT_ID)?.state).toBe("closed");
@@ -1674,16 +1618,16 @@ describe("Consultation close and cleanup through the UI", () => {
 					await toConsultations(setup, "the consultations view without open history", (f) =>
 						f.includes("no open Consultations"),
 					);
-					await press(setup, "f", "the closed history filter", (f) => f.includes("State: closed"));
+					await pressControl(setup, "history", { shows: "State: closed" });
 					// The closed record answers the Delete key with the section's own
 					// removal (ADR 0122): the record's removal outranks the close's
 					// refusal, so the panel names what goes before anything leaves.
-					await openConsultationPanel(setup, "delete", "the removal panel", (f) =>
-						f.includes(`Delete Consultation ${CLOSED_DIRECT_ID.slice(0, 8)}`),
-					);
-					const frame = await confirmPanel(setup, "the removal", (f) =>
-						f.includes("deleted; backups may retain data"),
-					);
+					await guideKey(setup, "consultation-delete", "Delete", {
+						opens: `Delete Consultation ${CLOSED_DIRECT_ID.slice(0, 8)}`,
+					});
+					const frame = await pressControl(setup, "confirm-action", {
+						shows: "deleted; backups may retain data",
+					});
 					expect(messageRowOf(frame)).toContain(
 						`Consultation ${CLOSED_DIRECT_ID.slice(0, 8)} deleted; backups may retain data`,
 					);
@@ -1732,9 +1676,7 @@ describe("Consultation close and cleanup through the UI", () => {
 						detailPaneText(f).includes("State: working"),
 					);
 					// The live Agent asks first: the confirmation stands open.
-					await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
-						f.includes("Close Consultation"),
-					);
+					await guideKey(setup, "consultation-close", "Delete", { opens: "Close Consultation" });
 					// A refresh finds the Agent gone while the dialog is open, so
 					// neither close branch draws any more and the panel must let go
 					// of the keys it took.
@@ -1742,16 +1684,14 @@ describe("Consultation close and cleanup through the UI", () => {
 					// The release names its reason on the Message line: the record
 					// moved out of the states the panel draws, so the panel stood
 					// down instead of holding keys with nothing to show.
-					const released = await awaitFrame(
-						setup,
-						(f) =>
-							messageRowOf(f).includes("the Consultation moved to missing; the close panel closed"),
-						"the release reason on the Message line",
+					const released = await frameUntil(setup, "the release reason on the Message line", (f) =>
+						messageRowOf(f).includes("the Consultation moved to missing; the close panel closed"),
 					);
 					expect(detailPaneText(released)).toContain("State: missing");
 					// A missing Consultation closes directly: the key reaches the
 					// section, so no invisible panel was holding it.
-					await press(setup, "delete", "the direct close after the panel let go", (f) =>
+					await guideKey(setup, "consultation-close", "Delete", { quiet: true });
+					await frameUntil(setup, "the direct close after the panel let go", (f) =>
 						messageRowOf(f).includes(`${gone8} closed`),
 					);
 					expect(state.consultationRecord.consultation(CONFIRM_GONE_ID)?.state).toBe("closed");
@@ -1791,7 +1731,7 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					// list stays visible beside the detail.
 					expect(frame).toContain("┌─❯ Consultations");
 					expect(frameText(frame)).toContain("State: working");
-					const crossed = await crossToTickets(setup);
+					const crossed = await crossCursor(setup, "tickets");
 					// The shared detail pane follows the cursor to the Ticket side.
 					expect(frameText(crossed)).toContain("no ticket selected");
 					expect(crossed).toContain("┌─❯ Tickets");
@@ -1818,10 +1758,8 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 			await withApp(
 				async (setup) => {
 					// The ticket view never shows Consultation content.
-					const tickets = await awaitFrame(
-						setup,
-						(f) => f.includes("no ticket sources configured"),
-						"the ticket view",
+					const tickets = await frameUntil(setup, "the ticket view", (f) =>
+						f.includes("no ticket sources configured"),
 					);
 					expect(frameText(tickets)).not.toContain("secret output");
 					// The closed Consultation is hidden from the open history by default.
@@ -1829,20 +1767,14 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 						f.includes("no open Consultations"),
 					);
 					// The closed history is reachable from the history cycle.
-					await press(setup, "f", "the closed history filter", (f) => f.includes("State: closed"));
-					const detail = await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes("secret output"),
-						"the captured history",
+					await pressControl(setup, "history", { shows: "State: closed" });
+					const detail = await frameUntil(setup, "the captured history", (f) =>
+						detailPaneText(f).includes("secret output"),
 					);
 					expect(detailPaneText(detail)).toContain("Input 2026-09-01 10:00: review auth");
 					// Delete removes the local history.
-					await openConsultationPanel(setup, "delete", "the delete panel", (f) =>
-						f.includes("Delete Consultation"),
-					);
-					await pressEnter(setup, "the empty closed history", (f) =>
-						f.includes("no closed Consultations"),
-					);
+					await guideKey(setup, "consultation-delete", "Delete", { opens: "Delete Consultation" });
+					await pressControl(setup, "confirm-action", { shows: "no closed Consultations" });
 					expect(state.consultationRecord.consultation(CLOSED_ID)).toBeUndefined();
 				},
 				{ width: WIDTH, height: 32, plane: planeRecord },
@@ -1880,32 +1812,26 @@ describe("Consultation attention through the UI", () => {
 						f.includes("State: working"),
 					);
 					// One observation cycle already ran and saw the Agent working.
-					await awaitFrame(
-						setup,
-						(f) => f.includes("Agent status: working"),
-						"the observed Agent status",
+					await frameUntil(setup, "the observed Agent status", (f) =>
+						f.includes("Agent status: working"),
 					);
 					expect(bells.count()).toBe(0);
 					// The first newly settled turn rings exactly once.
 					runner.agentListJson = agentListJson([{ pane: paneId, status: "idle", seq: 1 }]);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("State: awaiting-response"),
-						"the settled turn",
+					await frameUntil(setup, "the settled turn", (f) =>
+						f.includes("State: awaiting-response"),
 					);
 					await sleep(150);
 					expect(bells.count()).toBe(1);
 					// The Agent resumes work: the external turn reopens the cycle.
 					runner.agentListJson = agentListJson([{ pane: paneId, status: "working", seq: 2 }]);
-					await awaitFrame(setup, (f) => f.includes("State: working"), "the reopened turn");
+					await frameUntil(setup, "the reopened turn", (f) => f.includes("State: working"));
 					await sleep(150);
 					expect(bells.count()).toBe(1);
 					// The second newly settled turn rings once more.
 					runner.agentListJson = agentListJson([{ pane: paneId, status: "idle", seq: 3 }]);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("State: awaiting-response"),
-						"the second settled turn",
+					await frameUntil(setup, "the second settled turn", (f) =>
+						f.includes("State: awaiting-response"),
 					);
 					await sleep(150);
 					expect(bells.count()).toBe(2);
@@ -1952,12 +1878,10 @@ describe("Consultation attention through the UI", () => {
 					expect(bells.count()).toBe(0);
 					// A later newly settled turn still rings.
 					runner.agentListJson = agentListJson([{ pane: paneId, status: "working", seq: 2 }]);
-					await awaitFrame(setup, (f) => f.includes("State: working"), "the reopened turn");
+					await frameUntil(setup, "the reopened turn", (f) => f.includes("State: working"));
 					runner.agentListJson = agentListJson([{ pane: paneId, status: "idle", seq: 3 }]);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("State: awaiting-response"),
-						"the second settled turn",
+					await frameUntil(setup, "the second settled turn", (f) =>
+						f.includes("State: awaiting-response"),
 					);
 					await sleep(150);
 					expect(bells.count()).toBe(1);
@@ -1997,7 +1921,7 @@ describe("Consultation attention through the UI", () => {
 					// Attention order puts the missing Agent above the failed
 					// launch, and the cursor starts on the Consultation list
 					// retained row: one step up is a boundary no-op.
-					await crossToConsultations(setup);
+					await crossCursor(setup, "consultations");
 					const first = await settle(setup);
 					expect(detailPaneText(first)).toContain("State: missing");
 					expect(frameText(first)).toContain("Warning: the Agent pane is gone");
@@ -2009,22 +1933,25 @@ describe("Consultation attention through the UI", () => {
 					state.consultationRecord.settleConsultationTurn(AWAITING_ID, null, "answer", {
 						settledStatus: "idle",
 					});
-					setup.mockInput.pressKey("r");
-					await awaitFrame(setup, (f) => f.includes("awaiting response: 1"), "the awaiting row");
+					await pressControl(setup, "refresh", { quiet: true });
+					await frameUntil(setup, "the awaiting row", (f) => f.includes("awaiting response: 1"));
 					// The Refresh re-projection keeps the cursor on its retained
 					// row; the list key returns it to the retained row of the
-					// re-sorted list, and one step up takes the new first row.
-					await press(
+					// re-sorted list, and one step up takes the new first row. The
+					// list's own bar names no way back to the list, so the key rides
+					// the rig's named guide key.
+					await guideKey(setup, "consultation-list", "h", { quiet: true });
+					await frameUntil(
 						setup,
-						"h",
 						"the Consultation list",
 						(f) =>
 							!f.includes("\u250c\u2500\u276f Tickets") &&
 							f.includes("\u250c\u2500\u276f Consultations"),
 					);
-					const selected = await press(setup, "k", "the awaiting detail", (f) =>
-						detailPaneText(f).includes("State: awaiting-response"),
-					);
+					const selected = await pressControl(setup, "move-list", {
+						via: "k",
+						shows: "State: awaiting-response",
+					});
 					expect(detailPaneText(selected)).toContain("State: awaiting-response");
 				},
 				{ width: WIDTH, height: 32, plane: planeRecord },
@@ -2056,10 +1983,8 @@ describe("Consultation attention through the UI", () => {
 				async (setup) => {
 					// Normal size, tickets view: the attention line is reserved
 					// and rendered.
-					const normal = await awaitFrame(
-						setup,
-						(f) => f.includes("awaiting response: 1"),
-						"the attention line in the tickets view",
+					const normal = await frameUntil(setup, "the attention line in the tickets view", (f) =>
+						f.includes("awaiting response: 1"),
 					);
 					expect(normal).toContain("recovery: 0");
 					// Below the minimum size the compact frame keeps exactly its
@@ -2090,14 +2015,12 @@ describe("Consultation live-worktree launch through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
+					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
 					await waitForCommands(
 						runner,
 						[
@@ -2170,16 +2093,12 @@ describe("Consultation live-worktree launch through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await press(setup, "c", "the launcher to open", (f) =>
-						f.includes("Consultation launcher"),
-					);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
+					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
 					await waitForCommands(
 						runner,
 						[`herdr agent start ${AGENT} --kind pi --pane pane-c1 -- --context 131072`],
@@ -2212,14 +2131,12 @@ describe("Consultation live-worktree launch through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
+					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
 					expect(consultation.paneId).toBe("pane-c1");
@@ -2340,24 +2257,20 @@ describe("Consultation live-worktree launch through the UI", () => {
 					// The pile view: the drawn rows hold only the Ticket the operator
 					// judged out, so the list the screen shows is not the list the
 					// machine reads.
-					const pile = await press(setup, "f", "the pile", (f) => f.includes("ignored: 1"));
+					const pile = await guideKey(setup, "ticket-filter", "f", { shows: "ignored: 1" });
 					// Exactly one in-flight row stands in the drawn list: the judged-out one.
 					const drawnRows = rowsOf(frameText(pile)).filter((row) =>
 						row.includes("[running] [implement]"),
 					);
 					expect(drawnRows).toHaveLength(1);
 					expect(drawnRows[0]).toContain("Watch age");
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					const panel = await awaitFrame(
-						setup,
-						(f) => f.includes("Live checkout conflict"),
-						"the live checkout conflict panel",
+					const panel = await frameUntil(setup, "the live checkout conflict panel", (f) =>
+						f.includes("Live checkout conflict"),
 					);
 					// Both Tickets are named, not a bare Herdr Agent: the identity the
 					// confirmation records is the same one the operator would read.
@@ -2484,11 +2397,11 @@ describe("Consultation live-worktree launch through the UI", () => {
 					planeRecord.settleFirstFetch();
 					// The pile view: the drawn rows hold only the judged-out Ticket, so
 					// acme/tools stands on no drawn row at all.
-					await press(setup, "f", "the pile", (f) => f.includes("ignored: 1"));
+					await guideKey(setup, "ticket-filter", "f", { shows: "ignored: 1" });
 					const validatedBefore = runner
 						.commands()
 						.filter((command) => command.includes("rev-parse")).length;
-					await openLauncher(setup);
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 					await tabUntilSlot(setup, "\u276f Repository");
 					// The selector's own walk: every choice it offers, collected as the
 					// cycle moves. A repository the catalog lost is never visited.
@@ -2500,7 +2413,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 					for (let step = 0; step < 3; step += 1) {
 						const shown = choiceOn(current);
 						if (shown !== undefined) seen.add(shown);
-						current = await pressArrow(setup, "right", "the next Repository", (f) => {
+						await pressControl(setup, "cycle-choice", { quiet: true });
+						current = await frameUntil(setup, "the next Repository", (f) => {
 							const next = choiceOn(f);
 							return next !== undefined && next !== shown;
 						});
@@ -2545,17 +2459,13 @@ describe("Consultation live-worktree launch through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					const panel = await awaitFrame(
-						setup,
-						(f) => f.includes("Live checkout conflict"),
-						"the live checkout conflict panel",
+					const panel = await frameUntil(setup, "the live checkout conflict panel", (f) =>
+						f.includes("Live checkout conflict"),
 					);
 					expect(frameText(panel)).toContain("Conflict: Herdr Agent pi (pane-herdr)");
 					expect(frameText(panel)).toContain("Confirm once to share this live checkout");
@@ -2564,9 +2474,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("opening");
 					// Confirm once: the launch proceeds and the override is recorded.
-					await pressEnter(setup, "the confirmed launch to reach working", (f) =>
-						f.includes("State: working"),
-					);
+					await pressControl(setup, "confirm-action", { shows: "State: working" });
 					await waitForCommands(
 						runner,
 						[
@@ -2635,20 +2543,14 @@ describe("Consultation live-worktree launch through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await press(setup, "c", "the launcher to open", (f) =>
-						f.includes("Consultation launcher"),
-					);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					const readsBeforeLaunch = resolveReads();
 					await launchConsultationDraft(setup, "review auth");
-					const refused = await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("consultation not queued"),
-						"the enqueue's refusal",
+					const refused = await frameUntil(setup, "the enqueue's refusal", (f) =>
+						messageRowOf(f).includes("consultation not queued"),
 					);
 					expect(messageRowOf(refused)).toContain('has no model "openai/gpt-4o"');
 					// No record and no queue item: the ask never entered the channel.
@@ -2688,14 +2590,12 @@ describe("Consultation live-worktree launch through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
+					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
 					expect(frameText(setup.captureCharFrame())).not.toContain("Live checkout conflict");
 					const [consultation] = state.consultationRecord.consultations("open");
 					expect(consultation.state).toBe("working");
@@ -2740,20 +2640,13 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					// The live Agent asks first: the confirmation names the Agent
 					// that is alive and the checkout the close keeps.
-					await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
-						f.includes("Close Consultation"),
-					);
+					await guideKey(setup, "consultation-close", "Delete", { opens: "Close Consultation" });
 					const dialog = await settle(setup);
 					expect(dialog).toContain("The Agent is working");
 					expect(dialog).toContain("Close stops the Agent. The checkout stays.");
 					expect(dialog).toContain("stop the Agent; the checkout stays");
 					// A cancel leaves the state unchanged.
-					await press(
-						setup,
-						"escape",
-						"the panel to close",
-						(f) => !f.includes("Close Consultation"),
-					);
+					await pressControl(setup, "cancel-action", { closes: "Close Consultation" });
 					expect(state.consultationRecord.consultation(LIVE_CLOSE_ID)?.state).toBe("working");
 				},
 				{ width: WIDTH, height: 32, plane: planeRecord, loopPolicy: { kind: "production" } },
@@ -2794,15 +2687,11 @@ describe("Consultation response gating by observed Agent status", () => {
 					);
 					// The observed blocked status re-points the hints, and the
 					// configured exit key is visible before any input is forwarded.
-					const bar = await awaitFrame(
-						setup,
-						(f) => frameText(f).includes("Enter Interact"),
-						"the blocked Agent hints",
+					const bar = await frameUntil(setup, "the blocked Agent hints", (f) =>
+						frameText(f).includes("Enter Interact"),
 					);
 					expect(frameText(bar)).toContain("Enter Interact");
-					await pressEnter(setup, "interaction mode, not the response editor", (f) =>
-						f.includes("F12 Exit interaction"),
-					);
+					await pressControl(setup, "consultation-interact", { shows: "F12 Exit interaction" });
 					// Agent interaction owns keyboard and mouse input. A header
 					// click must not move the cursor to the other section.
 					await mouseClick(setup, 10, 1);
@@ -2854,23 +2743,16 @@ describe("Consultation response gating by observed Agent status", () => {
 						f.includes("State: awaiting-response"),
 					);
 					// The gate is the observed status, not the last settled turn.
-					await awaitFrame(
-						setup,
-						(f) => frameText(f).includes("Enter Respond"),
-						"the idle Agent hints",
+					await frameUntil(setup, "the idle Agent hints", (f) =>
+						frameText(f).includes("Enter Respond"),
 					);
-					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
+					await pressControl(setup, "consultation-respond", { opens: "Response draft" });
 					// The response editor owns mouse input too. A pane click must not
 					// move focus behind it, which would change the next base mode when
 					// the editor closes.
 					await mouseClick(setup, 80, 5);
 					await settle(setup);
-					const afterEditor = await press(
-						setup,
-						"escape",
-						"the response editor to close",
-						(f) => !f.includes("Response draft"),
-					);
+					const afterEditor = await pressControl(setup, "close-form", { hides: "Response draft" });
 					expect(afterEditor).toContain("┌─❯ Consultations");
 				},
 				{
@@ -2909,14 +2791,12 @@ describe("Consultation response gating by observed Agent status", () => {
 					await toConsultations(setup, "the consultations view", (f) =>
 						f.includes("State: working"),
 					);
-					await pressEnter(setup, "interaction mode with its exit key", (f) =>
-						f.includes("F12 Exit interaction"),
-					);
+					await pressControl(setup, "consultation-interact", { shows: "F12 Exit interaction" });
 					const ansiReads = () =>
 						runner.commands().filter((c) => c.includes("--format ansi")).length;
 					// The mount read plus one 250 ms tick: the timer is in phase.
 					await waitFor(() => ansiReads() >= 2, "the first interval refresh");
-					setup.mockInput.pressKey("h");
+					await typeText(setup, "h");
 					await waitForCommands(runner, [`herdr pane send-text ${paneId} h`], "the forwarded key");
 					const sentAt = Date.now();
 					// The input must not wait for the next 250 ms tick: a new
@@ -2944,15 +2824,14 @@ const interactionExitCases = [
 		name: "ctrl+e",
 		config: "ctrl+e" as const,
 		label: "Ctrl+E",
-		send: (setup: Setup) => setup.mockInput.pressKey("e", { ctrl: true }),
 	},
 	{
 		name: "f13",
 		config: "f13" as const,
 		label: "F13",
-		// The mock helper exposes F1-F12 only; send Kitty's F13 code through
-		// the same renderer parser used by the production terminal.
-		send: (setup: Setup) => setup.mockInput.pressKey("\u001b[57376u"),
+		// The mock helper exposes F1-F12 only; the rig's key route sends
+		// Kitty's F13 code through the same renderer parser used by the
+		// production terminal.
 	},
 ] as const;
 for (const exitCase of interactionExitCases) {
@@ -2984,14 +2863,14 @@ for (const exitCase of interactionExitCases) {
 					await toConsultations(setup, "the Consultation section", (f) =>
 						f.includes("State: working"),
 					);
-					await pressEnter(setup, "Agent interaction mode", (f) =>
-						f.includes(`${exitCase.label} Exit interaction`),
-					);
-					exitCase.send(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("left Agent interaction mode"),
-						"the interaction exit",
+					await pressControl(setup, "consultation-interact", {
+						shows: `${exitCase.label} Exit interaction`,
+					});
+					// The exit key the bar names runs the catalogue's own exit control; the
+					// rig's key route sends the configured key.
+					await pressControl(setup, "interact-exit", { quiet: true });
+					await frameUntil(setup, "the interaction exit", (f) =>
+						f.includes("left Agent interaction mode"),
 					);
 					expect(runner.commands().join("\n")).not.toContain("send-text");
 				},
@@ -3041,33 +2920,29 @@ describe("The full Consultation operator flow", () => {
 			await withApp(
 				async (setup) => {
 					// Launch.
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
+					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
 					const id = state.consultationRecord.consultations("open")[0].id;
 					// The opening turn settles and rings.
 					runner.agentListJson = agentListJson([{ ...launchedAgent, status: "idle", seq: 1 }]);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("State: awaiting-response"),
-						"the settled opening turn",
+					await frameUntil(setup, "the settled opening turn", (f) =>
+						f.includes("State: awaiting-response"),
 					);
 					await sleep(150);
 					expect(bells.count()).toBe(1);
 					// a is plane-wide (issue #319, ADR 0111): it flips the mode
 					// even from the Consultation section.
-					setup.mockInput.pressKey("a");
+					await guideKey(setup, "auto-handoff", "a", { quiet: true });
 					expect((await settle(setup)).match(/○ auto/g)).not.toBeNull();
 					// The Agent is idle: Enter opens the response editor.
-					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
-					setup.mockInput.typeText("answer one");
+					await pressControl(setup, "consultation-respond", { opens: "Response draft" });
+					await typeText(setup, "answer one");
 					await sendResponseDraft(setup);
-					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
+					await frameUntil(setup, "the working state", (f) => f.includes("State: working"));
 					await waitForCommands(
 						runner,
 						[`herdr agent prompt ${AGENT} answer one`],
@@ -3075,19 +2950,15 @@ describe("The full Consultation operator flow", () => {
 					);
 					// The Agent goes blocked: the settled turn takes its status.
 					runner.agentListJson = agentListJson([{ ...launchedAgent, status: "blocked", seq: 2 }]);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("State: awaiting-response"),
-						"the blocked settled turn",
+					await frameUntil(setup, "the blocked settled turn", (f) =>
+						f.includes("State: awaiting-response"),
 					);
 					expect(state.consultationRecord.consultationTurns(id).at(-1)?.settledStatus).toBe(
 						"blocked",
 					);
 					// Enter now opens interaction, not the response editor.
-					await pressEnter(setup, "the blocked interaction mode", (f) =>
-						f.includes("F12 Exit interaction"),
-					);
-					setup.mockInput.pressKey("h");
+					await pressControl(setup, "consultation-interact", { shows: "F12 Exit interaction" });
+					await typeText(setup, "h");
 					await waitForCommands(runner, [`herdr pane send-text pane-c1 h`], "the forwarded key");
 					await pressF12(setup, "the exit from interaction mode", (f) =>
 						f.includes("left Agent interaction mode"),
@@ -3105,26 +2976,20 @@ describe("The full Consultation operator flow", () => {
 					expect(bells.count()).toBe(3);
 					// Close stops the live Agent, so the confirmation asks first;
 					// the confirm takes down the owned workspace.
-					await openConsultationPanel(setup, "delete", "the close confirmation", (f) =>
-						f.includes("Close Consultation"),
-					);
+					await guideKey(setup, "consultation-close", "Delete", { opens: "Close Consultation" });
 					// The awaiting-response state names the Agent that answered and
 					// now waits, and the body keeps the worktree and branch.
 					const dialog = await settle(setup);
 					expect(dialog).toContain("The Agent has answered and is waiting for your reply");
 					expect(dialog).toContain("Close stops the Agent. The worktree and branch stay.");
 					expect(dialog).toContain("stop the Agent; the work stays");
-					await confirmPanel(setup, "the closing status", (f) =>
-						f.includes(`${id.slice(0, 8)} closed`),
-					);
+					await pressControl(setup, "confirm-action", { shows: `${id.slice(0, 8)} closed` });
 					await waitForCommands(runner, ["herdr workspace close ws-new"], "the workspace cleanup");
 					expect(state.consultationRecord.consultation(id)?.state).toBe("closed");
 					// The captured history keeps every turn in order.
-					await press(setup, "f", "the closed history", (f) => f.includes("State: closed"));
-					const detail = await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes("Captured history:"),
-						"the captured history",
+					await pressControl(setup, "history", { shows: "State: closed" });
+					const detail = await frameUntil(setup, "the captured history", (f) =>
+						detailPaneText(f).includes("Captured history:"),
 					);
 					const history = detailPaneText(detail);
 					expect(history).toContain("review auth");
@@ -3172,17 +3037,13 @@ describe("The full Consultation operator flow", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					const frame = await awaitFrame(
-						setup,
-						(f) => f.includes("State: working"),
-						"the launched Consultation working",
+					const frame = await frameUntil(setup, "the launched Consultation working", (f) =>
+						f.includes("State: working"),
 					);
 					expect(detailPaneText(frame)).toContain("State: working");
 					expect(detailPaneText(frame)).not.toContain("State: missing");
@@ -3243,43 +3104,37 @@ describe("The full Consultation operator flow", () => {
 					// empty list, so the manual refresh below has an idle
 					// source to start.
 					source.settle(outcome);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("no tickets match the configured sources"),
-						"the answered mount fetch",
+					await frameUntil(setup, "the answered mount fetch", (f) =>
+						f.includes("no tickets match the configured sources"),
 					);
 					await toConsultations(setup, "the Consultation section", (f) =>
 						f.includes("no open Consultations"),
 					);
-					await openLauncher(setup);
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 					await launchConsultationDraft(setup, "review auth");
 					// The launch proceeds: the Consultation holds the shared
 					// detail, which stays up while the refresh runs beside it.
-					await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes("State: opening"),
-						"the Consultation detail",
+					await frameUntil(setup, "the Consultation detail", (f) =>
+						detailPaneText(f).includes("State: opening"),
 					);
 					// The refresh runs from the Ticket list: on the
 					// Consultation list, the opening row would take `r` as
 					// its recovery key. The launch command stays in flight
 					// on its own progress owner.
-					await crossToTickets(setup);
-					setup.mockInput.pressKey("r");
-					const refreshing = await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("refreshing 1 sources"),
-						"the refresh progress",
+					await crossCursor(setup, "tickets");
+					await pressControl(setup, "refresh", { quiet: true });
+					const refreshing = await frameUntil(setup, "the refresh progress", (f) =>
+						messageRowOf(f).includes("refreshing 1 sources"),
 					);
 					expect(messageRowOf(refreshing)).toContain("refreshing 1 sources");
 					source.settle(outcome);
 					// Its settle must not leave the line with the refresh
 					// progress: the line returns to the launch progress or
 					// goes blank.
-					const returned = await awaitFrame(
+					const returned = await frameUntil(
 						setup,
-						(f) => !messageRowOf(f).includes("refreshing"),
 						"the line without the refresh progress",
+						(f) => !messageRowOf(f).includes("refreshing"),
 					);
 					expect(messageRowOf(returned)).not.toContain("refreshing");
 				},
@@ -3345,16 +3200,12 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 					expect(actionBarRowOf(setup.captureCharFrame())).toContain("g Goto");
 					// The observation settles the turn on its own; the Session
 					// view stays the body while the Consultation rests.
-					await awaitFrame(
-						setup,
-						(f) => f.includes("State: awaiting-response"),
-						"the settled turn",
+					await frameUntil(setup, "the settled turn", (f) =>
+						f.includes("State: awaiting-response"),
 					);
 					// g focuses the pane and reports on the Message line: a
 					// navigation, not a Consultation change.
-					await press(setup, "g", "the focus notice", (f) =>
-						messageRowOf(f).includes("focused the Agent pane"),
-					);
+					await pressControl(setup, "consultation-goto", { shows: "focused the Agent pane" });
 					expect(runner.commands()).toContain(`herdr agent focus ${paneId}`);
 					expect(state.consultationRecord.consultation(WORKING_ID)?.state).toBe(
 						"awaiting-response",
@@ -3407,9 +3258,7 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 					// result, never as a warning. Herdr 0.9 keeps each client's
 					// own view, so the line names the workspace the operator
 					// switches to.
-					const frame = await press(setup, "g", "the focus confirmation", (f) =>
-						messageRowOf(f).includes("in workspace"),
-					);
+					const frame = await pressControl(setup, "consultation-goto", { shows: "in workspace" });
 					expect(messageRowOf(frame)).toContain(
 						`Info: focused the Agent pane for Consultation ${short} in workspace ${label}`,
 					);
@@ -3454,11 +3303,9 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 					await toConsultations(setup, "the consultations view", (f) =>
 						f.includes("no open Consultations"),
 					);
-					await press(setup, "f", "the closed history filter", (f) => f.includes("State: closed"));
-					await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes("Session view:"),
-						"the record the closed detail shows",
+					await pressControl(setup, "history", { shows: "State: closed" });
+					await frameUntil(setup, "the record the closed detail shows", (f) =>
+						detailPaneText(f).includes("Session view:"),
 					);
 					const detail = detailPaneText(setup.captureCharFrame());
 					expect(detail).toContain("❯ review auth");
@@ -3467,14 +3314,12 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 					// record it read, and g answers its reason on the Message
 					// line instead of focusing a pane herdr no longer lists.
 					runner.agentListJson = agentListJson([]);
-					await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes("Agent status: unknown"),
-						"the poll without the pane",
+					await frameUntil(setup, "the poll without the pane", (f) =>
+						detailPaneText(f).includes("Agent status: unknown"),
 					);
-					await press(setup, "g", "the Goto reason", (f) =>
-						messageRowOf(f).includes("the Agent's pane is not alive in the last poll"),
-					);
+					await pressControl(setup, "consultation-goto", {
+						refuses: "the Agent's pane is not alive in the last poll",
+					});
 					expect(runner.commands()).not.toContain(`herdr agent focus ${paneId}`);
 				},
 				{
@@ -3520,17 +3365,13 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					const frame = await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("consultation queued"),
-						"the queued notice",
+					const frame = await frameUntil(setup, "the queued notice", (f) =>
+						messageRowOf(f).includes("consultation queued"),
 					);
 					// The record is durable in `queued` state: the launcher
 					// closed it, the Consultation list shows it, and the
@@ -3606,20 +3447,16 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
 					// The pickup pass runs in the submit itself and takes the free
 					// seat: the record leaves `queued` on the key and settles
 					// `working`, the way a direct start would.
-					await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes("State: working"),
-						"the picked-up Consultation working",
+					await frameUntil(setup, "the picked-up Consultation working", (f) =>
+						detailPaneText(f).includes("State: working"),
 					);
 					// The pickup ran the launch, the way a direct start does.
 					await waitForCommands(
@@ -3687,17 +3524,13 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					const frame = await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("consultation queued"),
-						"the queued notice",
+					const frame = await frameUntil(setup, "the queued notice", (f) =>
+						messageRowOf(f).includes("consultation queued"),
 					);
 					const queued = state.consultationRecord
 						.consultations("all")
@@ -3753,17 +3586,13 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("consultation queued"),
-						"the queued notice",
+					await frameUntil(setup, "the queued notice", (f) =>
+						messageRowOf(f).includes("consultation queued"),
 					);
 					const queued = state.consultationRecord
 						.consultations("all")
@@ -3778,9 +3607,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// takes the Work queue item out without confirmation. The record
 					// stays `unscheduled` behind the row it loses, and nothing
 					// cleans up: no panel, no pane or workspace command.
-					await press(setup, "delete", "the removal notice", (f) =>
-						messageRowOf(f).includes(`${gone8}: removed from the queue`),
-					);
+					await guideKey(setup, "consultation-delete", "Delete", {
+						shows: `${gone8}: removed from the queue`,
+					});
 					expect(messageRowOf(setup.captureCharFrame())).toContain(
 						`consultation ${gone8}: removed from the queue; the record is unscheduled`,
 					);
@@ -3818,17 +3647,13 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("consultation queued"),
-						"the queued notice",
+					await frameUntil(setup, "the queued notice", (f) =>
+						messageRowOf(f).includes("consultation queued"),
 					);
 					const queued = state.consultationRecord
 						.consultations("all")
@@ -3846,10 +3671,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// The pickup crosses to the Consultation operations, the
 					// start runs the opening pipeline, and the detail settles
 					// on the record's new state.
-					await awaitFrame(
-						setup,
-						(f) => detailPaneText(f).includes("State: working"),
-						"the picked-up Consultation working",
+					await frameUntil(setup, "the picked-up Consultation working", (f) =>
+						detailPaneText(f).includes("State: working"),
 					);
 					await waitForCommands(
 						runner,
@@ -3901,17 +3724,13 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
+					await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+					await frameUntil(setup, "the verified Repository option", (f) =>
+						f.includes("acme/factory"),
 					);
 					await launchConsultationDraft(setup, "review auth");
-					await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("consultation queued"),
-						"the queued notice",
+					await frameUntil(setup, "the queued notice", (f) =>
+						messageRowOf(f).includes("consultation queued"),
 					);
 					const queued = state.consultationRecord
 						.consultations("all")
@@ -3924,18 +3743,14 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// so it rests collapsed, and Enter on the queued row jumps to
 					// its item and expands the section with it (ADR 0049).
 					expect(setup.captureCharFrame()).toContain("● manual 1/1");
-					await press(setup, "return", "the cursor in the Work queue", (f) =>
-						f.includes("┌─❯ Work queue"),
-					);
+					await pressControl(setup, "queue-jump", { moved: "queue" });
 					// Enter force-dispatches the item over the full cap: the line
 					// names the cap, the seat count stands over the limit, the item
 					// leaves the queue, and the start runs the real external steps.
-					await press(setup, "return", "the force-dispatch message", (f) =>
-						f.includes("force-dispatched"),
-					);
+					await pressControl(setup, "queue-force-dispatch", { shows: "force-dispatched" });
 					// The line names the cap, and the seat count stands over the
 					// limit: the seed's seat plus the start the force-dispatch took.
-					await awaitFrame(setup, (f) => f.includes("● manual 2/1"), "the seat over the cap");
+					await frameUntil(setup, "the seat over the cap", (f) => f.includes("● manual 2/1"));
 					expect(messageRowOf(setup.captureCharFrame())).toContain(
 						`force-dispatched Consultation ${id8} over the Parallel limit`,
 					);
@@ -3973,31 +3788,27 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 	 * Consultation section, where the record keeps standing.
 	 */
 	async function unscheduleThroughTheQueue(setup: Setup, state: FactoryState): Promise<string> {
-		await openLauncher(setup);
-		await awaitFrame(setup, (f) => f.includes("acme/factory"), "the verified Repository option");
+		await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
+		await frameUntil(setup, "the verified Repository option", (f) => f.includes("acme/factory"));
 		await launchConsultationDraft(setup, "review auth");
-		await awaitFrame(
-			setup,
-			(f) => messageRowOf(f).includes("consultation queued"),
-			"the queued notice",
+		await frameUntil(setup, "the queued notice", (f) =>
+			messageRowOf(f).includes("consultation queued"),
 		);
 		const queued = state.consultationRecord.consultations("all").find((c) => c.state === "queued");
 		if (queued === undefined) throw new Error("the queued Consultation is not recorded");
 		// The frame holds no room for the Work section's rows, so it rests
 		// collapsed, and Enter on the queued row jumps to its item and
 		// expands the section with it (ADR 0049).
-		await press(setup, "return", "the cursor in the Work queue", (f) =>
-			f.includes("┌─❯ Work queue"),
-		);
+		await pressControl(setup, "queue-jump", { moved: "queue" });
 		// The item's row stands under the kind word, with the record's identity.
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("consultation");
 		expect(frame).toContain(queued.id.slice(0, 8));
 		// Delete removes the item, not the ask: the record moves to
 		// `unscheduled`, and the Message line says both.
-		const removed = await press(setup, "delete", "the removal notice", (f) =>
-			f.includes("removed from the queue"),
-		);
+		const removed = await guideKey(setup, "queue-remove", "Delete", {
+			shows: "removed from the queue",
+		});
 		expect(messageRowOf(removed)).toContain(
 			`consultation ${queued.id.slice(0, 8)}: removed from the queue; the record is unscheduled`,
 		);
@@ -4005,7 +3816,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		expect(state.consultationRecord.consultation(queued.id)?.state).toBe("unscheduled");
 		// The record keeps standing in the Consultation section: the row
 		// carries its state, its type, and its repository.
-		await crossToConsultations(setup);
+		await crossCursor(setup, "consultations");
 		const section = setup.captureCharFrame();
 		expect(section).toContain("unscheduled");
 		expect(section).toContain("grill");
@@ -4015,7 +3826,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		// unscheduled row, the one every test works on.
 		for (let step = 0; step < 10; step += 1) {
 			if (detailPaneText(setup.captureCharFrame()).includes("State: unscheduled")) break;
-			setup.mockInput.pressKey("j");
+			await pressControl(setup, "move-list", { via: "j", quiet: true });
 			await settle(setup, 200);
 		}
 		expect(detailPaneText(setup.captureCharFrame())).toContain("State: unscheduled");
@@ -4072,9 +3883,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					const id = await unscheduleThroughTheQueue(setup, state);
 					// `s` schedules the record back: it returns to `queued` with
 					// its item at the queue's tail, and the line names the place.
-					const scheduled = await press(setup, "s", "the schedule notice", (f) =>
-						f.includes(`Consultation ${id.slice(0, 8)} scheduled`),
-					);
+					const scheduled = await guideKey(setup, "consultation-schedule", "s", {
+						shows: `Consultation ${id.slice(0, 8)} scheduled`,
+					});
 					expect(messageRowOf(scheduled)).toContain(
 						`Consultation ${id.slice(0, 8)} scheduled: it waits at the end of the Work queue`,
 					);
@@ -4085,9 +3896,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// section still stands expanded from the walk, so the
 					// cursor's cross down from the section's last row lands on
 					// its item.
-					const inQueue = await press(setup, "j", "the cursor in the Work queue", (f) =>
-						f.includes("┌─❯ Work queue"),
-					);
+					const inQueue = await pressControl(setup, "move-list", { via: "j", moved: "queue" });
 					expect(inQueue).toContain("consultation");
 					expect(inQueue).toContain(id.slice(0, 8));
 					// The walk back crosses up out of the queue, into the
@@ -4098,7 +3907,7 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					for (let step = 0; step < 10; step += 1) {
 						const frame = setup.captureCharFrame();
 						if (frame.includes("┌─❯ Consultations") && !frame.includes("┌─❯ Work queue")) break;
-						setup.mockInput.pressKey("k");
+						await pressControl(setup, "move-list", { via: "k", quiet: true });
 						await settle(setup, 200);
 					}
 					const backFrame = setup.captureCharFrame();
@@ -4107,9 +3916,9 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// A second `s` says the record already waits: the schedule
 					// refuses in the section's words, and the record stands where
 					// it stands.
-					await press(setup, "s", "the already-waiting refusal", (f) =>
-						f.includes("already waits in the Work queue"),
-					);
+					await guideKey(setup, "consultation-schedule", "s", {
+						refuses: "already waits in the Work queue",
+					});
 					expect(state.consultationRecord.consultation(id)?.state).toBe("queued");
 				},
 				{
@@ -4145,15 +3954,15 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// The cap stands full from the boot: the seed's seat is the
 					// line, and Enter starts the record over it.
 					expect(setup.captureCharFrame()).toContain("● manual 1/1");
-					const started = await press(setup, "return", "the start-now notice", (f) =>
-						f.includes("starting Consultation"),
-					);
+					const started = await pressControl(setup, "consultation-start-now", {
+						shows: "starting Consultation",
+					});
 					expect(messageRowOf(started)).toContain(
 						`starting Consultation ${id.slice(0, 8)} over the Parallel limit`,
 					);
 					// The seat count stands over the limit: the seed's seat plus
 					// the seat the start took over the cap.
-					await awaitFrame(setup, (f) => f.includes("● manual 2/1"), "the seat over the cap");
+					await frameUntil(setup, "the seat over the cap", (f) => f.includes("● manual 2/1"));
 					await waitForCommands(
 						runner,
 						[
@@ -4203,20 +4012,16 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					// The write lands in the state the app reads live but re-renders
 					// nothing: step the cursor up to the seed's row and back, so the
 					// mode cell re-reads the freed seat count before the key runs.
-					await press(setup, "k", "the mode cell on the freed seat", (f) =>
-						f.includes("● manual 0/1"),
-					);
-					await press(setup, "j", "the cursor back on the record", (f) =>
-						detailPaneText(f).includes("State: unscheduled"),
-					);
-					const started = await press(setup, "return", "the start-now notice", (f) =>
-						f.includes("starting Consultation"),
-					);
+					await pressControl(setup, "move-list", { via: "k", shows: "● manual 0/1" });
+					await pressControl(setup, "move-list", { via: "j", shows: "State: unscheduled" });
+					const started = await pressControl(setup, "consultation-start-now", {
+						shows: "starting Consultation",
+					});
 					const line = messageRowOf(started);
 					expect(line).toContain(`starting Consultation ${id.slice(0, 8)}`);
 					expect(line).not.toContain("over the Parallel limit");
 					// The start took the only free seat.
-					await awaitFrame(setup, (f) => f.includes("● manual 1/1"), "the start's seat");
+					await frameUntil(setup, "the start's seat", (f) => f.includes("● manual 1/1"));
 					await waitForCommands(
 						runner,
 						[
@@ -4257,12 +4062,12 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					const id = await unscheduleThroughTheQueue(setup, state);
 					// The Delete key asks first: the removal takes the record
 					// and its history, and nothing else can run behind it.
-					await openConsultationPanel(setup, "delete", "the delete confirmation", (f) =>
-						f.includes(`Delete Consultation ${id.slice(0, 8)}`),
-					);
-					const frame = await confirmPanel(setup, "the delete", (f) =>
-						f.includes("deleted; backups may retain data"),
-					);
+					await guideKey(setup, "consultation-delete", "Delete", {
+						opens: `Delete Consultation ${id.slice(0, 8)}`,
+					});
+					const frame = await pressControl(setup, "confirm-action", {
+						shows: "deleted; backups may retain data",
+					});
 					expect(messageRowOf(frame)).toContain(
 						`Consultation ${id.slice(0, 8)} deleted; backups may retain data`,
 					);

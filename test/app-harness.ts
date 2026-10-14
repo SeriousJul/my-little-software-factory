@@ -1858,6 +1858,13 @@ function titledSurfaceModes(frame: string, barLabels: string[]): InteractionMode
 		return barLabels.includes("Toggle") || barLabels.includes("Select")
 			? ["repository-select"]
 			: ["action-panel"];
+	// The response editor is the shared form in the consultations view's own
+	// column: the section boxes stay up behind it, and the detail beside it
+	// can show the saved draft too. The read therefore stands on the form
+	// bar's Field hint, which no section bar paints, beside the editor's
+	// own Draft label.
+	if (frame.includes("Response draft") && barLabels.includes("Field"))
+		return ["form-field", "form-selector", "form-action"];
 	// The launcher is the one shared form surface: its frame stands on the
 	// form's three slot modes at once, the slot the focus holds naming one.
 	if (frame.includes("┌─Consultation launcher"))
@@ -1870,7 +1877,10 @@ function sectionSurfaceModes(frame: string, barLabels: string[]): InteractionMod
 	// The section boxes and the detail panes carry the focus marker on the
 	// pane the cursor holds.
 	if (frame.includes("┌─❯ Tickets")) return ["ticket-list"];
-	if (frame.includes("┌─❯ Consultations")) return ["consultation-list"];
+	if (frame.includes("┌─❯ Consultations"))
+		return barLabels.some((label) => label.endsWith("Exit interaction"))
+			? ["consultation-list", "consultation-interaction"]
+			: ["consultation-list"];
 	if (frame.includes("┌─❯ Work queue")) return ["work-queue-list"];
 	if (frame.includes("┌─❯ Detail")) return ["ticket-detail"];
 	if (frame.includes("┌─❯ Agent view") || frame.includes("┌─❯ Session view"))
@@ -2333,8 +2343,23 @@ function sendKey(setup: Setup, token: string): void {
 		input.pressArrow(arrow);
 		return;
 	}
-	if (/^F\d{1,2}$/.test(token)) {
-		input.pressKey(token);
+	const fmatch = /^F(\d{1,2})$/.exec(token);
+	if (fmatch !== null) {
+		const fnum = Number(fmatch[1]);
+		if (fnum <= 12) {
+			input.pressKey(token);
+			return;
+		}
+		// Beyond the terminal's F1-F12 the mock's key names end: the renderer
+		// parses the Kitty code the key stands for, the way the operator's
+		// terminal sends it.
+		input.pressKey(`\u001b[${57376 + (fnum - 13)}u`);
+		return;
+	}
+	if (/^Ctrl\+[A-Z]$/.test(token)) {
+		// The configured interaction exit key: the base letter out with the
+		// modifier, the way the terminal sends it.
+		input.pressKey(token.slice(5).toLowerCase(), { ctrl: true });
 		return;
 	}
 	switch (token) {

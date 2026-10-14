@@ -582,8 +582,28 @@ describe("the frame rig owns a painted hint one control paints (issue #387)", ()
 			"form-selector",
 			"form-action",
 		]);
+		// The response editor stands in the consultations column beside its
+		// section boxes, and the detail beside it can show the saved draft: the
+		// read names the form through the form bar's Field hint, and the same
+		// draft line on a section bar's frame still names the section.
+		expect(surfaceModes(titled("Response draft", "Tab Field  Esc Close  F1 Help"))).toEqual([
+			"form-field",
+			"form-selector",
+			"form-action",
+		]);
+		expect(
+			surfaceModes(
+				"\u250c\u2500\u276f Consultations\nResponse draft: review auth\n\u2191\u2193/jk Move  f History  s Schedule  Enter Interact  Delete Close",
+			),
+		).toEqual(["consultation-list"]);
 		expect(surfaceModes("┌─❯ Tickets\n↑↓/jk Move")).toEqual(["ticket-list"]);
 		expect(surfaceModes("┌─❯ Consultations\n↑↓/jk Move")).toEqual(["consultation-list"]);
+		// The interaction mode keeps the section's focus marker: the bar's exit
+		// hint names the mode the read stands on.
+		expect(surfaceModes("┌─❯ Consultations\nF12 Exit interaction")).toEqual([
+			"consultation-list",
+			"consultation-interaction",
+		]);
 		expect(surfaceModes("┌─❯ Work queue\n↑↓/jk Move")).toEqual(["work-queue-list"]);
 		expect(surfaceModes("┌─❯ Detail\n↑↓/jk Scroll  ←/h Tickets")).toEqual(["ticket-detail"]);
 		expect(
@@ -754,11 +774,15 @@ describe("the frame rig owns a painted hint one control paints (issue #387)", ()
 				await toSection(setup, "consultation");
 				await pressControl(setup, "detail", { quiet: true });
 				await pressControl(setup, "consultation-respond", { quiet: true });
-				// The editor stands on no marker the rig names: the surface read
-				// is permissive, the last unnamed surface the plane paints. The
-				// form's painted hints each resolve to one owner, so no press on
-				// this frame reaches the co-owner guard.
-				expect(surfaceModes(setup.captureCharFrame())).toBeNull();
+				// The editor names itself: its Draft label beside the form bar's
+				// Field hint, which no section bar paints. The form's painted
+				// hints each resolve to one owner, so no press on this frame
+				// reaches the co-owner guard.
+				expect(surfaceModes(setup.captureCharFrame())).toEqual([
+					"form-field",
+					"form-selector",
+					"form-action",
+				]);
 				const owners = barHintOwners(setup);
 				expect(owners.get("Tab Field")).toEqual(["move-field"]);
 				expect(owners.get("Esc Close")).toEqual(["close-form"]);
