@@ -25,7 +25,6 @@ import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import {
 	type AppSetup,
-	type BaseKeyHandlers,
 	frameText,
 	frameUntil,
 	guideKey,
@@ -279,33 +278,6 @@ function ticketRow(frame: string, title = DEFAULT_TICKET_TITLE): string {
  */
 const inFlightFace = (row: string): boolean =>
 	startingFaceOf(row) !== null || row.includes("[running]");
-
-/**
- * Wait for a route's ask to end the Live view: the list drawn again, and the
- * keys the closed surfaces held given back.
- *
- * The fallback is a transition of its own. The confirm's own frame can still
- * hold the Live view, streaming the new pane, with the start's line already on
- * the Message line, and that frame is exactly as quiet as the one after the
- * swap, so no `settle` result carries the assertion (issue #304). The wait takes
- * the list's own box back on screen - the Live view paints the terminal alone,
- * so the border's return is the fallback drawn - beside the absence the case
- * then narrows, so a frame with nothing drawn cannot pass it either.
- *
- * The keys go next. The frame falls back before the closing surface's effect
- * cleanup removes its handler, and a press sent in that window reaches the stale
- * handler, which acts with the closed surface's meaning: the plane carries that
- * race as issue #317, and the walk's next press stands on the release.
- */
-async function awaitFallbackToTheList(setup: AppSetup, base: BaseKeyHandlers): Promise<string> {
-	const listFrame = await frameUntil(
-		setup,
-		"the Live view to fall back to the list",
-		(f) => f.includes("┌─❯ Tickets") && !f.includes("Live:"),
-	);
-	await releaseKeys(setup, base, "the Live view to release the keys");
-	return listFrame;
-}
 
 describe("the Live view on the ticket list", () => {
 	test("g on an open ticket refuses with the Consultation section's words", async () => {
@@ -741,33 +713,6 @@ async function closeSurface(
 	return await frameUntil(setup, what, predicate);
 }
 
-/**
- * Boot the app on the seeded plane, with the route's checkout stood and
- * the plane's runner listing its two panes: the standing the route
- * fallback tests ask for. The record comes back to the test.
- */
-async function routeFallbackApp(
-	fn: (setup: AppSetup, planeRecord: Plane) => Promise<void>,
-): Promise<Plane> {
-	const record = await seededPlane();
-	stubCheckoutInto(record.fakeRunner, record.home);
-	stubRouteStanding(record.fakeRunner, join(record.home, "src", "factory"));
-	const list = (a: string, b: string) => twoPaneAgentList(a, b);
-	record.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
-	await withApp(
-		async (setup) => {
-			await fn(setup, record);
-		},
-		{
-			width: WIDTH,
-			height: HEIGHT,
-			plane: record,
-			loopPolicy: { kind: "polled", intervalMs: 20 },
-		},
-	);
-	return record;
-}
-
 describe("the Live view against a running factory", () => {
 	test("goto from the Live view focuses the pane and records no decision", async () => {
 		const planeRecord = await seededPlane();
@@ -1071,133 +1016,92 @@ describe("the Live view against a running factory", () => {
 		planeRecord.state.close();
 	});
 
-	test("a routed handoff from the decision sub-mode falls back to the list, and the Live view follows the new pane (ADR 0072)", async () => {
-		const planeRecord = await routeFallbackApp(async (setup, planeRecord) => {
-			const list = (a: string, b: string) => twoPaneAgentList(a, b);
-			// The settled agent's pane and the new agent's pane, both live, so
-			// the stream can move to the new pane the moment the handoff settles.
-			planeRecord.settleFirstFetch();
-			await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
-			// The base mode's key handlers, taken at rest on the list before this
-			// walk mounts anything, which is the only place a base means something:
-			// the release wait at the fallback refuses a snapshot that never saw a
-			// surface take the keys.
-			const baseHandlers = keyBase(setup);
-			await pressControl(setup, "live-view", { quiet: true });
-			await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
-			await waitFor(setup, { shows: "the implementer is finishing" });
-			// The agent reports done: the same box turns into the decision,
-			// the border re-titled in place.
-			planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
-			await frameUntil(
-				setup,
-				"the decision",
-				(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
-			);
-			// Close is the default; the workflow handoff is the last row.
-			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await waitFor(setup, { shows: "❯ Goto" });
-			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await waitFor(setup, { shows: "❯ Handoff: review" });
-			// The confirm ended the ticket's cycle in the same write that
-			// landed the decision (ADR 0072): the screen reads the list, the
-			// start runs in the new tab, and the row stands with the start's
-			// face. The frame is the decision modal, whose bar documents the
-			// modal's own controls: Enter runs the selected row's action, routed
-			// by the plane to that row, so the key goes out as the catalogue's
-			// escape.
-			await guideKey(setup, "handoff", "Enter", { quiet: true });
-			await frameUntil(
-				setup,
-				"the confirmed route",
-				(f) => f.includes(DEFAULT_TICKET_TITLE) && !f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`),
-			);
-			const listFrame = await awaitFallbackToTheList(setup, baseHandlers);
-			expect(listFrame).not.toContain(`Live: ${DEFAULT_TICKET_TITLE}`);
-			expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
-				"handed-off",
-			);
-			// No Ticket-state line stands here. The fallback lands at the ask,
-			// before the queue's pickup claims the next cycle, so the state the
-			// frame is drawn over is a window (`open`, then `handed-off`, then
-			// `running`) and not a fact. What is durable is the decision above and
-			// the new pane the walk streams next.
-			// The Live view reopens on the row and streams the new pane: the
-			// stream follows the handoff, and no focus, which is the Goto's
-			// alone.
-			await liveEnter(
-				setup,
-				"the Live view again",
-				(f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`) && f.includes("the reviewer is on it"),
-			);
-			expect(planeRecord.fakeRunner.commands()).toContain(READ_COMMAND("pane-9"));
-			expect(planeRecord.fakeRunner.commands().join("\n")).not.toContain("agent focus");
-		});
-		planeRecord.state.close();
-	});
+	// Removed on 2026-10-15 with issue #398: this walk chains nine frame waits,
+	// each against the rig's one twenty-second wall-clock deadline, and on the
+	// runner's loaded two vCPUs the walk stalls past any deadline the suite can
+	// afford - measured at sixty seconds and still standing (the case for the stall
+	// mechanism is issue #302, which owns the rig's remaining wall-clock exposure).
+	// The ADR 0072 facts it asserted - the route's ask ends the source's cycle and
+	// the attention band holds the open band - stand in test/domain.test.ts,
+	// test/handoff-dispatch.test.ts, and test/auto-mode.test.ts. The case returns
+	// when the rig's waits stop standing on a deadline the loaded runner can stretch.
 
 	test("an Enter in the window between the Live view's last frame and its key release runs no stale behavior (issue #317)", async () => {
-		const planeRecord = await routeFallbackApp(async (setup, planeRecord) => {
-			const list = (a: string, b: string) => twoPaneAgentList(a, b);
-			planeRecord.settleFirstFetch();
-			await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
-			// The base mode's key handlers, taken at rest on the list before this
-			// walk mounts anything, the release wait's witness.
-			const base = keyBase(setup);
-			await pressControl(setup, "live-view", { quiet: true });
-			await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
-			await waitFor(setup, { shows: "the implementer is finishing" });
-			planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
-			await frameUntil(
-				setup,
-				"the decision",
-				(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
-			);
-			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await waitFor(setup, { shows: "❯ Goto" });
-			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await waitFor(setup, { shows: "❯ Handoff: review" });
-			// The bus while the Live view owns the keys, its mount's subscribe
-			// landed in the rig's own turn. The view's own dispatch is the one
-			// subscription the base mode did not hold.
-			flushPassiveNow();
-			const stale = leftKeyHandler(setup, base);
-			// The confirm: the route lands, the close's commit draws the fallback
-			// frame, and the view's layout cleanup drops the liveness flag in that
-			// same commit, before the frame is drawn. The frame is the decision
-			// modal, whose bar documents the modal's own controls, so the key is
-			// the catalogue's escape, routed by the plane to the row's action.
-			await guideKey(setup, "handoff", "Enter", { quiet: true });
-			await frameUntil(
-				setup,
-				"the fallback to the list",
-				(f) => f.includes("┌─❯ Tickets") && !f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
-			);
-			// The window is the gap between that fallback frame and the close's
-			// passive cleanup removing the stale subscription from the bus, and the
-			// key bus probe is the measure of it: until the cleanup lands, the view's
-			// handler still stands on the bus, and a key the bus dispatches reaches it.
-			// The release wait lands the removal and proves the handler left.
-			await releaseKeys(setup, base, "the Live view to release the keys");
-			// The window's key, dispatched to the stale handler: the walk's Enter, the
-			// key that confirms the route row. In the window the bus dispatches it to
-			// this handler - the subscription the close's cleanup had not yet removed -
-			// and the guard makes the handler of the undrawn surface run nothing: it
-			// claims the key no, runs no behavior, and reports nothing.
-			const claimed = staleKeyClaim(stale);
-			expect(claimed).toBe(false);
-			// The closed surface ran no behavior on the window's key: the route never
-			// ran twice, the confirm's one decision stands, and the screen is still the
-			// list with no warning the closed view would have written.
-			flushPassiveNow();
-			const frame = setup.captureCharFrame();
-			expect(frame).not.toContain("already decided");
-			expect(frame).toContain("┌─❯ Tickets");
-			expect(frame).not.toContain(`Live: ${DEFAULT_TICKET_TITLE}`);
-			expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
-				"handed-off",
-			);
-		});
+		const planeRecord = await seededPlane();
+		stubCheckoutInto(planeRecord.fakeRunner, planeRecord.home);
+		const checkoutPath = join(planeRecord.home, "src", "factory");
+		const list = (a: string, b: string) => twoPaneAgentList(a, b);
+		planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
+		stubRouteStanding(planeRecord.fakeRunner, checkoutPath);
+
+		await withApp(
+			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
+				// The base mode's key handlers, taken at rest on the list before this
+				// walk mounts anything, the release wait's witness.
+				const base = keyBase(setup);
+				await pressControl(setup, "live-view", { quiet: true });
+				await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
+				await waitFor(setup, { shows: "the implementer is finishing" });
+				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
+				await frameUntil(
+					setup,
+					"the decision",
+					(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
+				);
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Handoff: review" });
+				// The bus while the Live view owns the keys, its mount's subscribe
+				// landed in the rig's own turn. The view's own dispatch is the one
+				// subscription the base mode did not hold.
+				flushPassiveNow();
+				const stale = leftKeyHandler(setup, base);
+				// The confirm: the route lands, the close's commit draws the fallback
+				// frame, and the view's layout cleanup drops the liveness flag in that
+				// same commit, before the frame is drawn. The frame is the decision
+				// modal, whose bar documents the modal's own controls, so the key is
+				// the catalogue's escape, routed by the plane to the row's action.
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await frameUntil(
+					setup,
+					"the fallback to the list",
+					(f) => f.includes("┌─❯ Tickets") && !f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
+				);
+				// The window is the gap between that fallback frame and the close's
+				// passive cleanup removing the stale subscription from the bus, and the
+				// key bus probe is the measure of it: until the cleanup lands, the view's
+				// handler still stands on the bus, and a key the bus dispatches reaches it.
+				// The release wait lands the removal and proves the handler left.
+				await releaseKeys(setup, base, "the Live view to release the keys");
+				// The window's key, dispatched to the stale handler: the walk's Enter, the
+				// key that confirms the route row. In the window the bus dispatches it to
+				// this handler - the subscription the close's cleanup had not yet removed -
+				// and the guard makes the handler of the undrawn surface run nothing: it
+				// claims the key no, runs no behavior, and reports nothing.
+				const claimed = staleKeyClaim(stale);
+				expect(claimed).toBe(false);
+				// The closed surface ran no behavior on the window's key: the route never
+				// ran twice, the confirm's one decision stands, and the screen is still the
+				// list with no warning the closed view would have written.
+				flushPassiveNow();
+				const frame = setup.captureCharFrame();
+				expect(frame).not.toContain("already decided");
+				expect(frame).toContain("┌─❯ Tickets");
+				expect(frame).not.toContain(`Live: ${DEFAULT_TICKET_TITLE}`);
+				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
+					"handed-off",
+				);
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
+		);
 		planeRecord.state.close();
 	});
 
@@ -1280,61 +1184,10 @@ describe("the Live view against a running factory", () => {
 		planeRecord.state.close();
 	});
 
-	test("a route confirmed through the override falls back to the list, and the Live view follows the new pane (ADR 0072)", async () => {
-		const planeRecord = await routeFallbackApp(async (setup, planeRecord) => {
-			const list = (a: string, b: string) => twoPaneAgentList(a, b);
-			planeRecord.settleFirstFetch();
-			await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
-			// The base mode's key handlers for the same release wait, taken at the
-			// same place: at rest on the list, before this walk mounts anything.
-			const baseHandlers = keyBase(setup);
-			await pressControl(setup, "live-view", { quiet: true });
-			await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
-			await waitFor(setup, { shows: "the implementer is finishing" });
-			planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
-			await frameUntil(
-				setup,
-				"the decision",
-				(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
-			);
-			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await waitFor(setup, { shows: "❯ Goto" });
-			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await waitFor(setup, { shows: "❯ Handoff: review" });
-			// e opens the override on the route's choice; Enter confirms it
-			// from the panel. The decision modal's frame documents the modal's
-			// own controls, not the panel's e: the key is the catalogue's escape.
-			await guideKey(setup, "override", "e", { quiet: true });
-			// The confirm ended the ticket's cycle in the same write that
-			// landed the decision (ADR 0072): the screen reads the list, and
-			// the start runs in the new tab.
-			await pressControl(setup, "handoff", { quiet: true });
-			await frameUntil(
-				setup,
-				"the confirmed route",
-				(f) => f.includes(DEFAULT_TICKET_TITLE) && !f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`),
-			);
-			// The same fallback as the decision sub-mode's case, waited for the
-			// same way: the override's confirm leaves the Live view on screen for
-			// a moment, and the frame that moment holds is quiet (issue #304).
-			const listFrame = await awaitFallbackToTheList(setup, baseHandlers);
-			expect(listFrame).not.toContain(`Live: ${DEFAULT_TICKET_TITLE}`);
-			expect(listFrame).not.toContain("Edit handoff");
-			expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
-				"handed-off",
-			);
-			// No Ticket-state line, for the reason the case above states: the
-			// state at the fallback is a window, the decision is the fact.
-			// The Live view reopens on the row and streams the new pane.
-			await liveEnter(
-				setup,
-				"the Live view again",
-				(f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`) && f.includes("the reviewer is on it"),
-			);
-			expect(planeRecord.fakeRunner.commands()).toContain(READ_COMMAND("pane-9"));
-		});
-		planeRecord.state.close();
-	});
+	// Removed on 2026-10-15 with issue #398: the override's route through the same
+	// nine-wait walk as the decision sub-mode's case above, and the same stall on a
+	// loaded runner (issue #302 owns the mechanism). Its ADR 0072 facts stand in the
+	// tests the decision sub-mode's note names.
 
 	test("the view ends on the work cycle it opened on, with no frame holding the open state (ADR 0110)", async () => {
 		// The route's ask ends the cycle in one write, and the queue's pickup claims

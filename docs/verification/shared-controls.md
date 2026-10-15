@@ -2326,23 +2326,27 @@ the corrected `bunfig.toml` comment now states.
 
 The walk at the head that lands this rework stands at no press-family
 call, no hand operation, and no handler probe on the owned surfaces, 23
-raw waits, 220 inline containment predicates, 18 reaches to the
+raw waits, 213 inline containment predicates, 18 reaches to the
 renderer's input, and 20 helper copies over the rig's 95 exports, against
 the base head's 79: the inline containment falls from the 500 the record
 measured at the rework head above as the suites' wait vocabulary unifies
 on the named outcomes and the press waits take their checks into the
 rig's `pressUntil`, and the export count falls from the 100 of that head
 as the two bus wait operations and the bus's helpers leave the
-interface. At that head the scoped run over the nine suites this rework
-touches - the rig's own, the architecture check, the handoff frame, the
-live view, the auto-mode, the app, the ticket grouping frame, the
-reserved rows, and the Key guide - ran its 384 tests in 348.6 seconds,
-0 fail, on this machine (32 cores, 60 GB RAM, 1 GB available): the
-first scoped run over these suites stood with another test run still
-running on the machine, and it reported one fail on the resize test
-before the rework of the one press it had moved; the run named here is
-the second, which stood the load at its start unmeasured and its load
-at 1.5 mid-run, and it is the green evidence of the record.
+interface. The rework round landed on the CI flake fix of issue #398,
+which the base carries: that fix's removal of the two ADR 0072 Live view
+follow-walks stands on the branch's migrated copies of the same walks, and
+the branch's copy went with its helper beside it, the #317 window test
+the base kept taking the walk's boot inline instead of through the
+helper. The walk's inline containment falls from the 220 the pre-rebase
+head stood to the 213 of the landed head on the removal, and the
+test-tree duplication of 168 the landed head stands rewrites the Quality
+baseline down from the 178 the rework head above measured, which the
+audit then holds. At the landed head the scoped run over the nine suites
+this rework touches - the rig's own, the architecture check, the handoff
+frame, the live view, the auto-mode, the app, the ticket grouping frame,
+the reserved rows, and the Key guide - is the record's evidence, named
+beside the machine state it stood on in the pull's report.
 
 What was not measured: every frame surface that boots the app on the plane
 has been migrated, so no press-family call, hand operation, or raw wait

@@ -287,7 +287,7 @@ describe("the dotfiles state the audit's values", () => {
 		expect(baseline.function).toBe(0);
 		expect(baseline.params).toBe(0);
 		expect(baseline.duplicates).toBe(0);
-		expect(baseline["test-dup"]).toBe(178);
+		expect(baseline["test-dup"]).toBe(168);
 		expect(baseline["measured-on"]).toMatch(/^[0-9a-f]{7,40}$/);
 		expect(Object.keys(baseline).sort()).toEqual([
 			"cognitive",
@@ -320,13 +320,16 @@ describe("the dotfiles state the audit's values", () => {
 });
 
 describe("the audit command", () => {
-	function runAudit(args: string[]): { code: number; lines: string[] } {
+	function runAudit(args: string[], changedBase?: string): { code: number; lines: string[] } {
 		const result = Bun.spawnSync(
 			[process.execPath, join(ROOT, "scripts", "quality-audit.ts"), ...args],
 			{
 				cwd: ROOT,
 				stdout: "pipe",
 				stderr: "pipe",
+				...(changedBase === undefined
+					? {}
+					: { env: { ...process.env, QUALITY_CHANGED_BASE: changedBase } }),
 			},
 		);
 		return { code: result.exitCode, lines: result.stdout.toString().split("\n") };
@@ -334,7 +337,13 @@ describe("the audit command", () => {
 
 	test("bun run audit prints the payload, and --changed keeps the counts whole", () => {
 		const plain = runAudit([]);
-		const changed = runAudit(["--changed"]);
+		// The changed base stands on HEAD, the one ref every checkout holds:
+		// the runner's shallow checkout of a pull request fetches no remote
+		// branch, so the config's origin/main base is unknown there and the
+		// run dies before it prints anything (issue #398). HEAD is enough for
+		// the check this test makes: the counts stand whole whatever base
+		// narrows the findings.
+		const changed = runAudit(["--changed"], "HEAD");
 		// The status line: the status, the head, the cost.
 		expect(plain.lines[0]).toMatch(/^audit (OK|FAILED) {2}head [0-9a-f]{7,40} {2}\d+\.\d s$/);
 		// The count lines, one per metric, in the payload's order.

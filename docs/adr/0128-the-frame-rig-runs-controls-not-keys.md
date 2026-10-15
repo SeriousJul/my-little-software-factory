@@ -507,3 +507,12 @@ settled frame the guard waits on can park the cursor on a row whose Enter
 the bar documents as another control's action, and a re-sent named press
 would run that row's action instead of waiting for the handoff the first
 press started.
+
+
+The rework round of this pull stood on the base's fix of the CI test flake,
+issue #398, which the pull's head carries: that fix's removal of the two
+ADR 0072 Live view follow-walks reached the branch's migrated copies of the
+same walks, and they went with their helper, the #317 window test the base
+kept taking the walk's boot inline. The interface this addendum names
+therefore stands on the tree beside that fix, and its pins are the suite's
+evidence at the head that lands the rework.

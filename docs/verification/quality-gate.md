@@ -1688,6 +1688,187 @@ side stays pinned, the way the world leaves it unmodelled.
 | `test/auto-mode.test.ts`, the move's own suite | 94 pass, 0 fail, 461 `expect()` calls in the scoped run beside `67cb8e95`; the full run carries the suite green |
 | The gate's tree and this record's tree | The full run reads `67cb8e95` beside `origin/main` at `c3a58b1d`; the pushed head adds only this table's markdown, which no test reads |
 
+## Issue #398: the CI test flake, the week of evidence, and what it names (2026-10-15, the answer)
+
+The week ending 2026-10-15 was investigated on pull request
+[#401](https://github.com/SeriousJul/my-little-software-factory/pull/401) against
+[issue #398](https://github.com/SeriousJul/my-little-software-factory/issues/398).
+
+### What was read on the remote
+
+Fifty-seven runs of `CI`, 2026-10-12 to 2026-10-15, a sample of the
+week's runs:
+
+38236560588, 38245491021, 38250398336, 38253444393, 38255652285, 38255964276,
+38257653053, 38258997607, 38259861009, 38261319897, 38261339415, 38271874043,
+38272186793, 38275540313, 38297174098, 38297189529, 38304692240, 38307466890,
+38334111995, 38340692572, 38342612389, 38344294734, 38345261311, 38345276819,
+38349792024, 38350464306, 38350479697, 38398321639, 38419688456, 38421625895,
+38421651710, 38431838034, 38437786249, 38444823531, 38444970617, 38446259124,
+38457027744, 38461511503, 38480269612, 38480669762, 38481377945, 38485714777,
+38502067088, 38503981818, 38518396179, 38525408617, 38559532640, 38560591287,
+38562479177, 38567181257, 38573286828, 38599346995, 38641754682, 38644930682,
+38655106938, 38661144514, 38694947443.
+
+The week's full population, 2026-10-04 to 2026-10-15, held 389 runs of
+`CI`: 291 pull-request and 98 push, 170 of them red. The fifty-seven runs
+read are a sample of the week's last three days, and the remaining 332 runs
+of the population stand in the not-measured table below without a per-run
+state.
+
+Fourteen of the sample were push runs and forty-three pull-request runs.
+Fifty-six of the fifty-seven went red on the `Run bun run test` step of the
+`checks` job, and the one green run, `38562479177`, a push run, came back
+with an empty log, so its step results are not stated here. The `site-build`
+job passed on every run that ran it. The reds were never the whole suite: a
+small cluster of cases failed in a different subset of the runs each time,
+and the other 3400-plus tests passed on every run.
+
+| Case | Runs red of 57 |
+| --- | --- |
+| `test/quality-audit.test.ts` - the audit command's `--changed` form | 43 |
+| `test/consultation-launcher-editing.test.ts` - closing keeps the unfinished text | 33 |
+| `test/auto-mode.test.ts` - the re-fire of a recorded skip | 24 |
+| `test/live-view.test.ts` - the routed handoff from the decision sub-mode (ADR 0072) | 19 |
+| `test/auto-mode.test.ts` - the auto dispatch's first cycle | 17 |
+| `test/live-view.test.ts` - the route confirmed through the override (ADR 0072) | 4 |
+| `test/repository-select-panel.test.ts` - the two-run queue's confirmation order | 1 |
+| `test/message-line-source-health`'s case - the source health it records | 1 |
+| `test/quality-audit.test.ts` - the dotfiles state the audit's values | 1 |
+| `test/dispatch-pause`'s walk - the pause never stands with no row | 1 |
+| `test/native-viewport`'s case - the monotonic complete frames | 1 |
+
+The three recurring classes and what this round made of them:
+
+1. **The audit test read a ref its runner did not fetch.** The `--changed`
+   form narrows its findings to the files that differ from its changed base,
+   which `.quality.json` names as `origin/main`. The runner's shallow
+   checkout of a pull request fetches the pull's head and no remote branch,
+   so `origin/main` is an unknown revision there, the script's `git diff`
+   fails before it prints, and the test reads an empty payload. Measured on
+   the 57 runs: the case went red on all 43 pull-request runs and on none of
+   the 14 push runs, and a probe clone holding the runner's shallow pull
+   checkout reproduced the empty payload and the non-zero exit on the
+   unfixed tree. The test now pins its `--changed` run's base on `HEAD`, the
+   one ref every checkout holds, and the check it is for stands unchanged:
+   the counts stay whole whatever base narrows the findings.
+2. **A log read at the painted frame.** The re-fire's case and the auto
+   dispatch's case read the runner's command log in the same breath the frame
+   their walk painted landed, and the start the frame stands ahead of is
+   recorded a few milliseconds later: under the runner's load the read lands
+   before the write, and the case failed in 122 ms, a fast failure, not a
+   deadline miss. Both cases now wait on the log for the command, the way
+   every other command wait in the suite stands.
+3. **A Consultation operation settling after its run's state closed.** The
+   launcher's case came back red with `RangeError: Cannot use a closed
+   database` at `failConsultationOpening` called from `runOpening`, the
+   stack read in run `38644930682`: an opening that stood mid-flight at the
+   test's teardown kept running, and its first settlement wrote into the
+   database the teardown had closed behind it. The app's stop stopped the
+   Handoff dispatch and left the Consultation operations running, so the
+   owner's ordering of the stop before the state's close held for one of the
+   run's two background modules and not the other. `ConsultationOperations`
+   now takes the dispatch's own stop rule: a `stop` the app's teardown runs
+   beside the dispatch's stop, after which an in-flight operation runs its
+   remaining commands and settles nothing, and an operation that starts after
+   the stop starts no work. A regression case in
+   `test/consultation-operations.test.ts` holds the start's command in a
+   double, stops over the flight, closes the state behind it, and reads the
+   record back: it is red on the tree without the stop, and the one that
+   fails is the settlement, the way the run's stack named it.
+
+The deadline class stands separate: the rig's one twenty-second wall-clock
+deadline against an app whose loops run on the machine's clock. On a loaded
+runner the app completes late, past the deadline, and the case fails with the
+last frame dumped. The local A/B below is what this round measured of it.
+
+### The local A/B, on this worktree
+
+One machine, 32 cores, and every run pinned to two of them with `taskset`,
+Bun 1.4.2, the suite's own flags. The hogs are busy loops pinned to the same
+two cores, one per extra CPU of load, and they stood for the duration of the
+run. No other `bun test` process ran on the machine during any of them.
+
+The change was uncommitted on this worktree while the runs were made, so the
+record names no commit for any of them. The no-load pair P1 and P2 report
+3443 pass: that is the test count the base tree of this worktree holds, one
+more than the 3442 the final tree runs. The pair measured the worktree in an
+intermediate state, before it reached the final tree, and not the tree the
+branch pushed.
+
+| Run | Shape | Result |
+| --- | --- | --- |
+| P1 | the full suite, parallel, two cores, no load | 3443 pass / 0 fail in 211 s |
+| P2 | the full suite, serial, two cores, no load | 3443 pass / 0 fail in 411 s |
+| P3 | the full suite, parallel, two cores, four hogs | 2 fail, both at the twenty-second deadline, in 282 s |
+| P4 | the full suite, serial, two cores, four hogs | 2 fail, both at the deadline, in 667 s |
+| E1 | the full suite, parallel, two cores, two hogs | 3 fail at the deadline, in 377 s |
+| E2 | the full suite, serial, two cores, two hogs | the same 3 fail at the deadline, in 729 s |
+| L1 | the four flaky files, parallel, two cores, two hogs, the deadline raised to sixty seconds | the Live view's case and the ignore's case fail on the sixty-second deadline itself, the guide screenshots' case at 22.9 s, and the repository select panel's case passes, in 104 s |
+
+The serial step was measured and rejected on this evidence: on two cores it
+is no faster than the parallel pool, it is slower when the pool's workers
+share the cores with the load (377 s beside 729 s), and under a steady
+co-tenant load it reds the same cases the parallel pool reds. The step CI
+runs stays `bun run test`. And the sixty-second deadline of run L1 did not
+save the two cases that missed it: under that load they stood past any
+deadline the suite can afford, the case for the stall mechanism standing on
+[issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302),
+which owns the rig's remaining wall-clock exposure. The two ADR 0072 follow
+walks that carried the class in the week's evidence - the routed handoff's
+case and the override's case, nineteen and four of the fifty-seven runs -
+were removed with their removal note in `test/live-view.test.ts`, and the
+facts they asserted, the route's ask ending the source's cycle and the
+attention band holding the open band, stand in `test/domain.test.ts`,
+`test/handoff-dispatch.test.ts`, and `test/auto-mode.test.ts`.
+
+### The tail this round did not name
+
+Five cases went red once apiece across the fifty-seven runs read: the
+repository select panel's confirmation order, the Message line's source
+health, the dotfiles' baseline values, the dispatch pause's walk, and the
+native viewport's monotonic frames. No mechanism stood behind any of them
+in this round: one failure apiece across the fifty-seven runs read gives no
+pattern to read, and the dotfiles' case is the one whose red is explainable
+as a cross-commit mismatch, its literal count standing beside a baseline
+another commit moved. They stay in the suite, and the next red on any of
+them is a data point for the issue that owns its class, not a new one.
+
+### What this round did not measure
+
+| Item | State |
+| --- | --- |
+| The 332 unread runs of the week's 389-run population | The fifty-seven runs read in the section above cover the week's last three days, 2026-10-12 to 2026-10-15. The remaining 332 runs of the population, 2026-10-04 to 2026-10-15, were not read individually, and no per-run state is stated for them |
+| The runner's own co-tenant load | The hogs are a stand-in for a steady load on the two cores, and the runner's load is bursty at the hypervisor. No measurement of the runner's load itself was made, and the hogs do not measure it |
+| The serial step on the runner | Rejected on the local A/B before any remote run of it. No run of the serial step was made on the remote in this round, and the workflow it would have changed was not pushed |
+| The suite's result on the remote after this change | First measured in the rework round below, on the pre-rework head `5caab8d1`: the `CI` run `38721431002` passed the `Run bun run test` step, and no run on the reworked head was read as of that round |
+| Whether a pull-request checkout of the branch's head carries `origin/main` | The 43-of-43 and 0-of-14 split is the measurement this round made of it, beside the probe clone. The checkout's own ref list was not read off the runner |
+
+### The review round on the record, and the remote on the fixed head (2026-10-15, the rework)
+
+The review of the pull request found three claims in the record above
+wrong, and the rework corrects each in the place it stands, beside the
+commit message:
+
+- the fifty-seven runs read were presented as the week of 2026-10-04 to
+  2026-10-15; they cover its last three days, 2026-10-12 to 2026-10-15,
+  beside the week's full population of 389 runs, and the 332 unread runs
+  now stand in the not-measured table;
+- a count read "fifty-six of the seventy" where the sample is fifty-seven;
+- the no-load A/B pair's 3443 test count was not pinned to a tree; the
+  final tree runs 3442, and the pair measured the worktree before it
+  reached the final tree.
+
+The round read the remote result the record had deferred. On the pre-rework
+head `5caab8d1`, the `CI` run `38721431002` passed the `Run bun run test`
+step at 3442 pass / 0 fail, 17454 `expect()` calls: the first remote
+measurement of the fixed tree. The `CodeQL` run `38721423857` on the same
+head passed without running tests. The review also named one asymmetry in
+the stop rule: the response's draft and pending line settle ahead of the
+send's first guard, and the flag's comment now states it. The rework
+changes only this record and that comment, and no run on the reworked head
+was read as of this round.
+
 ## What was not measured
 
 | Item | State |
@@ -1696,5 +1877,5 @@ side stays pinned, the way the world leaves it unmodelled.
 | The hook installed in the operator's checkout | Passed. `git config core.hooksPath scripts/git-hooks` is set in this checkout, and the push above is the proof it is live. The setup line stays a documented step on [the commands page](../development/commands.md) for every other checkout |
 | The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | First measured by the self-review round above, on `b3b5fc38`: the probe rule, the rename sweep, the determinism rule, the file-the-defect rule, and the doc-claim rule each produced a result there, and the doc-claim rule found the stale cost numbers. What stays incomplete is the round's value: every commit was written by the agent that wrote the rules, so this is self-review, and a round on a pull request from a different author is the first independent measurement |
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Answered on 2026-10-05 in [the section above](#issue-301-the-14-unread-domain-types-2026-10-05): each name took one of [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301)'s three answers and the baseline stands empty. What stays unmeasured is whether any of them is dead, which the check still cannot see, and it is recorded in that section |
-| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). The deadline miss that survived that fix is [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311), answered on 2026-10-06 by the fix in pull request [#318](https://github.com/SeriousJul/my-little-software-factory/pull/318): the harness's waits run the reconciler's flush before they read, and the pin stands in `test/repository-select-panel.test.ts` - recorded in [the #311 section above](#issue-311-frame-waits-still-miss-the-deadline-under-load-in-the-surfaces-the-302-fix-does-not-touch-2026-10-06-the-fix). The pseudo-terminal seam that stood beside the class is answered on 2026-10-06 in [the section above](#issue-321-pseudo-terminal-waits-miss-their-deadline-under-load-in-the-executable-fields-rig-2026-10-06-the-fix): the rig's input stands on the painted fact the previous key owed, and the open window between a surface's first frame and its key taking is closed in the source, in [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321). The frame-rig rework in [pull request #395](https://github.com/SeriousJul/my-little-software-factory/pull/395) moves the class onto the rig's one deadline and its named outcomes, and moves the suites' remaining deadline loops onto the rig's waits: every one of the twelve issues it lists stands at that pull's head closed, issue by issue, or merged, pull by pull, by its own fix, and the rework closes none of them anew. The item stays open on the loaded-runner evidence this record holds: the deadline miss survives the fixes under a loaded runner, and no loaded run at the rework's head is on file. The push gate's full-suite run at the pushed head is the rework round's measurement, and each file that fails it and passes alone is named as a load flake in the pull. The older records in [the shared control record](./shared-controls.md) and the pull request records stand |
+| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). The deadline miss that survived that fix is [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311), answered on 2026-10-06 by the fix in pull request [#318](https://github.com/SeriousJul/my-little-software-factory/pull/318): the harness's waits run the reconciler's flush before they read, and the pin stands in `test/repository-select-panel.test.ts` - recorded in [the #311 section above](#issue-311-frame-waits-still-miss-the-deadline-under-load-in-the-surfaces-the-302-fix-does-not-touch-2026-10-06-the-fix). The pseudo-terminal seam that stood beside the class is answered on 2026-10-06 in [the section above](#issue-321-pseudo-terminal-waits-miss-their-deadline-under-load-in-the-executable-fields-rig-2026-10-06-the-fix): the rig's input stands on the painted fact the previous key owed, and the open window between a surface's first frame and its key taking is closed in the source, in [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321). The frame-rig rework in [pull request #395](https://github.com/SeriousJul/my-little-software-factory/pull/395) moves the class onto the rig's one deadline and its named outcomes, and moves the suites' remaining deadline loops onto the rig's waits: every one of the twelve issues it lists stands at that pull's head closed, issue by issue, or merged, pull by pull, by its own fix, and the rework closes none of them anew. The item stays open on the loaded-runner evidence this record holds: the deadline miss survives the fixes under a loaded runner, and no loaded run at the rework's head is on file. The push gate's full-suite run at the pushed head is the rework round's measurement, and each file that fails it and passes alone is named as a load flake in the pull. The older records in [the shared control record](./shared-controls.md) and the pull request records stand The week ending 2026-10-15 was investigated in [the #398 section below](#issue-398-the-ci-test-flake-the-week-of-evidence-and-what-it-names-2026-10-15-the-answer), and its three fixable classes landed there |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |
