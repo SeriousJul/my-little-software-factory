@@ -2279,8 +2279,14 @@ about 4.6 s: the migrated queue walk takes 2.3 times the budget it ran at
 the base and stands the deadline's edge under the run's load. It is named
 as a load flake of the record's #317 class, and no production code moves in
 this pull, so the pull's own change stands cleared of the failure. At the
-head that lands this round the push gate re-runs the full suite, and the
-record carries that run beside the one above.
+head `97405875` that lands this round, the push gate's full suite on the
+merged tree ran its 3,450 tests on the same machine (32 cores, 60 GB RAM,
+2 GB free, no other test run standing at its start): 3,449 pass, 1 fail,
+in 110.26 s. The failing test, `repository-select-panel > a marking of two
+runs the queue, one confirmation per row, in list order`, missed the rig's
+20 s deadline at 20,589 ms, and it ran 14 of 14 alone in 4.62 s on the same
+tree: it is named as a load flake per the triage rule, in the shape the
+record's #317 line names, and the base comparison above stands beside it.
 
 What was not measured: every frame surface that boots the app on the plane
 has been migrated, so no press-family call, hand operation, or raw wait
