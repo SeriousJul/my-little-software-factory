@@ -2346,7 +2346,18 @@ audit then holds. At the landed head the scoped run over the nine suites
 this rework touches - the rig's own, the architecture check, the handoff
 frame, the live view, the auto-mode, the app, the ticket grouping frame,
 the reserved rows, and the Key guide - is the record's evidence, named
-beside the machine state it stood on in the pull's report.
+beside the machine state it stood on in the pull's report. The push
+gate's full suite on the landed tree ran its 3,454 tests on this machine
+(32 cores, 60 GB RAM, 2 GB available, load 1.2 at its start, no other
+test run standing): 3,453 pass, 1 fail, in 129.9 s. The failing test,
+`repository-select-panel > a marking of two runs the queue, one
+confirmation per row, in list order`, missed the rig's 20 s deadline at
+20,597 ms, and it ran 14 of 14 alone in 4.69 s on the same tree: it is
+named as a load flake per the triage rule, in the shape the record's
+#317 line names, the class the base's #398 fix measured, beside the same
+file's fail and solo pass at the pull's earlier pushed head. The change
+this pull lands touches no line the failing test drives, and no wait in
+the run's passes that stands on the change reaches the deadline.
 
 What was not measured: every frame surface that boots the app on the plane
 has been migrated, so no press-family call, hand operation, or raw wait
