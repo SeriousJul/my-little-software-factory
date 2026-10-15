@@ -7,15 +7,39 @@
  * is read back out of the pane - the same two directions an operator uses, with
  * no test renderer between them.
  *
- * The check reports itself incomplete rather than passing quietly: when tmux is
- * not installed, it says so in the failure message. A required check that cannot
- * run is not a pass, and a skipped one proves nothing about paste, focus, or
- * rendering.
+ * The check runs on its own tmux server, on a socket of its own, and starts
+ * that server with an empty config file. The machine's own tmux server is a
+ * fixture the check cannot control: it stands up wherever and whenever an
+ * operator started it, it keeps the environment of that moment, it wears the
+ * global state that stood on it when it started - an operator's own config, or
+ * the setting a tool that manages the machine's sessions set on it - and it
+ * holds other people's sessions. Measured on a machine holding a long-lived
+ * server: a detached session the check spawned stood for under a second before
+ * the server's own state dropped it, and the check read `can't find pane`
+ * from a screen the gallery never got to draw (issue #400). The check's own
+ * server starts from the test's own environment, with stock options, and with
+ * no session on it but the check's: the check stands the same on a clean
+ * machine and on a machine full of long-lived tmux sessions and dev processes,
+ * and it leaves the machine's tmux as it found it. The empty config file
+ * matters on an operator's machine: any new tmux server there reads the
+ * operator's own tmux.conf at startup, and the check measures the
+ * multiplexer's stock behavior, not the operator's personal one.
+ *
+ * The pane's command runs the gallery through a small shell wrapper that keeps
+ * a copy of the pane's stderr in the check's own temporary directory. The pane
+ * may die with the session before the first capture; the kept stderr is what
+ * the failure then reads out, so the check says what the gallery said instead
+ * of `can't find pane`.
+ *
+ * The check reports itself incomplete rather than passing quietly: when tmux
+ * is not installed, it says so in the failure message. A required check that
+ * cannot run is not a pass, and a skipped one proves nothing about paste,
+ * focus, or rendering.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { type SpawnSyncReturns, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,43 +48,139 @@ const GALLERY_BIN = join(process.cwd(), "bin", "factory-gallery.mjs");
 /** How long one wait on the pane is allowed to run. */
 const SETTLE_MS = 25_000;
 
+/** Collapse a captured screen's runs of spaces, so column padding is not asserted. */
+const collapse = (screen: string): string => screen.replace(/[ \t]{2,}/g, " ");
+
+/**
+ * The check's own tmux: one socket and one session per run, named for the
+ * test's pid, so two runs of the check never share a server. The server the
+ * check starts dies with the check: nothing of it stands on the machine after
+ * the run.
+ */
+const NAME = `factory-fields-${process.pid}`;
+
+/** Where the pane's stderr is kept. Stands once `beforeAll` has made the directory. */
+let paneLog: string;
+/** Where the check's temporary directory stands. Stands once `beforeAll` has made it. */
+let dir: string;
+
 const tmux = spawnSync("tmux", ["-V"], { encoding: "utf8" });
 const available = tmux.status === 0;
 
 /**
- * Start a detached tmux session running one command, at one size.
+ * One call to the check's own tmux: the check's socket, and the empty config
+ * file, so a server the check starts wears stock options on every machine.
  *
- * A detached session starts in the tmux server's working directory, not the
- * test's: on a machine where the server stood up long before this run, a
- * relative command path resolves against the server's directory and the
- * pane dies at start. The `-c` pins the pane to the test's own directory,
- * so the check stands on a fresh CI server and on a long-running one alike.
+ * The client's environment drops the `TMUX` mark: if the suite runs inside a
+ * tmux session, the mark would tell tmux the check is nested, and the check's
+ * own server must answer the way the machine's tmux answers.
  */
-function tmuxSpawn(session: string, command: string[], cols: number, rows: number): void {
-	const started = spawnSync(
-		"tmux",
-		[
-			"new-session",
-			"-d",
-			"-s",
-			session,
-			"-c",
-			process.cwd(),
-			"-x",
-			String(cols),
-			"-y",
-			String(rows),
-			...command,
-		],
-		{ encoding: "utf8" },
-	);
+function tmuxCall(args: string[]): SpawnSyncReturns<string> {
+	const env = { ...process.env };
+	delete env.TMUX;
+	return spawnSync("tmux", ["-L", NAME, "-f", "/dev/null", ...args], {
+		encoding: "utf8",
+		env,
+	});
+}
+
+/**
+ * Start the check's own tmux server and its one session, running the gallery's
+ * fields example at one size.
+ *
+ * The server is the check's, not the machine's: it stands on the check's own
+ * socket, in the check's own environment, wearing no config file. A machine
+ * server that stood long before the run - holding an operator's sessions and a
+ * dev loop, and the global state such a server picks up along the way - has no
+ * say in the pane the check reads. Any server a crashed run of this check left
+ * on the socket goes first, so a pid that stands again starts clean.
+ *
+ * The pane's command runs the gallery through the check's wrapper: the gallery
+ * itself, its stderr kept in the check's temporary directory. The pane and the
+ * session may die with the gallery before the first capture; the kept stderr
+ * is what the failure then reads out.
+ */
+function startPane(): void {
+	tmuxCall(["kill-server"]);
+	const started = tmuxCall([
+		"new-session",
+		"-d",
+		"-s",
+		NAME,
+		"-c",
+		process.cwd(),
+		"-x",
+		"90",
+		"-y",
+		"26",
+		"/bin/sh",
+		"-c",
+		'exec "$0" "$1" "$2" 2>"$3"',
+		process.execPath,
+		GALLERY_BIN,
+		"fields",
+		paneLog,
+	]);
 	if (started.status !== 0) {
 		throw new Error(`tmux new-session failed: ${started.stderr.trim()}`);
 	}
+	// While the pane stands, keep it standing after the gallery exits, so a
+	// gallery that dies mid-check leaves its last screen to be read. The set
+	// can lose the race to the gallery's death; the kept stderr wins that race.
+	tmuxCall(["set-option", "-q", "-p", "-t", NAME, "remain-on-exit", "on"]);
 }
 
-/** Collapse a captured screen's runs of spaces, so column padding is not asserted. */
-const collapse = (screen: string): string => screen.replace(/[ \t]{2,}/g, " ");
+/** The report a failure carries when the pane is gone, and what the pane left. */
+function paneGoneReport(what: string): Error {
+	const parts = [
+		`${what}: the check ran its own tmux server, so the machine's tmux state stands outside the failure`,
+	];
+	let screen = "";
+	const captured = tmuxCall(["capture-pane", "-p", "-t", NAME]);
+	if (captured.status === 0) screen = captured.stdout;
+	let log = "";
+	try {
+		log = readFileSync(paneLog, "utf8");
+	} catch {
+		// the pane wrote no stderr: nothing was kept
+	}
+	if (screen.trim() !== "") parts.push(`the pane's last screen:\n${screen.trimEnd()}`);
+	if (log.trim() !== "") parts.push(`the pane's stderr:\n${log.trimEnd()}`);
+	if (screen.trim() === "" && log.trim() === "") {
+		parts.push(
+			"the pane left neither a screen nor a word of stderr: the gallery never stood, or it died without writing",
+		);
+	}
+	return new Error(parts.join("\n\n"));
+}
+
+/** Whether the session the check spawned still holds its pane. */
+function paneStands(): boolean {
+	const has = tmuxCall(["has-session", "-t", NAME]);
+	if (has.status !== 0) return false;
+	const listed = tmuxCall(["list-panes", "-t", NAME, "-F", "#{pane_dead}"]);
+	if (listed.status !== 0) return false;
+	return listed.stdout.trim() !== "1";
+}
+
+/**
+ * The pane's drawn screen: what an operator in front of the terminal reads.
+ *
+ * A capture that finds no pane would say `can't find pane` and nothing else,
+ * the way the check once read a pane its own machine had dropped. A screen is
+ * read only from a pane that stands, and a pane that does not stand is
+ * reported with what it left behind.
+ */
+function readScreen(): string {
+	if (!paneStands()) {
+		throw paneGoneReport("the pane died before the check could read its screen");
+	}
+	const captured = tmuxCall(["capture-pane", "-p", "-t", NAME]);
+	if (captured.status !== 0) {
+		throw paneGoneReport(`tmux capture-pane failed: ${captured.stderr.trim()}`);
+	}
+	return captured.stdout;
+}
 
 /**
  * Read the pane after it has stopped changing, so a key has landed.
@@ -69,11 +189,11 @@ const collapse = (screen: string): string => screen.replace(/[ \t]{2,}/g, " ");
  * agree before the key is proven landed. A fixed sleep would instead bet the
  * check on a machine speed, and pass on a pane that had not finished redrawing.
  */
-async function settle(session: string): Promise<string> {
+async function settle(): Promise<string> {
 	const deadline = Date.now() + SETTLE_MS;
-	let last = tmuxCapture(session);
+	let last = readScreen();
 	for (;;) {
-		const screen = tmuxCapture(session);
+		const screen = readScreen();
 		if (screen === last) return screen;
 		last = screen;
 		if (Date.now() >= deadline) {
@@ -91,31 +211,16 @@ async function settle(session: string): Promise<string> {
  * the field sees the terminal's own bracketed-paste sequence rather than a test's
  * approximation of one.
  */
-function tmuxSendKeys(session: string, text: string): void {
-	const sent = spawnSync("tmux", ["send-keys", "-t", session, "-l", text], {
-		encoding: "utf8",
-	});
+function sendKeys(text: string): void {
+	const sent = tmuxCall(["send-keys", "-t", NAME, "-l", text]);
 	if (sent.status !== 0) throw new Error(`tmux send-keys failed: ${sent.stderr.trim()}`);
 }
 
-/** The pane's drawn screen: what an operator in front of the terminal reads. */
-function tmuxCapture(session: string): string {
-	const captured = spawnSync("tmux", ["capture-pane", "-p", "-t", session], {
-		encoding: "utf8",
-	});
-	if (captured.status !== 0) throw new Error(`tmux capture-pane failed: ${captured.stderr.trim()}`);
-	return captured.stdout;
-}
-
 /** Wait until the pane's screen satisfies a predicate, and return it. */
-async function tmuxWaitFor(
-	session: string,
-	predicate: (screen: string) => boolean,
-	what: string,
-): Promise<string> {
+async function waitFor(predicate: (screen: string) => boolean, what: string): Promise<string> {
 	const deadline = Date.now() + SETTLE_MS;
 	for (;;) {
-		const screen = tmuxCapture(session);
+		const screen = readScreen();
 		if (predicate(screen)) return screen;
 		if (Date.now() >= deadline) {
 			throw new Error(`timed out waiting for ${what}\nlast screen:\n${screen}`);
@@ -124,14 +229,12 @@ async function tmuxWaitFor(
 	}
 }
 
-function tmuxKill(session: string): void {
-	spawnSync("tmux", ["kill-session", "-t", session], { encoding: "utf8" });
+/** End the check's own server: the check leaves no tmux on the machine. */
+function endPane(): void {
+	tmuxCall(["kill-server"]);
 }
 
 describe("shared fields through tmux", () => {
-	const session = `factory-fields-${process.pid}`;
-	let dir: string;
-
 	beforeAll(() => {
 		if (!available) {
 			throw new Error(
@@ -140,23 +243,23 @@ describe("shared fields through tmux", () => {
 			);
 		}
 		dir = mkdtempSync(join(tmpdir(), "factory-tmux-"));
+		paneLog = join(dir, "pane-stderr.log");
 	});
 
 	afterAll(() => {
-		tmuxKill(session);
+		endPane();
 		if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
 	});
 
 	test("a real terminal path draws the fields, takes ordinary keys, and refuses a bad paste whole", async () => {
-		tmuxSpawn(session, [process.execPath, GALLERY_BIN, "fields"], 90, 26);
+		startPane();
 		try {
 			// The gallery is up and the shared chrome drew its controls. The wait
 			// demands every row the check reads, so a slow runner never hands back a
 			// half-drawn frame: a capture taken mid-redraw would hold the header
 			// before the action bar landed, and the check would fail on the missing
 			// bar instead of on the field it exists to test.
-			const opened = await tmuxWaitFor(
-				session,
+			const opened = await waitFor(
 				(screen) =>
 					screen.includes("Shared controls") &&
 					screen.includes("Initial input") &&
@@ -171,15 +274,14 @@ describe("shared fields through tmux", () => {
 			// An ordinary sequence moves the caret. A digits field that only had its
 			// caret touched keeps its text: the key belongs to the field, and the
 			// application below it sees nothing.
-			tmuxSendKeys(session, "\x1b[D");
-			const held = await settle(session);
+			sendKeys("\x1b[D");
+			const held = await settle();
 			expect(collapse(held)).toContain("Context 272000");
 
 			// A bracketed paste that carries a letter is refused as one operation:
 			// `1e3` never becomes `13`, and the field states why in its own row.
-			tmuxSendKeys(session, "\x1b[200~1e3\x1b[201~");
-			const refused = await tmuxWaitFor(
-				session,
+			sendKeys("\x1b[200~1e3\x1b[201~");
+			const refused = await waitFor(
 				(screen) => screen.includes("takes digits only"),
 				"the refusal to be stated on the screen",
 			);
@@ -191,9 +293,8 @@ describe("shared fields through tmux", () => {
 			// above was about the letters and not about the terminal path: the value
 			// grows by exactly one digit, at the caret, and the row's length proves
 			// where it went without pinning the renderer's own padding.
-			tmuxSendKeys(session, "7");
-			const taken = await tmuxWaitFor(
-				session,
+			sendKeys("7");
+			const taken = await waitFor(
 				(screen) =>
 					collapse(screen).includes("Context 2720070") && !screen.includes("Error: Context"),
 				"the typed digit to join the value and the reason to end",
@@ -203,7 +304,7 @@ describe("shared fields through tmux", () => {
 			expect(collapse(taken)).toContain("Context 2720070");
 			expect(collapse(taken)).not.toContain("Error: Context");
 		} finally {
-			tmuxKill(session);
+			endPane();
 		}
 	});
 });
