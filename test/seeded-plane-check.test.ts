@@ -71,7 +71,7 @@ const QUOTED_TITLE = '"Persist source ' + 'facts"';
  */
 const SPELLS_DEFAULT_TITLE = (source: string): boolean =>
 	new RegExp(
-		DEFAULT_TICKET_TITLE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?!(?:[ \\t]*[\\w-]))",
+		`${DEFAULT_TICKET_TITLE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?!(?:[ \\t]*[\\w-]))`,
 		"u",
 	).test(source);
 
