@@ -2223,6 +2223,16 @@ over the rig's 100 exports, against the base head's 79. The test-tree
 duplication clone count stands at 189 at that head, unchanged by the
 removal, so the Quality baseline holds it as is.
 
+The pull's repository-select queue walk reaches the open window the
+record's #317 line names: the queue's advance can stand its cleanup
+outside the flush the close proof runs on every poll, and the replaced
+panel's handler stands on the bus when the proof's deadline stands. Measured
+at the base head `1e1159e8`, the test fails 3 of 10 runs alone on an idle
+machine, and the same shape stands in the full suite at the heads this pull
+runs; the pull's test-tree change is the dead operations' removal, which the
+walk never calls. The window is the class the #317 line records, and its
+close stands on that issue's own measurement.
+
 The twelve flake issues the ADR lists - #302, #303, #304, #310, #311,
 #312, #314, #316, #318, #323, #326, and #342 - stand closed, issue by
 issue, or merged, pull by pull, by their own fixes at the head this
