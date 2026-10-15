@@ -42,6 +42,7 @@ import { serializeRepositoryOperation } from "./operation-serializer.ts";
 import { parallelSeatReading } from "./parallel.ts";
 import {
 	type RepositoryMapping,
+	type ResolutionNotes,
 	type ResolvedRepository,
 	realPathOf,
 	resolveRepository,
@@ -253,6 +254,20 @@ export class ConsultationOperations {
 	private readonly openingOperations = new Set<string>();
 	private readonly closeOperations = new Map<string, CloseOperation>();
 	private readonly inputQueue: ConsultationInputQueue;
+	/**
+	 * True after `stop` runs. The run's owner stops the module before it
+	 * closes the state, so a continuation that reaches a settlement after its
+	 * own await settles nothing: the record and the view go away with the
+	 * state, and a write that lands there reads a closed database (issue
+	 * #398). The Handoff dispatch reads the same rule at its own settlement,
+	 * so a stop over the run's two background modules stands one rule. One
+	 * write stands ahead of the rule: the response's draft and pending line
+	 * settle before the send's first guard, so a stop that lands while they
+	 * stand behind the Repository queue still lets those two writes land.
+	 * They cannot reach a closed database: the record read that precedes them
+	 * throws there, and the response's failure swallows every settlement.
+	 */
+	private stopped = false;
 
 	constructor(options: ConsultationOperationsOptions) {
 		this.state = options.state;
@@ -266,6 +281,15 @@ export class ConsultationOperations {
 		this.persistRepositoryMapping = options.persistRepositoryMapping;
 		this.checkoutHold = options.checkoutHold;
 		this.inputQueue = new ConsultationInputQueue(this.runner, options.textBatchBytes);
+	}
+
+	/**
+	 * Stop the module: the run's owner is closing its state. An operation
+	 * already in flight runs its remaining commands but settles nothing into
+	 * the record, and an operation that starts after the stop starts no work.
+	 */
+	stop(): void {
+		this.stopped = true;
 	}
 
 	/**
@@ -337,6 +361,7 @@ export class ConsultationOperations {
 	}
 
 	launch(consultation: Consultation): Promise<void> {
+		if (this.stopped) return Promise.resolve();
 		if (!this.state.consultationRecord.canRecoverConsultationOpening(consultation.id))
 			return Promise.resolve();
 		if (!this.claimOpening(consultation.id)) {
@@ -356,6 +381,7 @@ export class ConsultationOperations {
 	}
 
 	recover(consultation: Consultation): Promise<void> {
+		if (this.stopped) return Promise.resolve();
 		const current = this.state.consultationRecord.consultation(consultation.id);
 		if (
 			current === undefined ||
@@ -518,6 +544,7 @@ export class ConsultationOperations {
 	 * checkout and starts nothing. The let-go runs where the opening settles.
 	 */
 	pickup(consultationId: string, mode: StartMode): Promise<ConsultationPickupOutcome> {
+		if (this.stopped) return Promise.resolve({ kind: "moved" });
 		const current = this.state.consultationRecord.consultation(consultationId);
 		if (current === undefined || (current.state !== "queued" && current.state !== "unscheduled"))
 			return Promise.resolve({ kind: "moved" });
@@ -690,6 +717,7 @@ export class ConsultationOperations {
 	}
 
 	async respond(consultation: Consultation, draft: string): Promise<void> {
+		if (this.stopped) return;
 		const validation = validateResponseInput(draft);
 		if (validation !== undefined) {
 			this.status("error", validation);
@@ -732,6 +760,9 @@ export class ConsultationOperations {
 			this.progress(current.id, `sending response to Consultation ${latest.id.slice(0, 8)}...`);
 			progressStarted = true;
 			const result = await this.runner.run("herdr", ["agent", "prompt", latest.agentName, draft]);
+			// A stop over the send: the state is closing, so the delivery settles
+			// nothing; the pending line dies with the record.
+			if (this.stopped) return;
 			if (result.code !== 0) {
 				this.state.consultationRecord.cancelConsultationResponse(latest.id, pending.id);
 				this.callbacks.onConsultationsChanged();
@@ -783,6 +814,7 @@ export class ConsultationOperations {
 	 * from that decision on, this cleanup issues no command at all.
 	 */
 	close(consultation: Consultation): Promise<void> {
+		if (this.stopped) return Promise.resolve();
 		const current = this.state.consultationRecord.consultation(consultation.id) ?? consultation;
 		if (current.state === "closed") return Promise.resolve();
 		if (this.closeOperations.has(current.id)) {
@@ -822,9 +854,10 @@ export class ConsultationOperations {
 	}
 
 	private async runClose(current: Consultation, operation: CloseOperation): Promise<void> {
-		// Cancelled before it reached the head of the queue: the operator forced
-		// this record closed, so herdr is left alone.
-		if (operation.cancelled) return;
+		// A Force-close that reached the record first, or a stop over the run,
+		// settles nothing: the owner is closing the state the close would
+		// settle into, so herdr is left alone.
+		if (operation.cancelled || this.stopped) return;
 		try {
 			const refreshed = this.state.consultationRecord.consultation(current.id) ?? current;
 			// The launch recorded no pane to take down: the record closes with no
@@ -836,36 +869,48 @@ export class ConsultationOperations {
 			// Agent's own name or session says the handles are still its.
 			const identity = await this.identifyCloseAgent(refreshed);
 			// The shared guard: a Force-close that arrived while the probe ran
-			// stops the cleanup here, before any resource is taken down.
-			if (operation.cancelled) return;
-			if (identity.kind === "none") {
-				this.closeAgentMissing(current);
-				return;
-			}
-			this.closeFollowedAgent(identity.agent, refreshed);
-			const latest = this.state.consultationRecord.consultation(current.id) ?? refreshed;
-			const output =
-				latest.paneId === null
-					? null
-					: await new HerdrAgentReader(this.runner).readPane(
-							latest.paneId,
-							this.config().completionMessageLines,
-						);
-			if (operation.cancelled) return;
-			// The last lines the control plane can still read become a partial
-			// snapshot, so the history does not end with the opening prompt.
-			if (output !== null)
-				this.state.consultationRecord.captureConsultationPartial(current.id, output);
-			const settled = this.state.consultationRecord.consultation(current.id) ?? latest;
-			await this.closeExecutePlan(settled, operation);
+			// stops the cleanup here, before any resource is taken down; a stop
+			// over the run settles nothing at all.
+			if (operation.cancelled || this.stopped) return;
+			await this.closeIdentifiedAgent(current, identity, refreshed, operation);
 		} catch (error) {
 			// A force-closed record needs no recovery warning: the operator
-			// already accepted the resources that may remain.
-			if (operation.cancelled) return;
+			// already accepted the resources that may remain. A stopped run
+			// settles no warning either: the record is going away with the state.
+			if (operation.cancelled || this.stopped) return;
 			this.state.consultationRecord.recordConsultationCloseFailure(current.id, errorMessage(error));
 			this.callbacks.onConsultationsChanged();
 			this.status("error", `Consultation close needs recovery: ${errorMessage(error)}`);
 		}
+	}
+
+	/** Take the identified Agent's resources down, in order. */
+	private async closeIdentifiedAgent(
+		current: Consultation,
+		identity: { kind: "agent"; agent: HerdrAgent } | { kind: "none" },
+		refreshed: Consultation,
+		operation: CloseOperation,
+	): Promise<void> {
+		if (identity.kind === "none") {
+			this.closeAgentMissing(current);
+			return;
+		}
+		this.closeFollowedAgent(identity.agent, refreshed);
+		const latest = this.state.consultationRecord.consultation(current.id) ?? refreshed;
+		const output =
+			latest.paneId === null
+				? null
+				: await new HerdrAgentReader(this.runner).readPane(
+						latest.paneId,
+						this.config().completionMessageLines,
+					);
+		if (operation.cancelled || this.stopped) return;
+		// The last lines the control plane can still read become a partial
+		// snapshot, so the history does not end with the opening prompt.
+		if (output !== null)
+			this.state.consultationRecord.captureConsultationPartial(current.id, output);
+		const settled = this.state.consultationRecord.consultation(current.id) ?? latest;
+		await this.closeExecutePlan(settled, operation);
 	}
 
 	/** Plan the cleanup and run it, with the Force-close guard at each step. */
@@ -876,8 +921,8 @@ export class ConsultationOperations {
 		);
 		// The last check before the destructive call: a Force-close that ran
 		// during the topology probe stops the cleanup here, not on the next
-		// command.
-		if (operation.cancelled) return;
+		// command; a stop over the run settles nothing.
+		if (operation.cancelled || this.stopped) return;
 		for (const retained of plan.retains)
 			this.state.consultationRecord.markConsultationResourceShared(
 				settled.id,
@@ -887,14 +932,14 @@ export class ConsultationOperations {
 			);
 		// Retaining shared resources is durable work too. Do not let a
 		// Force-close between the loop and the command produce a partial plan.
-		if (operation.cancelled) return;
+		if (operation.cancelled || this.stopped) return;
 		if (plan.command !== undefined) {
 			const result = await this.runner.run("herdr", plan.command);
 			if (result.code !== 0) throw new Error(commandFailureText(result));
 			// A close sends no focus command, whatever it takes down: the plane
 			// never moves herdr's view on its own (ADR 0061), and a close of a
 			// workspace the client is not viewing leaves that view alone.
-			if (operation.cancelled) return;
+			if (operation.cancelled || this.stopped) return;
 			for (const resource of plan.closes)
 				this.state.consultationRecord.markConsultationResourceClosed(
 					settled.id,
@@ -902,7 +947,7 @@ export class ConsultationOperations {
 					resource.resourceId,
 				);
 		}
-		if (operation.cancelled) return;
+		if (operation.cancelled || this.stopped) return;
 		this.state.consultationRecord.finishConsultationClose(settled.id);
 		this.callbacks.onConsultationsChanged();
 		this.status("info", `Consultation ${settled.id.slice(0, 8)} closed`);
@@ -1242,6 +1287,9 @@ export class ConsultationOperations {
 				consultation.repository.identity,
 				() => this.runOpeningStart(consultation),
 			);
+			// A stop over the opening: the state is closing, so the settlement
+			// writes nothing into the record and states nothing to the view.
+			if (this.stopped) return;
 			if (outcome === undefined) return;
 			if (outcome.status === "conflict") {
 				this.callbacks.onSafetyConflict({
@@ -1254,6 +1302,9 @@ export class ConsultationOperations {
 			}
 			await this.finishOpening(consultation, outcome);
 		} catch (error) {
+			// A stop over the failure: the record is going away with the state, so
+			// the catch fails nothing into it.
+			if (this.stopped) return;
 			this.state.consultationRecord.failConsultationOpening(consultation.id, errorMessage(error));
 			this.callbacks.onConsultationsChanged();
 			this.status(
@@ -1291,6 +1342,7 @@ export class ConsultationOperations {
 			);
 			if (!resolution.ok) return { status: "failed", reason: resolution.reason };
 			resolvedRepository = resolution.repository;
+			if (this.stopped) return undefined;
 			this.state.consultationRecord.setConsultationRepositoryPath(
 				current.id,
 				resolvedRepository.path,
@@ -1298,6 +1350,7 @@ export class ConsultationOperations {
 			const safety = await this.checkLiveCheckoutSafety(current, resolvedRepository);
 			if (safety !== null) return safety;
 		}
+		if (this.stopped) return undefined;
 		return this.launchConsultation(current, onStage, startCheck, resolvedRepository);
 	}
 
@@ -1326,9 +1379,11 @@ export class ConsultationOperations {
 			consultations: this.state.consultationRecord.consultations("open"),
 			agents: probe.agents,
 		});
+		if (this.stopped) return null;
 		if (safety.warning !== undefined)
 			this.state.consultationRecord.setConsultationWarning(current.id, safety.warning);
 		const key = await realPathOf(resolvedRepository.path);
+		if (this.stopped) return null;
 		const confirmed = this.state.consultationRecord.confirmedCheckoutConflicts(key);
 		if (safety.conflicts.some((conflict) => !confirmed.includes(conflict.identity)))
 			return { status: "conflict", safety };
@@ -1354,9 +1409,12 @@ export class ConsultationOperations {
 			onStage,
 			startCheck,
 			resolvedRepository,
-			onRepositoryResolved: (path) =>
-				this.state.consultationRecord.setConsultationRepositoryPath(current.id, path),
+			onRepositoryResolved: (path) => {
+				if (this.stopped) return;
+				this.state.consultationRecord.setConsultationRepositoryPath(current.id, path);
+			},
 			onAgentStarted: (agent) => {
+				if (this.stopped) return;
 				this.state.consultationRecord.recordConsultationAgentHandles(current.id, agent);
 				this.state.consultationRecord.recordConsultationResource(current.id, {
 					kind: "pane",
@@ -1371,25 +1429,29 @@ export class ConsultationOperations {
 					details: `Agent hosted by pane ${agent.paneId}`,
 				});
 			},
-			onResource: (kind, resourceId, owned, details) =>
+			onResource: (kind, resourceId, owned, details) => {
+				if (this.stopped) return;
 				this.state.consultationRecord.recordConsultationResource(current.id, {
 					kind,
 					resourceId,
 					owned,
 					details: details ?? "",
-				}),
+				});
+			},
 			// The start's own cleanup confirms what it removed, so the record
 			// does not keep a row for a handle the plane already took down.
-			onResourceRemoved: (kind, resourceId) =>
-				this.state.consultationRecord.markConsultationResourceClosed(current.id, kind, resourceId),
+			onResourceRemoved: (kind, resourceId) => {
+				if (this.stopped) return;
+				this.state.consultationRecord.markConsultationResourceClosed(current.id, kind, resourceId);
+			},
 		});
 	}
 
 	private async finishOpening(consultation: Consultation, outcome: HandoffOutcome): Promise<void> {
-		const mappingReport =
-			outcome.notes?.mappingToWrite === undefined || this.persistRepositoryMapping === undefined
-				? undefined
-				: await this.persistRepositoryMapping(outcome.notes.mappingToWrite);
+		const mappingReport = await this.openingMappingReport(outcome.notes);
+		// A stop over the finish: the record is going away with the state, so
+		// the opening settles no fact into it.
+		if (this.stopped) return;
 		// The order the write fact takes beside the other notes is the Handoff
 		// dispatch's order, worded by one shared rule (ADR 0103).
 		const lines = handoffReportLines({
@@ -1428,6 +1490,19 @@ export class ConsultationOperations {
 		const warning = this.state.consultationRecord.consultation(consultation.id)?.warning;
 		if (warning !== null && warning !== undefined) this.status("warning", warning);
 		this.callbacks.onConsultationsChanged();
+	}
+
+	/**
+	 * The repository mapping the opening settles, or nothing: a stop over the
+	 * persistence settles no mapping for a record that is going away.
+	 */
+	private async openingMappingReport(
+		notes: ResolutionNotes | undefined,
+	): Promise<ConfigWriteReport | undefined> {
+		if (this.stopped) return undefined;
+		if (notes?.mappingToWrite === undefined || this.persistRepositoryMapping === undefined)
+			return undefined;
+		return this.persistRepositoryMapping(notes.mappingToWrite);
 	}
 
 	private status(kind: ConsultationStatus["kind"], text: string): void {

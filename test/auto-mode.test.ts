@@ -3686,6 +3686,15 @@ describe("the auto dispatch", () => {
 					(log) => log.some((command) => command.startsWith("herdr workspace create")),
 					"the dispatch's workspace create",
 				);
+				// The start's prompt lands a few commands behind the create the
+				// frame already stood on: it is waited for, the way the create
+				// was, so a loaded runner cannot widen the window past the
+				// read (issue #398).
+				await waitCommands(
+					() => app.runner.commands(),
+					(log) => log.some((command) => command.startsWith("herdr agent prompt")),
+					"the dispatch's agent prompt",
+				);
 				const commands = app.runner.commands();
 				expect(commands).toContain(`herdr workspace create --cwd ${path} --no-focus`);
 				expect(commands.some((c) => c.startsWith("herdr agent prompt"))).toBe(true);
@@ -5265,6 +5274,15 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 								command.includes("--add-label ready-for-review"),
 						),
 					"the re-fire's label write",
+				);
+				// The frame the route painted can stand ahead of the start it
+				// runs, the way the re-fire's frame stands ahead of its label
+				// write: the prompt the start records is waited for, not read
+				// at the frame (issue #398).
+				await waitCommands(
+					() => app.runner.commands(),
+					(log) => log.some((command) => command.startsWith("herdr agent prompt")),
+					"the route's agent prompt",
 				);
 				const commands = app.runner.commands();
 				// The re-fire wrote the facts the skip left unwritten.
