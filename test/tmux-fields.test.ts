@@ -27,11 +27,31 @@ const SETTLE_MS = 25_000;
 const tmux = spawnSync("tmux", ["-V"], { encoding: "utf8" });
 const available = tmux.status === 0;
 
-/** Start a detached tmux session running one command, at one size. */
+/**
+ * Start a detached tmux session running one command, at one size.
+ *
+ * A detached session starts in the tmux server's working directory, not the
+ * test's: on a machine where the server stood up long before this run, a
+ * relative command path resolves against the server's directory and the
+ * pane dies at start. The `-c` pins the pane to the test's own directory,
+ * so the check stands on a fresh CI server and on a long-running one alike.
+ */
 function tmuxSpawn(session: string, command: string[], cols: number, rows: number): void {
 	const started = spawnSync(
 		"tmux",
-		["new-session", "-d", "-s", session, "-x", String(cols), "-y", String(rows), ...command],
+		[
+			"new-session",
+			"-d",
+			"-s",
+			session,
+			"-c",
+			process.cwd(),
+			"-x",
+			String(cols),
+			"-y",
+			String(rows),
+			...command,
+		],
 		{ encoding: "utf8" },
 	);
 	if (started.status !== 0) {

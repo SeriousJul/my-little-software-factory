@@ -11,16 +11,16 @@ import type { TicketSourceConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import {
 	type AppSetup,
-	awaitFrame,
-	awaitFrameChecking,
 	cellColors,
-	press,
-	pressArrow,
-	pressScrollKey,
+	frameUntil,
+	guideKey,
+	pageKey,
+	pressControl,
 	rgb,
 	roleColor,
 	rowsOf,
 	sleep,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import { SAMPLE_TICKETS } from "./fact-fixtures.ts";
@@ -139,25 +139,26 @@ function expectPinnedScrollbar(frame: string): void {
 /**
  * Open the modal on the awaiting ticket and wait for the pop-in to finish.
  *
+ * The suite's frame stands below the plane's declared minimum of 26 rows,
+ * and the base bar on that frame stands down to its Help hint alone, so the
+ * Decide key goes out beside the guide, which names the control and its key
+ * whatever the bar stands down to. The dispatch the key lands on keeps
+ * running under the size message, the way the plane runs under it.
+ *
  * The pop-in fades the box in over 120 ms, so the last frames carry a
  * blended foreground. The wait ends when the thumb is fully bright, which
  * only happens at the final size.
  */
-async function openModal(setup: AppSetup): Promise<string> {
-	setup.mockInput.pressEnter();
-	await awaitFrame(setup, (f) => f.includes("Decision:"), "the decision modal");
+async function popInDone(setup: AppSetup): Promise<string> {
+	await guideKey(setup, "decide-completion", "Enter", { shows: "Decision:" });
 	const bright = rgb(roleColor("text"));
-	return awaitFrame(
-		setup,
-		(frame) => {
-			const rows = rowsOf(frame);
-			const thumbRow = bodyRowsOf(frame).find((row) => row[SCROLL_COL] === "█");
-			if (thumbRow === undefined) return false;
-			const at = rows.indexOf(thumbRow);
-			return cellColors(setup, SCROLL_COL, at).fg.every((v, i) => v === bright[i]);
-		},
-		"the pop-in to finish",
-	);
+	return frameUntil(setup, "the pop-in to finish", (frame) => {
+		const rows = rowsOf(frame);
+		const thumbRow = bodyRowsOf(frame).find((row) => row[SCROLL_COL] === "█");
+		if (thumbRow === undefined) return false;
+		const at = rows.indexOf(thumbRow);
+		return cellColors(setup, SCROLL_COL, at).fg.every((v, i) => v === bright[i]);
+	});
 }
 
 /**
@@ -191,34 +192,25 @@ describe("the decision modal's pop-in", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				setup.mockInput.pressEnter();
-				// The first frame that holds the modal, waited with the harness's
-				// deadline: a pop-in that lands late lands on a wait that still
-				// reaches it, and a miss names this wait instead of a count that
-				// came to zero.
-				await awaitFrame(setup, (f) => f.includes("Decision:"), "the decision modal's pop-in");
+				// The wide frame stands the base bar, and the Decide hint is on it:
+				// the key goes out from the bar, the suite's first choice.
+				await pressControl(setup, "decide-completion", { shows: "Decision:" });
 				// Every painted frame from the pop-in to the settled size, checked
 				// as the stream gives it: while the box grows, no glyph may reach
 				// the terminal's last column, and the settled frame is checked too.
-				// The poll runs faster than the pop-in's own 16 ms tick, so a
-				// painted frame is not replaced in the buffer before a read.
-				const settled = await awaitFrameChecking(setup, {
-					until: (f) => rowsOf(f).some((row) => row[WIDE - 2] === "┐"),
-					what: "the pop-in to finish",
-					check: (frame) => {
-						const rows = rowsOf(frame);
-						for (const [i, row] of rows.entries()) {
-							// Above the bar, the last column holds the overlay's
-							// background alone: no glyph may land there.
-							if (i === rows.length - 1) continue;
-							expect(row[WIDE - 1], `a glyph reached the last column on row ${i}:\n${row}`).toBe(
-								" ",
-							);
-						}
-						// The last row is the shared Action bar, not empty margin.
-						expect(rows[rows.length - 1]).toContain("Help");
-					},
-					pollMs: 5,
+				// The wait steps the stream faster than the pop-in's own 16 ms tick,
+				// so a painted frame is not replaced in the buffer before a read.
+				const settled = await frameUntil(setup, "the pop-in to finish", (frame) => {
+					const rows = rowsOf(frame);
+					for (const [i, row] of rows.entries()) {
+						// Above the bar, the last column holds the overlay's
+						// background alone: no glyph may land there.
+						if (i === rows.length - 1) continue;
+						expect(row[WIDE - 1], `a glyph reached the last column on row ${i}:\n${row}`).toBe(" ");
+					}
+					// The last row is the shared Action bar, not empty margin.
+					expect(rows[rows.length - 1]).toContain("Help");
+					return rows.some((row) => row[WIDE - 2] === "┐");
 				});
 				// It opens at the bottom, where the conclusion sits.
 				expect(rowsOf(settled).some((row) => row.includes("352"))).toBe(true);
@@ -234,7 +226,7 @@ describe("the decision modal's scrollbar", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				const settled = await openModal(setup);
+				const settled = await popInDone(setup);
 				const body = bodyRowsOf(settled);
 				// The log is six rows, and the pane keeps the three the box has
 				// left after the context row, the pane's border, and the region's
@@ -263,14 +255,14 @@ describe("the decision modal's scrollbar", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await openModal(setup);
+				await popInDone(setup);
 				// One row up brings the blank row between the two text
-				// blocks into the window.
-				setup.mockInput.pressKey("k");
-				const frame = await awaitFrame(
-					setup,
-					(f) => rowsOf(f).some(isBlankBodyRow),
-					"the blank row in the log",
+				// blocks into the window. The key goes out beside the guide,
+				// which names the control and its key, and the wait ends on the
+				// row the scroll reveals.
+				await pressControl(setup, "scroll-body", { via: "k", quiet: true });
+				const frame = await frameUntil(setup, "the blank row in the log", (f) =>
+					rowsOf(f).some(isBlankBodyRow),
 				);
 				// It must be an empty row with its track in the last column,
 				// not a lone mark next to the left border.
@@ -294,16 +286,14 @@ describe("the decision modal's nested border at the declared minimum", () => {
 	const MIN_WIDTH = 40;
 	const MIN_HEIGHT = 27;
 
-	/** Open the modal at the minimum and wait for the pop-in to settle. */
-	async function openAtMinimum(setup: AppSetup): Promise<string> {
-		setup.mockInput.pressEnter();
-		await awaitFrame(
-			setup,
-			(f) => rowsOf(f).some((row) => row.includes("Select action")),
-			"the decision modal at the minimum",
-		);
-		// The pop-in grows the box to its final place over 120 ms; the frame
-		// above may still hold it a row short of the edge.
+	/** Open the modal at the minimum and wait for the pop-in to rest. */
+	async function atRestAtMinimum(setup: AppSetup): Promise<string> {
+		// The bar packs the Decide hint away at the declared minimum, so the
+		// key goes out beside the guide, which names the control and its key.
+		await guideKey(setup, "decide-completion", "Enter", { shows: "Select action" });
+		// The pop-in is budgeted to 120 ms, so a grace of 250 ms stands
+		// over the budget: when it has run, the box is at its final place,
+		// the frame above may not hold it there yet.
 		await sleep(250);
 		return setup.captureCharFrame();
 	}
@@ -313,7 +303,7 @@ describe("the decision modal's nested border at the declared minimum", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				const frame = await openAtMinimum(setup);
+				const frame = await atRestAtMinimum(setup);
 				const rows = rowsOf(frame);
 				// The box's border is the terminal's edge one cell in, on
 				// every side that has a side: the box sits on the Message line.
@@ -346,7 +336,7 @@ describe("the decision modal's nested border at the declared minimum", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await openAtMinimum(setup);
+				await atRestAtMinimum(setup);
 				// The pane opens pinned to the log's tail, as it does at every
 				// size, and the long turn's head stands above the window: a 27-row
 				// box shows some of it, never all of it.
@@ -355,21 +345,59 @@ describe("the decision modal's nested border at the declared minimum", () => {
 				expect(tail).not.toContain("First I read the ticket");
 				// Down moves the region's selection to the Goto row: the region's
 				// own keys, one cell inside the pane's border.
-				const moved = await pressArrow(setup, "down", "the selection on the Goto row", (f) =>
-					rowsOf(f).some((row) => row.includes("❯ Goto")),
-				);
-				expect(moved).not.toContain("❯ Close");
+				await pressControl(setup, "select-action", { via: "↓", shows: "❯ Goto" });
 				// And the body still scrolls inside the nested pane: the jump key
 				// brings the head, which no window row held, into view. Both
 				// regions take their keys at the plane's floor.
-				await pressScrollKey(setup, "home", "the body to reach the log's head", (f) =>
-					f.includes("First I read the ticket"),
-				);
+				await pageKey(setup, "home", { shows: "First I read the ticket" });
 			},
 			{ width: MIN_WIDTH, height: MIN_HEIGHT, loopPolicy: { kind: "held" }, plane: planeRecord },
 		);
 	});
 });
+
+/**
+ * The pane's top and bottom border rows, by the pane's own border glyphs.
+ * A frame mid-resize that has not committed the pane yet answers null, so
+ * a wait can poll through it.
+ */
+function paneBordersOf(rows: string[]): { top: number; bottom: number } | null {
+	const top = rows.findIndex((row) => row.includes("Turn log"));
+	if (top < 0) return null;
+	const inner = rows.findIndex((row, index) => index > top && row.slice(2, 4).trim() === "└");
+	if (inner < 0) return null;
+	return { top, bottom: inner };
+}
+
+/** The pane of a frame that must hold one, or the test fails. */
+function expectPaneOf(rows: string[]): { top: number; bottom: number } {
+	const borders = paneBordersOf(rows);
+	if (borders === null) throw new Error("the frame holds no Turn log pane");
+	return borders;
+}
+
+/**
+ * Open the modal on the awaiting ticket and wait for the pop-in to rest.
+ *
+ * This modal's log may carry no scrollbar, so the rest cannot be read from
+ * the thumb's color the way the scrollbar case does. The pop-in is budgeted
+ * to 120 ms, so a grace of 250 ms bounds the budget: the effect's end is
+ * time-limited, and once the grace has run the effect is done, whatever a
+ * loaded runner did to the ticks in between - the effect cannot land
+ * outside a grace that stands over its own budget. A settle cannot read it:
+ * the resize repaints on its own tick, and two settle polls that land inside
+ * one tick read the same mid-resize frame and call it stable. The shows
+ * wait before it starts the change, so the read after it ends on a change
+ * that is done, not one that never started.
+ */
+async function modalAtRest(setup: AppSetup): Promise<string> {
+	// The bar stands down to its Help hint below the plane's minimum, so
+	// the key goes out beside the guide, which names the control and its
+	// key.
+	await guideKey(setup, "decide-completion", "Enter", { shows: "Turn log" });
+	await sleep(250);
+	return setup.captureCharFrame();
+}
 
 /**
  * The Decision region at the box's floor: the log's floor of three rows,
@@ -423,46 +451,12 @@ describe("the decision modal's region and the log's floor", () => {
 		},
 	};
 
-	/**
-	 * Open the modal on the awaiting ticket and wait for the pop-in to settle.
-	 *
-	 * This modal's log may carry no scrollbar, so the settle cannot read the
-	 * thumb's color the way the scrollbar case does. The wait ends after the
-	 * pop-in's 120 ms have run out and the frame holds the pane.
-	 */
-	async function openSettled(setup: AppSetup): Promise<string> {
-		setup.mockInput.pressEnter();
-		await awaitFrame(setup, (f) => f.includes("Turn log"), "the decision modal");
-		await sleep(250);
-		return setup.captureCharFrame();
-	}
-
-	/**
-	 * The pane's top and bottom border rows, by the pane's own border glyphs.
-	 * A frame mid-resize that has not committed the pane yet answers null, so
-	 * a wait can poll through it.
-	 */
-	function paneBordersOf(rows: string[]): { top: number; bottom: number } | null {
-		const top = rows.findIndex((row) => row.includes("Turn log"));
-		if (top < 0) return null;
-		const inner = rows.findIndex((row, index) => index > top && row.slice(2, 4).trim() === "└");
-		if (inner < 0) return null;
-		return { top, bottom: inner };
-	}
-
-	/** The pane of a frame that must hold one, or the test fails. */
-	function expectPaneOf(rows: string[]): { top: number; bottom: number } {
-		const borders = paneBordersOf(rows);
-		if (borders === null) throw new Error("the frame holds no Turn log pane");
-		return borders;
-	}
-
 	test("a short log keeps the region pinned to the box's floor without a scrollbar", async () => {
 		const planeRecord = await modalPlane([oneLineTicket]);
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				const frame = await openSettled(setup);
+				const frame = await modalAtRest(setup);
 				const rows = rowsOf(frame);
 				// The body holds one row and the pane's window eight, so the log
 				// scrolls nowhere and the pane carries no thumb.
@@ -489,7 +483,7 @@ describe("the decision modal's region and the log's floor", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				const frame = await openSettled(setup);
+				const frame = await modalAtRest(setup);
 				const rows = rowsOf(frame);
 				const { top, bottom } = expectPaneOf(rows);
 				// The pane keeps its full chrome and the log's floor of three
@@ -516,15 +510,11 @@ describe("the decision modal's region and the log's floor", () => {
 				expect(rows[rows.length - 1]).toContain("1-2/3");
 				// Down moves the selection; the window slides when the step would
 				// leave the cursor's row, and the range follows on the bar.
-				await pressArrow(setup, "down", "the selection on the Goto row", (f) =>
-					f.includes("❯ Goto"),
-				);
-				const slid = await pressArrow(
-					setup,
-					"down",
-					"the window to slide onto the handoff row",
-					(f) => rowsOf(f).slice(-1)[0].includes("2-3/3"),
-				);
+				await pressControl(setup, "select-action", { via: "↓", shows: "❯ Goto" });
+				const slid = await pressControl(setup, "select-action", {
+					via: "↓",
+					shows: "2-3/3",
+				});
 				expect(slid).toContain("❯ Handoff: fix");
 			},
 			{ width: FLOOR_WIDTH, height: 21, loopPolicy: { kind: "held" }, plane: planeRecord },
@@ -564,7 +554,7 @@ describe("the decision modal's region and the log's floor", () => {
 			await withApp(
 				async (setup) => {
 					planeRecord.settleFirstFetch();
-					const frame = await openSettled(setup);
+					const frame = await modalAtRest(setup);
 					// The route runs on its position ticket: the row reads as the
 					// fact line that names the standing, and takes no key.
 					expect(frame).toContain("the route is running on its position ticket");
@@ -589,7 +579,7 @@ describe("the decision modal's region and the log's floor", () => {
 			await withApp(
 				async (setup) => {
 					planeRecord.settleFirstFetch();
-					const frame = await openSettled(setup);
+					const frame = await modalAtRest(setup);
 					// The position holds no handoff and nothing waits for it: the
 					// route is dead. The stateful world derives the Next step's
 					// gate on the position - the position offers no `fix` - and
@@ -599,15 +589,11 @@ describe("the decision modal's region and the log's floor", () => {
 					expect(frame).toContain("the Next step is held: the position no longer offers the task");
 					// The hold does not withdraw the key: the region's window shows
 					// two of its three rows, and down walks to the handoff row.
-					await pressArrow(setup, "down", "the selection on the Goto row", (f) =>
-						f.includes("❯ Goto"),
-					);
-					const atHandoff = await pressArrow(
-						setup,
-						"down",
-						"the selection on the handoff row",
-						(f) => f.includes("❯ Handoff: fix"),
-					);
+					await pressControl(setup, "select-action", { via: "↓", shows: "❯ Goto" });
+					const atHandoff = await pressControl(setup, "select-action", {
+						via: "↓",
+						shows: "❯ Handoff: fix",
+					});
 					expect(atHandoff).toContain("Handoff: fix");
 				},
 				{ width: FLOOR_WIDTH, height: 21, loopPolicy: { kind: "held" }, plane: planeRecord },
@@ -640,7 +626,7 @@ describe("the decision modal's region and the log's floor", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				const frame = await openSettled(setup);
+				const frame = await modalAtRest(setup);
 				// The no-fire's reason stands as the region's fact line. The
 				// region shows two of its three rows, Close first, and the bar
 				// states the window. No position: no handoff row stands.
@@ -653,15 +639,11 @@ describe("the decision modal's region and the log's floor", () => {
 
 				// Down walks the rows; the window slides when the step would
 				// leave it, and the Re-fire row is the region's last row.
-				await pressArrow(setup, "down", "the selection on the Goto row", (f) =>
-					f.includes("❯ Goto"),
-				);
-				const atRefire = await pressArrow(
-					setup,
-					"down",
-					"the window to slide onto the re-fire row",
-					(f) => f.includes("❯ Re-fire"),
-				);
+				await pressControl(setup, "select-action", { via: "↓", shows: "❯ Goto" });
+				const atRefire = await pressControl(setup, "select-action", {
+					via: "↓",
+					shows: "❯ Re-fire",
+				});
 				expect(atRefire).toContain("3-3/3");
 			},
 			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "held" }, plane: planeRecord },
@@ -682,7 +664,7 @@ describe("the decision modal's region and the log's floor", () => {
 			await withApp(
 				async (setup) => {
 					planeRecord.settleFirstFetch();
-					const full = await openSettled(setup);
+					const full = await modalAtRest(setup);
 					// Full chrome: the pane's padding stands above the body's rows.
 					let borders = expectPaneOf(rowsOf(full));
 					expect(
@@ -695,16 +677,12 @@ describe("the decision modal's region and the log's floor", () => {
 					// border, the border keeps, and the log keeps its floor of
 					// three rows with its thumb.
 					setup.resize(FLOOR_WIDTH, 15);
-					let frame = await awaitFrame(
-						setup,
-						(f) => {
-							const rows = rowsOf(f);
-							const top = rows.findIndex((row) => row.includes("Turn log"));
-							if (top < 0) return false;
-							return rows[top + 1].slice(4, RIGHT_BORDER - 2).trim() !== "";
-						},
-						"the pane's padding to yield",
-					);
+					let frame = await frameUntil(setup, "the pane's padding to yield", (f) => {
+						const rows = rowsOf(f);
+						const top = rows.findIndex((row) => row.includes("Turn log"));
+						if (top < 0) return false;
+						return rows[top + 1].slice(4, RIGHT_BORDER - 2).trim() !== "";
+					});
 					borders = expectPaneOf(rowsOf(frame));
 					expect(borders.bottom - borders.top).toBe(4); // two borders, no padding, three body rows
 					expect(frame).toContain("█");
@@ -713,10 +691,8 @@ describe("the decision modal's region and the log's floor", () => {
 					// row, the region keeps its one row, and the bar states the
 					// region's range over the two it holds.
 					setup.resize(FLOOR_WIDTH, 12);
-					frame = await awaitFrame(
-						setup,
-						(f) => rowsOf(f).slice(-1)[0].includes("1-1/2"),
-						"the region's range at the low box",
+					frame = await frameUntil(setup, "the region's range at the low box", (f) =>
+						rowsOf(f).slice(-1)[0].includes("1-1/2"),
 					);
 					const paneRows = rowsOf(frame);
 					borders = expectPaneOf(paneRows);
@@ -729,11 +705,7 @@ describe("the decision modal's region and the log's floor", () => {
 					// to the size message, and the modal's own bar keeps the way
 					// out.
 					setup.resize(FLOOR_WIDTH, 9);
-					frame = await awaitFrame(
-						setup,
-						(f) => f.includes("Terminal too small"),
-						"the size message",
-					);
+					frame = await waitFor(setup, { shows: "Terminal too small" });
 					expect(frame).not.toContain("Turn log");
 					expect(rowsOf(frame).slice(-1)[0]).toContain("Cancel");
 				},
@@ -751,7 +723,7 @@ describe("the decision modal's region and the log's floor", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				const frame = await openSettled(setup);
+				const frame = await modalAtRest(setup);
 				const rows = rowsOf(frame);
 				const { bottom } = expectPaneOf(rows);
 				// The capture's lines stand inside the pane's border, and the
@@ -763,9 +735,10 @@ describe("the decision modal's region and the log's floor", () => {
 				// The body fills the window, so the pane holds no thumb, and the
 				// scroll's key refuses with its reason on the Message line.
 				expect(frame).not.toContain("█");
-				const refused = await press(setup, "j", "the scroll's refusal", (f) =>
-					f.includes("the body fills its pane"),
-				);
+				const refused = await pressControl(setup, "scroll-body", {
+					via: "j",
+					refuses: "the body fills its pane",
+				});
 				expect(refused).not.toContain("█");
 				// The region keeps its rows at the floor, below the pane.
 				expect(rows[bottom + 1]).toContain("❯ Close");

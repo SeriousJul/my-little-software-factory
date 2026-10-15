@@ -29,22 +29,19 @@ import type { FactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import {
+	type AppBootFields,
 	type AppSetup,
 	actionBarRowOf,
-	awaitFrame,
-	confirmPanel,
 	detailPaneText,
-	focusDetail,
+	fieldKey,
 	frameText,
+	frameUntil,
+	guideKey,
 	HEIGHT,
 	markerRowOf,
 	messageRowOf,
-	openSurface,
-	press,
-	pressArrow,
-	pressEnterQuiet,
-	pressQuiet,
-	pressScrollKey,
+	pageKey,
+	pressControl,
 	rgb,
 	roleColor,
 	rowsOf,
@@ -52,8 +49,11 @@ import {
 	sleep,
 	spanColors,
 	startingFaceOf,
+	toggleAutoHandoff,
+	typeText,
 	WIDTH,
 	waitCommands,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -619,6 +619,29 @@ async function planeOf(app: SeededApp, runner?: CommandRunner): Promise<Plane> {
 }
 
 /**
+ * Boot the app on the plane the seeded app stands up, and run the body on
+ * the boot it answers. The body receives the rig's setup and the plane
+ * record beside it; the test's boot fields name the frame without the
+ * record, and the helper adds the record to them. The record comes back to
+ * the test, which decides whether the plane closes or keeps running.
+ */
+async function appOnSeeded(
+	app: SeededApp,
+	fn: (setup: AppSetup, planeRecord: Plane) => Promise<void>,
+	extra: Partial<AppBootFields>,
+	runner?: CommandRunner,
+): Promise<Plane> {
+	const record = await planeOf(app, runner);
+	await withApp(
+		async (setup) => {
+			await fn(setup, record);
+		},
+		{ ...extra, plane: record },
+	);
+	return record;
+}
+
+/**
  * A seeded app and the plane it boots from.
  *
  * The world answers the boot's agent list with the standing it holds, so the
@@ -687,24 +710,36 @@ async function settleReverify(src: FakeSource, outcome: FetchOutcome): Promise<v
 	for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
 }
 
-/** Enter through the real key path, then wait for its effect. */
-async function pressReturn(
+/**
+ * Enter through the real key path, then wait for its effect.
+ *
+ * The frames these presses stand on document different controls' Enter: the
+ * handoff's, the Decide's, and the decision modal's row action. One named
+ * control owns the key on none of those frames alone, so the key goes out as
+ * the catalogue's escape, and the plane routes it to the on-bar owner of the
+ * frame it lands on.
+ */
+async function handoffEnter(
 	setup: AppSetup,
 	what: string,
-	predicate: (frame: string) => boolean,
+	target: string | ((frame: string) => boolean),
 ): Promise<string> {
-	setup.mockInput.pressEnter();
-	return await awaitFrame(setup, predicate, what);
+	await guideKey(setup, "handoff", "Enter", { quiet: true });
+	const predicate =
+		typeof target === "string" ? (frame: string) => frameText(frame).includes(target) : target;
+	return await frameUntil(setup, what, predicate);
 }
 
 /** Escape through the real key path, then wait for its effect. */
-async function pressEscape(
+async function closeSurface(
 	setup: AppSetup,
 	what: string,
-	predicate: (frame: string) => boolean,
+	target: string | ((frame: string) => boolean),
 ): Promise<string> {
-	setup.mockInput.pressEscape();
-	return await awaitFrame(setup, predicate, what);
+	await guideKey(setup, "cancel-action", "Esc", { quiet: true });
+	const predicate =
+		typeof target === "string" ? (frame: string) => !frameText(frame).includes(target) : target;
+	return await frameUntil(setup, what, predicate);
 }
 
 /**
@@ -729,21 +764,23 @@ describe("the mode cell and the a key", () => {
 		const app = seededApp("open");
 		const before = readFileSync(app.configPath, "utf8");
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
-				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
+				await waitFor(setup, { shows: "● manual 0/2" });
+				await toggleAutoHandoff(setup, { quiet: true });
+				await waitFor(setup, { shows: "○ auto 0/2" });
 				// The flip is factory state (ADR 0036): it is on the state file the
 				// moment the key lands, and the toggle never writes the config file.
 				expect(app.state.handoff.autoHandoffMode()).toBe(true);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
-				await press(setup, "a", "auto off", (f) => f.includes("● manual 0/2"));
+				await toggleAutoHandoff(setup, { quiet: true });
+				await waitFor(setup, { shows: "● manual 0/2" });
 				expect(app.state.handoff.autoHandoffMode()).toBe(false);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -751,15 +788,15 @@ describe("the mode cell and the a key", () => {
 	test("a restart on the same state file finds the mode where the operator left it", async () => {
 		const app = seededApp("open");
 		const statePath = app.state.path;
-		const planeRecord = await planeOf(app);
-
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
-				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
+				await waitFor(setup, { shows: "● manual 0/2" });
+				await toggleAutoHandoff(setup, { quiet: true });
+				await waitFor(setup, { shows: "○ auto 0/2" });
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		// The end of the run: the plane closes its state file, as a restart or a
 		// dev reload does.
@@ -778,11 +815,7 @@ describe("the mode cell and the a key", () => {
 		await withApp(
 			async (setup) => {
 				src.settle(success);
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("○ auto 0/2"),
-					"the restarted mode cell",
-				);
+				const frame = await waitFor(setup, { shows: "○ auto 0/2" });
 				expect(frame).not.toContain("● manual");
 			},
 			{ width: WIDTH, height: HEIGHT, plane: restarted, loopPolicy: LOOP_60S },
@@ -797,7 +830,7 @@ describe("the mode cell and the a key", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
+				const frame = await waitFor(setup, { shows: "● manual 0/2" });
 				expect(frame).not.toContain("○ auto");
 				expect(app.state.handoff.autoHandoffMode()).toBe(false);
 			},
@@ -814,13 +847,15 @@ describe("the mode cell and the a key", () => {
 	test("the a key leaves the mode flip in the record", async () => {
 		const app = seededApp("open");
 		const lines: RecordedLine[] = [];
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
-				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
-				await press(setup, "a", "auto off", (f) => f.includes("● manual 0/2"));
+				await waitFor(setup, { shows: "● manual 0/2" });
+				await toggleAutoHandoff(setup, { quiet: true });
+				await waitFor(setup, { shows: "○ auto 0/2" });
+				await toggleAutoHandoff(setup, { quiet: true });
+				await waitFor(setup, { shows: "● manual 0/2" });
 				// One line per key, in the order the keys landed, each at the `info` level
 				// the configuration reference states for it. The `mode:` prefix is the
 				// record's family for the facts the operator sets by key. The cycle's own hold
@@ -830,13 +865,7 @@ describe("the mode cell and the a key", () => {
 					infoLine("mode: auto-handoff is off"),
 				]);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: LOOP_60S,
-				logger: recordLogger(lines),
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S, logger: recordLogger(lines) },
 		);
 		planeRecord.close();
 	});
@@ -845,11 +874,11 @@ describe("the mode cell and the a key", () => {
 		const app = seededApp("open");
 		const lines: RecordedLine[] = [];
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
+				await waitFor(setup, { shows: "● manual 0/2" });
 				// The real write path, made to fail: the mode table is gone from the
 				// state file, so the plane's next write to it is refused by SQLite.
 				// The busy timeout covers the refresh write still in flight.
@@ -857,7 +886,8 @@ describe("the mode cell and the a key", () => {
 				damage.exec("PRAGMA busy_timeout = 5000;");
 				damage.exec("DROP TABLE auto_handoff_mode;");
 				damage.close();
-				await press(setup, "a", "auto on", (f) => f.includes("○ auto 0/2"));
+				await toggleAutoHandoff(setup, { quiet: true });
+				await waitFor(setup, { shows: "○ auto 0/2" });
 				// The in-session flip stands, and the failure names the state file
 				// the plane could not write and says how long the flip lives.
 				const frame = await settle(setup);
@@ -878,13 +908,7 @@ describe("the mode cell and the a key", () => {
 				expect(recorded[0]?.message).toContain("mode: auto-handoff is on for this session only:");
 				expect(recorded[0]?.message).toContain(app.state.path);
 			},
-			{
-				width: WIDE_STATUS,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: LOOP_60S,
-				logger: recordLogger(lines),
-			},
+			{ width: WIDE_STATUS, height: HEIGHT, loopPolicy: LOOP_60S, logger: recordLogger(lines) },
 		);
 		planeRecord.close();
 	});
@@ -895,22 +919,18 @@ describe("the mode cell and the a key", () => {
 			agents: [{ name: AGENT, kind: "pi", status: "blocked", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("● manual 1"),
-					"the unlimited mode cell",
-				);
+				const frame = await waitFor(setup, { shows: "● manual 1" });
 				// The count stands without a limit after it: no `/0` anywhere.
 				expect(frame).toContain("● manual 1");
 				expect(frame).not.toContain("/0");
 				// The blocked agent still holds its seat, with no limit to hold it to.
 				expect(ticketRow(frame)).toContain("blocked");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -950,15 +970,15 @@ describe("the mode cell and the a key", () => {
 			workspaceId: "ws-2",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				// The ticket seat and the Consultation seat fill the limit of
 				// two in one number on the mode cell.
-				await awaitFrame(setup, (f) => f.includes("● manual 2/2"), "the mode cell");
+				await waitFor(setup, { shows: "● manual 2/2" });
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -970,21 +990,19 @@ describe("the failure markers", () => {
 			agents: [{ name: AGENT, kind: "pi", status: "blocked", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(
-					setup,
-					(f) => ticketRow(f).includes("blocked"),
-					"the blocked badge",
+				const frame = await frameUntil(setup, "the blocked badge", (f) =>
+					ticketRow(f).includes("blocked"),
 				);
 				// The agent is alive but not working: the state badge is replaced by the
 				// blocked badge, and the live agent count still holds its slot.
 				expect(ticketRow(frame)).toContain("blocked");
 				expect(frame).toContain("● manual 1/2");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1002,10 +1020,8 @@ describe("the failure markers", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(
-					setup,
-					(f) => ticketRow(f).includes("missing"),
-					"the missing badge",
+				const frame = await frameUntil(setup, "the missing badge", (f) =>
+					ticketRow(f).includes("missing"),
 				);
 				// The missing badge replaces the state badge although no state changed:
 				// manual mode never acts on a missing agent. The missing agent holds no
@@ -1014,16 +1030,19 @@ describe("the failure markers", () => {
 				expect(ticketRow(frame)).toContain("missing");
 
 				// Enter on the in-flight missing ticket opens the missing modal.
-				await pressReturn(setup, "the missing modal", (f) => f.includes("Missing:"));
+				await handoffEnter(setup, "the missing modal", "Missing:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Restart");
 				expect(panel).toContain("Abandon");
 
 				// Abandon is the last action: one down, confirm.
-				await pressArrow(setup, "down", "select abandon", (f) =>
-					frameText(f).includes("❯ Abandon"),
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Abandon" });
+				console.log(
+					"ABANDON-SEL",
+					rowsOf(setup.captureCharFrame()).slice(2, 12).join(" | ").slice(0, 500),
 				);
-				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
+				await handoffEnter(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 				// The open ticket keeps no failure badge.
 				expect(ticketRow(await settle(setup))).not.toContain("missing");
 			},
@@ -1046,17 +1065,17 @@ describe("the failure markers", () => {
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await pressReturn(setup, "the Missing modal", (f) => f.includes("Missing:"));
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
+				await handoffEnter(setup, "the Missing modal", "Missing:");
 				const modal = frameText(await settle(setup));
 				expect(modal).toContain("Restart");
 				expect(modal).toContain("same task type, same workspace");
 				expect(modal).toContain("Abandon");
-				await pressReturn(setup, "the restart handoff", (_frame) =>
+				await handoffEnter(setup, "the restart handoff", (_frame) =>
 					app.runner.commands().some((command) => command.startsWith("herdr agent prompt")),
 				);
 				expect(app.runner.commands()).toContain(
@@ -1070,7 +1089,7 @@ describe("the failure markers", () => {
 					}),
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1083,12 +1102,11 @@ describe("the failure markers", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await pressReturn(setup, "the Missing modal", (f) => f.includes("Missing:"));
-				await pressArrow(setup, "down", "select abandon", (f) =>
-					frameText(f).includes("❯ Abandon"),
-				);
-				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
+				await handoffEnter(setup, "the Missing modal", "Missing:");
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Abandon" });
+				await handoffEnter(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
 		);
@@ -1119,20 +1137,18 @@ describe("the failure markers", () => {
 			paneContent: { "pane-1": "the agent is waiting on a build\n" },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("blocked"), "the blocked badge");
+				await frameUntil(setup, "the blocked badge", (f) => ticketRow(f).includes("blocked"));
 				// Enter on the blocked ticket opens the Live view: the Goto is
 				// one confirm away, and nothing focuses before it.
-				await pressReturn(setup, "the Live view", (f) =>
-					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await handoffEnter(setup, "the Live view", `Live: ${DEFAULT_TICKET_TITLE}`);
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent focus");
 				// The stream shows the pane output under the ticket's context,
 				// and the blocked status stands on the context line.
-				await awaitFrame(setup, (f) => f.includes("the agent is waiting on a build"), "the stream");
+				await waitFor(setup, { shows: "the agent is waiting on a build" });
 				expect(frameText(setup.captureCharFrame())).toContain("acme/factory · implement · pi");
 				// The pop-in fades in for a little while, so wait it out before
 				// reading the painted colors: mid-fade they are blended.
@@ -1140,12 +1156,12 @@ describe("the failure markers", () => {
 				expect(spanColors(setup, "blocked")).toContainEqual(rgb(roleColor("yellow")));
 				// Enter confirms the Goto: the focus runs, the view closes, and
 				// the ticket stays in flight with the blocked badge standing.
-				await pressReturn(setup, "the focus", (f) => f.includes("focused the agent"));
+				await handoffEnter(setup, "the focus", "focused the agent");
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(ticketRow(await settle(setup))).toContain("blocked");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1158,13 +1174,13 @@ describe("the failure markers", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await pressReturn(setup, "the missing modal", (f) => f.includes("Missing:"));
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
+				await handoffEnter(setup, "the missing modal", "Missing:");
 				// The panel key handler subscribes in an effect that flushes after
 				// the commit; a settled frame proves the panel is open and ready.
 				await settle(setup);
 				// Esc cancels: nothing runs, no decision lands.
-				await pressEscape(setup, "the panel to close", (f) => !f.includes("Missing:"));
+				await closeSurface(setup, "the panel to close", "Missing:");
 				// The ticket is still in flight with its missing agent.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(ticketRow(await settle(setup))).toContain("missing");
@@ -1183,10 +1199,8 @@ describe("the failure markers", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(
-					setup,
-					(f) => ticketRow(f).includes("handoff limit"),
-					"the handoff limit marker",
+				const frame = await frameUntil(setup, "the handoff limit marker", (f) =>
+					ticketRow(f).includes("handoff limit"),
 				);
 				// The marker rides at the end of the list row. The terminal row
 				// also carries the detail pane, so check only the list half.
@@ -1215,14 +1229,12 @@ describe("the Ticket Close key", () => {
 			agents: [{ name: AGENT, kind: "pi", status: "working", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(
-					setup,
-					(f) => actionBarRowOf(f).includes("Delete Close"),
-					"the Close hint on the bar",
+				const frame = await frameUntil(setup, "the Close hint on the bar", (f) =>
+					actionBarRowOf(f).includes("Delete Close"),
 				);
 				const bar = actionBarRowOf(frame);
 				// Close and Goto stand beside each other on an in-flight Ticket's
@@ -1232,7 +1244,7 @@ describe("the Ticket Close key", () => {
 				expect(bar).toContain("g Goto");
 				expect(bar).toContain("Enter Live view");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1251,11 +1263,10 @@ describe("the Ticket Close key", () => {
 				// The pane herdr does not list wears the `missing` marker, which
 				// ADR 0030 puts before the Starting face: the Ticket is in flight
 				// with no Agent to stop, and the close is the way out of it.
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				const before = app.runner.commands();
-				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
+				const opened = await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				const body = frameText(opened);
 				// The first line names who is alive - here, the fact the last
 				// observation saw: herdr no longer lists the pane the handoff
@@ -1273,10 +1284,10 @@ describe("the Ticket Close key", () => {
 				// states: a lost pane is nothing to keep running.
 				expect(body).toContain("Cancel keep the cycle, and its missing pane");
 
-				const cancelled = await pressEscape(
+				const cancelled = await closeSurface(
 					setup,
 					"the base view",
-					(f) => !f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
+					`Close: ${DEFAULT_TICKET_TITLE}`,
 				);
 				await settle(setup);
 				// Cancel is the way out with nothing changed: the ticket, its
@@ -1312,11 +1323,10 @@ describe("the Ticket Close key", () => {
 				// The pane herdr does not list wears the `missing` marker, which
 				// ADR 0030 puts before the Starting face: the Ticket is in flight
 				// with no Agent to stop, and the close is the way out of it.
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await focusDetail(setup);
-				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
+				await guideKey(setup, "detail", "l", { quiet: true });
+				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
+				const opened = await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				expect(frameText(opened)).toContain(
 					"Close removes the worktree checkout; a dirty checkout stays as a leftover.",
 				);
@@ -1338,10 +1348,9 @@ describe("the Ticket Close key", () => {
 				// The pane herdr does not list wears the `missing` marker, which
 				// ADR 0030 puts before the Starting face: the Ticket is in flight
 				// with no Agent to stop, and the close is the way out of it.
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
+				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
+				const opened = await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				const body = frameText(opened);
 				expect(body).toContain(
 					"Close closes the Agent's herdr tab, and keeps the checkout and the workspace.",
@@ -1381,14 +1390,12 @@ describe("the Ticket Close key", () => {
 			);
 		}
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(
-					setup,
-					(f) => ticketRow(f).includes("failed starts"),
-					"the Failed-start park marker",
+				const frame = await frameUntil(setup, "the Failed-start park marker", (f) =>
+					ticketRow(f).includes("failed starts"),
 				);
 				// The marker rides at the end of the list row, in the lane the Handoff
 				// limit's marker rides.
@@ -1402,7 +1409,7 @@ describe("the Ticket Close key", () => {
 					"Handoff starts failing: 2 in a row; the Top-up adds no automatic start",
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1435,14 +1442,12 @@ describe("the Ticket Close key", () => {
 				"which is no agent of this ticket: agent_name_taken",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(
-					setup,
-					(f) => ticketRow(f).includes("name held"),
-					"the held Agent name marker",
+				const frame = await frameUntil(setup, "the held Agent name marker", (f) =>
+					ticketRow(f).includes("name held"),
 				);
 				// The marker rides at the end of the list row, in the lane the Handoff
 				// limit's and the park's markers ride, and the Leftover marker stands
@@ -1461,7 +1466,7 @@ describe("the Ticket Close key", () => {
 				// And the Leftover block states its own fact beside it, never this one.
 				expect(detail).toContain("its cleanup runs in herdr");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1480,13 +1485,11 @@ describe("the Ticket Close key", () => {
 				// The pane herdr does not list wears the `missing` marker, which
 				// ADR 0030 puts before the Starting face: the Ticket is in flight
 				// with no Agent to stop, and the close is the way out of it.
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
-				const frame = await confirmPanel(setup, "the close", (f) =>
-					ticketRow(f).includes("[open]"),
-				);
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
+				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
+				await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
+				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
+				const frame = await frameUntil(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				// The cycle ended and the ticket is open with its next number, and
 				// no completion trace exists: the turn never settled.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
@@ -1519,22 +1522,22 @@ describe("the Ticket Close key", () => {
 			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				// The pane herdr does not list wears the `missing` marker, which
 				// ADR 0030 puts before the Starting face: the Ticket is in flight
 				// with no Agent to stop, and the close is the way out of it.
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
+				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
+				await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				// The dialog warned about this outcome before the answer was given.
 				expect(frameText(setup.captureCharFrame())).toContain(
 					"a dirty checkout stays as a leftover",
 				);
-				const frame = await confirmPanel(setup, "the close", (f) =>
+				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
+				const frame = await frameUntil(setup, "the close", (f) =>
 					ticketRow(f).includes("leftover"),
 				);
 				// The cycle still ended; what herdr could not remove is the ticket's
@@ -1548,7 +1551,7 @@ describe("the Ticket Close key", () => {
 				);
 				expect(messageRowOf(frame)).toContain("the close cleanup failed");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1568,45 +1571,38 @@ describe("the Ticket Close key", () => {
 			agents: [{ name: AGENT, kind: "pi", status: "working", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				// The poll sees the live pane and marks the Ticket running.
-				await awaitFrame(
-					setup,
-					(f) => detailPaneText(f).includes("[running]"),
-					"the in-flight ticket",
+				await frameUntil(setup, "the in-flight ticket", (f) =>
+					detailPaneText(f).includes("[running]"),
 				);
-				await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
+				await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				// The Agent dies while the dialog stands: the world stops holding it,
 				// and the next poll's list no longer reports it. Auto mode ends the
 				// missing cycle at the handoff limit, so the ticket returns to open
 				// under the dialog.
 				app.world.removeAgent(AGENT);
-				const released = await awaitFrame(
+				const released = await frameUntil(
 					setup,
+					"the panel to let go when its cycle ends",
 					(f) =>
 						!frameText(f).includes(`Close: ${DEFAULT_TICKET_TITLE}`) &&
 						ticketRow(f).includes("[open]"),
-					"the panel to let go when its cycle ends",
 				);
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				// The base pane answers its keys again: no invisible panel swallows them.
-				const refused = await press(setup, "delete", "the refusal on the open ticket", (f) =>
+				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
+				const refused = await frameUntil(setup, "the refusal on the open ticket", (f) =>
 					messageRowOf(f).includes("no work is in flight to close"),
 				);
 				expect(frameText(refused)).not.toContain(`Close: ${DEFAULT_TICKET_TITLE}`);
 				expect(frameText(released)).toContain("[open]");
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 100 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 100 } },
 		);
 		planeRecord.close();
 	});
@@ -1620,13 +1616,13 @@ describe("the Ticket Close key", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
+				const opened = await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				expect(frameText(opened)).toContain("The turn has settled, and no Agent works.");
 				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");
-				await confirmPanel(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
+				await frameUntil(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				// The settled turn carries the decision, exactly as the Decision
 				// modal's Close row leaves it, and the tab went through the cleanup.
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("closed");
@@ -1645,10 +1641,8 @@ describe("the detail pane", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(
-					setup,
-					(f) => ticketRow(f).includes("[awaiting]"),
-					"the awaiting ticket",
+				const frame = await frameUntil(setup, "the awaiting ticket", (f) =>
+					ticketRow(f).includes("[awaiting]"),
 				);
 				// The detail pane shows the selected ticket, which is the awaiting
 				// one: first in the attention order.
@@ -1678,12 +1672,12 @@ describe("the decision modal", () => {
 			detail: { transition: reviewRoute() },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("The turn is done.");
 				expect(panel).toContain("Handoff: review");
@@ -1696,13 +1690,10 @@ describe("the decision modal", () => {
 				expect(panel).toContain("ticket · added ready-for-review · removed ready-for-agent");
 
 				// Close is the default; the workflow handoff is the last row: down twice.
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await pressReturn(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				// The prompt carried the last captured message, and the
 				// settled agent's tab was closed once the new agent started.
@@ -1714,7 +1705,7 @@ describe("the decision modal", () => {
 				// the routed handoff started, not at the claim.
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1737,18 +1728,18 @@ describe("the decision modal", () => {
 				}),
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("no linked pull request was found for the ticket");
 				// No position: no handoff row stands.
 				expect(panel).not.toContain("Handoff: review");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1765,17 +1756,17 @@ describe("the decision modal", () => {
 			environment: "live-worktree",
 			detail: { transition: reviewRoute() },
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Handoff: review");
 				expect(panel).toContain("the Next step is held: the position no longer offers the task");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1797,17 +1788,17 @@ describe("the decision modal", () => {
 				transition: reviewRoute(),
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(landed);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Handoff: review");
 				expect(panel).toContain("the Next step is held: the position is at the handoff limit");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1827,17 +1818,17 @@ describe("the decision modal", () => {
 			environment: "live-worktree",
 			detail: { transition: reviewRoute() },
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(landed);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Handoff: review");
 				expect(panel).not.toContain("the Next step is held");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1863,12 +1854,12 @@ describe("the decision modal", () => {
 			detail: { transition: noFire },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain(
 					"no transition branch held: the pull request carries no review score",
@@ -1877,13 +1868,10 @@ describe("the decision modal", () => {
 				expect(panel).not.toContain("Handoff: review");
 
 				// Close is the default, Goto the second row, Re-fire the third.
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the re-fire row", (f) =>
-					frameText(f).includes("❯ Re-fire"),
-				);
-				await pressReturn(setup, "the re-fire lands", (f) =>
-					frameText(f).includes("Handoff: review"),
-				);
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await handoffEnter(setup, "the re-fire lands", "Handoff: review");
 				const after = frameText(await settle(setup));
 				// The fact lines stand on the re-fired outcome, the Re-fire row
 				// stands down, and the Message line reports the landing. The fact
@@ -1915,7 +1903,7 @@ describe("the decision modal", () => {
 				});
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -1933,18 +1921,18 @@ describe("the decision modal", () => {
 				}),
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("label write failed: gh pr edit #12 failed");
 				// The write did not complete: the Re-fire row stands on it too.
 				expect(panel).toContain("Re-fire");
 			},
-			{ width: WIDE_STATUS, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDE_STATUS, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2018,24 +2006,22 @@ describe("the decision modal", () => {
 			const pull = app.pullSrc;
 			if (pull === undefined) throw new Error("the pull source is missing");
 
-			const planeRecord = await planeOf(app);
-			await withApp(
-				async (setup) => {
+			const planeRecord = await appOnSeeded(
+				app,
+				async (setup, _planeRecord) => {
 					app.src.settle(success);
-					await awaitFrame(
-						setup,
-						(f) => ticketRow(f).includes("[awaiting]"),
-						"the awaiting ticket",
+					await frameUntil(setup, "the awaiting ticket", (f) =>
+						ticketRow(f).includes("[awaiting]"),
 					);
 					// The startup refresh runs while the decision is still
 					// closed: it finds the pull request gone.
 					pull.settle(pullGone);
-					await awaitFrame(
+					await frameUntil(
 						setup,
-						() => app.state.sourceFact.stillListed(pullIdentity) === false,
 						"the pull request to leave its source",
+						() => app.state.sourceFact.stillListed(pullIdentity) === false,
 					);
-					await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+					await handoffEnter(setup, "the decision modal", "Decision:");
 					const panel = frameText(await settle(setup));
 					// The position's ticket is in no list: the handoff row
 					// stands withdrawn, and the fact line takes its place.
@@ -2044,7 +2030,7 @@ describe("the decision modal", () => {
 					expect(panel).toContain("Close");
 					expect(panel).toContain("Goto");
 				},
-				{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+				{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 			);
 			planeRecord.close();
 		});
@@ -2061,28 +2047,24 @@ describe("the decision modal", () => {
 			const pull = app.pullSrc;
 			if (pull === undefined) throw new Error("the pull source is missing");
 
-			const planeRecord = await planeOf(app);
-			await withApp(
-				async (setup) => {
+			const planeRecord = await appOnSeeded(
+				app,
+				async (setup, _planeRecord) => {
 					app.src.settle(success);
-					await awaitFrame(
-						setup,
-						(f) => ticketRow(f).includes("[awaiting]"),
-						"the awaiting ticket",
+					await frameUntil(setup, "the awaiting ticket", (f) =>
+						ticketRow(f).includes("[awaiting]"),
 					);
 					// The refresh confirms the pull request still lists.
 					pull.settle(pullOpen);
-					await awaitFrame(
-						setup,
-						() => app.state.sourceFact.stillListed(pullIdentity),
-						"the pull request to list",
+					await frameUntil(setup, "the pull request to list", () =>
+						app.state.sourceFact.stillListed(pullIdentity),
 					);
-					await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+					await handoffEnter(setup, "the decision modal", "Decision:");
 					const panel = frameText(await settle(setup));
 					expect(panel).toContain("Handoff: review");
 					expect(panel).not.toContain("no handoff stands");
 				},
-				{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+				{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 			);
 			planeRecord.close();
 		});
@@ -2099,16 +2081,14 @@ describe("the decision modal", () => {
 			const pull = app.pullSrc;
 			if (pull === undefined) throw new Error("the pull source is missing");
 
-			const planeRecord = await planeOf(app);
-			await withApp(
-				async (setup) => {
+			const planeRecord = await appOnSeeded(
+				app,
+				async (setup, _planeRecord) => {
 					app.src.settle(success);
-					await awaitFrame(
-						setup,
-						(f) => ticketRow(f).includes("[awaiting]"),
-						"the awaiting ticket",
+					await frameUntil(setup, "the awaiting ticket", (f) =>
+						ticketRow(f).includes("[awaiting]"),
 					);
-					await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+					await handoffEnter(setup, "the decision modal", "Decision:");
 					// The row stands while the pull request still lists: the
 					// refresh is in flight, and the state lists it.
 					const before = frameText(await settle(setup));
@@ -2116,16 +2096,16 @@ describe("the decision modal", () => {
 					// The in-flight refresh settles without the pull request:
 					// it left the source while the decision stood open.
 					pull.settle(pullGone);
-					await awaitFrame(
+					await frameUntil(
 						setup,
-						() => app.state.sourceFact.stillListed(pullIdentity) === false,
 						"the pull request to leave its source",
+						() => app.state.sourceFact.stillListed(pullIdentity) === false,
 					);
 					const after = frameText(await settle(setup));
 					expect(after).not.toContain("Handoff: review");
 					expect(after).toContain("the position's ticket left its source; no handoff stands");
 				},
-				{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+				{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 			);
 			planeRecord.close();
 		});
@@ -2143,26 +2123,23 @@ describe("the decision modal", () => {
 			agents: [{ name: AGENT, kind: "pi", status: "idle", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await pressReturn(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 				// The name holder is gone with its predecessor tab. It is not a
 				// leftover fact, and the row must not carry a false marker.
 				expect(app.state.handoff.leftoverEnvironment(identity)).toBe(null);
 				expect(ticketRow(setup.captureCharFrame())).not.toContain("leftover");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2185,19 +2162,16 @@ describe("the decision modal", () => {
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await pressReturn(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision panel", "Decision:");
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				const start = app.runner
 					.commands()
@@ -2205,7 +2179,7 @@ describe("the decision modal", () => {
 				expect(start).toContain("--kind pi --pane pane-2 -- --thinking low");
 				expect(start).not.toContain("--model");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2233,19 +2207,16 @@ describe("the decision modal", () => {
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await pressReturn(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision panel", "Decision:");
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				const start = app.runner
 					.commands()
@@ -2254,7 +2225,7 @@ describe("the decision modal", () => {
 					"--kind codex --pane pane-2 -- --model review-model -c model_reasoning_effort=high",
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2291,24 +2262,31 @@ describe("the decision modal", () => {
 			detail: { transition: reviewRoute({ agent: "pi" }) },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				// The first row ends the cycle: it has no Handoff settings to
-				// edit, so e there opens nothing.
-				await press(setup, "e", "the decision modal to hold", (f) => f.includes("Decision:"));
+				// edit, so e there opens nothing. The frame is the decision
+				// modal, whose bar documents the modal's own controls, not the
+				// panel's e: the key is the catalogue's escape.
+				await guideKey(setup, "override", "e", { quiet: true });
+				await waitFor(setup, { shows: "Decision:" });
 				expect(frameText(await settle(setup))).not.toContain("Override");
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Handoff: review" });
 
 				// e opens the panel on the choice the edge resolved: the pinned
 				// pi agent, and the target profile's model and context window.
-				await press(setup, "e", "the route override panel", (f) => f.includes("Override"));
+				// The frame is the decision modal, whose bar documents the
+				// modal's own controls, not the panel's e: the key is the
+				// catalogue's escape.
+				await guideKey(setup, "override", "e", { quiet: true });
+				await waitFor(setup, { shows: "Override" });
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Agent pi");
 				expect(panel).toContain("Model review-model");
@@ -2318,23 +2296,19 @@ describe("the decision modal", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 
 				// The operator replaces the resolved model for this one handoff.
-				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
-				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
-				await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
+				await waitFor(setup, { shows: "❯ Environment" });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
+				await waitFor(setup, { shows: "❯ Task type" });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
+				await waitFor(setup, { shows: "❯ Model" });
 				// The row's input takes focus on its own render pass: let that
 				// land, and the frame settle, before the edit keys go in.
 				await settle(setup);
-				setup.mockInput.pressKey("HOME");
-				for (const _ of "review-model") setup.mockInput.pressKey("DELETE");
-				await setup.mockInput.typeText("one-shot-model");
-				await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Model one-shot-model"),
-					"the typed model",
-				);
-				await pressReturn(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				fieldKey(setup, "home");
+				for (const _ of "review-model") fieldKey(setup, "delete");
+				await typeText(setup, "one-shot-model");
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				// The override is the last writer: the agent started on the
 				// operator's model, not the profile's. The context window the
@@ -2348,7 +2322,7 @@ describe("the decision modal", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2387,40 +2361,47 @@ describe("the decision modal", () => {
 			environment: "live-worktree",
 			detail: { transition: reviewRoute({ agent: "claude" }) },
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await press(setup, "e", "the route override panel", (f) => f.includes("Override"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Handoff: review" });
+				// The frame is the decision modal, whose bar documents the
+				// modal's own controls, not the panel's e: the key is the
+				// catalogue's escape.
+				await guideKey(setup, "override", "e", { quiet: true });
+				await waitFor(setup, { shows: "Override" });
 				const opened = frameText(await settle(setup));
 				// The panel starts on the route the edge resolved: its pinned Agent,
 				// and the target profile's Model.
 				expect(opened).toContain("Agent claude");
 				expect(opened).toContain("Model review-model");
 
-				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
-				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
+				await waitFor(setup, { shows: "❯ Environment" });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
+				await waitFor(setup, { shows: "❯ Task type" });
 				// Left from `review` lands on `fix`, whose profile names its own
 				// Agent and Model. Both rows are untouched, so both follow it, and
 				// the edge's pin is gone with the edge's target.
-				await press(setup, "h", "the fix task type", (f) => frameText(f).includes("Task type fix"));
+				await guideKey(setup, "cycle-choice", "←", { quiet: true });
+				await waitFor(setup, { shows: "Task type fix" });
 				const moved = frameText(await settle(setup));
 				expect(moved).toContain("Agent pi");
 				expect(moved).toContain("Model fix-model");
 
-				await pressReturn(setup, "the routed handoff", (f) => f.includes("Handoff task type: fix"));
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: fix");
 				const start = app.runner
 					.commands()
 					.find((command) => command.startsWith("herdr agent start"));
 				expect(start).toContain("--kind pi --pane pane-2 -- --model fix-model");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2432,20 +2413,24 @@ describe("the decision modal", () => {
 			environment: "live-worktree",
 			detail: { transition: reviewRoute() },
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await press(setup, "e", "the route override panel", (f) => f.includes("Override"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Handoff: review" });
+				// The frame is the decision modal, whose bar documents the
+				// modal's own controls, not the panel's e: the key is the
+				// catalogue's escape.
+				await guideKey(setup, "override", "e", { quiet: true });
+				await waitFor(setup, { shows: "Override" });
 				await settle(setup);
 				// Esc drops the edit and returns to the decision still being made.
-				const back = await pressEscape(
+				const back = await closeSurface(
 					setup,
 					"the decision modal",
 					(f) => !f.includes("Override") && f.includes("Decision:"),
@@ -2454,7 +2439,7 @@ describe("the decision modal", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2464,10 +2449,9 @@ describe("the decision modal", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				const frame = await press(setup, "e", "the hint on the status line", (f) =>
-					frameText(f).includes("press Enter, then e on a Handoff row"),
-				);
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await pressControl(setup, "override", { quiet: true });
+				const frame = await waitFor(setup, { shows: "press Enter, then e on a Handoff row" });
 				// The bar carries the e Override hint with its reason; the panel's
 				// box title is the open signal.
 				expect(frame).not.toContain("┌─Override");
@@ -2494,12 +2478,10 @@ describe("the decision modal", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(
-					setup,
-					(frame) => ticketRow(frame).includes("[awaiting]"),
-					"the awaiting ticket",
+				await frameUntil(setup, "the awaiting ticket", (frame) =>
+					ticketRow(frame).includes("[awaiting]"),
 				);
-				await pressReturn(setup, "the decision modal", (frame) => frame.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				expect(frameText(await settle(setup))).toContain("Handoff: review agent codex");
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
@@ -2533,19 +2515,16 @@ describe("the decision modal", () => {
 		});
 		app.world.setModelList("pi", ["anthropic/claude-review-4"]);
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await pressReturn(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision panel", "Decision:");
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				const start = app.runner
 					.commands()
@@ -2553,7 +2532,7 @@ describe("the decision modal", () => {
 				expect(start).toContain("--model anthropic/claude-review-4");
 				expect(start).not.toContain("opus-4");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2581,12 +2560,12 @@ describe("the decision modal", () => {
 			environment: "worktree",
 			detail: { transition: reviewRoute({ agent: "codex", environment: "worktree" }) },
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				// One position, one row: the facts offer review, so the modal
 				// shows the route once, with the pinning in its detail.
@@ -2594,13 +2573,10 @@ describe("the decision modal", () => {
 				expect(panel).toContain("agent codex, environment worktree");
 
 				// The route row is the last one: down twice, confirm.
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the route row", (f) =>
-					frameText(f).includes("❯ Handoff: review agent codex"),
-				);
-				await pressReturn(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				// The handoff ran with the transition's pinned agent, and the
 				// route's decision landed on the settled turn's trace when the
@@ -2610,7 +2586,7 @@ describe("the decision modal", () => {
 				);
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2629,17 +2605,16 @@ describe("the decision modal", () => {
 			stderr: "the workspace is gone",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "down", "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await pressReturn(setup, "the failed route", (f) => f.includes("the workspace is gone"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await handoffEnter(setup, "the failed route", "the workspace is gone");
 
 				// The handoff never started: the ask ended the cycle in the
 				// same write that landed the decision (ADR 0064, ADR 0072), so
@@ -2652,10 +2627,10 @@ describe("the decision modal", () => {
 				// the assertion narrows it to the screen that left. A swap that has not
 				// started fails the positive, and so does a frame with nothing drawn
 				// (issue #304).
-				const list = await awaitFrame(
+				const list = await frameUntil(
 					setup,
-					(f) => f.includes("Tickets") && ticketRow(f).includes("[open]"),
 					"the decision screen to fall back to the list",
+					(f) => f.includes("Tickets") && ticketRow(f).includes("[open]"),
 				);
 				expect(list).not.toContain("Decision:");
 				expect(ticketRow(list)).toContain("[open]");
@@ -2664,7 +2639,7 @@ describe("the decision modal", () => {
 				// rewritten.
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2674,15 +2649,17 @@ describe("the decision modal", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				// Goto is the second row: one down, confirm.
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				setup.mockInput.pressEnter();
-				await awaitFrame(
-					setup,
-					() => app.runner.commands().includes("herdr agent focus pane-1"),
-					"the focus",
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				// Goto is the second row: one down, confirm. The frame is the
+				// decision modal, whose bar documents the modal's own controls:
+				// Enter runs the selected row's action, so the key is the
+				// catalogue's escape, routed by the plane to that row.
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await frameUntil(setup, "the focus", () =>
+					app.runner.commands().includes("herdr agent focus pane-1"),
 				);
 				// The focus went to the stored pane, and the handoff stayed
 				// open: Goto is navigation (ADR 0033), so the ticket rests in
@@ -2707,16 +2684,14 @@ describe("the decision modal", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// `g` is the base-mode Goto (ADR 0033): on an awaiting ticket the
 				// recorded pane stands, the focus runs without opening a surface,
 				// and the ticket rests awaiting until the poll or a decision
 				// moves it.
-				setup.mockInput.pressKey("g");
-				await awaitFrame(
-					setup,
-					() => app.runner.commands().includes("herdr agent focus pane-1"),
-					"the focus",
+				await guideKey(setup, "ticket-goto", "g", { quiet: true });
+				await frameUntil(setup, "the focus", () =>
+					app.runner.commands().includes("herdr agent focus pane-1"),
 				);
 				expect(
 					app.state.ticketWorkCycle.ticketListViews(
@@ -2748,12 +2723,12 @@ describe("the decision modal", () => {
 		});
 		const thumbRowOf = (frame: string) => rowsOf(frame).findIndex((row) => row.includes("█"));
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = await settle(setup);
 				const text = frameText(panel);
 				// The near-fullscreen modal gives the terminal's last two rows to
@@ -2773,28 +2748,34 @@ describe("the decision modal", () => {
 				// `first(n)` is the oldest line still on screen after n steps up.
 				const first = (steps: number) => `log ${String(41 - shown - steps).padStart(3, "0")}`;
 				const last = (steps: number) => `log ${String(40 - steps).padStart(3, "0")}`;
-				await press(setup, "k", "one row up", (f) => f.includes(first(1)) && !f.includes(last(0)));
-				const higher = await press(
+				await guideKey(setup, "scroll-body", "k", { quiet: true });
+				await frameUntil(setup, "one row up", (f) => f.includes(first(1)) && !f.includes(last(0)));
+				await guideKey(setup, "scroll-body", "k", { quiet: true });
+				const higher = await frameUntil(
 					setup,
-					"k",
 					"one more row up",
 					(f) => f.includes(first(2)) && !f.includes(last(1)),
 				);
 				expect(thumbRowOf(higher)).toBeLessThan(bottomThumbRow);
 				// j scrolls back down and brings the thumb with it.
-				const backDown = await press(
+				await guideKey(setup, "scroll-body", "j", { quiet: true });
+				const backDown = await frameUntil(
 					setup,
-					"j",
 					"one row down",
 					(f) => f.includes(last(1)) && !f.includes(first(2)),
 				);
 				expect(thumbRowOf(backDown)).toBe(bottomThumbRow);
 
-				// up and down move the action row.
-				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressArrow(setup, "up", "back to close", (f) => frameText(f).includes("❯ Close"));
+				// up and down move the action row. The frame is the decision
+				// modal, whose bar documents the modal's own row keys: the key
+				// is the catalogue's escape, routed by the plane to the row's
+				// move.
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Goto" });
+				await guideKey(setup, "move-list", "↑", { quiet: true });
+				await waitFor(setup, { shows: "❯ Close" });
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2804,13 +2785,13 @@ describe("the decision modal", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				// The panel key handler subscribes in an effect that flushes after
 				// the commit; a settled frame proves the panel is open and ready.
 				await settle(setup);
 				// Esc cancels: nothing runs, no decision lands.
-				await pressEscape(setup, "the panel to close", (f) => !f.includes("Decision:"));
+				await closeSurface(setup, "the panel to close", "Decision:");
 				// The ticket is still awaiting, and the turn is still pending.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
@@ -2840,8 +2821,8 @@ describe("the decision modal", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressEnterQuiet(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const modal = frameText(await settle(setup));
 				// The border names the ticket, and the context line names the
 				// repository, the task type, the agent, and the completion time.
@@ -2887,31 +2868,32 @@ describe("the decision modal", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await settle(setup);
 
 				// The modal opens at the bottom, where the agent's conclusion is.
 				// home takes the opening, without the conclusion.
-				await pressScrollKey(
+				await pageKey(setup, "home", { quiet: true });
+				await frameUntil(
 					setup,
-					"home",
 					"the log at its top",
 					(f) => f.includes("log 001") && !f.includes("log 040"),
 				);
 				// end returns to the conclusion, without the opening.
-				await pressScrollKey(
+				await pageKey(setup, "end", { quiet: true });
+				await frameUntil(
 					setup,
-					"end",
 					"the log at its bottom",
 					(f) => f.includes("log 040") && !f.includes("log 001"),
 				);
 				// pageup pages back up, out of the conclusion.
-				await pressScrollKey(setup, "pageup", "a page up", (f) => !f.includes("log 040"));
+				await pageKey(setup, "pageup", { quiet: true });
+				await waitFor(setup, { hides: "log 040" });
 				// pagedown pages back down to the bottom.
-				await pressScrollKey(
+				await pageKey(setup, "pagedown", { quiet: true });
+				await frameUntil(
 					setup,
-					"pagedown",
 					"a page down",
 					(f) => f.includes("log 040") && !f.includes("log 001"),
 				);
@@ -2928,21 +2910,17 @@ describe("the herdr-unreachable line", () => {
 		// herdr cannot be reached: the agent list fails.
 		app.world.set("herdr", ["agent", "list"], { code: 1, stderr: "no herdr session" });
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(
-					setup,
-					(f) => f.includes("herdr is unreachable"),
-					"the herdr-unreachable warning",
-				);
+				await waitFor(setup, { shows: "herdr is unreachable" });
 				// The loop holds: the failed list marks nothing, so the
 				// in-flight ticket runs on without a marker.
 				expect(ticketRow(setup.captureCharFrame())).not.toContain("missing");
 				expect(ticketRow(setup.captureCharFrame())).not.toContain("blocked");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -2958,10 +2936,10 @@ describe("the Close cleanup", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				// Close is the default row: confirm.
-				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
 				// herdr worktree remove closes the workspace with the checkout
 				// and never deletes the branch, so pushed work and pull requests
@@ -2987,9 +2965,9 @@ describe("the Close cleanup", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
 				expect(commands).toContain("herdr tab close tab-1");
 				const joined = commands.join("\n");
@@ -3012,12 +2990,11 @@ describe("the Close cleanup", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await pressReturn(setup, "the missing modal", (f) => f.includes("Missing:"));
-				await pressArrow(setup, "down", "select abandon", (f) =>
-					frameText(f).includes("❯ Abandon"),
-				);
-				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
+				await handoffEnter(setup, "the missing modal", "Missing:");
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Abandon" });
+				await handoffEnter(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
 				// herdr worktree remove closes the workspace with the checkout
 				// and never deletes the branch: there is no workspace close after it.
@@ -3041,12 +3018,11 @@ describe("the Close cleanup", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await pressReturn(setup, "the missing modal", (f) => f.includes("Missing:"));
-				await pressArrow(setup, "down", "select abandon", (f) =>
-					frameText(f).includes("❯ Abandon"),
-				);
-				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
+				await handoffEnter(setup, "the missing modal", "Missing:");
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Abandon" });
+				await handoffEnter(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
 				expect(commands).toContain("herdr tab close tab-1");
 				const joined = commands.join("\n");
@@ -3069,13 +3045,13 @@ describe("the leftover environment", () => {
 			dirtyWorktree: true,
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 				// The state transition stands: the cycle closed. What failed is
 				// now a fact on the ticket, not only a message line that fades.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
@@ -3094,7 +3070,7 @@ describe("the leftover environment", () => {
 				expect(detail).toContain("Leftover: herdr workspace ws-1");
 				expect(detail).toContain("its cleanup runs in herdr");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3111,15 +3087,16 @@ describe("the leftover environment", () => {
 			dirtyWorktree: true,
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 				const commandsBefore = app.runner.commands();
-				const frame = await press(setup, "delete", "the close refusal", (f) =>
+				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
+				const frame = await frameUntil(setup, "the close refusal", (f) =>
 					messageRowOf(f).includes("no work is in flight to close"),
 				);
 				// The refusal is readable on the Message line, in the catalogue's
@@ -3143,7 +3120,7 @@ describe("the leftover environment", () => {
 				expect(detail).toContain("Leftover: herdr workspace ws-1");
 				expect(detail).toContain("its cleanup runs in herdr");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3159,14 +3136,13 @@ describe("the leftover environment", () => {
 					: app.runner.run(command, args, options),
 			listModels: (kind) => app.runner.listModels(kind),
 		};
-		const planeRecord = await planeOf(app, brokenRunner);
-
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the first decision", "Decision:");
+				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
 					expect.objectContaining({
@@ -3178,7 +3154,8 @@ describe("the leftover environment", () => {
 					"the close cleanup failed: the close cleanup did not run",
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
+			brokenRunner,
 		);
 		planeRecord.close();
 	});
@@ -3197,14 +3174,12 @@ describe("the leftover environment", () => {
 			stderr: "the checkout is dirty",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(
-					setup,
-					(f) => ticketRow(f).includes("leftover"),
-					"the leftover marker",
+				const frame = await frameUntil(setup, "the leftover marker", (f) =>
+					ticketRow(f).includes("leftover"),
 				);
 				// Auto mode ends the missing cycle at the limit, and the failed
 				// Close cleanup of the abandoned handoff lands as a fact on the
@@ -3223,7 +3198,7 @@ describe("the leftover environment", () => {
 				const row = frameText(ticketRow(frame).slice(0, Math.floor(WIDTH / 2))).trimEnd();
 				expect(row.endsWith("handoff limit leftover")).toBe(true);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3241,16 +3216,15 @@ describe("the leftover environment", () => {
 			detail: { stateNow: () => Date.now() - 600_000 },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await pressReturn(setup, "the missing modal", (f) => f.includes("Missing:"));
-				await pressArrow(setup, "down", "select abandon", (f) =>
-					frameText(f).includes("❯ Abandon"),
-				);
-				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("leftover"));
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
+				await handoffEnter(setup, "the missing modal", "Missing:");
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Abandon" });
+				await handoffEnter(setup, "the abandonment", (f) => ticketRow(f).includes("leftover"));
 				expect(app.runner.commands()).toContain("herdr worktree remove --workspace ws-1");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				// The fact names the handoff the abandon ended, so the clear that
@@ -3263,7 +3237,7 @@ describe("the leftover environment", () => {
 					}),
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3282,11 +3256,11 @@ describe("the leftover environment", () => {
 			stderr: '{"error":{"code":"agent_running","message":"running agent pi"}}\n',
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("leftover"), "the leftover marker");
+				await frameUntil(setup, "the leftover marker", (f) => ticketRow(f).includes("leftover"));
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
@@ -3297,12 +3271,7 @@ describe("the leftover environment", () => {
 					}),
 				);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 20 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 20 } },
 		);
 		planeRecord.close();
 	});
@@ -3347,37 +3316,38 @@ describe("the leftover environment", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(pairSuccess);
-				await awaitFrame(
-					setup,
-					(f) => ticketRow(f).includes("[awaiting]"),
-					"the first awaiting ticket",
+				await frameUntil(setup, "the first awaiting ticket", (f) =>
+					ticketRow(f).includes("[awaiting]"),
 				);
-				await pressReturn(setup, "the first decision", (f) => f.includes("Decision:"));
-				await pressReturn(setup, "the first Close cleanup", () => gate.busy());
-				await awaitFrame(setup, (f) => !f.includes("Decision:"), "the first panel closing");
+				await handoffEnter(setup, "the second decision", "Decision:");
+				await handoffEnter(setup, "the first Close cleanup", () => gate.busy());
+				await waitFor(setup, { hides: "Decision:" });
 
-				await pressArrow(setup, "up", "the second ticket", (f) =>
+				await pressControl(setup, "move-list", { via: "↑", quiet: true });
+				await frameUntil(setup, "the second ticket", (f) =>
 					detailPaneText(f).includes("External key: #6"),
 				);
-				await pressReturn(setup, "the second decision", (f) => f.includes("Decision:"));
-				await pressReturn(setup, "the queued second Close cleanup", (f) =>
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await handoffEnter(setup, "the queued second Close cleanup", (f) =>
 					ticketRow(f, "Watch agent turns").includes("[open]"),
+				);
+				console.log(
+					"ABANDON",
+					rowsOf(setup.captureCharFrame()).slice(2, 12).join(" | ").slice(0, 500),
 				);
 				// The second ticket is open again. Its handoff claims now, but the
 				// cleanup seat keeps its external work out of herdr.
 				await settleReverify(app.src, pairSuccess);
-				setup.mockInput.pressEnter();
+				await pressControl(setup, "handoff", { quiet: true });
 				await settle(setup);
 
 				gate.release();
-				await awaitFrame(setup, () => gate.arrivals() === 2, "the second cleanup reaching herdr");
+				await frameUntil(setup, "the second cleanup reaching herdr", () => gate.arrivals() === 2);
 				expect(app.runner.commands()).not.toContain("herdr workspace list");
 
 				gate.release();
-				await awaitFrame(
-					setup,
-					() => app.runner.commands().includes("herdr workspace list"),
-					"the queued handoff after both cleanups",
+				await frameUntil(setup, "the queued handoff after both cleanups", () =>
+					app.runner.commands().includes("herdr workspace list"),
 				);
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
@@ -3430,13 +3400,13 @@ describe("the leftover environment", () => {
 			completedAt: "2026-09-02T10:30:00.000Z",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressReturn(setup, "the close", (f) => f.includes(" closed"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await handoffEnter(setup, "the close", " closed");
 				// Nothing to close means nothing reached: the fact of the row the
 				// cleanup did not reach stands, and no command resolved it.
 				expect(app.runner.commands().join("\n")).not.toContain("herdr worktree remove");
@@ -3445,7 +3415,7 @@ describe("the leftover environment", () => {
 					expect.objectContaining({ handoffId: first.handoffId, workspaceId: "ws-1" }),
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3458,13 +3428,13 @@ describe("the leftover environment", () => {
 			dirtyWorktree: true,
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 				// The detail block is one warning the operator can act on: the
 				// fact, its reason, and its herdr pointer all carry it.
 				expect(spanColors(setup, "Leftover: herdr workspace ws-1")).toEqual([
@@ -3472,7 +3442,7 @@ describe("the leftover environment", () => {
 				]);
 				expect(spanColors(setup, "its cleanup runs in herdr")).toEqual([rgb(roleColor("yellow"))]);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3515,15 +3485,15 @@ describe("the leftover environment", () => {
 	 * again: the key path that meets the leftover name.
 	 */
 	async function closeAndHandOffAgain(setup: AppSetup, src: FakeSource): Promise<void> {
-		await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-		await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-		await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+		await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+		await handoffEnter(setup, "the decision modal", "Decision:");
+		await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 		await settleReverify(src, success);
 		// Enter on the open ticket: the leftover does not stop it. The row
 		// wears the Starting window's face on the keypress (ADR 0030), and the
 		// face keeps standing on the settle, so the face with the Working line
 		// cleared is the settle itself.
-		await pressReturn(
+		await handoffEnter(
 			setup,
 			"the handoff to settle",
 			(f) => startingFaceOf(ticketRow(f)) !== null && !frameText(f).includes("Working:"),
@@ -3583,21 +3553,18 @@ describe("the leftover environment", () => {
 					: app.runner.run(command, args, options),
 			listModels: (kind) => app.runner.listModels(kind),
 		};
-		const planeRecord = await planeOf(app, collisionRunner);
-
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				await settleReverify(app.src, success);
 				// The drop warning prefixes the reason, and the line truncates at
 				// the terminal width, so the test renders wide enough to hold
 				// the whole of it.
-				await pressReturn(setup, "the handoff stopped by the stranger", (f) =>
-					f.includes("pane pane-stranger"),
-				);
+				await handoffEnter(setup, "the handoff stopped by the stranger", "pane pane-stranger");
 				// The stranger blocks the new name, but the stable name was still
 				// this ticket's own leftover. That first collision remains a fact.
 				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
@@ -3605,7 +3572,8 @@ describe("the leftover environment", () => {
 				);
 				expect(ticketRow(setup.captureCharFrame())).toContain("leftover");
 			},
-			{ width: WIDE_STATUS, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDE_STATUS, height: HEIGHT, loopPolicy: LOOP_60S },
+			collisionRunner,
 		);
 		planeRecord.close();
 	});
@@ -3666,10 +3634,10 @@ describe("the auto dispatch", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(
+				const frame = await frameUntil(
 					setup,
-					(f) => f.includes("○ auto 1/2") && startingFaceOf(ticketRow(f)) !== null,
 					"the dispatch",
+					(f) => f.includes("○ auto 1/2") && startingFaceOf(ticketRow(f)) !== null,
 				);
 				// The started agent stands listed in the world, so the poll confirms it
 				// inside its startup grace and the row wears the booting face.
@@ -3728,15 +3696,15 @@ describe("the auto dispatch", () => {
 				},
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				// An open ticket already shows its profile's agent in the detail
 				// pane, so the wait resolves on the handoff itself: the pane's
 				// task type row says `Handoff` only once the ticket is no longer
 				// open, and the start command lands before that claim.
-				await awaitFrame(setup, (f) => f.includes("Handoff task type: implement"), "the dispatch");
+				await waitFor(setup, { shows: "Handoff task type: implement" });
 				const start = app.runner
 					.commands()
 					.find((command) => command.startsWith("herdr agent start"));
@@ -3748,7 +3716,7 @@ describe("the auto dispatch", () => {
 					"--kind codex --pane pane-2 -- --model anthropic/claude-sonnet-4-5 -c model_reasoning_effort=high",
 				);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3767,18 +3735,18 @@ describe("the auto dispatch", () => {
 		});
 		app.world.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => f.includes("has no model"), "the refused dispatch");
+				await waitFor(setup, { shows: "has no model" });
 				// The handoff never reached herdr: no workspace, no agent start.
 				expect(app.runner.commands().some((c) => c.startsWith("herdr workspace"))).toBe(false);
 				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
 				// The ticket stays open and dispatchable once the config is fixed.
 				expect(ticketRow(setup.captureCharFrame())).toContain("[open]");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -3796,13 +3764,13 @@ describe("the auto dispatch", () => {
 				// Both started agents stand listed in herdr inside their
 				// startup grace, so the mode cell holds both booting seats
 				// against the cap.
-				await awaitFrame(
+				await frameUntil(
 					setup,
+					"both dispatches",
 					(f) =>
 						f.includes("○ auto 2/2") &&
 						startingFaceOf(ticketRow(f)) !== null &&
 						startingFaceOf(ticketRow(f, "Watch agent turns")) !== null,
-					"both dispatches",
 				);
 				// One herdr agent start per ticket, under the ticket's own
 				// name: the queue drained, and no handoff ran twice. The fresh
@@ -3847,25 +3815,24 @@ describe("the auto dispatch", () => {
 		// The fixture holds no mapping, so the convention checkout is the one
 		// that resolves the repository, and it holds a different repository.
 		const app = seededAppInAutoMode("open", { extra: { repos: {} }, outcome: pairSuccess });
-		const planeRecord = await planeOf(app);
-		const home = planeRecord.home;
-		const convention = join(home, "src", "factory");
-		mkdirSync(convention, { recursive: true });
-		writeFileSync(join(convention, "marker"), "repo");
-		// The convention checkout the plane's home holds answers its git reads
-		// with another repository, so the discovery clones the ticket's
-		// repository beside it and maps the ticket's repository there.
-		app.world.set("git", ["-C", convention, "rev-parse", "--git-dir"], { stdout: ".git\n" });
-		app.world.set("git", ["-C", convention, "remote", "get-url", "origin"], {
-			stdout: "https://github.com/acme/other.git\n",
-		});
-		// The sibling clone the discovery makes, and the handoff that runs in it:
-		// the world answers the clone, and the launch grows the workspace it
-		// names.
-		const sibling = join(home, "src", "factory_1");
-
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, planeRecord) => {
+				const home = planeRecord.home;
+				const convention = join(home, "src", "factory");
+				mkdirSync(convention, { recursive: true });
+				writeFileSync(join(convention, "marker"), "repo");
+				// The convention checkout the plane's home holds answers its git reads
+				// with another repository, so the discovery clones the ticket's
+				// repository beside it and maps the ticket's repository there.
+				app.world.set("git", ["-C", convention, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+				app.world.set("git", ["-C", convention, "remote", "get-url", "origin"], {
+					stdout: "https://github.com/acme/other.git\n",
+				});
+				// The sibling clone the discovery makes, and the handoff that runs in it:
+				// the world answers the clone, and the launch grows the workspace it
+				// names.
+				const sibling = join(home, "src", "factory_1");
 				app.src.settle(pairSuccess);
 				// The config write-back re-runs the refresh too, and a fetch the
 				// test never settles would make every Ticket non-actionable. The
@@ -3877,12 +3844,12 @@ describe("the auto dispatch", () => {
 				// observation effect. The second cycle, the queue drained, must still
 				// start the second ticket: a dispatch the re-run stopped starts
 				// nothing, and the plane reads auto while it does nothing.
-				await awaitFrame(
+				await frameUntil(
 					setup,
+					"both dispatches after the mapping write-back",
 					(f) =>
 						f.includes("\u25cb auto 2/2") &&
 						startingFaceOf(ticketRow(f, "Watch agent turns")) !== null,
-					"both dispatches after the mapping write-back",
 				);
 				clearInterval(pump);
 				const starts = app.runner.commands().filter((c) => c.startsWith("herdr agent start"));
@@ -3897,12 +3864,7 @@ describe("the auto dispatch", () => {
 					`"github.com/acme/factory" = "${sibling}"`,
 				);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 25 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 25 } },
 		);
 		planeRecord.close();
 	});
@@ -3924,9 +3886,9 @@ describe("the auto dispatch", () => {
 				cause: "completed",
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(pairSuccess);
 				// The first cycles: the turn settles, the auto-close ends the
 				// cycle, and the pair takes the dispatch. The finished ticket
@@ -3935,13 +3897,13 @@ describe("the auto dispatch", () => {
 				// is inside its startup grace, so the mode cell holds one seat,
 				// and the pair's row keeps the Starting face instead of reading
 				// missing (issue #379).
-				await awaitFrame(
+				await frameUntil(
 					setup,
+					"the auto close and the pair dispatch",
 					(f) =>
 						f.includes("○ auto 1/2") &&
 						ticketRow(f).includes("[open]") &&
 						startingFaceOf(ticketRow(f, "Watch agent turns")) !== null,
-					"the auto close and the pair dispatch",
 				);
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
 				// The re-read lands after the decision: the re-verify gate opens
@@ -3954,12 +3916,7 @@ describe("the auto dispatch", () => {
 					`herdr agent start ${SECOND_AGENT} --kind pi --pane pane-2`,
 				]);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 20 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 20 } },
 		);
 		planeRecord.close();
 	});
@@ -3978,22 +3935,18 @@ describe("the auto dispatch", () => {
 				},
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				const failed = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("queued handoff for"),
-					"the failed automatic handoff",
-				);
+				const failed = await waitFor(setup, { shows: "queued handoff for" });
 				expect(frameText(failed)).toContain("no model setting");
 				// Nothing ran, and the ticket stayed the open ticket it was.
 				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(ticketRow(failed)).toContain("[open]");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4003,7 +3956,7 @@ describe("the auto dispatch", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(setup, (f) => f.includes("● manual 0/2"), "the mode cell");
+				const frame = await waitFor(setup, { shows: "● manual 0/2" });
 				expect(ticketRow(frame)).toContain("[open]");
 				// No herdr handoff commands: only the agent list polls.
 				// No herdr handoff commands: only agent list polls plus the
@@ -4036,9 +3989,9 @@ describe("the auto decision", () => {
 			detail: { transition: reviewRoute() },
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				// The refresh after the fire carries the labels the fire wrote:
 				// the position offers the review task, and the top-up's
 				// continuation takes it (ADR 0051).
@@ -4052,15 +4005,15 @@ describe("the auto decision", () => {
 				// the facts the reads below take: the frame, the ticket's place
 				// in the work queue, and the close of the settled agent's tab.
 				// Under the parallel CI load the frame can land first.
-				const frame = await awaitFrame(
+				const frame = await frameUntil(
 					setup,
+					"the automatic route",
 					(f) =>
 						f.includes("auto-handed-off") &&
 						["handed-off", "running"].includes(
 							app.state.ticketWorkCycle.ticketState(identity) ?? "",
 						) &&
 						app.runner.commands().includes("herdr tab close tab-1"),
-					"the automatic route",
 				);
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe(
 					"auto-handed-off",
@@ -4077,7 +4030,7 @@ describe("the auto decision", () => {
 				expect(prompt?.includes("The turn is done.")).toBe(true);
 				expect(commands).toContain("herdr tab close tab-1");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4105,9 +4058,9 @@ describe("the auto decision", () => {
 		});
 		app.world.setModelList("pi", ["anthropic/claude-review-4"]);
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				// The refresh after the fire carries the labels the fire wrote:
 				// the position offers the review task, and the top-up's
 				// continuation takes it (ADR 0051).
@@ -4119,12 +4072,12 @@ describe("the auto decision", () => {
 				// Wait for the start command as well as the frame: under load the
 				// route's frame can be captured before the runner records the start,
 				// and asserting on a not-yet-recorded command reads undefined.
-				await awaitFrame(
+				await frameUntil(
 					setup,
+					"the automatic route",
 					(f) =>
 						f.includes("auto-handed-off") &&
 						app.runner.commands().some((command) => command.startsWith("herdr agent start")),
-					"the automatic route",
 				);
 				const start = app.runner
 					.commands()
@@ -4133,7 +4086,7 @@ describe("the auto decision", () => {
 				// The settled handoff's own model never rides on the route.
 				expect(start).not.toContain("opus-4");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4168,11 +4121,7 @@ describe("the auto decision", () => {
 				});
 				// The loud reason reaches the status line as the drop warning, and
 				// it names the ticket the route was for.
-				const failed = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("queued handoff for"),
-					"the failed automatic route",
-				);
+				const failed = await waitFor(setup, { shows: "queued handoff for" });
 				expect(frameText(failed)).toContain("no model setting");
 				// Nothing the record claims started did start: no agent ran, and
 				// the drop keeps the decision the ask recorded, with the ticket
@@ -4214,14 +4163,14 @@ describe("the auto decision", () => {
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(f) => ticketRow(f).includes("[open]") && ticketRow(f).includes("handoff limit"),
 					"the auto close",
+					(f) => ticketRow(f).includes("[open]") && ticketRow(f).includes("handoff limit"),
 				);
 				// The settled turn is auto-closed: the cycle ended, the trace
 				// carries the automatic decision, and the live tab was closed.
@@ -4233,7 +4182,7 @@ describe("the auto decision", () => {
 				// alone: no agent start ran.
 				expect(commands.filter((c) => c.startsWith("herdr agent start"))).toHaveLength(0);
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4271,22 +4220,20 @@ describe("the auto decision", () => {
 			workspaceId: "ws-2",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(pairSuccess);
 				// The route waits for the free seat: the ticket stays awaiting.
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// Enter does not open the decision modal: the factory decides.
-				await pressReturn(setup, "the factory's notice", (f) =>
-					f.includes("the factory decides this ticket"),
-				);
+				await handoffEnter(setup, "the factory's notice", "the factory decides this ticket");
 				const frame = await settle(setup);
 				expect(frame).not.toContain("Decision:");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4307,24 +4254,21 @@ describe("the auto decision", () => {
 			detail: { transition: reviewRoute() },
 		});
 		// No Agent works: the cycle's only fact is the settled turn it resolves.
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(pairSuccess);
-				await awaitFrame(
-					setup,
-					(f) =>
-						messageRowOf(f).includes(
-							`ticket ${identity} holds its Next step review: the position no longer offers the task`,
-						),
-					"the held Next step on the Message line",
+				await frameUntil(setup, "the held Next step on the Message line", (f) =>
+					messageRowOf(f).includes(
+						`ticket ${identity} holds its Next step review: the position no longer offers the task`,
+					),
 				);
 				const frame = await settle(setup);
 				expect(frame).not.toContain("Decision:");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4360,11 +4304,11 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the parked ticket");
+				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The park stands ahead of the outcome checks: a completion
 				// without a transition - the case that would close - rests in
 				// awaiting, undecided, and the environment stays untouched.
@@ -4382,12 +4326,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(commands.filter((c) => c.startsWith("herdr tab close"))).toHaveLength(0);
 				expect(commands.filter((c) => c.startsWith("herdr agent start"))).toHaveLength(0);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 40 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 		planeRecord.close();
 	});
@@ -4399,11 +4338,11 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 			environment: "live-worktree",
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[open]"), "the auto-closed ticket");
+				await frameUntil(setup, "the auto-closed ticket", (f) => ticketRow(f).includes("[open]"));
 				// implement carries the flag off, and no transition fired: the
 				// automatic rule closes the turn, the way it did before the flag
 				// existed, in a config that also carries the analyze type.
@@ -4411,7 +4350,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("auto-closed");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4426,27 +4365,27 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the parked ticket");
+				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The operator's close is the gate from the parked turn to
 				// whatever the ticket's new position offers next (ADR 0085): the
 				// refresh after the settle carries the ready-for-agent label the
 				// settling agent applied (ADR 0086), and the ticket's position
 				// re-derives where the machine offers it next - open, and ready
 				// to be offered for implementation.
-				const opened = await openSurface(setup, "delete", "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
+				const opened = await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");
-				await confirmPanel(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
+				await frameUntil(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("closed");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4465,24 +4404,22 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 			agents: [{ name: AGENT, kind: "pi", status: "idle", paneId: "pane-1" }],
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the parked ticket");
+				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The operator answers the agent's questions in the live
 				// session: the agent works again, and the plane reopens the
 				// ticket - the parked turn's session survived the round.
 				app.world.setAgentStatus(AGENT, "working");
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[running]"), "the reopened ticket");
+				await frameUntil(setup, "the reopened ticket", (f) => ticketRow(f).includes("[running]"));
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("running");
 				// The session's next settle refreshes the trace in place: still
 				// parked, still undecided, still holding its session.
 				app.world.setAgentStatus(AGENT, "idle");
-				await awaitFrame(
-					setup,
-					(f) => ticketRow(f).includes("[awaiting]"),
-					"the settled ticket, parked again",
+				await frameUntil(setup, "the settled ticket, parked again", (f) =>
+					ticketRow(f).includes("[awaiting]"),
 				);
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
@@ -4490,12 +4427,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 					0,
 				);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 40 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 		planeRecord.close();
 	});
@@ -4595,12 +4527,12 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 		const pull = app.pullSrc;
 		if (pull === undefined) throw new Error("the pull source is missing");
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(bugOutcome);
 				pull.settle(pullOutcome);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the parked ticket");
+				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The park stands ahead of the outcome checks: the fired
 				// transition did not route, the turn rests in awaiting with no
 				// decision on it, and the environment stayed untouched.
@@ -4609,7 +4541,12 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(app.runner.commands().filter((c) => c.startsWith("herdr tab close"))).toHaveLength(
 					0,
 				);
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				// The parked ticket rests awaiting its completion decision,
+				// whose Enter the bar documents as the row's Decide, not the
+				// handoff's hint: the key is the catalogue's escape, routed by
+				// the plane to the row's own control.
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { shows: "Decision:" });
 				const panel = frameText(await settle(setup));
 				// The Decision region offers the review the fire's labels put the
 				// fixing pull request on, beside the write it states, and no gate
@@ -4619,11 +4556,11 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(panel).not.toContain("the Next step is held");
 				// The Close row is the default; confirming it releases the park
 				// and ends the cycle.
-				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBe("closed");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -4660,11 +4597,11 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 	test("the machine never hands off a flagged type, and the operator's handoff starts it", async () => {
 		const app = seededAppInAutoMode("open", { extra: flaggedConfig, outcome: specSuccess });
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(specSuccess);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[open]"), "the open ticket");
+				await frameUntil(setup, "the open ticket", (f) => ticketRow(f).includes("[open]"));
 				await settle(setup);
 				// The machine's walk has had its cycles, and it never asked a start
 				// of the flagged type: the ticket stays listed, open, and unhanded,
@@ -4679,19 +4616,12 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 				// The operator's handoff is the operator's: Enter on the row hands the
 				// ticket off with the position's suggestion, and the start runs the
 				// flagged type.
-				await pressReturn(setup, "the settled handoff", (f) =>
-					frameText(f).includes("Handoff task type: analyze"),
-				);
+				await handoffEnter(setup, "the settled handoff", "Handoff task type: analyze");
 				expect(
 					app.runner.commands().some((command) => command.startsWith("herdr agent start")),
 				).toBe(true);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 40 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 		planeRecord.close();
 	});
@@ -4720,11 +4650,11 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 				},
 			},
 		});
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(specSuccess);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the parked ticket");
+				await frameUntil(setup, "the parked ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// The hold stands: no decision, and the environment is untouched.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
@@ -4734,8 +4664,9 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 				// The operator's surface is the Decision screen, and the factory's
 				// mode never opens it: the flip to manual is the operator's act,
 				// and the Enter on the parked ticket opens the modal.
-				await press(setup, "a", "manual mode", (f) => f.includes("manual"));
-				await pressReturn(
+				await toggleAutoHandoff(setup, { quiet: true });
+				await waitFor(setup, { shows: "manual" });
+				await handoffEnter(
 					setup,
 					"the decision modal",
 					(f) => f.includes("Decision:") && f.includes("Handoff: analyze"),
@@ -4743,23 +4674,15 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 				const modal = frameText(await settle(setup));
 				expect(modal).toContain("the Next step is held: the task type carries Operator-decides");
 				// The row's key is still the operator's: the confirm runs the start.
-				await pressArrow(setup, "down", "the goto row", () => true);
-				await pressArrow(setup, "down", "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: analyze"),
-				);
-				await pressReturn(setup, "the settled handoff", (f) =>
-					frameText(f).includes("Handoff task type: analyze"),
-				);
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await frameUntil(setup, "the goto row", () => true);
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await handoffEnter(setup, "the settled handoff", "Handoff task type: analyze");
 				expect(
 					app.runner.commands().some((command) => command.startsWith("herdr agent start")),
 				).toBe(true);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 40 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 		planeRecord.close();
 	});
@@ -4776,11 +4699,11 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 			},
 		});
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				await settle(setup);
 				// The restart walk's candidate facts all stand, and the flag's brake
 				// holds the ticket out: the machine asks no start and abandons
@@ -4793,8 +4716,8 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 				).toHaveLength(0);
 				// The Missing modal is the operator's surface, and its Restart is the
 				// operator's act.
-				await pressReturn(setup, "the Missing modal", (f) => f.includes("Missing:"));
-				await pressReturn(setup, "the restart handoff", (_f) =>
+				await handoffEnter(setup, "the Missing modal", "Missing:");
+				await handoffEnter(setup, "the restart handoff", (_f) =>
 					app.runner.commands().some((command) => command.startsWith("herdr agent prompt")),
 				);
 				expect(
@@ -4807,12 +4730,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 						),
 				).toBe(true);
 			},
-			{
-				width: WIDTH,
-				height: HEIGHT,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 40 },
-			},
+			{ width: WIDTH, height: HEIGHT, loopPolicy: { kind: "polled", intervalMs: 40 } },
 		);
 		planeRecord.close();
 	});
@@ -4926,22 +4844,39 @@ describe("the handoff queue", () => {
 				// refresh chain's updates are still in flight.
 				await sleep(250);
 				// The in-flight ticket is missing: its badge shows.
-				await awaitFrame(
-					setup,
-					(f) => ticketRow(f, "Watch agent turns").includes("missing"),
-					"the missing badge",
+				await frameUntil(setup, "the missing badge", (f) =>
+					ticketRow(f, "Watch agent turns").includes("missing"),
 				);
 				// Every key here waits for its effect and then for the chained
 				// updates (the observation tick, the Message line) to go quiet:
 				// a key that lands while they are in flight stalls the test
 				// renderer.
-				const pressQuietFor = (
-					key: Parameters<typeof press>[1],
+				const namedStep = async (
+					key: "j" | "k" | "delete",
 					what: string,
 					predicate: (f: string) => boolean,
-				) => pressQuiet(setup, key, what, predicate);
-				const pressReturnQuietFor = (what: string, predicate: (f: string) => boolean) =>
-					pressEnterQuiet(setup, what, predicate);
+				) => {
+					if (key === "delete") {
+						await guideKey(setup, "queue-remove", "Delete", { quiet: true });
+					} else {
+						await pressControl(setup, "move-list", { via: key === "j" ? "↓" : "↑", quiet: true });
+					}
+					await frameUntil(setup, what, predicate);
+				};
+				/**
+				 * Enter through the real key path, then wait for the named fact.
+				 *
+				 * The frames these presses stand on document different controls' Enter: the
+				 * handoff's on the open row, the row's own restart on the missing row, and
+				 * the modal's own key on the Missing modal. One named control owns the key
+				 * on none of those frames alone, so the key goes out as the catalogue's
+				 * escape, and the plane routes it to the on-bar owner of the frame it lands
+				 * on.
+				 */
+				const namedEnter = async (what: string, predicate: (f: string) => boolean) => {
+					await guideKey(setup, "handoff", "Enter", { quiet: true });
+					await frameUntil(setup, what, predicate);
+				};
 				// Hand off the open ticket: it runs, and it holds the seat.
 				// The Ticket header, the list box border, and the box's padding
 				// row sit above the list rows, so the two tickets sit on frame
@@ -4949,48 +4884,61 @@ describe("the handoff queue", () => {
 				// ticket is first, and it is the initial selection, so the
 				// move down lands the marker on line four - a line it was not
 				// on, so the key is applied before the next key is pressed.
-				await pressQuietFor("j", "select the open ticket", (f) => markerRowOf(f) === 4);
-				await pressReturnQuietFor("the handoff to start", (f) => f.includes("handing off"));
+				await namedStep("j", "select the open ticket", (f) => markerRowOf(f) === 4);
+				await pressControl(setup, "handoff", { quiet: true });
+				await waitFor(setup, { shows: "handing off" });
 				// Back to the missing ticket: its restart queues behind the
 				// handoff in flight.
-				await pressQuietFor("k", "select the missing ticket", (f) => markerRowOf(f) === 3);
-				await pressReturnQuietFor("the missing modal", (f) => f.includes("Missing:"));
-				await pressReturnQuietFor("the restart to queue", (f) => !f.includes("Missing:"));
+				await namedStep("k", "select the missing ticket", (f) => markerRowOf(f) === 3);
+				// The frame stands on the missing ticket's row, whose bar
+				// documents the row's own restart Enter, not the handoff's hint:
+				// the key is the catalogue's escape, routed by the plane to the
+				// row's own control.
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { shows: "Missing:" });
+				// The frame is the Missing modal, whose bar documents the
+				// modal's own key: the catalogue's escape, routed by the plane.
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { hides: "Missing:" });
 				// And while the restart is queued, the ticket moves on:
 				// abandon it. Enter on the row jumps to the queued item
 				// (ADR 0049), and the operator removes it there; the queue
 				// emptying sends the selection home to the Ticket list.
-				await pressReturnQuietFor("the jump to the queued restart", (f) =>
+				await namedEnter("the jump to the queued restart", (f) =>
 					queueRowLeads(f, "Watch agent turns"),
 				);
 				// The Working line outranks the removal notice, so the effect is
 				// read on the queue's own row: the handoff's item keeps the queue
 				// holding one row, and the selection clamps onto it.
-				await pressQuietFor("delete", "the item removed", (f) =>
+				await namedStep("delete", "the item removed", (f) =>
 					queueRowLeads(f, DEFAULT_TICKET_TITLE),
 				);
 				// Back to the Ticket list: up crosses the empty Consultation
 				// section to the last Ticket, and one more step lands the
 				// missing row, where the modal opens again and Abandon ends the
 				// work cycle.
-				await pressQuietFor(
+				await namedStep(
 					"k",
 					"the Consultation section",
 					// The empty Consultation list shows no marker on its message
 					// row, so the cross is read on the detail pane's empty line.
 					(f) => f.includes("no Consultation selected"),
 				);
-				await pressQuietFor("k", "the last Ticket", (f) => markerRowOf(f) === 4);
-				await pressQuietFor("k", "the missing row", (f) => markerRowOf(f) === 3);
-				await pressReturnQuietFor("the missing modal", (f) => f.includes("Missing:"));
-				await pressArrow(setup, "down", "select abandon", (f) =>
-					frameText(f).includes("❯ Abandon"),
-				);
+				await namedStep("k", "the last Ticket", (f) => markerRowOf(f) === 4);
+				await namedStep("k", "the missing row", (f) => markerRowOf(f) === 3);
+				// The frame stands on the missing ticket's row, whose bar
+				// documents the row's own restart Enter, not the handoff's hint:
+				// the key is the catalogue's escape, routed by the plane to the
+				// row's own control.
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { shows: "Missing:" });
+				await guideKey(setup, "select-action", "↓", { quiet: true });
+				await waitFor(setup, { shows: "❯ Abandon" });
 				// The abandonment closes the modal, and the row reads open at
 				// once: the waiting restart never claimed a seat - the cap held
 				// it in the Work queue - so no Starting window covers the badge
 				// (ADR 0034).
-				await pressReturnQuietFor("the abandonment", (f) =>
+				await namedEnter("the abandonment", (f) =>
 					ticketRow(f, "Watch agent turns").includes("[open]"),
 				);
 				// Release the gate: the handoff in flight settles and its row
@@ -5009,13 +4957,12 @@ describe("the handoff queue", () => {
 				// the Working line cleared is the settle itself. The row is found
 				// on its face, not its title: the list row's title truncates, and
 				// a message line may still carry the whole name.
-				await awaitFrame(
+				await frameUntil(
 					setup,
+					"the settled handoff's row",
 					(f) =>
 						rowsOf(f).some((l) => l.includes("Persist") && startingFaceOf(l) !== null) &&
 						!frameText(f).includes("Working:"),
-					"the settled handoff's row",
-					5000,
 				);
 
 				// The open ticket's handoff started once; no agent started for
@@ -5051,17 +4998,20 @@ describe("the handoff queue", () => {
 				// The re-handoff settles on its new pane, which the world lists
 				// with its started agent: the Starting window's face keeps
 				// standing on the settle, the way it did on the first handoff.
-				await pressReturnQuietFor(
+				// The handoff's own settle stands dirty while the re-handoff's agent start
+				// lands: the key goes out immediate, with no post-key settle
+				// before the wait on the face, so the plane's own tick stands
+				// on the frame the face and the cleared Working line paint.
+				await pressControl(setup, "handoff", { immediate: true });
+				await frameUntil(
+					setup,
 					"the re-handoff to settle",
 					(f) =>
 						rowsOf(f).some((l) => l.includes("Watch") && startingFaceOf(l) !== null) &&
 						!frameText(f).includes("Working:"),
 				);
-				await awaitFrame(
-					setup,
-					() =>
-						runner.commands().includes(`herdr agent start ${SECOND_AGENT} --kind pi --pane pane-3`),
-					"the re-handoff start",
+				await frameUntil(setup, "the re-handoff start", () =>
+					runner.commands().includes(`herdr agent start ${SECOND_AGENT} --kind pi --pane pane-3`),
 				);
 				await settle(setup);
 				const startsAfter = runner.commands().filter((c) => c.startsWith("herdr agent start"));
@@ -5121,9 +5071,9 @@ describe("the handoff queue", () => {
 			automatic: true,
 		});
 		if (!enqueued.ok) throw new Error(enqueued.reason);
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(pairSuccess);
 				await sleep(400);
 				const frame = await settle(setup, 1000);
@@ -5135,7 +5085,7 @@ describe("the handoff queue", () => {
 				expect(app.state.handoff.openAttemptTickets()).toEqual([]);
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});
@@ -5217,17 +5167,15 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 		const pull = app.pullSrc;
 		if (pull === undefined) throw new Error("the pull source is missing");
 
-		const planeRecord = await planeOf(app);
-		await withApp(
-			async (setup) => {
+		const planeRecord = await appOnSeeded(
+			app,
+			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				// The awaiting rule reads the skip: it derives no position,
 				// so the cycle auto-closes the ticket. It rests open behind
 				// the closed cycle, and the trace records the skip.
-				await awaitFrame(
-					setup,
-					(f) => ticketRow(f).includes("[open]"),
-					"the auto-close of the skip",
+				await frameUntil(setup, "the auto-close of the skip", (f) =>
+					ticketRow(f).includes("[open]"),
 				);
 				// The refresh lands the fixing pull request. The cycle
 				// re-fires the skip: the pull request's facts were left
@@ -5237,16 +5185,12 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 					fetchedAt: "2026-08-31T10:02:00Z",
 					tickets: [pullFetched()],
 				});
-				await awaitFrame(
-					setup,
-					(f) => f.includes("Persist source facts in state"),
-					"the pull request row",
-				);
+				await waitFor(setup, { shows: "Persist source facts in state" });
 				// The re-fire's fire re-reads the pull request source before it
 				// writes (ADR 0076): the read is its own fetch, and the fetch
 				// the test settles is that one. The label has not landed in the
 				// projection, so the write is the plane's own.
-				await awaitFrame(setup, () => pull.calls === 2, "the re-fire's source read");
+				await frameUntil(setup, "the re-fire's source read", () => pull.calls === 2);
 				pull.settle({
 					status: "success",
 					fetchedAt: "2026-08-31T10:03:00Z",
@@ -5255,12 +5199,12 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 				// The rule routes the position's task on the pull request. The
 				// route only runs off the re-fired trace, so a frame that shows
 				// the route proves the re-fire ran and recorded first.
-				await awaitFrame(
+				await frameUntil(
 					setup,
+					"the review route on the pull request",
 					(f) =>
 						f.includes("○ auto 1/2") &&
 						ticketRow(f, "Persist source facts in state").includes("starting"),
-					"the review route on the pull request",
 				);
 				// The frame the re-fire painted can stand ahead of its label write
 				// in the log, the way the dispatch's frame stands ahead of its
@@ -5325,7 +5269,7 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 				// The issue stands open and covered behind the pull request.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 			},
-			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
 		planeRecord.close();
 	});

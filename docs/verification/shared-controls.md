@@ -321,7 +321,7 @@ surface - the base panes included - paints from the shared Theme module (ADR
 above), the terminal walks have not been re-run on the theme-inherited paint
 (see the inherited-Theme record above), inherited herdr theme pairs are not
 contrast-checked (limit recorded there), and the frame suites' move to the
-rig's named controls and outcomes lands one surface at a time - five are owned
+rig's named controls and outcomes lands one surface at a time - seven are owned
 now, the rest still run the retired surface - as the frame-rig record below
 measures.
 
@@ -1881,11 +1881,12 @@ always held it. A skipped required check is not a pass.
 
 ## The frame rig runs the controls, not the keys (issue #365, ADR 0128)
 
-Status: the automated checks pass for the rig and the seven owned surfaces: its
-own suite, the Action bar, the Key guide, the Message line, the theme frame,
-the Ticket scroll frame, and the merged Main view. The remaining frame
-surfaces migrate one at a time, and the owned list in the architecture check
-is the record of what has landed.
+Status: the automated checks pass for the rig and every frame surface it
+owns. The frame suites that stood on raw keys now run the rig's controls
+and wait on its named outcomes, and the architecture check reads every
+suite that imports the rig, the owned list standing beneath the discovery
+as the floor that never shrinks: a surface that leaves the rig's world
+fails the floor and is migrated again, not removed from the list.
 
 What was measured: the frame rig in `test/app-harness.ts` now resolves a
 control to the key the Action bar painted for it and owns the input end to
@@ -1980,6 +1981,14 @@ before a step gives the plane the pass that commits the detail pane's
 identity reset before the cross's unmount saves the pane's offset, and a
 round trip through the other section loses the offset the operator left
 behind - and the rig's suite pins the walk across the boundary and back.
+The walk's back key goes out beside its walk keys as one literal: when the
+box the walk starts from holds no focus marker, the cursor stands where a
+named press resolves no hint - a detail, a section the walk steps away from,
+or a surface the frame's markers stand not on at all - and the step that
+brings it to the box the walk starts from sends the `h` the guide paints
+beside the pane-navigation arrows, waited on the walk's starting marker,
+because a frame the section markers name nowhere answers the back key to the
+section it leaves.
 `frameUntil` stands for a frame check no outcome names. A wait that still stands after the deadline names the
 outcome it waited on and the press that sent it, and the rig's suite pins the
 message on a press that runs to the deadline. The close proof is the set of
@@ -2041,7 +2050,12 @@ the head reported one fail over its 3,409 tests, and the re-run at the same
 head reports none, so the first run's fail stands as a recorded load flake;
 the failing test's name did not survive the first run, whose output was cut
 to its tail, and the re-run is the measured pass. No wait in either run's
-passes reached the deadline, which a wait that stands past it would fail.
+passes reached the deadline, which a wait that stands past it would fail. At
+head `85c46225`, the head that lands the rework above, the scoped run over
+the branch's suites ran its 918 tests in 353.1 seconds, 0 fail, at that same
+head (this machine, 32 cores, 60 GB RAM, with the Quality audit's run
+concurrent at its start), and the push gate re-runs the full suite at the
+pushed head.
 
 The static architecture check, `test/frame-rig-architecture.test.ts`, owns the
 set of surfaces the rig drives and refuses the two ways a surface can opt out:
@@ -2093,8 +2107,34 @@ history, message, refresh, and override keys through the named press and
 its guide-named sibling, the page and jump keys through `pageKey`, the
 auto-handoff toggle through its named operation, and the guide's scroll and
 close keys through `guideKey` - waits through the rig's frame check and
-its named outcomes, and rides `crossCursor` for the section's cross-walk.
-The seven owned surfaces
+its named outcomes, and rides `crossCursor` for the section's cross-walk. At
+the head that lands the review's rework (`85c46225`), one step further, the
+walk stands at 730 press-family calls, 166 hand operations, 720 raw waits,
+662 inline containment predicates, 396 reaches to the renderer's input, and
+36 helper copies over the rig's 110 exports: the Action bar's suite crosses
+to the Consultation list through the rig's own `crossCursor` instead of its
+local walk, which keeps the row walks the section walk does not reach, and
+the named escapes take the quiet default the press and the guide key hold.
+At the head that lands the Work queue section (`49dc1d1a`), one step
+further, the walk stands at 692 press-family calls, 166 hand operations,
+665 raw waits, 653 inline containment predicates, 391 reaches to the
+renderer's input, and 36 helper copies: the suite's queue presses ride the
+rig's named presses - pause and removal through the bar, the order moves
+and the packed hints beside the guide - and its waits take the closed
+outcomes, the scroll's named waits among them; the Mute key the bar
+withholds on the queue frame refuses in the Ticket section's words, retiring
+the premise that the key was silent there. At the head that lands the
+Decision modal (`cae09f97`), one step further, the walk stands at 683
+press-family calls, 166 hand operations, 655 raw waits, 644 inline
+containment predicates, 387 reaches to the renderer's input, and 33 helper
+copies: the suite's frames stand below the plane's declared minimum, where
+the base bar stands down to its Help hint and the packed bar leaves the
+Decide hint off, so the key goes out beside the guide - the rig's escape
+for the bar's packed hint - the one wide frame reading its key from the
+bar, and the pop-in's rest, which a scrollbar-less log gives the frame no
+fact to read, stands a 250 ms grace over the animation's 120 ms budget: the
+effect's end is time-limited, and it cannot land outside a grace that
+bounds its maximum duration. The nine owned surfaces
 press through the rig
 with none of the retired surface left: no hand-picked key, no hand operation,
 no raw wait, and no reach to the renderer's input, as the architecture check
@@ -2105,23 +2145,239 @@ builder - not input the rig should own. The escape list's named `frameUntil`
 check, which the closed set of outcomes does not reach, is invisible to the
 walk's line-based metric: its arrow and its containment test stand on
 different lines. The test-tree duplication clone count, the Quality audit's
-own metric, stands at 204 at the base head and at this head, and the Quality
-baseline, which only shrinks, holds that count. The walk counts in this
-paragraph re-derive from the committed walk at the two named heads: the
+own metric, stands at 211 at the base head `a5a947dd`, and at 197 at the
+head this branch rebases onto, measured on `d2a380ff` - the Quality
+baseline, which only shrinks, holds that count. The count measures 196 at
+the head that lands the rework above, measured on `85c46225`: the branch's
+own work takes the count down by one, and the baseline rewrite down to it
+lands on head `51779392`, which the audit then holds. The count measures
+195 at the head that lands the Work queue section above, measured on
+`49dc1d1a`: the baseline rewrite down to it lands on head `e23d29a5`, the
+head that names the Work queue and the Decision modal migrations, which the
+audit then holds. The walk counts in this
+paragraph re-derive from the committed walk at the named heads: the
 script run at either head prints them, and a head that moves the suites
 re-records them here from the same script.
 
-What was not measured: the remaining frame surfaces have not been migrated, so
-the 730 press-family calls and 720 raw waits above stand in the suites that
-have not landed yet, and this change's effect on the whole plane is the seven
-owned surfaces plus the rig, not the surfaces that follow. The closed walk
-stands on the bar of the frame it walks, and at this head the rig's suite
-walks the base bar and the bars of the detail frames of the three sections,
-the response editor, the Agent interaction input, the Decision modal, the
-action panel, and the Message view: each walk boots the frame the bar stands
-on. The walk still does not boot the mode that owns each hinted catalogue id,
-the shape the spec's walk names. The remaining surfaces' bars walk as their
-migrations land. Two gaps the migration met are now closed: the panes' focus
+At the head that lands the last of the frame suites on the rig's
+controls, and the suites' shared boots and walks taken into the
+suites' own helpers - the panel's open, the in-flight walk's step and
+the delayed standing, the route's seeded standing, the decision suite's
+own standing, the seeded plane's app boot, and the queue-row world - the
+walk stands at no press-family call, no hand operation, and no handler
+probe on the owned surfaces, 23 raw waits, 498 inline containment
+predicates, 18 reaches to the renderer's input, and 24 helper copies, as
+the walk at that head prints. The test-tree duplication clone count,
+the Quality audit's own metric, measures 189 at that head, and this
+change rewrites the Quality baseline, which only shrinks, down to that
+count, which the audit then holds.
+
+The rework of this record (pull request #395) moves the last of the
+suites' own deadline loops onto the rig's one deadline, and it reads the
+last of the escape keys from the catalogue:
+
+- The emergency exit reads its key from the catalogue, the way the quit
+  and the repository-init escapes do: the blind literal it sent before is
+  gone, and every key the rig's named operations send is read from the
+  catalogue, the source the Key guide paints from.
+- The suites' command-log and state deadline loops stand on the rig's
+  `waitCommands` and `waitUntil`: the consultation frame's local copy of
+  the command-log wait, with its own four-second deadline, is deleted, and
+  the per-suite loops of the desktop-notification, the live-view, the
+  plane-action-merge, the source-frame, and the turn-end-cause suites take
+  the rig's deadline with the rig's named error. The plane-action-merge
+  suite's per-test timeouts that stood below the rig's deadline stand above
+  twice of it now, the way the rig's suite keeps its own pin.
+- The press re-send loops the suites carried on the deadline minus its
+  margin ride the rig's `pressUntil`: the ignored-ticket, the
+  muted-source, and the ticket-grouping suites name the control and the
+  frame fact, and the rig re-sends inside the one deadline. The bar is
+  read first, the way `pressControl` reads it, and a bar that paints no
+  hint for the control takes the one key the catalogue names for it on
+  the surface, a control that wears more than one key taking the press's
+  named token.
+- The rig's interface loses the cross-walk exports no owned suite drives,
+  `crossToConsultations` and `crossToTickets`.
+
+The walk at the head that lands this rework stands at no press-family
+call, no hand operation, and no handler probe on the owned surfaces, 23
+raw waits, 500 inline containment predicates, 18 reaches to the renderer's
+input, and 20 helper copies over the rig's 118 exports, against the base
+head's 79: the export count grows with the named operations as the raw
+input leaves, and the depth is enforced by the architecture check, not by
+the count. The inline containment the walk still counts stands on the
+named `frameUntil` checks the walk keeps, and the helper copies it still
+counts are the domain fixtures the named stems reach not.
+
+The rework of this pull removes the dead raw input operations of the
+rig's old input face: the press, arrow, scroll, and function key
+helpers, the hand open, close, and confirm of a panel, guide, view,
+launcher, or surface, and the hand focus and scroll walks, named in ADR
+0128's addendum. No suite calls one, and the architecture check reaches every
+owned surface from them, so the module's interface stands on the named
+operations, the raw `press` and its waits, and the four kept bus reads.
+The walk at the head that lands it stands at the suite counts of the
+rework above - no press-family call, no hand operation, and no handler
+probe on the owned surfaces, 23 raw waits, 500 inline containment
+predicates, 18 reaches to the renderer's input, and 20 helper copies -
+over the rig's 100 exports, against the base head's 79. The test-tree
+duplication clone count stands at 189 at that head, unchanged by the
+removal, so the Quality baseline holds it as is.
+
+The rework of this pull lands the wait side of the rule the record's
+rework above delivered on the input side: the static architecture check
+now reads the wait as well as the press. It refuses, on every owned
+surface, the inline predicate that is one containment of a painted string,
+or its negation, on the frame or its normalized text - the shape the rig's
+named outcomes name - and it refuses it wherever the wait stands: at the
+`frameUntil` site itself and at the named operations that carry a wait
+behind a press. Those operations take a string target or a predicate, and
+the string target reads through the rig's own `shows` and `hides` - the
+same normalized containment, not a second outcome vocabulary the wrapper
+defines. `namedStep` and `namedEnter` take no string target: a wait they
+name not by containment keeps its predicate, and a wait that is one
+containment calls for no wrapper. One suite stands outside the owned list,
+and the check names why it stands there: `ticket-boot-order-frame.test.ts`
+drives no input of any kind, it boots the plane and reads the frame the
+order paints, so the input side of the rule reaches it nowhere.
+
+The check measures the residual rather than characterizing it. At the head
+that lands this round, the owned surfaces hold 604 frame waits: 531 of them
+an inline arrow the check reads and passes, each naming a fact a single
+containment names not - a row the suite derives from the frame, a marker it
+counts, a focus it reads off a row - and 73 a wait on a named predicate the
+suite keeps. The count the check holds at zero is the one that matters: no
+owned surface waits on a containment the `shows` and `hides` outcomes name.
+The named outcomes' unification of the suites' wait vocabulary takes the
+test-tree duplication clone count from 189 to 178, and the Quality
+baseline, which only shrinks, is rewritten down to the new count in the
+same change, which the audit then holds.
+
+The pull's repository-select queue walk reaches the open window the
+record's #317 line names: the queue's advance can stand its cleanup
+outside the flush the close proof runs on every poll, and the replaced
+panel's handler stands on the bus when the proof's deadline stands. Measured
+at the base head `1e1159e8`, the test fails 3 of 10 runs alone on an idle
+machine, and the same shape stands in the full suite at the heads this pull
+runs; the pull's test-tree change is the dead operations' removal, which the
+walk never calls. The window is the class the #317 line records, and its
+close stands on that issue's own measurement.
+
+The twelve flake issues the ADR lists - #302, #303, #304, #310, #311,
+#312, #314, #316, #318, #323, #326, and #342 - stand closed, issue by
+issue, or merged, pull by pull, by their own fixes at the head this
+rework lands on, and the rework closes none of them anew. It reaches the
+class in its mechanism: the one deadline, the named outcomes, and the
+loops above. The class-level CI flake item stays open in the quality
+gate's record: the load evidence on file shows the deadline miss
+surviving the earlier fixes under a loaded runner, and this rework runs
+no loaded runner of its own. At the pushed head `72ff79a0` of this rework,
+the push gate's full suite on the tree merged with `origin/main` ran its
+3,448 tests on this machine (32 cores, 60 GB RAM): 3,447 pass, 1 fail. The
+failing file, `test/repository-select-panel.test.ts`, ran 6 of 6 solo at
+the `origin/main` base in about 2.0 s and 4 of 5 on the branch's tree in
+about 4.6 s: the migrated queue walk takes 2.3 times the budget it ran at
+the base and stands the deadline's edge under the run's load. It is named
+as a load flake of the record's #317 class, and no production code moves in
+this pull, so the pull's own change stands cleared of the failure. At the
+head `97405875` that lands this round, the push gate's full suite on the
+merged tree ran its 3,450 tests on the same machine (32 cores, 60 GB RAM,
+2 GB free, no other test run standing at its start): 3,449 pass, 1 fail,
+in 110.26 s. The failing test, `repository-select-panel > a marking of two
+runs the queue, one confirmation per row, in list order`, missed the rig's
+20 s deadline at 20,589 ms, and it ran 14 of 14 alone in 4.62 s on the same
+tree: it is named as a load flake per the triage rule, in the shape the
+record's #317 line names, and the base comparison above stands beside it.
+
+The rework of this pull moves the suites' per-site escapes onto the rig's
+named controls wherever the frame's bar paints the control's hint, and it
+names the frame at every escape that stands: the handoff-frame, the live
+view, the auto-mode, the app, and the reserved-rows suites press the
+override, the handoff, and the move-list controls through `pressControl`
+and `pressUntil` on the frames whose bars paint their hints - the 120
+and 60 column base bars among them, the last measured through the probe
+the migration ran beside them - and their `guideKey` sites that stand
+keep their name and the frame around it: the decision modal frames and
+the Missing modal frames, whose bars document the modals' own row actions;
+the detail-focused frames, whose `↑↓/jk` hint the record's scroll pair
+names as the detail's scroll control, not the list's Move hint; the packed
+base bars, where the e hint packs out on the 46 and 60 column frames and
+the below-minimum frames pack the Move hint away with it; the 24 by 6
+panel frames, whose bars stand down to their Help hint; the Work queue
+item rows, whose Enter the bars document as the queue's own action once
+an in-flight handoff settles the frame onto them; the missing tickets'
+rows, whose bars document the rows' own recovery Enter; and the Key
+guide's frames, whose bars document the guide's own keys. Home and End
+stand the class the record's escape list names: the catalogue assigns
+them to the move-list control, but the bar's Move hint names only the up,
+down, j, and k tokens, so the ticket-grouping suite's Home and End presses
+keep the named escape, its header naming the class. The rig's own suite
+takes the pins the rework of its interface names: the press wait rides
+the rig's one deadline in full, the margin its delivered form cut away
+stands dead, and the operation's timeout, its `via` token, its catalogue
+fallback, and its re-send each stand on a pin of their own. Its interface
+loses the two raw bus wait operations no owned surface drives, and the
+bus's helpers stand private beside the four kept bus reads, the static
+check taking the wider rule that an owned surface that touches the
+renderer's input, its mouse, or the key bus directly fails it.
+The runner fact the correction names stands beside the pins: Bun's test
+runner reads no `[test] timeout` from `bunfig.toml` on the standalone
+form, and the rig's long pins pass the per-test budget themselves, which
+the corrected `bunfig.toml` comment now states.
+
+The walk at the head that lands this rework stands at no press-family
+call, no hand operation, and no handler probe on the owned surfaces, 23
+raw waits, 213 inline containment predicates, 18 reaches to the
+renderer's input, and 20 helper copies over the rig's 95 exports, against
+the base head's 79: the inline containment falls from the 500 the record
+measured at the rework head above as the suites' wait vocabulary unifies
+on the named outcomes and the press waits take their checks into the
+rig's `pressUntil`, and the export count falls from the 100 of that head
+as the two bus wait operations and the bus's helpers leave the
+interface. The rework round landed on the CI flake fix of issue #398,
+which the base carries: that fix's removal of the two ADR 0072 Live view
+follow-walks stands on the branch's migrated copies of the same walks, and
+the branch's copy went with its helper beside it, the #317 window test
+the base kept taking the walk's boot inline instead of through the
+helper. The walk's inline containment falls from the 220 the pre-rebase
+head stood to the 213 of the landed head on the removal, and the
+test-tree duplication of 168 the landed head stands rewrites the Quality
+baseline down from the 178 the rework head above measured, which the
+audit then holds. At the landed head the scoped run over the nine suites
+this rework touches - the rig's own, the architecture check, the handoff
+frame, the live view, the auto-mode, the app, the ticket grouping frame,
+the reserved rows, and the Key guide - is the record's evidence, named
+beside the machine state it stood on in the pull's report. The push
+gate's full suite on the landed tree ran its 3,454 tests on this machine
+(32 cores, 60 GB RAM, 2 GB available, load 1.2 at its start, no other
+test run standing): 3,453 pass, 1 fail, in 129.9 s. The failing test,
+`repository-select-panel > a marking of two runs the queue, one
+confirmation per row, in list order`, missed the rig's 20 s deadline at
+20,597 ms, and it ran 14 of 14 alone in 4.69 s on the same tree: it is
+named as a load flake per the triage rule, in the shape the record's
+#317 line names, the class the base's #398 fix measured, beside the same
+file's fail and solo pass at the pull's earlier pushed head. The change
+this pull lands touches no line the failing test drives, and no wait in
+the run's passes that stands on the change reaches the deadline.
+
+What was not measured: every frame surface that boots the app on the plane
+has been migrated, so no press-family call, hand operation, or raw wait
+stands outside the rig's ownership on the owned surfaces, as the walk at
+the head that lands this record prints. The raw waits and the inline containment predicates the walk still counts
+are the named `frameUntil` waits and the stable-frame reads a named outcome
+names not, and the wait-side check above measures that residual at the head
+it lands on rather than characterizing it: the 531 inline arrows and the 73
+named-predicate waits named in that paragraph, the walk's own escape, kept
+closed at the one shape the named outcomes name. The closed walk walks the painted bar of the frames
+it stands, and the mode the spec's walk names - the mode that owns each
+hinted catalogue id, booted by the walk - stands superseded by ADR 0128's
+addendum: the delivered walk is the accepted shape, and every mode whose
+bar the rig's suite stands not - the override surface, the missing modal,
+the repository-select modal, the Live view, and the Key guide - is stood
+by the owning surface's suite, which presses its controls through the rig
+on that bar. No screen reader has read any of the migrated surfaces, and no
+terminal walk has been re-run on the migrated frames, so both stand as
+unverified here as in every other entry of this record. Two gaps the migration met are now closed: the panes' focus
 moves stand in the catalogue as the pane's own controls the bar hints (the
 Detail hint and the list's Move keys), and the keys the bar paints nowhere,
 the guide's scroll keys among them, reach through `guideKey` - the Action
@@ -2166,3 +2422,76 @@ label span, and the resolution fails loudly on the hint it cannot split. The
 plane's own themes keep the tested pairs, and the inherited-theme walks
 stand on that limit. The terminal walks and the screen-reader
 path stand as they do for the rest of this record: not walked, not verified.
+
+The rework of this pull stands two statements of the delivered rule on the
+sources they read from, and it moves the last of the suites' own raw input
+off the rig's retired surface:
+
+- The rig's copy of the catalogue's key display names stands pinned
+  against the catalogue's own display function, `keyName`: the function
+  takes the one production line this round moves, the `export` beside it,
+  the second such line after the `omitFromOtherSection` export, and the
+  rig's own suite walks the two functions key by key over the keys the
+  rig's table holds and the keys the catalogue names in any mode, failing
+  on the empty read with every drifted key named. The pin's red edge is
+  measured: a re-label of `pageup` in the catalogue's display table fails
+  the pin and names the key, and the table is restored byte-identical
+  after the run.
+- The static architecture check discovers its scope from the rig's own
+  import: every test file that imports the rig stands under the input and
+  wait rules, owned or not, and the owned list stands beneath the discovery
+  as the pinned floor it never shrinks: a surface on the list that stops
+  importing the rig fails the floor and is migrated again, not removed.
+  The discovery reads the import at every relative depth the tree holds,
+  and it pins its positive and negative edges beside itself, the positive
+  edges spelled in split parts so the check's own source holds no match
+  for the discovery it applies and the campaign's walk counts no check as
+  a suite. The two suites that imported the rig's input side without
+  owning a plane surface leave it: the harness's own contract suite takes
+  the rig's named frame check beside its stored and compound predicates
+  and the `shows` outcome for the one it named by containment, its per-wait
+  five second budgets standing below the rig's one deadline gone, and the
+  region's component suite stops importing the rig and stands on the
+  renderer's own seam beside the component it defines, the harness's keys
+  bound in the harness and its feed the renderer's raw feeder, the shape
+  the executable-boundary tests keep: its frame wait stands on the rig's
+  wait beside it, the same poll, the same passive flush on every poll, and
+  the same one deadline, and its flat read stands for the frame's own
+  whitespace, the frame the harness paints wearing no box border.
+- The closed set the outcome check's error lists stands whole: `immediate`,
+  which the check accepted, is named in it.
+
+The walk at the head that lands this rework, `e28652ce`, stands at no
+press-family call, no hand operation, no raw wait, and no handler probe on
+the suites it reads, 212 inline containment predicates, no reach to the
+renderer's input, and 20 helper copies over the rig's 96 exports: the raw
+waits fall from the 23 the landed head above stood, the harness's contract
+suite's five raw waits and the region's component suite's eighteen leaving
+with the two migrations, the renderer's reaches fall from the 18 the
+region's component suite stood alone, and the inline containment falls from
+the 213 on the harness's contract suite's one named-containment wait
+standing on the `shows` outcome. The export count grows from the 95 above
+on the rig's one new read, the display drift the rig's own suite pins. The
+test-tree duplication clone count stands at 168 at that head, the baseline
+it holds, unchanged by the rework, so the Quality baseline is rewritten
+not.
+
+The scoped run over the six suites this rework touches - the rig's own,
+the architecture check, the harness's contract, the region's component
+suite, the Seeded plane check, and the Control catalogue's own - ran its
+114 tests in 63.87 seconds, 0 fail, at that head (this machine, 32 cores,
+60 GB RAM, 2 GB available, load 1.73 at its run, one dev process standing,
+no other test run standing). The push gate's full suite on the tree merged
+with `origin/main` ran its 3,456 tests on this machine at that same head:
+3,455 pass, 1 fail, in 130.16 s, over 156 files and 17,391 `expect()`
+calls. The failing test, `repository-select-panel > a marking of two runs
+the queue, one confirmation per row, in list order`, missed the rig's 20 s
+deadline at 20,581 ms, and it ran 14 of 14 alone in 4.57 s on the same
+tree: it is named as a load flake per the triage rule, in the shape the
+record's #317 line names, beside the same file's fail and solo pass at the
+landed head above. No wait in the run's passes that stands on this rework
+reaches the deadline, and the class-level CI item stays open as the
+record's #398 line states: the loaded-runner evidence it names is
+unmeasured here, and no loaded runner of this rework's own stands on file.
+The screen-reader path and the terminal walks stand as for the rest of the
+record: not walked, not verified.

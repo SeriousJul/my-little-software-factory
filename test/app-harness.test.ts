@@ -19,7 +19,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import type { Ticket } from "../src/domain/ticket.ts";
-import { awaitFrame, withApp } from "./app-harness.ts";
+import { frameUntil, waitFor, withApp } from "./app-harness.ts";
 import { plane } from "./plane.ts";
 
 /** The ticket the named plane stands on, beside the default standing's. */
@@ -75,7 +75,7 @@ describe("the shared frame harness boots the Seeded plane", () => {
 		// old default - the projection in memory - had no such file.
 		await withApp(async (setup) => {
 			expect(existsSync(setup.plane.state.path), "the plane's state file").toBe(true);
-			const frame = await awaitFrame(setup, SAMPLE_ROW, "the sample list");
+			const frame = await frameUntil(setup, "the sample list", SAMPLE_ROW);
 			expect(SAMPLE_ROW(frame)).toBe(true);
 		});
 	});
@@ -86,7 +86,7 @@ describe("the shared frame harness boots the Seeded plane", () => {
 		// poll is the loop the held policy holds, so the runner's record of
 		// it is empty while the frame stands.
 		await withApp(async (setup) => {
-			await awaitFrame(setup, SAMPLE_ROW, "the sample list");
+			await frameUntil(setup, "the sample list", SAMPLE_ROW);
 			const polls = setup.plane.fakeRunner
 				.commands()
 				.filter((command) => command.startsWith("herdr agent list"));
@@ -100,14 +100,10 @@ describe("the shared frame harness boots the Seeded plane", () => {
 		// called test-only. The poll lands in the runner's record.
 		await withApp(
 			async (setup) => {
-				await awaitFrame(
-					setup,
-					() =>
-						setup.plane.fakeRunner
-							.commands()
-							.some((command) => command.startsWith("herdr agent list")),
-					"the observation poll",
-					5000,
+				await frameUntil(setup, "the observation poll", () =>
+					setup.plane.fakeRunner
+						.commands()
+						.some((command) => command.startsWith("herdr agent list")),
 				);
 			},
 			{ loopPolicy: { kind: "polled", intervalMs: 25 } },
@@ -122,14 +118,10 @@ describe("the shared frame harness boots the Seeded plane", () => {
 		const named = await plane({ pollIntervalMs: 25 });
 		await withApp(
 			async (setup) => {
-				await awaitFrame(
-					setup,
-					() =>
-						setup.plane.fakeRunner
-							.commands()
-							.some((command) => command.startsWith("herdr agent list")),
-					"the observation poll",
-					5000,
+				await frameUntil(setup, "the observation poll", () =>
+					setup.plane.fakeRunner
+						.commands()
+						.some((command) => command.startsWith("herdr agent list")),
 				);
 			},
 			{ plane: named },
@@ -160,7 +152,7 @@ describe("the shared frame harness boots the Seeded plane", () => {
 				async (setup) => {
 					expect(setup.plane, "the plane record the boot takes").toBe(named);
 					expect(setup.plane.state.path, "the named plane's state file").toBe(named.state.path);
-					await awaitFrame(setup, (f) => f.includes("A named plane ticket"), "the named ticket");
+					await waitFor(setup, { shows: "A named plane ticket" });
 				},
 				{ plane: named },
 			);

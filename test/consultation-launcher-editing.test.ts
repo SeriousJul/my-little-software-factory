@@ -16,12 +16,17 @@ import type { FactoryConfig } from "../src/config.ts";
 import type { FactoryState } from "../src/state.ts";
 import type { Setup } from "./app-harness.ts";
 import {
-	awaitFrame,
+	fieldKey,
 	frameText,
+	guideKey,
 	HEIGHT,
-	openLauncher,
-	press,
+	pasteText,
+	pressControl,
+	settle,
+	tabUntilSlot,
+	typeText,
 	WIDTH,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import type { FakeRunner } from "./fake-runner.ts";
@@ -53,15 +58,9 @@ function launcherConfig(): Partial<FactoryConfig> {
 	};
 }
 
-/** Tab `count` slots forward and wait for the frame to name the new one. */
-async function tabUntil(setup: Setup, count: number, what: string): Promise<string> {
-	for (let step = 0; step < count; step += 1) setup.mockInput.pressTab();
-	return awaitFrame(setup, (f) => frameText(f).includes(what), `the focus on ${what}`);
-}
-
 /** Tab to the Draft field, and wait until the field really holds the keys. */
 async function focusDraft(setup: Setup): Promise<void> {
-	await tabUntil(setup, 2, "❯ Initial input");
+	await tabUntilSlot(setup, "❯ Initial input");
 }
 
 /** Run one launcher flow at the real app seam, with its own fake runner. */
@@ -102,29 +101,20 @@ async function withLauncher(
 describe("the Consultation launcher's editing baseline", () => {
 	test("a plain Enter in the Draft field adds a line instead of launching", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await focusDraft(setup);
-			await setup.mockInput.typeText("first line");
-			setup.mockInput.pressEnter();
-			await setup.mockInput.typeText("second line");
-			const frame = await awaitFrame(
-				setup,
-				(f) => frameText(f).includes("first line second line"),
-				"the two lines the operator typed",
-			);
+			await typeText(setup, "first line");
+			fieldKey(setup, "enter");
+			await typeText(setup, "second line");
+			const frame = await waitFor(setup, { shows: "first line second line" });
 			// The Consultation is still not open: an ordinary editing key never
 			// started Agent work on the operator's behalf.
 			expect(frameText(frame)).toContain("Consultation launcher");
 			expect(setup.state.consultationRecord.consultations("open")).toEqual([]);
 
 			// The visible Launch action is what submits the draft.
-			await tabUntil(setup, 1, "❯ Launch Consultation");
-			setup.mockInput.pressEnter();
-			await awaitFrame(
-				setup,
-				(f) => !frameText(f).includes("Consultation launcher"),
-				"the Launch action to open the Consultation",
-			);
+			await tabUntilSlot(setup, "❯ Launch Consultation");
+			await pressControl(setup, "confirm-choice", { closes: "Consultation launcher" });
 			const opened = setup.state.consultationRecord.consultations("open");
 			expect(opened).toHaveLength(1);
 			// Both lines the operator typed are the Consultation's own input: the
@@ -136,14 +126,11 @@ describe("the Consultation launcher's editing baseline", () => {
 	test("closing keeps the unfinished text and states that a restart would not", async () => {
 		await withLauncher(async (setup) => {
 			const draft = "a draft with several words";
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await focusDraft(setup);
-			await setup.mockInput.typeText(draft);
-			setup.mockInput.pressEscape();
-			await awaitFrame(setup, (f) => !frameText(f).includes("Consultation launcher"), "close");
-			const reopened = await press(setup, "c", "the launcher to reopen", (f) =>
-				frameText(f).includes("Consultation launcher"),
-			);
+			await typeText(setup, draft);
+			await pressControl(setup, "close-form", { closes: "Consultation launcher" });
+			const reopened = await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			expect(frameText(reopened)).toContain(draft);
 			expect(frameText(reopened)).toContain("not saved across restarts");
 		});
@@ -151,33 +138,26 @@ describe("the Consultation launcher's editing baseline", () => {
 
 	test("Discard is the only route that deletes unfinished text", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await focusDraft(setup);
-			await setup.mockInput.typeText("text worth keeping");
-			await tabUntil(setup, 2, "❯ Discard");
-			setup.mockInput.pressEnter();
-			await awaitFrame(setup, (f) => !frameText(f).includes("Consultation launcher"), "closed");
-			const reopened = await press(setup, "c", "the launcher to reopen", (f) =>
-				frameText(f).includes("Consultation launcher"),
-			);
+			await typeText(setup, "text worth keeping");
+			await tabUntilSlot(setup, "❯ Discard");
+			await pressControl(setup, "confirm-choice", { closes: "Consultation launcher" });
+			const reopened = await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			expect(frameText(reopened)).not.toContain("text worth keeping");
 		});
 	});
 
 	test("the Repository and Consultation type stay with the retained text", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			// One cycle on the Type choice moves it to the other configured type.
-			await tabUntil(setup, 0, "❯ Type");
-			setup.mockInput.pressArrow("right");
-			await awaitFrame(setup, (f) => frameText(f).includes("Type design"), "the other type");
+			await tabUntilSlot(setup, "❯ Type");
+			await pressControl(setup, "cycle-choice", { via: "→", shows: "Type design" });
 			await focusDraft(setup);
-			await setup.mockInput.typeText("a held draft");
-			setup.mockInput.pressEscape();
-			await awaitFrame(setup, (f) => !frameText(f).includes("Consultation launcher"), "close");
-			const reopened = await press(setup, "c", "the launcher to reopen", (f) =>
-				frameText(f).includes("Consultation launcher"),
-			);
+			await typeText(setup, "a held draft");
+			await pressControl(setup, "close-form", { closes: "Consultation launcher" });
+			const reopened = await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			expect(frameText(reopened)).toContain("Repository acme/repo");
 			expect(frameText(reopened)).toContain("Type design");
 			expect(frameText(reopened)).toContain("a held draft");
@@ -186,51 +166,38 @@ describe("the Consultation launcher's editing baseline", () => {
 
 	test("Help above the launcher keeps the draft, the caret, and the selection", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await focusDraft(setup);
-			await setup.mockInput.typeText("draft before help");
-			setup.mockInput.pressKey("HOME");
-			setup.mockInput.pressArrow("right", { shift: true });
-			setup.mockInput.pressArrow("right", { shift: true });
-			await setup.flush();
-			setup.mockInput.pressKey("F1");
-			const guide = await awaitFrame(setup, (f) => frameText(f).includes("Key guide"), "the guide");
+			await typeText(setup, "draft before help");
+			fieldKey(setup, "home");
+			fieldKey(setup, "shift+right");
+			fieldKey(setup, "shift+right");
+			await settle(setup);
+			const guide = await pressControl(setup, "help", { opens: "Key guide" });
 			// The guide names field editing, so basic editing is no operator's
 			// private knowledge.
 			expect(frameText(guide)).toContain("Undo");
 			expect(frameText(guide)).toContain("Insert a new line");
-			setup.mockInput.pressEscape();
-			await awaitFrame(
-				setup,
-				(f) => frameText(f).includes("Consultation launcher"),
-				"the launcher",
-			);
+			await guideKey(setup, "guide-close", "Esc", { closes: "Key guide" });
 			// The two-cell selection is still the selection: asking for help changed
 			// nothing about the operator's work.
-			setup.mockInput.pressKey("q");
-			await awaitFrame(
-				setup,
-				(f) => frameText(f).includes("qaft before help"),
-				"the typed character to replace the selection",
-			);
+			await typeText(setup, "q");
+			await waitFor(setup, { shows: "qaft before help" });
 		});
 	});
 
 	test("Ctrl+A selects the whole draft, and F3 copies it as news on the Message line", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await focusDraft(setup);
-			await setup.mockInput.typeText("copy this part");
+			await typeText(setup, "copy this part");
 			// The Key guide names Ctrl+A for Select all, and the field obeys the key
 			// the guide names: the bar offers the copy while a selection is held.
-			setup.mockInput.pressKey("a", { ctrl: true });
-			await awaitFrame(setup, (f) => f.includes("F3 Copy selection"), "the bar to name the copy");
-			setup.mockInput.pressKey("F3");
-			const frame = await awaitFrame(
-				setup,
-				(f) => f.includes("Copied 14 cells of selected text"),
-				"the copy result on the Message line",
-			);
+			fieldKey(setup, "ctrl+a");
+			await waitFor(setup, { shows: "F3 Copy selection" });
+			const frame = await pressControl(setup, "copy-selection", {
+				shows: "Copied 14 cells of selected text",
+			});
 			// The success is news the field reports, not a refusal wearing a warning.
 			expect(frameText(frame)).toContain("Info: Copied 14 cells of selected text");
 			expect(frameText(frame)).not.toContain("Warning:");
@@ -239,14 +206,10 @@ describe("the Consultation launcher's editing baseline", () => {
 
 	test("an oversized draft stays editable and states its size and limit", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await focusDraft(setup);
-			await setup.mockInput.pasteBracketedText("x".repeat(64 * 1024 + 1));
-			const frame = await awaitFrame(
-				setup,
-				(f) => frameText(f).includes("65537 UTF-8 bytes"),
-				"the size and the limit",
-			);
+			await pasteText(setup, "x".repeat(64 * 1024 + 1));
+			const frame = await waitFor(setup, { shows: "65537 UTF-8 bytes" });
 			expect(frameText(frame)).toContain("the limit is 65536");
 			// The text stands: the operator shortens it rather than retyping it.
 			expect(frameText(frame)).toContain("xxxxxxxxxx");
@@ -255,12 +218,12 @@ describe("the Consultation launcher's editing baseline", () => {
 
 	test("Tab reaches every field and action, and the bar names them", async () => {
 		await withLauncher(async (setup) => {
-			const opened = await openLauncher(setup);
+			const opened = await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			expect(frameText(opened)).toContain("❯ Type");
-			const repository = await tabUntil(setup, 1, "❯ Repository");
+			const repository = await tabUntilSlot(setup, "❯ Repository");
 			expect(frameText(repository)).toContain("Repository acme/repo");
-			await tabUntil(setup, 1, "❯ Initial input");
-			const launch = await tabUntil(setup, 1, "❯ Launch Consultation");
+			await tabUntilSlot(setup, "❯ Initial input");
+			const launch = await tabUntilSlot(setup, "❯ Launch Consultation");
 			expect(frameText(launch)).toContain("Discard");
 			// The bar names a control the launcher actually dispatches.
 			const rows = frameText(launch).split(" ");
@@ -270,16 +233,12 @@ describe("the Consultation launcher's editing baseline", () => {
 
 	test("an unavailable action states why it cannot run", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			// An empty draft is not a Consultation: the visible action refuses, and
 			// states why instead of failing in silence.
-			await tabUntil(setup, 3, "❯ Launch Consultation");
-			setup.mockInput.pressEnter();
-			const refused = await awaitFrame(
-				setup,
-				(f) => frameText(f).includes("initial input cannot be empty"),
-				"the refusal",
-			);
+			await tabUntilSlot(setup, "❯ Launch Consultation");
+			await pressControl(setup, "confirm-choice", { quiet: true });
+			const refused = await waitFor(setup, { shows: "initial input cannot be empty" });
 			expect(frameText(refused)).toContain("Consultation launcher");
 			expect(setup.runner.commands().some((call) => call.startsWith("herdr"))).toBe(false);
 		});

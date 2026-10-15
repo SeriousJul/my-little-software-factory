@@ -18,10 +18,8 @@ import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	frameText,
-	press,
-	pressArrow,
+	pressControl,
 	rgb,
-	rowSelected,
 	spanColors,
 	WIDTH,
 	waitSourceHealthy,
@@ -115,18 +113,17 @@ describe("the Task row's placement note", () => {
 				// actionable.
 				app.src.settle(success);
 				await waitSourceHealthy(app.plane.state);
-				await press(setup, "e", "the override panel", (f) => f.includes("Override"));
-				await press(setup, "j", "the Environment row", (f) => rowSelected(f, "Environment"));
-				await press(setup, "j", "the Task type row", (f) => rowSelected(f, "Task type"));
+				await pressControl(setup, "override", { shows: "Override" });
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
 				// The row opens on the ticket's suggestion, implement, and
 				// cycles the full list: the operator reaches review in two
 				// steps, and the note follows the selection.
-				await pressArrow(setup, "right", "the fix selection", (f) =>
-					frameText(f).includes("Task type fix"),
-				);
-				const review = await pressArrow(setup, "right", "the review selection", (f) =>
-					f.includes("places the ticket on state ready-for-review"),
-				);
+				await pressControl(setup, "change-override", { via: "→", shows: "Task type fix" });
+				const review = await pressControl(setup, "change-override", {
+					via: "→",
+					shows: "places the ticket on state ready-for-review",
+				});
 				expect(frameText(review)).toContain("places the ticket on state ready-for-review");
 				// The note wears the detail tone, the same ink the panel's
 				// other written facts wear.
@@ -159,18 +156,20 @@ describe("the Task row's placement note", () => {
 				// actionable.
 				app.src.settle(success);
 				await waitSourceHealthy(app.plane.state);
-				await press(setup, "e", "the override panel", (f) => f.includes("Override"));
-				await press(setup, "j", "the Environment row", (f) => rowSelected(f, "Environment"));
-				await press(setup, "j", "the Task type row", (f) => rowSelected(f, "Task type"));
+				await pressControl(setup, "override", { shows: "Override" });
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
 				// The row opens on implement, the ticket's suggestion, and
 				// cycles the full list: fix refuses on the first step, and the
 				// wait stands on the review sentence itself.
-				await pressArrow(setup, "right", "the fix selection", (f) =>
-					frameText(f).includes("task type fix is not offered"),
-				);
-				const review = await pressArrow(setup, "right", "the review selection", (f) =>
-					f.includes(`Error: Task type: ${reason}`),
-				);
+				await pressControl(setup, "change-override", {
+					via: "→",
+					shows: "task type fix is not offered",
+				});
+				const review = await pressControl(setup, "change-override", {
+					via: "→",
+					shows: `Error: Task type: ${reason}`,
+				});
 				// The whole sentence stands, not a tone alone: a row that
 				// carried its meaning on a tone alone would paint only the
 				// first. The panel is wide enough to hold it.
@@ -194,11 +193,12 @@ describe("the Task row's placement note", () => {
 				// actionable.
 				app.src.settle(success);
 				await waitSourceHealthy(app.plane.state);
-				await press(setup, "e", "the override panel", (f) => f.includes("Override"));
-				await press(setup, "j", "the Environment row", (f) => rowSelected(f, "Environment"));
-				const implement = await press(setup, "j", "the Task type row", (f) =>
-					rowSelected(f, "Task type"),
-				);
+				await pressControl(setup, "override", { shows: "Override" });
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
+				const implement = await pressControl(setup, "move-list", {
+					via: "j",
+					shows: "❯ Task type",
+				});
 				// The panel opens on the ticket's suggestion: the row wears
 				// no placement note, no infeasibility reason, and no warning
 				// tone.

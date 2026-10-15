@@ -23,17 +23,20 @@ import type { HandoffChoice } from "../src/handoff.ts";
 import { type FitVerdict, settingFit } from "../src/setting-fit.ts";
 import { taskProfileOf } from "../src/setting-resolution.ts";
 import {
-	awaitFrame,
+	fieldKey,
 	frameText,
+	frameUntil,
 	HEIGHT,
-	press,
+	pasteText,
+	pressControl,
 	rgb,
-	rowSelected,
 	rowsOf,
 	settle,
 	spanColorAt,
 	spanColors,
+	typeText,
 	WIDTH,
+	waitFor,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 
@@ -184,8 +187,9 @@ async function withPanel(
 
 /** Move the selection from the Agent row down to the Model row. */
 async function moveToModelRow(setup: Awaited<ReturnType<typeof testRender>>): Promise<string> {
-	await setup.mockInput.pressKeys(["j", "j", "j"]);
-	return awaitFrame(setup, (f) => rowSelected(f, "Model"), "the Model row to be selected");
+	await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
+	await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+	return pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
 }
 
 /**
@@ -226,10 +230,8 @@ function reasonOf(frame: string, label: string): string {
 /** Walk the rows to the Context row, the panel's one digits-only field. */
 async function moveToContextRow(setup: Awaited<ReturnType<typeof testRender>>): Promise<string> {
 	await moveToModelRow(setup);
-	await setup.mockInput.pressArrow("down");
-	await awaitFrame(setup, (f) => rowSelected(f, "Thinking"), "the Thinking row");
-	await setup.mockInput.pressArrow("down");
-	return awaitFrame(setup, (f) => rowSelected(f, "Context"), "the Context row to be selected");
+	await pressControl(setup, "move-list", { via: "↓", shows: "❯ Thinking" });
+	return pressControl(setup, "move-list", { via: "↓", shows: "❯ Context" });
 }
 
 describe("the Model row's list belongs to the agent the panel is on", () => {
@@ -250,8 +252,8 @@ describe("the Model row's list belongs to the agent the panel is on", () => {
 
 				// The row takes no typing and no cycle while it waits, so a foreign
 				// value cannot be chosen by accident.
-				await setup.mockInput.typeText("mode");
-				await setup.mockInput.pressArrow("right");
+				await typeText(setup, "mode");
+				fieldKey(setup, "right");
 				const held = setup.captureCharFrame();
 				expect(frameText(held)).toContain("Model (loading...)");
 				expect(frameText(held)).not.toContain("only-for-scribe");
@@ -270,12 +272,8 @@ describe("the Model row's list belongs to the agent the panel is on", () => {
 				await moveToModelRow(setup);
 				// The row's list is the agent's own, so its search answers with a
 				// value from that list. Arrows move the caret here, not the value.
-				await setup.mockInput.typeText("model-y");
-				const shown = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("only-for-pilot/model-y"),
-					"the agent's own model to match the search",
-				);
+				await typeText(setup, "model-y");
+				const shown = await waitFor(setup, { shows: "only-for-pilot/model-y" });
 				expect(frameText(shown)).toContain("Model only-for-pilot/model-y");
 			},
 		);
@@ -290,20 +288,12 @@ describe("the Model row's list belongs to the agent the panel is on", () => {
 			INITIAL,
 			async (setup) => {
 				await moveToModelRow(setup);
-				await setup.mockInput.typeText("model-y");
-				setup.mockInput.pressKey("HOME");
-				setup.mockInput.pressArrow("right", { shift: true });
-				await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("F3 Copy selection"),
-					"Copy selection on the Model search",
-				);
-				setup.mockInput.pressArrow("right");
-				await awaitFrame(
-					setup,
-					(f) => !frameText(f).includes("F3 Copy selection"),
-					"Copy selection to leave the bar when the selection collapses",
-				);
+				await typeText(setup, "model-y");
+				fieldKey(setup, "home");
+				fieldKey(setup, "shift+right");
+				await waitFor(setup, { shows: "F3 Copy selection" });
+				fieldKey(setup, "right");
+				await waitFor(setup, { hides: "F3 Copy selection" });
 			},
 		);
 	});
@@ -329,11 +319,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
 			{ ...INITIAL, model: "not-offered/model" },
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Model not-offered/model"),
-					"the Model row holding the unfit value",
-				);
+				const frame = await waitFor(setup, { shows: "Model not-offered/model" });
 				// The row keeps the value the Handoff would send, and states it as
 				// the failure the Handoff would fail with.
 				expect(frameText(frame)).toContain("Model not-offered/model");
@@ -347,11 +333,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
 			{ ...INITIAL, thinking: "high" },
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Thinking high"),
-					"the Thinking row holding the unoffered level",
-				);
+				const frame = await waitFor(setup, { shows: "Thinking high" });
 				expect(frameText(frame)).toContain("Thinking high");
 				expectUnfit(setup, "Thinking", "high");
 			},
@@ -363,11 +345,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "scribe", status: { status: "available", models: ["only-for-scribe/model-y"] } },
 			{ ...INITIAL, agentType: "scribe", contextWindow: "131072" },
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Context 131072"),
-					"the Context row the Agent cannot take",
-				);
+				const frame = await waitFor(setup, { shows: "Context 131072" });
 				expect(frameText(frame)).toContain("Context 131072");
 				expectUnfit(setup, "Context", "131072");
 			},
@@ -381,11 +359,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
 			{ ...INITIAL, contextWindow: "000" },
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Context 000"),
-					"the Context row holding no count",
-				);
+				const frame = await waitFor(setup, { shows: "Context 000" });
 				// An all-zero count is no count at all, so the row keeps the
 				// operator's digits and wears the warning on them.
 				expect(frameText(frame)).toContain("Context 000");
@@ -399,22 +373,17 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "mute", status: { status: "available", models: ["only-for-mute/model-y"] } },
 			{ ...INITIAL, agentType: "mute", thinking: "low" },
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Thinking low"),
-					"the Thinking row with no level to offer",
-				);
+				const frame = await waitFor(setup, { shows: "Thinking low" });
 				expect(frameText(frame)).toContain("Thinking low");
 				expectUnfit(setup, "Thinking", "low");
-				await press(setup, "j", "the Environment row", (f) => rowSelected(f, "Environment"));
-				await press(setup, "j", "the Task type row", (f) => rowSelected(f, "Task type"));
-				await press(setup, "j", "the Model row", (f) => rowSelected(f, "Model"));
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
 				// The Model row takes typing, so the arrow key moves past it.
-				setup.mockInput.pressArrow("down");
-				await awaitFrame(setup, (f) => rowSelected(f, "Thinking"), "the Thinking row");
+				await pressControl(setup, "move-list", { via: "↓", shows: "❯ Thinking" });
 				// The row holds no option, so a cycle takes it nowhere: the value the
 				// Handoff would refuse stays on the row where the operator can clear it.
-				setup.mockInput.pressArrow("right");
+				await pressControl(setup, "change-override", { quiet: true });
 				const held = frameText(await settle(setup));
 				expect(held).toContain("Thinking low");
 				expect(held).not.toContain("Stryker");
@@ -436,13 +405,13 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 				contextWindow: "131072",
 			},
 			async (setup) => {
-				const frame = await awaitFrame(
+				const frame = await frameUntil(
 					setup,
+					"the three warning rows of an Agent that maps nothing",
 					(f) =>
 						frameText(f).includes("Model factory-model") &&
 						frameText(f).includes("Thinking low") &&
 						frameText(f).includes("Context 131072"),
-					"the three warning rows of an Agent that maps nothing",
 				);
 				expect(frameText(frame)).toContain("Agent bare");
 				expectUnfit(setup, "Model", "factory-model");
@@ -450,25 +419,15 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 				expectUnfit(setup, "Context", "131072");
 				// A warning row is an editing row, not a cycle: the selection reaches
 				// it and a typed letter lands in the value the Handoff would send.
-				await press(setup, "j", "the Environment row", (f) => rowSelected(f, "Environment"));
-				await press(setup, "j", "the Task type row", (f) => rowSelected(f, "Task type"));
-				setup.mockInput.pressArrow("down");
-				await awaitFrame(setup, (f) => rowSelected(f, "Model"), "the Model row");
-				await setup.mockInput.typeText("x");
-				const typedModel = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Model factory-modelx"),
-					"the Model row to take the typed letter",
-				);
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+				await pressControl(setup, "move-list", { via: "↓", shows: "❯ Model" });
+				await typeText(setup, "x");
+				const typedModel = await waitFor(setup, { shows: "Model factory-modelx" });
 				expect(frameText(typedModel)).toContain("Model factory-modelx");
-				setup.mockInput.pressArrow("down");
-				await awaitFrame(setup, (f) => rowSelected(f, "Thinking"), "the Thinking row");
-				await setup.mockInput.typeText("z");
-				const typedThinking = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Thinking lowz"),
-					"the Thinking row to take the typed letter",
-				);
+				await pressControl(setup, "move-list", { via: "↓", shows: "❯ Thinking" });
+				await typeText(setup, "z");
+				const typedThinking = await waitFor(setup, { shows: "Thinking lowz" });
 				expect(frameText(typedThinking)).toContain("Thinking lowz");
 			},
 		);
@@ -485,11 +444,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 				{ agentType: "bare", status },
 				{ ...INITIAL, agentType: "bare", model: "factory-model" },
 				async (setup) => {
-					const frame = await awaitFrame(
-						setup,
-						(f) => frameText(f).includes("factory-model"),
-						"the Model row of an Agent that maps no model",
-					);
+					const frame = await waitFor(setup, { shows: "factory-model" });
 					expect(frameText(frame)).toContain("Model factory-model");
 					expectUnfit(setup, "Model", "factory-model");
 				},
@@ -511,13 +466,13 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 				contextWindow: "131072",
 			},
 			async (setup) => {
-				const frame = await awaitFrame(
+				const frame = await frameUntil(
 					setup,
+					"the three warning rows of a record the config no longer names",
 					(f) =>
 						frameText(f).includes("Model factory-model") &&
 						frameText(f).includes("Thinking low") &&
 						frameText(f).includes("Context 131072"),
-					"the three warning rows of a record the config no longer names",
 				);
 				expect(frameText(frame)).toContain("Agent gone");
 				expectUnfit(setup, "Model", "factory-model");
@@ -535,11 +490,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "pilot", status: { status: "loading" } },
 			{ ...INITIAL, model: "factory-model" },
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Model factory-model"),
-					"the waiting row to hold its value",
-				);
+				const frame = await waitFor(setup, { shows: "Model factory-model" });
 				expect(frameText(frame)).toContain("Model factory-model");
 				expect(spanColors(setup, "factory-model")).toEqual([tone("detail")]);
 				expect(spanColors(setup, "pilot")).toEqual([tone("focusedText")]);
@@ -581,10 +532,8 @@ test("the no-color presentation keeps a warning row readable without color", asy
 			{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
 			{ ...INITIAL, model: "not-offered/model" },
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => rowsOf(f).some((r) => r.includes("Error: Model:")),
-					"the warning row in the no-color presentation",
+				const frame = await frameUntil(setup, "the warning row in the no-color presentation", (f) =>
+					rowsOf(f).some((r) => r.includes("Error: Model:")),
 				);
 				const expected = sentence(
 					settingFit.modelInList({ agentType: "pilot", agent: AGENTS.pilot }, "not-offered/model", [
@@ -615,11 +564,7 @@ describe("an unfit row states the Handoff's own sentence", () => {
 						"only-for-pilot/model-y",
 					]),
 				);
-				const frame = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes(expected),
-					"the Model row to state the Handoff's sentence",
-				);
+				const frame = await waitFor(setup, { shows: expected });
 				// The value the Handoff would send stays on its row, and the row under
 				// it states the sentence the Handoff would fail with.
 				expect(rowOf(frame, "Model")).toContain("not-offered/model");
@@ -640,11 +585,7 @@ describe("an unfit row states the Handoff's own sentence", () => {
 						{ ...NO_SETTINGS, thinking: "high" },
 					).thinking,
 				);
-				const frame = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes(expected),
-					"the Thinking row to state the Handoff's sentence",
-				);
+				const frame = await waitFor(setup, { shows: expected });
 				expect(reasonOf(frame, "Thinking")).toBe(`Error: Thinking: ${expected}`);
 			},
 			{ width: WIDE, height: HEIGHT },
@@ -662,11 +603,7 @@ describe("an unfit row states the Handoff's own sentence", () => {
 						{ ...NO_SETTINGS, contextWindow: "131072" },
 					).contextWindow,
 				);
-				const frame = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes(expected),
-					"the Context row to state the Handoff's sentence",
-				);
+				const frame = await waitFor(setup, { shows: expected });
 				expect(reasonOf(frame, "Context")).toBe(`Error: Context: ${expected}`);
 			},
 			{ width: WIDE, height: HEIGHT },
@@ -684,11 +621,7 @@ describe("an unfit row states the Handoff's own sentence", () => {
 						{ ...NO_SETTINGS, contextWindow: "000" },
 					).contextWindow,
 				);
-				const frame = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes(expected),
-					"the Context row to state the count rule",
-				);
+				const frame = await waitFor(setup, { shows: expected });
 				expect(reasonOf(frame, "Context")).toBe(`Error: Context: ${expected}`);
 			},
 			{ width: WIDE, height: HEIGHT },
@@ -708,10 +641,8 @@ describe("an unfit row states the Handoff's own sentence", () => {
 						"only-for-pilot/model-y",
 					]),
 				);
-				const frame = await awaitFrame(
-					setup,
-					(f) => rowsOf(f).some((r) => r.includes("Error: Model:")),
-					"the Model row to state its reason",
+				const frame = await frameUntil(setup, "the Model row to state its reason", (f) =>
+					rowsOf(f).some((r) => r.includes("Error: Model:")),
 				);
 				expect(rowOf(frame, "Model")).toContain("not-offered/model");
 				expect(reasonOf(frame, "Model")).toBe(`Error: Model: ${expected}`.slice(0, cells).trim());
@@ -741,11 +672,7 @@ test("a warning row states exactly the sentence its note cells hold", async () =
 			// this check reads that width instead of mirroring the box's arithmetic.
 			const cells = panelNoteCells(WIDTH, HEIGHT);
 			expect(note.length).toBeGreaterThan(cells);
-			const frame = await awaitFrame(
-				setup,
-				(f) => f.includes(note.slice(0, cells)),
-				"the Thinking row to fill its note",
-			);
+			const frame = await waitFor(setup, { shows: note.slice(0, cells) });
 			expect(reasonOf(frame, "Thinking")).toBe(note.slice(0, cells).trim());
 		},
 		{ width: WIDTH, height: HEIGHT },
@@ -760,10 +687,8 @@ describe("the Context row refuses an entry it cannot take", () => {
 	 * the row it refused on: no surface has to repeat it in its own words.
 	 */
 	function refusedFrame(setup: Awaited<ReturnType<typeof testRender>>): Promise<string> {
-		return awaitFrame(
-			setup,
-			(f) => rowsOf(f).some((r) => r.includes("Error: Context:")),
-			"the Context row to state its refusal",
+		return frameUntil(setup, "the Context row to state its refusal", (f) =>
+			rowsOf(f).some((r) => r.includes("Error: Context:")),
 		);
 	}
 
@@ -775,7 +700,7 @@ describe("the Context row refuses an entry it cannot take", () => {
 				await moveToContextRow(setup);
 				// The whole paste is refused: the row never keeps the digits that
 				// sat inside it, which is how `1e3` could otherwise become `13`.
-				await setup.mockInput.pasteBracketedText("1e3");
+				await pasteText(setup, "1e3");
 				const refused = await refusedFrame(setup);
 				expect(contextDigitsOf(refused)).toBe("(empty)");
 				expect(reasonOf(refused, "Context")).toBe(
@@ -795,18 +720,18 @@ describe("the Context row refuses an entry it cannot take", () => {
 			async (setup) => {
 				await moveToContextRow(setup);
 				// The caret stands after the first digit, where the arrows left it.
-				setup.mockInput.pressKey("HOME");
-				setup.mockInput.pressArrow("right");
-				await setup.mockInput.pasteBracketedText("12ab34");
+				fieldKey(setup, "home");
+				fieldKey(setup, "right");
+				await pasteText(setup, "12ab34");
 				const refused = await refusedFrame(setup);
 				expect(contextDigitsOf(refused)).toBe("272000");
 				// The refusal changed nothing, so the next digit still lands where the
 				// caret stood before it: between the first digit and the rest.
-				await setup.mockInput.typeText("9");
-				const inserted = await awaitFrame(
+				await typeText(setup, "9");
+				const inserted = await frameUntil(
 					setup,
-					(f) => contextDigitsOf(f) === "2972000",
 					"the digit to land at the caret the refusal left",
+					(f) => contextDigitsOf(f) === "2972000",
 				);
 				expect(contextDigitsOf(inserted)).toBe("2972000");
 			},
@@ -832,11 +757,11 @@ describe("the Context row refuses an entry it cannot take", () => {
 				{ ...INITIAL, contextWindow: "272000" },
 				async (setup) => {
 					await moveToContextRow(setup);
-					setup.mockInput.pressKey("HOME");
-					for (const _ of "27") setup.mockInput.pressArrow("right", { shift: true });
-					if (refuse) await setup.mockInput.pasteBracketedText("1x2");
+					fieldKey(setup, "home");
+					for (const _ of "27") fieldKey(setup, "shift+right");
+					if (refuse) await pasteText(setup, "1x2");
 					await settle(setup);
-					setup.mockInput.pressKey("9");
+					typeText(setup, "9");
 					final = contextDigitsOf(await settle(setup));
 				},
 			);
@@ -853,11 +778,11 @@ describe("the Context row refuses an entry it cannot take", () => {
 			{ ...INITIAL, contextWindow: "" },
 			async (setup) => {
 				await moveToContextRow(setup);
-				await setup.mockInput.pasteBracketedText("131072");
-				const taken = await awaitFrame(
+				await pasteText(setup, "131072");
+				const taken = await frameUntil(
 					setup,
-					(f) => contextDigitsOf(f) === "131072",
 					"the digits to land as the count",
+					(f) => contextDigitsOf(f) === "131072",
 				);
 				expect(contextDigitsOf(taken)).toBe("131072");
 				expect(refusals).toEqual([]);
@@ -873,7 +798,7 @@ describe("the Context row refuses an entry it cannot take", () => {
 			{ ...INITIAL, contextWindow: "272000" },
 			async (setup) => {
 				await moveToContextRow(setup);
-				await setup.mockInput.pasteBracketedText("12\n٣4");
+				await pasteText(setup, "12\n٣4");
 				const refused = await refusedFrame(setup);
 				expect(contextDigitsOf(refused)).toBe("272000");
 				expect(reasonOf(refused, "Context")).toContain("refused as a whole");
@@ -889,7 +814,7 @@ describe("the Context row refuses an entry it cannot take", () => {
 				await moveToContextRow(setup);
 				// A letter with an accent and a digit from another script are both
 				// characters this row cannot take, whatever a terminal reports them as.
-				await setup.mockInput.typeText("é١");
+				await typeText(setup, "é١");
 				const refused = await refusedFrame(setup);
 				expect(contextDigitsOf(refused)).toBe("1");
 				expect(reasonOf(refused, "Context")).toBe(
@@ -905,22 +830,22 @@ describe("the Context row refuses an entry it cannot take", () => {
 			{ ...INITIAL, contextWindow: "" },
 			async (setup) => {
 				await moveToContextRow(setup);
-				await setup.mockInput.typeText("1");
-				await awaitFrame(setup, (f) => contextDigitsOf(f) === "1", "the first digit");
+				await typeText(setup, "1");
+				await frameUntil(setup, "the first digit", (f) => contextDigitsOf(f) === "1");
 				// The `e` of `1e3` never reaches the field at all, so the row keeps
 				// the one digit it holds and says why nothing happened.
-				await setup.mockInput.typeText("e");
+				await typeText(setup, "e");
 				const refused = await refusedFrame(setup);
 				expect(contextDigitsOf(refused)).toBe("1");
 				expect(reasonOf(refused, "Context")).toBe(
 					"Error: Context: Context window accepts digits only",
 				);
 				expect(refusals).toEqual([]);
-				await setup.mockInput.typeText("3");
-				const next = await awaitFrame(
+				await typeText(setup, "3");
+				const next = await frameUntil(
 					setup,
-					(f) => contextDigitsOf(f) === "13",
 					"the row to keep taking digits",
+					(f) => contextDigitsOf(f) === "13",
 				);
 				expect(contextDigitsOf(next)).toBe("13");
 				// An entry the row took ends the refusal: the reason was about the key
@@ -938,12 +863,8 @@ describe("the Context row refuses an entry it cannot take", () => {
 			{ ...INITIAL, agentType: "mute" },
 			async (setup) => {
 				await moveToModelRow(setup);
-				await setup.mockInput.pasteBracketedText("1e3");
-				const taken = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Model 1e3"),
-					"the Model field to take the paste",
-				);
+				await pasteText(setup, "1e3");
+				const taken = await waitFor(setup, { shows: "Model 1e3" });
 				expect(frameText(taken)).toContain("Model 1e3");
 				expect(refusals).toEqual([]);
 			},
@@ -963,11 +884,7 @@ describe("the plane action's task type states that no Agent runs", () => {
 				contextWindow: "1000",
 			},
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("the plane action holds no settings"),
-					"the Task row's fact",
-				);
+				const frame = await waitFor(setup, { shows: "the plane action holds no settings" });
 				// The Task row states the fact, and no placement note stands
 				// beside it: the plane action runs no placement write.
 				expect(frameText(frame)).toContain("the plane action holds no settings");
@@ -975,12 +892,7 @@ describe("the plane action's task type states that no Agent runs", () => {
 				// wears the same refusal the decision screen's edit key states:
 				// the tone on the unselected list row, the written note under
 				// every row.
-				await setup.mockInput.pressKey("j");
-				await awaitFrame(
-					setup,
-					(f) => rowSelected(f, "Environment"),
-					"the Environment row to be selected",
-				);
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
 				expect(spanColors(setup, "worktree")).toEqual([tone("warning")]);
 				for (const label of ["Agent", "Environment", "Model", "Thinking", "Context"]) {
 					const note = reasonOf(setup.captureCharFrame(), label);

@@ -22,6 +22,7 @@ import type { FactoryState } from "../src/state.ts";
 import type { AppSetup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
+	crossCursor,
 	emergencyExit,
 	frameUntil,
 	guideKey,
@@ -129,18 +130,19 @@ async function walkToOpenTicket(setup: AppSetup): Promise<void> {
 }
 
 /**
- * Step the cursor with the list's Move control until the frame names the
- * target: crossing a section's boundary is a walk, and the rig sends every
- * step as a press of the named control.
+ * Step the cursor with the list's Move control until the frame names the row
+ * it waits for: a walk inside one section's list. Crossing a section's
+ * boundary goes out through the rig's own `crossCursor`, which owns the
+ * walk's key order and its back key.
  */
 async function moveCursorTo(
 	setup: AppSetup,
 	via: "j" | "k",
-	isThere: (frame: string) => boolean,
+	target: string,
 	maxSteps = 30,
 ): Promise<void> {
 	for (let step = 0; step < maxSteps; step += 1) {
-		if (isThere(setup.captureCharFrame())) return;
+		if (setup.captureCharFrame().includes(target)) return;
 		await pressControl(setup, "move-list", { via, quiet: true });
 	}
 	throw new Error(
@@ -570,11 +572,7 @@ describe("the contextual Action bar", () => {
 			const planeRecord = await plane({});
 			await withApp(
 				async (setup) => {
-					await moveCursorTo(
-						setup,
-						"j",
-						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
-					);
+					await crossCursor(setup, "consultations");
 					// No types stand in the config, and the bar packs past the
 					// launch hint while it stands unavailable: the key is read
 					// from the guide, which names the control and its refusal.
@@ -710,7 +708,7 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
-				await frameUntil(setup, "the ticket", (f) => f.includes("Retry policy for"));
+				await waitFor(setup, { shows: "Retry policy for" });
 				// The standing holds two seats in flight: the mode cell counts
 				// them beside the limit it stands on.
 				await toggleAutoHandoff(setup, { quiet: true });
@@ -975,11 +973,7 @@ describe("the contextual Action bar", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await moveCursorTo(
-						setup,
-						"j",
-						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
-					);
+					await crossCursor(setup, "consultations");
 					await emergencyExit(setup);
 					await destroyed(setup);
 				},
@@ -997,11 +991,7 @@ describe("the contextual Action bar", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await moveCursorTo(
-						setup,
-						"j",
-						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
-					);
+					await crossCursor(setup, "consultations");
 					// The Consultations bar packs past the launch hint, so the
 					// key is read from the guide the view names it in.
 					await guideKey(setup, "launch", "c", {
@@ -1024,11 +1014,7 @@ describe("the contextual Action bar", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await moveCursorTo(
-						setup,
-						"j",
-						(f) => f.includes("┌─❯ Consultations") && !f.includes("┌─❯ Tickets"),
-					);
+					await crossCursor(setup, "consultations");
 					await pressControl(setup, "help", {
 						via: "?",
 						opens: "Key guide - Consultation list",
@@ -1079,7 +1065,7 @@ describe("the contextual Action bar", () => {
 			try {
 				await withApp(
 					async (setup) => {
-						await moveCursorTo(setup, "j", (f) => f.includes("State: awaiting-response"));
+						await moveCursorTo(setup, "j", "State: awaiting-response");
 						await pressControl(setup, "consultation-respond", {
 							opens: "Response draft",
 						});
@@ -1150,7 +1136,7 @@ describe("the contextual Action bar", () => {
 			try {
 				await withApp(
 					async (setup) => {
-						await moveCursorTo(setup, "j", (f) => f.includes("State: awaiting-response"));
+						await moveCursorTo(setup, "j", "State: awaiting-response");
 						// The interaction mode stands over the base handler: it
 						// routes the keys through the plane's own bus rather than
 						// taking the key bus over, so the press settles the frame
@@ -1193,7 +1179,7 @@ describe("the contextual Action bar", () => {
 			try {
 				await withApp(
 					async (setup) => {
-						await moveCursorTo(setup, "j", (f) => f.includes("State: opening"));
+						await moveCursorTo(setup, "j", "State: opening");
 						// The opening Consultation's bar stands back from the Close
 						// hint, so the key is read from the guide.
 						await guideKey(setup, "consultation-close", "Delete", {
@@ -1312,7 +1298,7 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				planeRecord.settleFirstFetch();
 				await waitSourceHealthy(planeRecord.state);
-				await frameUntil(setup, "the ticket", (f) => f.includes("Drop the legacy auth"));
+				await waitFor(setup, { shows: "Drop the legacy auth" });
 				// A failed refresh makes the stored source stale: the ticket
 				// stays visible, but it is no longer actionable.
 				await pressControl(setup, "refresh", { shows: "Working: refreshing" });

@@ -1,4 +1,16 @@
-/** The shared region module owns the Decision region's selection behavior. */
+/**
+ * The shared region module owns the Decision region's selection behavior.
+ *
+ * The suite stands on the renderer's own seam: it renders the region's own
+ * component on a harness the suite defines, with the harness's keys bound in
+ * the harness, and drives the harness with the renderer's raw feeder. The
+ * frame rig's controls stand on the plane's Action bar, which the harness
+ * paints nowhere, so the rig's input side reaches this suite nowhere and the
+ * rig's import stands off it, the shape the executable-boundary tests keep.
+ * The suite's frame wait stands on the rig's wait beside it: the same poll,
+ * the same passive flush the rig's waits run on every poll, and the same one
+ * deadline, which dumps the last frame when it stands past it.
+ */
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { KeyEvent } from "@opentui/core";
@@ -6,7 +18,8 @@ import { createElement, useKeyboard } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import type { ActionRow } from "../src/components/modal-chrome.ts";
 import { rangeTextOf, useDecisionRegion } from "../src/components/shared/region.ts";
-import { awaitFrame, frameText } from "./app-harness.ts";
+import { flushPassiveNow } from "./passive-flush-hold.ts";
+import { sleep } from "./plane.ts";
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
 afterEach(async () => {
@@ -60,6 +73,46 @@ function RegionHarness({ rows, visibleRows, onConfirm }: HarnessProps) {
 		),
 	);
 }
+
+/**
+ * The harness's one frame deadline: the same number the frame rig's frame
+ * waits ride on, and the runner's own budget stands above twice of it.
+ */
+const REGION_DEADLINE_MS = 20000;
+
+/**
+ * Wait for the harness frame to satisfy `check`, named for what it waits
+ * for. The harness is the test's own component on the renderer, not the
+ * plane the frame rig resolves, so the wait stands on its own seam beside
+ * the rig's frame wait: the same poll, the same passive flush the rig's
+ * wait runs on every poll, and the same one deadline, the deadline failure
+ * dumping the last frame.
+ */
+async function untilRegionFrame(
+	setup: Awaited<ReturnType<typeof testRender>>,
+	check: (frame: string) => boolean,
+	what: string,
+): Promise<string> {
+	const deadline = Date.now() + REGION_DEADLINE_MS;
+	let frame = setup.captureCharFrame();
+	for (;;) {
+		if (check(frame)) return frame;
+		if (Date.now() >= deadline) {
+			throw new Error(`timed out waiting for ${what}\nlast frame:\n${frame}`);
+		}
+		await sleep(10);
+		flushPassiveNow();
+		frame = setup.captureCharFrame();
+	}
+}
+
+/**
+ * The harness frame as flat text. The harness paints no box border, so the
+ * read is the frame's own whitespace folded to single spaces, the rig's
+ * frame-text read with its border removal standing off the shape it has no
+ * place in.
+ */
+const flatFrame = (frame: string): string => frame.replace(/\s+/g, " ");
 
 /** Render one region at a fixed size, and hand the test the frame setup. */
 async function withRegion(
@@ -121,14 +174,14 @@ describe("the region's selection, its wrap, and its window", () => {
 
 				// Down walks the rows to the last.
 				setup.mockInput.pressKey("j");
-				await awaitFrame(
+				await untilRegionFrame(
 					setup,
 					() => selectedLabel(setup.captureCharFrame()) === "Row b",
 					"one step down",
 				);
 				for (const label of ["Row c", "Row d", "Row e", "Row f"]) {
 					setup.mockInput.pressKey("j");
-					await awaitFrame(
+					await untilRegionFrame(
 						setup,
 						() => selectedLabel(setup.captureCharFrame()) === label,
 						`the step to ${label}`,
@@ -137,7 +190,7 @@ describe("the region's selection, its wrap, and its window", () => {
 
 				// The next step wraps to the first row instead of stopping.
 				setup.mockInput.pressKey("j");
-				await awaitFrame(
+				await untilRegionFrame(
 					setup,
 					() => selectedLabel(setup.captureCharFrame()) === "Row a",
 					"the wrap from the last row",
@@ -147,7 +200,7 @@ describe("the region's selection, its wrap, and its window", () => {
 				// where the operator left it, so k from the first row takes the
 				// last.
 				setup.mockInput.pressKey("k");
-				await awaitFrame(
+				await untilRegionFrame(
 					setup,
 					() => selectedLabel(setup.captureCharFrame()) === "Row f",
 					"the wrap from the first row",
@@ -171,13 +224,13 @@ describe("the region's selection, its wrap, and its window", () => {
 
 				// Two steps stay inside the window: it does not move.
 				setup.mockInput.pressKey("j");
-				await awaitFrame(
+				await untilRegionFrame(
 					setup,
 					() => selectedLabel(setup.captureCharFrame()) === "Row b",
 					"the step to Row b",
 				);
 				setup.mockInput.pressKey("j");
-				await awaitFrame(
+				await untilRegionFrame(
 					setup,
 					() => selectedLabel(setup.captureCharFrame()) === "Row c",
 					"the step to Row c",
@@ -187,7 +240,7 @@ describe("the region's selection, its wrap, and its window", () => {
 				// The step that would leave the window slides it down with the
 				// cursor: Row d comes in, Row a goes.
 				setup.mockInput.pressKey("j");
-				await awaitFrame(
+				await untilRegionFrame(
 					setup,
 					() => selectedLabel(setup.captureCharFrame()) === "Row d",
 					"the step to Row d",
@@ -199,13 +252,13 @@ describe("the region's selection, its wrap, and its window", () => {
 
 				// To the last row, and the window holds it.
 				setup.mockInput.pressKey("j");
-				await awaitFrame(
+				await untilRegionFrame(
 					setup,
 					() => selectedLabel(setup.captureCharFrame()) === "Row e",
 					"the step to Row e",
 				);
 				setup.mockInput.pressKey("j");
-				await awaitFrame(
+				await untilRegionFrame(
 					setup,
 					() => selectedLabel(setup.captureCharFrame()) === "Row f",
 					"the step to Row f",
@@ -219,7 +272,7 @@ describe("the region's selection, its wrap, and its window", () => {
 				// both stand in the window it holds.
 				for (const label of ["Row e", "Row d"]) {
 					setup.mockInput.pressKey("k");
-					await awaitFrame(
+					await untilRegionFrame(
 						setup,
 						() => selectedLabel(setup.captureCharFrame()) === label,
 						`the step back to ${label}`,
@@ -230,7 +283,7 @@ describe("the region's selection, its wrap, and its window", () => {
 				// The step that leaves the window at its top slides it up: c
 				// comes in, f goes.
 				setup.mockInput.pressKey("k");
-				await awaitFrame(
+				await untilRegionFrame(
 					setup,
 					() => selectedLabel(setup.captureCharFrame()) === "Row c",
 					"the step back to Row c",
@@ -245,7 +298,7 @@ describe("the region's selection, its wrap, and its window", () => {
 				// included.
 				for (const label of ["Row d", "Row e"]) {
 					setup.mockInput.pressKey("j");
-					await awaitFrame(
+					await untilRegionFrame(
 						setup,
 						() => selectedLabel(setup.captureCharFrame()) === label,
 						`the step to ${label}`,
@@ -253,14 +306,14 @@ describe("the region's selection, its wrap, and its window", () => {
 					expect(rangeOf(setup.captureCharFrame())).toBe("3-5/6");
 				}
 				setup.mockInput.pressKey("j");
-				await awaitFrame(
+				await untilRegionFrame(
 					setup,
 					() => selectedLabel(setup.captureCharFrame()) === "Row f",
 					"the step to Row f",
 				);
 				expect(rangeOf(setup.captureCharFrame())).toBe("4-6/6");
 				setup.mockInput.pressKey("j");
-				await awaitFrame(
+				await untilRegionFrame(
 					setup,
 					() => selectedLabel(setup.captureCharFrame()) === "Row a",
 					"the wrap from the last row",
@@ -280,12 +333,12 @@ describe("the region's selection, its wrap, and its window", () => {
 			() => undefined,
 			async (setup) => {
 				const frame = setup.captureCharFrame();
-				expect(frameText(frame)).not.toContain("❯");
+				expect(flatFrame(frame)).not.toContain("❯");
 				expect(rangeOf(frame)).toBeUndefined();
 				// A step with nothing to land on changes nothing.
-				const before = frameText(frame);
+				const before = flatFrame(frame);
 				setup.mockInput.pressKey("j");
-				expect(frameText(setup.captureCharFrame())).toBe(before);
+				expect(flatFrame(setup.captureCharFrame())).toBe(before);
 			},
 		);
 	});
@@ -294,19 +347,19 @@ describe("the region's selection, its wrap, and its window", () => {
 		const onConfirm = mock();
 		await withRegion(SIX, 3, onConfirm, async (setup) => {
 			setup.mockInput.pressKey("j");
-			await awaitFrame(
+			await untilRegionFrame(
 				setup,
 				() => selectedLabel(setup.captureCharFrame()) === "Row b",
 				"the step to Row b",
 			);
 			setup.mockInput.pressKey("j");
-			await awaitFrame(
+			await untilRegionFrame(
 				setup,
 				() => selectedLabel(setup.captureCharFrame()) === "Row c",
 				"the step to Row c",
 			);
 			setup.mockInput.pressEnter();
-			await awaitFrame(
+			await untilRegionFrame(
 				setup,
 				() => onConfirm.mock.calls.length === 1,
 				"the confirm of the selected row",
@@ -314,7 +367,7 @@ describe("the region's selection, its wrap, and its window", () => {
 			expect(onConfirm.mock.calls[0]?.[0]).toBe("c");
 			// The confirm clears the selection: the first row stands again,
 			// and the window with it.
-			await awaitFrame(
+			await untilRegionFrame(
 				setup,
 				() => selectedLabel(setup.captureCharFrame()) === "Row a",
 				"the selection cleared by the confirm",

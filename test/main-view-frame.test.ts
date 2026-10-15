@@ -43,6 +43,7 @@ import {
 	stillFrame,
 	toggleAutoHandoff,
 	WIDTH,
+	waitFor,
 	withApp,
 	withholdFrameEvents,
 } from "./app-harness.ts";
@@ -376,7 +377,7 @@ describe("the merged Main view", () => {
 		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
-				await frameUntil(setup, "the Tickets header", (f) => f.includes("▾ Tickets"));
+				await waitFor(setup, { shows: "▾ Tickets" });
 				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
 					"▾ Tickets  open: 5  running: 2  awaiting: 1",
 				);
@@ -407,7 +408,7 @@ describe("the merged Main view", () => {
 		});
 		await withApp(
 			async (setup) => {
-				await frameUntil(setup, "the Tickets header", (f) => f.includes("▾ Tickets"));
+				await waitFor(setup, { shows: "▾ Tickets" });
 				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
 					"▾ Tickets  open: 5  running: 2  awaiting: 1  held: 1",
 				);
@@ -429,7 +430,7 @@ describe("the merged Main view", () => {
 		const planeRecord = await plane({});
 		await withApp(
 			async (setup) => {
-				await frameUntil(setup, "the Tickets header", (f) => f.includes("▾ Tickets"));
+				await waitFor(setup, { shows: "▾ Tickets" });
 				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
 					"▾ Tickets  open 5  running 2  awaiting 1",
 				);
@@ -446,7 +447,7 @@ describe("the merged Main view", () => {
 		// mode corner: the row holds the widest counts that fit beside it.
 		await withApp(
 			async (setup) => {
-				await frameUntil(setup, "the Tickets header", (f) => f.includes("▾ Tickets"));
+				await waitFor(setup, { shows: "▾ Tickets" });
 				expect(rowsOf(setup.captureCharFrame())[0]).toContain("▾ Tickets  open 5");
 				expect(rowsOf(setup.captureCharFrame())[0]).toContain("● running ● manual 2/2");
 			},
@@ -480,7 +481,7 @@ describe("the merged Main view", () => {
 		});
 		await withApp(
 			async (setup) => {
-				await frameUntil(setup, "the Tickets header", (f) => f.includes("▾ Tickets"));
+				await waitFor(setup, { shows: "▾ Tickets" });
 				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
 					"▾ Tickets  open 5  running 2  awaiting 1",
 				);
@@ -498,7 +499,7 @@ describe("the merged Main view", () => {
 		// the mode corner.
 		await withApp(
 			async (setup) => {
-				await frameUntil(setup, "the Tickets header", (f) => f.includes("▾ Tickets"));
+				await waitFor(setup, { shows: "▾ Tickets" });
 				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
 					"▾ Tickets  open: 5  running: 2  awaiting: 1  held: 1",
 				);
@@ -521,7 +522,7 @@ describe("the merged Main view", () => {
 		});
 		await withApp(
 			async (setup) => {
-				await frameUntil(setup, "the Tickets header", (f) => f.includes("▾ Tickets"));
+				await waitFor(setup, { shows: "▾ Tickets" });
 				expect(headerOf(setup.captureCharFrame(), "Tickets")).toContain(
 					"▾ Tickets  open: 0  running: 0  awaiting: 0",
 				);
@@ -550,7 +551,7 @@ describe("the merged Main view", () => {
 		await booted(
 			async (setup) => {
 				source.settle(sampleOutcome());
-				await frameUntil(setup, "the Tickets list", (f) => f.includes("Retry policy"));
+				await waitFor(setup, { shows: "Retry policy" });
 				// The collapse keeps the detail on the retained Ticket: the
 				// section gives up its box rows, not its selection.
 				const collapsed = await pressControl(setup, "section-toggle", { shows: "▸ Tickets" });
@@ -606,7 +607,7 @@ describe("the merged Main view", () => {
 		await booted(
 			async (setup) => {
 				source.settle(sampleOutcome());
-				await frameUntil(setup, "the Tickets list", (f) => f.includes("Retry policy"));
+				await waitFor(setup, { shows: "Retry policy" });
 				// The walk crosses the boundary: the detail follows the
 				// cursor into the Consultation section, and a key after the
 				// cross uses the Consultation list.
@@ -631,9 +632,7 @@ describe("the merged Main view", () => {
 				expect(back).toContain("Ticket id in the agent name");
 				expect(back).toContain("❯ Tickets");
 				await pressControl(setup, "move-list", { via: "k", quiet: true });
-				const moved = await frameUntil(setup, "the previous Ticket", (f) =>
-					f.includes("Run the container env"),
-				);
+				const moved = await waitFor(setup, { shows: "Run the container env" });
 				expect(markerRowOf(moved)).toBe(9);
 			},
 			planeRecord,
@@ -657,15 +656,13 @@ describe("the merged Main view", () => {
 		await booted(
 			async (setup) => {
 				source.settle(sampleOutcome());
-				await frameUntil(setup, "the Tickets list", (f) => f.includes("Retry policy"));
+				await waitFor(setup, { shows: "Retry policy" });
 				await crossCursor(setup, "consultations");
 				// A key through the detail and back answers the Consultation
 				// list the cursor just entered, not the Ticket list left
 				// behind.
 				await pressControl(setup, "detail", { via: "l", quiet: true });
-				await frameUntil(setup, "the Agent view to take focus", (f) =>
-					f.includes("┌─❯ Agent view"),
-				);
+				await waitFor(setup, { shows: "❯ Agent view" });
 				await pressControl(setup, "consultation-list", { via: "h", quiet: true });
 				await pressControl(setup, "move-list", { via: "j", quiet: true });
 				const moved = await frameUntil(
@@ -959,7 +956,7 @@ describe("the merged Main view", () => {
 			// The row stands under the ask and the repository, the state word
 			// beside them: the repository is the row's own identity word at
 			// boot, before the observation demotes the record.
-			await frameUntil(setup, "the Consultation list", (f) => f.includes("acme/factory"));
+			await waitFor(setup, { shows: "acme/factory" });
 			// The Consultation header and box sit below the Ticket
 			// section's: at this size the Ticket section holds the cursor,
 			// so the Consultation box keeps its minimum of three content
@@ -977,9 +974,7 @@ describe("the merged Main view", () => {
 			// A click inside the Agent view moves the pane focus, and the
 			// Action bar follows with the detail's own hints.
 			await mouseClick(setup, 70, 4);
-			const detailed = await frameUntil(setup, "the Agent view to take focus", (f) =>
-				f.includes("┌─❯ Agent view"),
-			);
+			const detailed = await waitFor(setup, { shows: "❯ Agent view" });
 			expect(actionBarRowOf(detailed)).toContain("←/h List");
 		}, planeRecord);
 	});
@@ -1064,9 +1059,7 @@ describe("the merged Main view", () => {
 			// The row stands under the ask and the repository, the state word
 			// beside them: the repository is the row's own identity word at
 			// boot, before the observation demotes the record.
-			const frame = await frameUntil(setup, "the Consultation list", (f) =>
-				f.includes("acme/factory"),
-			);
+			const frame = await waitFor(setup, { shows: "acme/factory" });
 			const rows = rowsOf(frame);
 			// The Ticket header with its mode cell, then the headers and the
 			// boxes, then the Message line and the Action bar: one frame, in
@@ -1176,7 +1169,7 @@ describe("the merged Main view", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		await booted(async (setup) => {
 			source.settle(sampleOutcome());
-			await frameUntil(setup, "the Tickets list", (f) => f.includes("Retry policy"));
+			await waitFor(setup, { shows: "Retry policy" });
 			// Move the Ticket selection, then collapse the section.
 			await pressControl(setup, "move-list", { via: "j", quiet: true });
 			await frameUntil(setup, "the next Ticket", (f) => markerRowOf(f) === 4);
@@ -1234,7 +1227,7 @@ describe("the merged Main view", () => {
 		setup: Setup,
 		withholdFrames: boolean,
 	): Promise<{ resumed: string; next: string }> {
-		await frameUntil(setup, "the Tickets list", (f) => f.includes("Retry policy"));
+		await waitFor(setup, { shows: "Retry policy" });
 		// The long-description Ticket is the one that overflows the pane, so it
 		// can be scrolled off its own title.
 		for (let step = 1; step <= 3; step += 1) {
@@ -1398,9 +1391,7 @@ describe("the merged Main view", () => {
 			async (setup) => {
 				await crossCursor(setup, "consultations");
 				await pressControl(setup, "detail", { via: "l", quiet: true });
-				await frameUntil(setup, "the Agent view to take focus", (f) =>
-					f.includes("┌─❯ Agent view"),
-				);
+				await waitFor(setup, { shows: "❯ Agent view" });
 				await frameUntil(setup, "the Agent output at the follow end", (f) =>
 					detailPaneText(f).includes("gamma output line 30"),
 				);

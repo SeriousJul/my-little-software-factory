@@ -18,9 +18,11 @@ import {
 	actionBarRowOf,
 	cellColors,
 	FRAME_DEADLINE_MS,
+	frameUntil,
+	guideKey,
 	HEIGHT,
 	messageRowOf,
-	press,
+	pressControl,
 	rgb,
 	roleColor,
 	rowsOf,
@@ -114,7 +116,7 @@ async function expectReservedRows(setup: Setup, width: number, height: number): 
 /** Select the awaiting Ticket and open its decision. */
 async function openDecision(setup: Setup): Promise<void> {
 	// The seeded order puts the awaiting ticket first: the cursor starts on it.
-	await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
+	await pressControl(setup, "decide-completion", { shows: "Decision:" });
 }
 
 /**
@@ -123,8 +125,17 @@ async function openDecision(setup: Setup): Promise<void> {
  * keeps its Help control at every size, so a bar that lost the surface's own
  * hints and states none of the base's has not come back at all.
  */
-async function closeSurface(setup: Setup, what: RegExp): Promise<void> {
-	await press(setup, "escape", "the surface to close", (f) => !what.test(f));
+async function closeSurface(
+	setup: Setup,
+	what: RegExp,
+	control: "guide-close" | "cancel-action",
+): Promise<void> {
+	if (control === "guide-close") {
+		await pressControl(setup, "guide-close", { quiet: true });
+	} else {
+		await pressControl(setup, "cancel-action", { quiet: true });
+	}
+	await frameUntil(setup, "the surface to close", (f) => !what.test(f));
 	expect(actionBarRowOf(await settle(setup))).toContain("Help");
 }
 
@@ -173,7 +184,7 @@ describe("the reserved bottom rows at every size", () => {
 				expect(cellColors(setup, 0, base - 1).bg).toEqual(BASE_BG);
 				expect(cellColors(setup, 0, base - 2).bg).toEqual(BASE_BG);
 
-				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				const guide = rowsOf(await settle(setup)).length;
 				// User story 69: a surface that owns its last two rows paints them
 				// on its own dark surface, so its Message line and its bar read as
@@ -184,7 +195,7 @@ describe("the reserved bottom rows at every size", () => {
 				// the surface and its ink are the theme's own pair.
 				await expectTextClearsItsSurface(setup, guide - 1, WIDTH);
 				await expectTextClearsItsSurface(setup, guide - 2, WIDTH);
-				await closeSurface(setup, /Key guide/);
+				await closeSurface(setup, /Key guide/, "guide-close");
 			},
 			{
 				width: WIDTH,
@@ -216,7 +227,7 @@ describe("the reserved bottom rows at every size", () => {
 				expect(frame).toContain("❯ Close");
 				expect(actionBarRowOf(frame)).toContain("Select action");
 
-				await closeSurface(setup, /Decision:/);
+				await closeSurface(setup, /Decision:/, "cancel-action");
 			},
 			{
 				width: WIDTH,
@@ -252,10 +263,14 @@ describe("the reserved bottom rows at every size", () => {
 					// stand actionable, and the walk down lands the cursor on one.
 					setup.plane.settleFirstFetch();
 					await settle(setup);
-					await press(setup, "j", "the running row", () => true);
-					await press(setup, "j", "the handed-off row", () => true);
-					await press(setup, "j", "the open row", () => true);
-					await press(setup, "e", "the override panel", () => true);
+					// The below-minimum frames of this sweep pack the bar's Move
+					// hint and the e hint away, so both keys go out as the
+					// catalogue's named escapes, the frame that stands each pass
+					// deciding what it paints.
+					await guideKey(setup, "move-list", "j", { quiet: true });
+					await guideKey(setup, "move-list", "j", { quiet: true });
+					await guideKey(setup, "move-list", "j", { quiet: true });
+					await guideKey(setup, "override", "e", { quiet: true });
 					const frame = await expectReservedRows(setup, width, height);
 					// The panel scrolls its rows rather than drawing its border
 					// through the bar, and states the size only when it cannot
@@ -286,7 +301,7 @@ describe("the reserved bottom rows at every size", () => {
 					expect(actionBarRowOf(frame)).toContain("Cancel");
 				}
 				setup.resize(WIDTH, HEIGHT);
-				await closeSurface(setup, /Decision:/);
+				await closeSurface(setup, /Decision:/, "cancel-action");
 			},
 			{
 				width: WIDTH,
@@ -306,7 +321,7 @@ describe("the reserved bottom rows at every size", () => {
 		] as const) {
 			await withApp(
 				async (setup) => {
-					await press(setup, "?", "the guide", () => true);
+					await pressControl(setup, "help", { via: "?", quiet: true });
 					const frame = await expectReservedRows(setup, width, height);
 					// The guide names itself while it can draw a box and states
 					// the size when it cannot; either way it stays open and its

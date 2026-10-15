@@ -13,15 +13,20 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
 import {
-	awaitFrame,
+	emergencyExit,
+	fieldKey,
 	frameText,
+	frameUntil,
+	guideKey,
 	HEIGHT,
-	openLauncher,
-	press,
+	pasteText,
+	quitApp,
 	type Setup,
 	settle,
 	tabUntilSlot,
+	typeText,
 	WIDTH,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import type { FakeRunner } from "./fake-runner.ts";
@@ -53,76 +58,68 @@ async function withLauncher(
 describe("shared field editing through the launcher", () => {
 	test("Left, Right, Home, End, and Delete edit at the caret", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await tabUntilSlot(setup, "❯ Initial input");
-			await setup.mockInput.typeText("alpha beta");
+			await typeText(setup, "alpha beta");
 			// Left twice, then a character: the caret moves, and the end of the
 			// draft is still there.
-			setup.mockInput.pressArrow("left");
-			setup.mockInput.pressArrow("left");
-			setup.mockInput.pressKey("X");
-			const moved = await awaitFrame(
-				setup,
-				(f) => frameText(f).includes("alpha beXta"),
-				"the character to land at the caret",
-			);
+			fieldKey(setup, "left");
+			fieldKey(setup, "left");
+			typeText(setup, "X");
+			const moved = await waitFor(setup, { shows: "alpha beXta" });
 			expect(frameText(moved)).toContain("alpha beXta");
 			// Home then Delete removes forward, not backward.
-			setup.mockInput.pressKey("HOME");
-			setup.mockInput.pressKey("DELETE");
-			await awaitFrame(setup, (f) => frameText(f).includes("lpha beXta"), "forward delete");
-			setup.mockInput.pressKey("END");
-			setup.mockInput.pressKey("END");
-			await setup.mockInput.typeText("!");
-			await awaitFrame(setup, (f) => frameText(f).includes("lpha beXta!"), "the caret at the end");
+			fieldKey(setup, "home");
+			fieldKey(setup, "delete");
+			await waitFor(setup, { shows: "lpha beXta" });
+			fieldKey(setup, "end");
+			fieldKey(setup, "end");
+			await typeText(setup, "!");
+			await waitFor(setup, { shows: "lpha beXta!" });
 		});
 	});
 
 	test("word movement and word deletion edit whole words", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await tabUntilSlot(setup, "❯ Initial input");
-			await setup.mockInput.typeText("alpha beta gamma");
-			setup.mockInput.pressKey("HOME");
+			await typeText(setup, "alpha beta gamma");
+			fieldKey(setup, "home");
 			// Ctrl+Right is word movement in the ordinary sequences a terminal
 			// sends without an enhanced keyboard protocol.
-			setup.mockInput.pressArrow("right", { ctrl: true });
+			fieldKey(setup, "ctrl+right");
 			await settle(setup);
-			setup.mockInput.pressKey("x");
+			typeText(setup, "x");
 			await settle(setup);
 			// Word movement stops at the next word's first character, so the
 			// typed letter lands at that boundary rather than at a fixed count.
-			const moved = await awaitFrame(
-				setup,
-				(f) => frameText(f).includes("alpha xbeta gamma"),
-				"the word boundary the caret reached",
-			);
+			const moved = await waitFor(setup, { shows: "alpha xbeta gamma" });
 			expect(moved).toBeTruthy();
 			// Ctrl+Backspace takes the word back out again.
-			setup.mockInput.pressBackspace({ ctrl: true });
-			await awaitFrame(
+			fieldKey(setup, "ctrl+backspace");
+			await frameUntil(
 				setup,
-				(f) => frameText(f).includes("beta gamma") && !frameText(f).includes("alpha x"),
 				"the word delete",
+				(f) => frameText(f).includes("beta gamma") && !frameText(f).includes("alpha x"),
 			);
 		});
 	});
 
 	test("Unicode, wide, and combined characters survive an edit beside them", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await tabUntilSlot(setup, "❯ Initial input");
-			await setup.mockInput.typeText("宽é");
+			await typeText(setup, "宽é");
 			const drawn = await settle(setup);
 			// The characters stand whole: a backspace removes one grapheme, never
 			// half a code point.
 			expect(frameText(drawn)).toContain("宽é");
-			setup.mockInput.pressArrow("left");
-			setup.mockInput.pressBackspace();
-			const cut = await awaitFrame(
+			fieldKey(setup, "left");
+			fieldKey(setup, "backspace");
+			const cut = await frameUntil(
 				setup,
-				(f) => frameText(f).includes("é") && !frameText(f).includes("宽"),
 				"one grapheme to be taken back",
+				(f) => frameText(f).includes("é") && !frameText(f).includes("宽"),
 			);
 			// The wide grapheme holds two cells, so a backspace takes exactly the
 			// grapheme left of the caret and leaves the rest of the row intact.
@@ -133,9 +130,9 @@ describe("shared field editing through the launcher", () => {
 
 	test("a long draft scrolls to keep the caret's line on screen", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await tabUntilSlot(setup, "❯ Initial input");
-			await setup.mockInput.typeText(`${"filler ".repeat(40)}tail`);
+			await typeText(setup, `${"filler ".repeat(40)}tail`);
 			const near = await settle(setup);
 			// The line the operator is on is the line the field shows: a long
 			// single line scrolls its own column rather than pushing the caret off
@@ -146,13 +143,13 @@ describe("shared field editing through the launcher", () => {
 
 	test("a resize keeps the draft, the caret, and the selection", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await tabUntilSlot(setup, "❯ Initial input");
-			await setup.mockInput.typeText("draft across a resize");
-			setup.mockInput.pressKey("HOME");
-			setup.mockInput.pressArrow("right", { shift: true });
-			setup.mockInput.pressArrow("right", { shift: true });
-			setup.mockInput.pressArrow("right", { shift: true });
+			await typeText(setup, "draft across a resize");
+			fieldKey(setup, "home");
+			fieldKey(setup, "shift+right");
+			fieldKey(setup, "shift+right");
+			fieldKey(setup, "shift+right");
 			await settle(setup);
 			setup.resize(WIDTH - 20, HEIGHT);
 			await settle(setup);
@@ -161,20 +158,16 @@ describe("shared field editing through the launcher", () => {
 			expect(frameText(back)).toContain("draft across a resize");
 			// The three-cell selection is the selection the operator made, so the
 			// next character replaces exactly what they had marked.
-			setup.mockInput.pressKey("q");
-			await awaitFrame(
-				setup,
-				(f) => frameText(f).includes("qdraft across a resize".slice(1)),
-				"the typed character to replace the selection",
-			);
+			typeText(setup, "q");
+			await waitFor(setup, { shows: "qdraft across a resize".slice(1) });
 		});
 	});
 
 	test("a paste never submits the form and never moves the focus", async () => {
 		await withLauncher(async (setup, runner) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await tabUntilSlot(setup, "❯ Initial input");
-			await setup.mockInput.pasteBracketedText("line one\nline two\tc");
+			await pasteText(setup, "line one\nline two\tc");
 			const pasted = await settle(setup);
 			expect(frameText(pasted)).toContain("Consultation launcher");
 			expect(frameText(pasted)).toContain("line one");
@@ -189,39 +182,36 @@ describe("shared field editing through the launcher", () => {
 	test("Ctrl+C stays the emergency exit while a field holds a selection", async () => {
 		let destroyed = 0;
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await tabUntilSlot(setup, "❯ Initial input");
-			await setup.mockInput.typeText("selected text here");
-			setup.mockInput.pressKey("HOME");
-			setup.mockInput.pressArrow("right", { shift: true });
+			await typeText(setup, "selected text here");
+			fieldKey(setup, "home");
+			fieldKey(setup, "shift+right");
 			await settle(setup);
-			setup.mockInput.pressCtrlC();
-			destroyed += 1;
 			// The app's own emergency exit runs; the launcher is not left holding a
 			// half-finished copy operation.
-			await awaitFrame(setup, () => true, "the exit to be taken");
+			await emergencyExit(setup, { quiet: true });
+			destroyed += 1;
 		});
 		expect(destroyed).toBe(1);
 	});
 
 	test("F3 copies the selection and says what it did", async () => {
 		await withLauncher(async (setup) => {
-			await openLauncher(setup);
+			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await tabUntilSlot(setup, "❯ Initial input");
-			await setup.mockInput.typeText("copy this part");
-			setup.mockInput.pressKey("HOME");
+			await typeText(setup, "copy this part");
+			fieldKey(setup, "home");
 			for (let step = 0; step < 4; step += 1) {
-				setup.mockInput.pressArrow("right", { shift: true });
+				fieldKey(setup, "shift+right");
 				await settle(setup);
 			}
 			// The bar names the control only while a selection exists, so a copy
 			// with nothing selected cannot be mistaken for one that ran.
 			expect(frameText(setup.captureCharFrame())).toContain("F3 Copy selection");
-			setup.mockInput.pressKey("F3");
-			const told = await awaitFrame(
-				setup,
-				(f) => /Copied|refused|Nothing is selected/u.test(frameText(f)),
-				"the copy result on the Message line",
+			fieldKey(setup, "F3");
+			const told = await frameUntil(setup, "the copy result on the Message line", (f) =>
+				/Copied|refused|Nothing is selected/u.test(frameText(f)),
 			);
 			expect(frameText(told)).toMatch(/Copied 4 cells|refused the copied text/u);
 		});
@@ -229,12 +219,12 @@ describe("shared field editing through the launcher", () => {
 
 	test("no key reaches the base view while the launcher is open", async () => {
 		await withLauncher(async (setup) => {
-			const opened = await openLauncher(setup);
+			const opened = await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			expect(frameText(opened)).toContain("Consultation launcher");
 			// `q` would quit the plane, `j` would move the Ticket list, and `?`
 			// would open a second guide. None of them belong to the launcher, so
 			// none of them may run while it holds the screen.
-			await press(setup, "q", "nothing to change", (f) => f.includes("Consultation launcher"));
+			await quitApp(setup, { quiet: true });
 			const frame = await settle(setup);
 			expect(frameText(frame)).toContain("Consultation launcher");
 			expect(frameText(frame)).not.toContain("Key guide");

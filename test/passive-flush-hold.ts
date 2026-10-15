@@ -17,9 +17,10 @@
  * and the flush stands pending in the rig's hand. That is the window a
  * loaded runner opened by chance, standing open by design: on the loaded
  * runner the flush landed 2 to 6 ms after the frame the same commit drew,
- * and `closeOverlay` took its key-handler snapshot in that window, so the
- * snapshot held the shell's handlers only, which never leave the bus, and
- * the wait that ends on the snapshot could end on nothing (issue #311).
+ * and the rig's close operation took its key-handler snapshot in that
+ * window, so the snapshot held the shell's handlers only, which never
+ * leave the bus, and the wait that ends on the snapshot could end on
+ * nothing (issue #311).
  *
  * `flushPassiveNow` is the door the fixed wait goes through. It runs
  * whatever the hold keeps and whatever the scheduler still owes at

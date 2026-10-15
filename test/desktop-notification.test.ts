@@ -20,13 +20,15 @@ import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
-	awaitFrame,
+	frameUntil,
 	HEIGHT,
 	messageRowOf,
-	press,
+	pressControl,
 	settle,
 	WIDTH,
+	waitFor,
 	waitSourceHealthy,
+	waitUntil,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -412,20 +414,15 @@ describe("the Message line's fact to the desktop", () => {
 			async (setup) => {
 				// The boot's own refresh runs first; settle it, so the manual
 				// refresh the key starts is the one the test drives.
-				const deadline = Date.now() + 4000;
-				while (source.calls < 1) {
-					if (Date.now() >= deadline) throw new Error("timed out: the initial refresh to start");
-					await new Promise((resolve) => setTimeout(resolve, 5));
-				}
+				await waitUntil(() => source.calls >= 1, "the initial refresh to start");
 				source.settle(empty);
 				// The `r` control writes the refresh's Working line...
-				await press(setup, "r", "the refresh's working line", (f) =>
-					f.includes("refreshing 1 sources"),
-				);
+				await pressControl(setup, "refresh", { quiet: true });
+				await waitFor(setup, { shows: "refreshing 1 sources" });
 				expect(notificationCalls(runner)).toHaveLength(0);
 				// ...and the clean result leaves no standing fact at all.
 				source.settle(empty);
-				await awaitFrame(setup, (f) => !f.includes("refreshing"), "the working line to clear");
+				await waitFor(setup, { hides: "refreshing" });
 				expect(notificationCalls(runner)).toHaveLength(0);
 			},
 			{
@@ -453,9 +450,8 @@ describe("the Message line's fact to the desktop", () => {
 			async (setup) => {
 				source.settle(fetchSuccess([singleTicket]));
 				await waitSourceHealthy(planeRecord.state);
-				await press(setup, "return", "the fault", (f) =>
-					messageRowOf(f).includes("the daemon is down"),
-				);
+				await pressControl(setup, "handoff", { quiet: true });
+				await frameUntil(setup, "the fault", (f) => messageRowOf(f).includes("the daemon is down"));
 				const calls = notificationCalls(runner);
 				expect(calls).toHaveLength(2);
 				expect(calls[0].args.join(" ")).toContain("Factory: error");
@@ -491,7 +487,8 @@ describe("the Message line's fact to the desktop", () => {
 		await withApp(
 			async (setup) => {
 				// The refusal the key meets: line only, no send.
-				await press(setup, "r", "the refusal", (f) =>
+				await pressControl(setup, "refresh", { quiet: true });
+				await frameUntil(setup, "the refusal", (f) =>
 					messageRowOf(f).includes("every Ticket source is already refreshing"),
 				);
 				expect(notificationCalls(runner)).toHaveLength(0);
@@ -499,9 +496,8 @@ describe("the Message line's fact to the desktop", () => {
 				// and it sends.
 				source.settle(fetchSuccess([singleTicket]));
 				await waitSourceHealthy(planeRecord.state);
-				await press(setup, "return", "the fault", (f) =>
-					messageRowOf(f).includes("the daemon is down"),
-				);
+				await pressControl(setup, "handoff", { quiet: true });
+				await frameUntil(setup, "the fault", (f) => messageRowOf(f).includes("the daemon is down"));
 				const afterError = notificationCalls(runner);
 				expect(afterError.length).toBe(2);
 				expect(afterError[0].args.join(" ")).toContain("Factory: error");
@@ -510,14 +506,12 @@ describe("the Message line's fact to the desktop", () => {
 				// The refusal stands again after a different fact: still line only.
 				// It is written under the working line its own refresh opens, and
 				// the settle is what lifts the working line to reveal it.
-				setup.mockInput.pressKey("r");
-				await awaitFrame(setup, (f) => f.includes("refreshing"), "the refresh to start");
-				setup.mockInput.pressKey("r");
+				await pressControl(setup, "refresh", { quiet: true });
+				await waitFor(setup, { shows: "refreshing" });
+				await pressControl(setup, "refresh", { quiet: true });
 				source.settle(fetchSuccess([singleTicket]));
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("every Ticket source is already refreshing"),
-					"the refusal to stand again",
+				await frameUntil(setup, "the refusal to stand again", (f) =>
+					messageRowOf(f).includes("every Ticket source is already refreshing"),
 				);
 				expect(notificationCalls(runner)).toHaveLength(2);
 			},
@@ -553,9 +547,8 @@ describe("the Message line's fact to the desktop", () => {
 				await waitSourceHealthy(planeRecord.state);
 				// The fault stands on the queued start's warning, which carries the
 				// command's own reason after its prefix.
-				await press(setup, "return", "the error", (f) =>
-					messageRowOf(f).includes("the daemon refused"),
-				);
+				await pressControl(setup, "handoff", { quiet: true });
+				await frameUntil(setup, "the error", (f) => messageRowOf(f).includes("the daemon refused"));
 				const frame = await settle(setup);
 				// The line cuts at the terminal edge...
 				expect(messageRowOf(frame).length).toBeLessThanOrEqual(WIDTH);
@@ -586,7 +579,8 @@ describe("the Message line's fact to the desktop", () => {
 		const runner = planeRecord.fakeRunner;
 		await withApp(
 			async (setup) => {
-				await press(setup, "r", "the warning", (f) =>
+				await pressControl(setup, "refresh", { quiet: true });
+				await frameUntil(setup, "the warning", (f) =>
 					messageRowOf(f).includes("no Ticket sources exist"),
 				);
 				expect(messageRowOf(await settle(setup)).trim()).toBe("Warning: no Ticket sources exist");
@@ -618,7 +612,8 @@ describe("the Message line's fact to the desktop", () => {
 			async (setup) => {
 				source.settle(fetchSuccess([singleTicket]));
 				await waitSourceHealthy(planeRecord.state);
-				await press(setup, "return", "the refusal", (f) =>
+				await pressControl(setup, "handoff", { quiet: true });
+				await frameUntil(setup, "the refusal", (f) =>
 					messageRowOf(f).includes("unknown agent type: nope"),
 				);
 				const frame = await settle(setup);
@@ -690,10 +685,8 @@ describe("the Message line's fact to the desktop", () => {
 			async (setup) => {
 				src.settle(parkRefresh);
 				await waitSourceHealthy(planeRecord.state);
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("handoff failure park:"),
-					"the park's standing warning",
+				await frameUntil(setup, "the park's standing warning", (f) =>
+					messageRowOf(f).includes("handoff failure park:"),
 				);
 				await flush();
 				const calls = notificationCalls(runner);

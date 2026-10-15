@@ -2,12 +2,17 @@
 # repository, the `bun run test` script included.
 #
 # The per-test budget is sixty seconds, the test script's `--timeout` flag:
-# bun takes it on the command line only, and the flag stays above twice the
-# frame rig's twenty-second deadline (ADR 0128), so a test's waits fail on
-# the rig's deadline, which dumps the last frame, before the runner's budget
-# can end the test without one. The mutation campaign's test children take
-# the same budget through `stryker.config.mjs`'s `bun.bunArgs`, which the
-# runner forwards onto its own `bun test` command line.
+# Bun 1.4.2 reads `[test] timeout` on the command line only, and a plain
+# `bun test <file>` run stands on the runner's five-second default. A test
+# that outlasts that default passes its own per-test timeout to `test` - the
+# frame rig's suite names sixty seconds on its twenty-second deadline pins
+# (ADR 0128) - so a plain run cannot hand a contributor a red the script's
+# run would not give. The flag stays above twice the frame rig's
+# twenty-second deadline, so a test's waits fail on the rig's deadline, which
+# dumps the last frame, before the runner's budget can end the test without
+# one. The mutation campaign's test children take the same budget through
+# `stryker.config.mjs`'s `bun.bunArgs`, which the runner forwards onto its
+# own `bun test` command line.
 #
 # The theme isolation preloads into every test file: the test files share one
 # worker's environment, and a file that leaves a theme variable behind (a

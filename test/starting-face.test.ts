@@ -28,19 +28,18 @@ import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
-	awaitFrame,
-	frameText,
+	frameUntil,
 	HEIGHT,
 	listHalfOf,
 	markerRowOf,
 	messageRowOf,
-	press,
-	pressArrow,
+	pressControl,
 	rowsOf,
 	settle,
 	spanColorAt,
 	startingFaceOf,
 	WIDTH,
+	waitFor,
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
@@ -304,9 +303,9 @@ describe("the Starting window's timeline", () => {
 				await waitSourceHealthy(app.state);
 				// Enter: the face lands on the keypress, before the agent
 				// starts, and the badge is nowhere in the frame.
-				const inFlight = await press(
+				await pressControl(setup, "handoff", { quiet: true });
+				const inFlight = await frameUntil(
 					setup,
-					"return",
 					"the face on the keypress",
 					(f) => face(f) !== null && messageRowOf(f).includes("Working: handing off"),
 				);
@@ -318,10 +317,8 @@ describe("the Starting window's timeline", () => {
 				// The start settles into `handed-off`: the face stays, and the
 				// first observation steps the ticket to running in its place.
 				await releaseHeld(gate);
-				const running = await awaitFrame(
-					setup,
-					(f) => badgeRow(f).includes("[running]"),
-					"the ticket to run",
+				const running = await frameUntil(setup, "the ticket to run", (f) =>
+					badgeRow(f).includes("[running]"),
 				);
 				expect(face(running)).toBeNull();
 				expect(running).toContain("open: 0  running: 1  awaiting: 0");
@@ -353,26 +350,22 @@ describe("the Starting window's timeline", () => {
 			async (setup) => {
 				src.settle(success);
 				await waitSourceHealthy(app.state);
-				await press(
+				await pressControl(setup, "handoff", { quiet: true });
+				await frameUntil(
 					setup,
-					"return",
 					"the face on the keypress",
 					(f) => face(f) !== null && messageRowOf(f).includes("Working: handing off"),
 				);
 				// The start settles into `handed-off`, and the claim resolves.
 				await releaseHeld(gate);
 				// A poll lands that still omits the Agent...
-				await awaitFrame(
-					setup,
-					() => {
-						const commands = app.fakeRunner.commands();
-						const start = commands.findIndex((command) => command.includes("agent start"));
-						const polls = (list: string[]) =>
-							list.filter((command) => command === "herdr agent list").length;
-						return start >= 0 && polls(commands.slice(start)) > 0;
-					},
-					"the poll that omits the Agent",
-				);
+				await frameUntil(setup, "the poll that omits the Agent", () => {
+					const commands = app.fakeRunner.commands();
+					const start = commands.findIndex((command) => command.includes("agent start"));
+					const polls = (list: string[]) =>
+						list.filter((command) => command === "herdr agent list").length;
+					return start >= 0 && polls(commands.slice(start)) > 0;
+				});
 				// ...and the row keeps the face: no missing badge while the start
 				// stands inside its grace.
 				const frame = await settle(setup);
@@ -380,7 +373,7 @@ describe("the Starting window's timeline", () => {
 				expect(badgeRow(frame)).not.toContain("missing");
 				// When herdr lists the Agent, the row steps to its own state.
 				app.fakeRunner.set("herdr", ["agent", "list"], { stdout: workingList() });
-				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
+				await frameUntil(setup, "the ticket to run", (f) => badgeRow(f).includes("[running]"));
 			},
 			{
 				width: WIDTH,
@@ -413,18 +406,18 @@ describe("the Starting window's timeline", () => {
 			async (setup) => {
 				src.settle(success);
 				await waitSourceHealthy(app.state);
-				const inFlight = await press(
+				await pressControl(setup, "handoff", { quiet: true });
+				const inFlight = await frameUntil(
 					setup,
-					"return",
 					"the face on the keypress",
 					(f) => face(f) !== null && messageRowOf(f).includes("Working: handing off"),
 				);
 				expect(face(inFlight)).not.toBeNull();
 				await releaseHeld(gate);
-				const failed = await awaitFrame(
+				const failed = await frameUntil(
 					setup,
-					(f) => badgeRow(f).includes("[open]") && face(f) === null,
 					"the row to return",
+					(f) => badgeRow(f).includes("[open]") && face(f) === null,
 				);
 				// The failed start drops through the queue's drop (ADR 0049):
 				// the line warns the queued start was not run, with the herdr
@@ -455,14 +448,14 @@ describe("the Starting window's timeline", () => {
 				src.settle(success);
 				// No key: the observation dispatches, and the face wears from
 				// the claim the dispatch makes.
-				const inFlight = await awaitFrame(
+				const inFlight = await frameUntil(
 					setup,
-					(f) => face(f) !== null && f.includes("○ auto"),
 					"the dispatched face",
+					(f) => face(f) !== null && f.includes("○ auto"),
 				);
 				expect(inFlight).not.toContain("[handed-off]");
 				await releaseHeld(gate);
-				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
+				await frameUntil(setup, "the ticket to run", (f) => badgeRow(f).includes("[running]"));
 			},
 			{
 				width: WIDTH,
@@ -530,20 +523,17 @@ describe("the Starting window's timeline", () => {
 		await withApp(
 			async (setup) => {
 				src.settle(success);
-				const held = await awaitFrame(
-					setup,
-					(f) => badgeRow(f).includes("held"),
-					"the held ticket",
+				const held = await frameUntil(setup, "the held ticket", (f) =>
+					badgeRow(f).includes("held"),
 				);
 				expect(face(held)).toBeNull();
 				// Enter shows the decision; the workflow handoff is the last
 				// row, and its confirm claims the ticket.
-				await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
-				await pressArrow(setup, "down", "the goto row", (f) => f.includes("❯ Goto"));
-				await pressArrow(setup, "down", "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				const claimed = await press(setup, "return", "the routed face", (f) => face(f) !== null);
+				await pressControl(setup, "decide-completion", { shows: "Decision:" });
+				await pressControl(setup, "select-action", { via: "↓", shows: "❯ Goto" });
+				await pressControl(setup, "select-action", { via: "↓", shows: "❯ Handoff: review" });
+				await pressControl(setup, "confirm-action", { quiet: true });
+				const claimed = await frameUntil(setup, "the routed face", (f) => face(f) !== null);
 				// The claim's face outranks the held badge while the start
 				// stands...
 				expect(badgeRow(claimed)).not.toContain("held");
@@ -554,10 +544,10 @@ describe("the Starting window's timeline", () => {
 				// drop: the machine's re-offer stands on the recorded turn, and
 				// the operator already chose.
 				await releaseHeld(gate);
-				const back = await awaitFrame(
+				const back = await frameUntil(
 					setup,
-					(f) => face(f) === null && messageRowOf(f).includes("was not run"),
 					"the face to return",
+					(f) => face(f) === null && messageRowOf(f).includes("was not run"),
 				);
 				// The route's failed start drops through the queue's drop
 				// (ADR 0049), with the herdr reason behind it.
@@ -620,10 +610,8 @@ describe("the Starting window's timeline", () => {
 				// The remnant boots wearing the missing marker: its stored pane
 				// is not in the list, and the recovery fact outranks the face,
 				// so the spinner is not drawn.
-				const remnant = await awaitFrame(
-					setup,
-					(f) => badgeRow(f).includes("missing"),
-					"the crash remnant",
+				const remnant = await frameUntil(setup, "the crash remnant", (f) =>
+					badgeRow(f).includes("missing"),
 				);
 				expect(face(remnant)).toBeNull();
 				// The automatic restart claims the ticket behind its own gate...
@@ -633,12 +621,12 @@ describe("the Starting window's timeline", () => {
 				// wears the face until the agent reports a step. The arrival is
 				// already proven, so the release stands on its own.
 				gate.release();
-				const restarted = await awaitFrame(setup, (f) => face(f) !== null, "the restart's face");
+				const restarted = await frameUntil(setup, "the restart's face", (f) => face(f) !== null);
 				expect(badgeRow(restarted)).not.toContain("missing");
 				expect(restarted).not.toContain("[handed-off]");
 				// The agent answers working, and the row steps to running.
 				app.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("working") });
-				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
+				await frameUntil(setup, "the ticket to run", (f) => badgeRow(f).includes("[running]"));
 			},
 			{
 				width: WIDTH,
@@ -668,17 +656,17 @@ describe("the Starting window's timeline", () => {
 				// The boot frame wears the face: the ticket rests in
 				// `handed-off`, the state the claim settled into, and no
 				// observation has read its work yet.
-				const handedOff = await awaitFrame(setup, (f) => face(f) !== null, "the handed-off face");
+				const handedOff = await frameUntil(setup, "the handed-off face", (f) => face(f) !== null);
 				expect(handedOff).not.toContain("[handed-off]");
 				// The row and the detail header wear it together.
 				expect(faceCount(handedOff)).toBe(2);
 				// The held poll answers: the turn settles, the window closes,
 				// and the row rests on its own badge.
 				await releaseHeld(gate);
-				const resting = await awaitFrame(
+				const resting = await frameUntil(
 					setup,
-					(f) => badgeRow(f).includes("[awaiting]") && face(f) === null,
 					"the settled turn",
+					(f) => badgeRow(f).includes("[awaiting]") && face(f) === null,
 				);
 				expect(resting).not.toContain("[handed-off]");
 				expect(faceCount(resting)).toBe(0);
@@ -717,15 +705,15 @@ describe("the Starting window's timeline", () => {
 		await withApp(
 			async (setup) => {
 				src.settle(success);
-				await awaitFrame(setup, (f) => face(f) !== null, "the face before the poll");
+				await frameUntil(setup, "the face before the poll", (f) => face(f) !== null);
 				// The poll lands with the agent blocked: the marker takes the
 				// badge's slot, and the motion never hides it, in the row and in
 				// the detail header alike.
 				await releaseHeld(gate);
-				const blocked = await awaitFrame(
+				const blocked = await frameUntil(
 					setup,
-					(f) => badgeRow(f).includes("blocked") && face(f) === null,
 					"the blocked marker",
+					(f) => badgeRow(f).includes("blocked") && face(f) === null,
 				);
 				expect(blocked).not.toContain("[handed-off]");
 				expect(faceCount(blocked)).toBe(0);
@@ -747,10 +735,8 @@ describe("the Starting window's timeline", () => {
 		await withApp(
 			async (setup) => {
 				src.settle(success);
-				const resting = await awaitFrame(
-					setup,
-					(f) => badgeRow(f).includes("[awaiting]"),
-					"the awaiting ticket",
+				const resting = await frameUntil(setup, "the awaiting ticket", (f) =>
+					badgeRow(f).includes("[awaiting]"),
 				);
 				expect(face(resting)).toBeNull();
 				expect(resting).not.toContain(" starting");
@@ -778,8 +764,10 @@ describe("the no-color presentation", () => {
 				expect(faceRow).toBeGreaterThanOrEqual(0);
 				// The standing opens on the awaiting lead; the running ticket
 				// rests on its badge, and the face is one step further down.
-				await press(setup, "j", "the running ticket", (f) => f.includes("[running]"));
-				await press(setup, "j", "the handed-off ticket", (f) => faceCount(f) === 2);
+				await pressControl(setup, "move-list", { via: "j", quiet: true });
+				await waitFor(setup, { shows: "[running]" });
+				await pressControl(setup, "move-list", { via: "j", quiet: true });
+				await frameUntil(setup, "the handed-off ticket", (f) => faceCount(f) === 2);
 				const frame = await settle(setup);
 				// The row and the detail face both wear the written word. The
 				// identity is one line now, so the two faces can stand on the

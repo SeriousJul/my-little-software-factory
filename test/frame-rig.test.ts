@@ -6,12 +6,20 @@
  * boots the real app on the Seeded plane and pins, on one frame, that the rig
  * resolves every control the bar advertises, sends the key a press names with
  * `via`, waits on the closed set of outcomes, and keeps the controls the bar
- * never hints on its escape list. The closed catalogue walk proves the
+ * never hints on its escape list. It pins the re-sending press beside the
+ * single press: the bar's key when the bar paints the control's hint, the
+ * catalogue's key when it does not, and the re-send that goes out again when
+ * the first press left no frame the wait names. The closed catalogue walk
+ * proves the
  * resolution is not tuned to one bar: it reads the bar the plane paints and
  * resolves whatever it advertises. A control off the bar owns no painted
  * hint and fails the resolution instead of pressing a key the bar names for
  * another control, and the bar's dynamic label wordings agree with the
  * catalogue's `barLabel` functions on the samples that cover their branches.
+ * The key display names the rig carries beside its copy of the catalogue's
+ * key names agree with the catalogue's display function, key by key, so a
+ * re-label in the catalogue fails the pin and names the drift instead of
+ * surfacing as a red page-key test.
  *
  * The rig's keys flow from the control catalogue and the painted bar, never
  * from a literal this suite picks.
@@ -49,15 +57,22 @@ import {
 	guideKey,
 	HEIGHT,
 	hintWordings,
+	keyBase,
+	keyDisplayDrift,
+	leftKeyHandler,
+	markerRowOf,
 	messageRowOf,
 	namedWhat,
 	pageKey,
 	parseBarText,
 	pressControl,
+	pressUntil,
+	releaseKeys,
 	resolveControl,
 	type SurfaceFamily,
 	settle,
 	sharedHintGuard,
+	staleKeyClaim,
 	surfaceFamily,
 	surfaceModes,
 	toggleAutoHandoff,
@@ -94,7 +109,7 @@ async function toOpenTicket(setup: AppSetup): Promise<void> {
 
 /** Boot a plane with the standing it names, and the source standing healthy. */
 async function withSeededPlane(
-	body: (setup: AppSetup) => Promise<void>,
+	body: (setup: AppSetup, planeRecord: Awaited<ReturnType<typeof plane>>) => Promise<void>,
 	standing: Parameters<typeof plane>[0],
 ): Promise<void> {
 	const planeRecord = await plane(standing);
@@ -102,7 +117,7 @@ async function withSeededPlane(
 		async (setup) => {
 			planeRecord.settleFirstFetch();
 			await waitSourceHealthy(planeRecord.state);
-			await body(setup);
+			await body(setup, planeRecord);
 		},
 		{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 	);
@@ -412,6 +427,16 @@ describe("the frame rig's escape list", () => {
 		}, toOpenTicket);
 	});
 
+	test("a named escape with no outcome settles the app to quiet after its key", async () => {
+		await withHealthyPlane(async (setup) => {
+			// No outcome named: the operation takes the quiet default, so the frame
+			// it hands back rests on the row the key landed, not on the press.
+			await pageKey(setup, "end");
+			const frame = await pageKey(setup, "home");
+			expect(frameText(frame)).toContain("Drop the legacy auth");
+		}, toOpenTicket);
+	});
+
 	test("reaches the key the guide names where the bar paints none", async () => {
 		const planeRecord = await plane({ runner: (fake) => fake, sources: [], groupingAxis: "none" });
 		await withApp(
@@ -436,6 +461,28 @@ describe("the frame rig's escape list", () => {
 			await settle(setup);
 			await expect(guideKey(setup, "help", "z")).rejects.toThrow(/the guide names F1, \? for it/);
 		});
+	});
+
+	test("an immediate guide key sends the key the guide names, without the pre-press settle", async () => {
+		const planeRecord = await plane({ runner: (fake) => fake, sources: [], groupingAxis: "none" });
+		await withApp(
+			async (setup) => {
+				// The record is empty, so the bar leaves the Message hint off:
+				// the guide still names m, and the immediate press sends the
+				// catalogue's own key at once, settling nowhere before it goes
+				// out, and reads the control's own refusal for it.
+				await guideKey(setup, "message", "m", {
+					immediate: true,
+					refuses: "no message has been recorded",
+				});
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
+		);
 	});
 });
 
@@ -510,6 +557,21 @@ describe("the frame rig's bar wordings", () => {
 	});
 });
 
+describe("the frame rig's key display names", () => {
+	test("agree with the catalogue's display function, key by key", () => {
+		// The rig holds its own copy of the catalogue's key display names,
+		// and this pin walks both display functions on the keys the rig's
+		// table holds and the keys the catalogue names in any mode: a
+		// re-label in the catalogue - a display name moved, dropped, or
+		// gained - fails the pin naming every drifted key, instead of
+		// surfacing as a red page-key test in a migrated suite. A key the
+		// rig's table holds that the catalogue names nowhere stays walked:
+		// the domain stands on the table beside the catalogue's keys, so
+		// the rig's copy cannot outlive a name the catalogue retires.
+		expect(keyDisplayDrift()).toEqual([]);
+	});
+});
+
 describe("the frame rig's keyless hints", () => {
 	test("a display-only hint parses keyless, and a key label parses its tokens", () => {
 		// The text row's display-only hints claim no key: the focused field owns
@@ -557,6 +619,11 @@ describe("the frame rig owns a painted hint one control paints (issue #387)", ()
 		expect(
 			surfaceModes(titled("Init a repository", "↑↓/jk Move  Enter Select  Esc Cancel")),
 		).toEqual(["repository-select"]);
+		// A marking of two rewords the confirm hint to Start queue: the read
+		// still stands on the list, through its own Toggle hint.
+		expect(
+			surfaceModes(titled("Init a repository", "↑↓/jk Move  Enter Start queue  Tab Toggle")),
+		).toEqual(["repository-select"]);
 		expect(
 			surfaceModes(
 				titled("Init a repository", "↑↓ Select action  Enter Confirm action  Esc Cancel"),
@@ -567,8 +634,28 @@ describe("the frame rig owns a painted hint one control paints (issue #387)", ()
 			"form-selector",
 			"form-action",
 		]);
+		// The response editor stands in the consultations column beside its
+		// section boxes, and the detail beside it can show the saved draft: the
+		// read names the form through the form bar's Field hint, and the same
+		// draft line on a section bar's frame still names the section.
+		expect(surfaceModes(titled("Response draft", "Tab Field  Esc Close  F1 Help"))).toEqual([
+			"form-field",
+			"form-selector",
+			"form-action",
+		]);
+		expect(
+			surfaceModes(
+				"\u250c\u2500\u276f Consultations\nResponse draft: review auth\n\u2191\u2193/jk Move  f History  s Schedule  Enter Interact  Delete Close",
+			),
+		).toEqual(["consultation-list"]);
 		expect(surfaceModes("┌─❯ Tickets\n↑↓/jk Move")).toEqual(["ticket-list"]);
 		expect(surfaceModes("┌─❯ Consultations\n↑↓/jk Move")).toEqual(["consultation-list"]);
+		// The interaction mode keeps the section's focus marker: the bar's exit
+		// hint names the mode the read stands on.
+		expect(surfaceModes("┌─❯ Consultations\nF12 Exit interaction")).toEqual([
+			"consultation-list",
+			"consultation-interaction",
+		]);
 		expect(surfaceModes("┌─❯ Work queue\n↑↓/jk Move")).toEqual(["work-queue-list"]);
 		expect(surfaceModes("┌─❯ Detail\n↑↓/jk Scroll  ←/h Tickets")).toEqual(["ticket-detail"]);
 		expect(
@@ -739,11 +826,15 @@ describe("the frame rig owns a painted hint one control paints (issue #387)", ()
 				await toSection(setup, "consultation");
 				await pressControl(setup, "detail", { quiet: true });
 				await pressControl(setup, "consultation-respond", { quiet: true });
-				// The editor stands on no marker the rig names: the surface read
-				// is permissive, the last unnamed surface the plane paints. The
-				// form's painted hints each resolve to one owner, so no press on
-				// this frame reaches the co-owner guard.
-				expect(surfaceModes(setup.captureCharFrame())).toBeNull();
+				// The editor names itself: its Draft label beside the form bar's
+				// Field hint, which no section bar paints. The form's painted
+				// hints each resolve to one owner, so no press on this frame
+				// reaches the co-owner guard.
+				expect(surfaceModes(setup.captureCharFrame())).toEqual([
+					"form-field",
+					"form-selector",
+					"form-action",
+				]);
 				const owners = barHintOwners(setup);
 				expect(owners.get("Tab Field")).toEqual(["move-field"]);
 				expect(owners.get("Esc Close")).toEqual(["close-form"]);
@@ -937,6 +1028,120 @@ describe("the frame rig names its timeouts", () => {
 			await expect(
 				pressControl(setup, "help", { opens: "a surface the plane never paints" }),
 			).rejects.toThrow(/a surface the plane never paints" to open, after the control "help"/);
+		}, toOpenTicket);
+	}, 60000);
+
+	test("a timeout on a re-sending press names the control and the fact", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			// The presses land and move the marker, but the fact no press paints
+			// never shows, and the deadline fails the wait: the message names the
+			// control the re-sends went out for and the fact they waited for.
+			await expect(
+				pressUntil(setup, "move-list", {
+					via: "j",
+					what: "the cursor to move",
+					check: () => false,
+				}),
+			).rejects.toThrow(/the control "move-list" never left the cursor to move/u);
+		}, toOpenTicket);
+	}, 60000);
+});
+
+describe("the frame rig's re-sending press", () => {
+	test("takes the token a press names from the bar's hint", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			// The bar names its movement hint `↑↓/jk`: without the via token the
+			// press would send the hint's first token, and the marker would not
+			// stand one row down. The re-sending press sends the named token, and
+			// the check passes on the press's own settle.
+			const top = markerRowOf(setup.captureCharFrame());
+			const frame = await pressUntil(setup, "move-list", {
+				via: "j",
+				what: "the cursor to step down",
+				check: (f) => markerRowOf(f) === top + 1,
+			});
+			expect(markerRowOf(frame)).toBe(top + 1);
+		});
+	});
+
+	test("fails a via token the bar's hint names nowhere", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			// The bar paints the movement hint, so the press takes its key from
+			// the bar, not from the catalogue: a token the hint names nowhere is
+			// the test's error, and the failure names the hint it refused.
+			await expect(
+				pressUntil(setup, "move-list", {
+					via: "Home",
+					what: "the cursor to jump to the top",
+					check: () => false,
+				}),
+			).rejects.toThrow(/not among its tokens/u);
+		});
+	});
+
+	test("takes the key from the catalogue where the bar paints no hint", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			// The Ticket list's bar paints no hint for the Message view: the
+			// press takes the one key the catalogue names for it on the surface,
+			// and the view it opens is the fact the wait returns.
+			const frame = await pressUntil(setup, "message", {
+				what: "the Message view to open",
+				check: (f) => frameText(f).includes("Message view"),
+			});
+			expect(frameText(frame)).toContain("Message view");
+		});
+	});
+
+	test("re-sends the press that left no frame the wait names, until the fact stands", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			await toOpenTicket(setup);
+			// The fact the wait names stands two rows up: the first press leaves
+			// the marker one row up, a frame the wait does not name, and the
+			// re-send goes out again until the marker stands on the named row.
+			const from = markerRowOf(setup.captureCharFrame());
+			const frame = await pressUntil(setup, "move-list", {
+				via: "k",
+				what: "the cursor to step two rows up",
+				check: (f) => markerRowOf(f) === from - 2,
+			});
+			expect(markerRowOf(frame)).toBe(from - 2);
+		}, toOpenTicket);
+	});
+});
+
+describe("the frame rig's key release", () => {
+	test("the base snapshot names the bus the mode the walk returns to holds", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			const base = keyBase(setup);
+			expect(base.base.length).toBeGreaterThan(0);
+			// The base mode holds nothing outside its own base: a closed surface
+			// with no handler to release names that out loud.
+			expect(() => leftKeyHandler(setup, base)).toThrow(/holds 0 outside the base/);
+			base.stop();
+		});
+	});
+
+	test("the stale claim dispatches the walk's Enter, and reports the handler's word", () => {
+		expect(staleKeyClaim(() => true)).toBe(true);
+		expect(staleKeyClaim(() => false)).toBe(false);
+	});
+
+	test("the release wait takes the bus back to the base after a surface lets the keys go", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			const base = keyBase(setup);
+			await pressControl(setup, "help", { quiet: true });
+			// The guide's mode is the one handler outside the base the rig names.
+			const stale = leftKeyHandler(setup, base);
+			await pressControl(setup, "guide-close", { quiet: true });
+			await releaseKeys(setup, base, "the Key guide to release the keys");
+			void stale;
 		}, toOpenTicket);
 	});
 });

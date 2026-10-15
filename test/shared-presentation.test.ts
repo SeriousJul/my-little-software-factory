@@ -35,7 +35,7 @@ import {
 	STATE_WORDS,
 } from "../src/components/shared/presentation.ts";
 import { BUILTIN_THEMES, STANDALONE_THEME } from "../src/components/shared/theme.ts";
-import { awaitFrame, cellColors, frameText, rgb } from "./app-harness.ts";
+import { cellColors, frameText, rgb, settle } from "./app-harness.ts";
 
 /** A `[r,g,b]` triplet as the `#rrggbb` the contrast formula reads. */
 const hexOf = (channels: readonly number[]): string =>
@@ -258,8 +258,10 @@ describe("the shared control ink", () => {
 			// the caret's cell is drawn once and stays, so no timing is needed to
 			// read where the next edit lands.
 			const first = setup.captureCharFrame();
-			await awaitFrame(setup, (f) => f === first, "a frame that holds steady", 200);
-			expect(frameText(setup.captureCharFrame())).toContain("Context window 272000");
+			await settle(setup);
+			const steady = setup.captureCharFrame();
+			expect(steady).toBe(first);
+			expect(frameText(steady)).toContain("Context window 272000");
 		} finally {
 			await setup.renderer.destroy();
 		}

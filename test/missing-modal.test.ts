@@ -6,7 +6,7 @@ import { testRender } from "@opentui/react/test-utils";
 
 import type { StandingFacts } from "../src/components/controls.ts";
 import { MissingModal } from "../src/components/missing-modal.ts";
-import { awaitFrame } from "./app-harness.ts";
+import { frameUntil, pressControl, waitFor } from "./app-harness.ts";
 import { DEFAULT_TICKET_TITLE } from "./fact-fixtures.ts";
 
 /** The base control facts a modal is mounted over: the list, idle. */
@@ -48,42 +48,33 @@ describe("the Missing modal", () => {
 			expect(opened).toContain("reason line 24");
 			expect(opened).toContain("❯ Restart");
 
-			setup.mockInput.pressArrow("down");
-			const selected = await awaitFrame(
-				setup,
-				(frame) => frame.includes("❯ Abandon"),
-				"the abandon row to become selected",
-			);
-			// Arrow navigation does not move the reason window.
+			// Arrow navigation does not move the reason window: the selection
+			// walks down and back, and the window keeps its last row. The
+			// last walk settles on a quiet frame before the scroll keys go out.
+			const selected = await pressControl(setup, "select-action", {
+				via: "↓",
+				shows: "❯ Abandon",
+			});
 			expect(selected).toContain("reason line 24");
-			setup.mockInput.pressArrow("up");
-			const restored = await awaitFrame(
-				setup,
-				(frame) => frame.includes("❯ Restart"),
-				"the restart row to become selected again",
-			);
+			const restored = await pressControl(setup, "select-action", {
+				via: "↑",
+				shows: "❯ Restart",
+			});
 			expect(restored).toContain("reason line 24");
-			setup.mockInput.pressArrow("down");
-			await awaitFrame(
-				setup,
-				(frame) => frame.includes("❯ Abandon"),
-				"the abandon row to become selected",
-			);
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
 
-			setup.mockInput.pressKey("k");
-			const up = await awaitFrame(
+			// The modal's own scroll control owns j and k on its bar, and the
+			// waits name the window the scroll reveals.
+			await pressControl(setup, "scroll-message", { via: "k", quiet: true });
+			const up = await frameUntil(
 				setup,
-				(frame) => frame.includes("reason line 23") && !frame.includes("reason line 24"),
 				"the reason to scroll up",
+				(frame) => frame.includes("reason line 23") && !frame.includes("reason line 24"),
 			);
 			expect(up).toContain("❯ Abandon");
 
-			setup.mockInput.pressKey("j");
-			const down = await awaitFrame(
-				setup,
-				(frame) => frame.includes("reason line 24"),
-				"the reason to scroll down",
-			);
+			await pressControl(setup, "scroll-message", { via: "j", quiet: true });
+			const down = await waitFor(setup, { shows: "reason line 24" });
 			expect(down).toContain("❯ Abandon");
 		} finally {
 			await setup.renderer.destroy();

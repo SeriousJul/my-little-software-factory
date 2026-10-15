@@ -26,16 +26,17 @@ import type { FactoryState } from "../src/state.ts";
 
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
-	awaitFrame,
 	detailPaneText,
+	frameUntil,
 	HEIGHT,
 	markerRowOf,
 	messageRowOf,
-	press,
+	pressControl,
 	rowsOf,
 	settle,
-	sleep,
 	WIDTH,
+	waitFor,
+	waitUntil,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -123,20 +124,18 @@ const HANDOFF_CHOICE = {
 };
 
 /**
- * Wait until the source has started its `calls`-th fetch.
+ * Wait until the source has started its `calls`-th fetch, on the rig's one
+ * deadline.
  *
  * A key press is dispatched on the next frame, so a test must not settle
  * before the refresh it started has actually called the source: an early
  * settle has no in-flight fetch to resolve and the refresh hangs forever.
  */
 async function callsReached(source: FakeSource, calls: number): Promise<void> {
-	const deadline = Date.now() + 2000;
-	for (;;) {
-		if (source.calls >= calls) return;
-		if (Date.now() >= deadline)
-			throw new Error(`the source was called ${source.calls} times, wanted ${calls}`);
-		await sleep(5);
-	}
+	await waitUntil(
+		() => source.calls >= calls,
+		`the source's ${calls}-th fetch to start (it stood ${source.calls})`,
+	);
 }
 
 /** The row of a title inside the list pane only, so the detail pane cannot hide it. */
@@ -157,19 +156,11 @@ describe("source-driven frames", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				const loading = await awaitFrame(
-					setup,
-					(f) => f.includes("loading tickets..."),
-					"the loading state",
-				);
+				const loading = await waitFor(setup, { shows: "loading tickets..." });
 				expect(loading).not.toContain("Add a webhook retry policy");
 
 				source.settle(success([ticket()]));
-				const settled = await awaitFrame(
-					setup,
-					(f) => f.includes("Add a webhook retry policy"),
-					"the fetched ticket",
-				);
+				const settled = await waitFor(setup, { shows: "Add a webhook retry policy" });
 				expect(settled).toContain("[open]");
 				expect(settled).not.toContain("loading tickets...");
 			},
@@ -192,11 +183,7 @@ describe("source-driven frames", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(success([]));
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("no tickets match the configured sources"),
-					"the empty state",
-				);
+				const frame = await waitFor(setup, { shows: "no tickets match the configured sources" });
 				expect(frame).not.toContain("loading tickets...");
 			},
 			{
@@ -218,25 +205,19 @@ describe("source-driven frames", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(success([ticket()]));
-				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+				await waitFor(setup, { shows: "Add a webhook retry policy" });
 
-				setup.mockInput.pressKey("r");
+				await pressControl(setup, "refresh", { quiet: true });
 				await callsReached(source, 2);
 				source.settle(fetchRateLimited);
-				const stale = await awaitFrame(
-					setup,
-					(f) => f.includes("issues: stale - GitHub rate limit exceeded"),
-					"the stale health line",
-				);
+				const stale = await waitFor(setup, { shows: "issues: stale - GitHub rate limit exceeded" });
 				// The prior snapshot stays visible.
 				expect(stale).toContain("Add a webhook retry policy");
 
-				setup.mockInput.pressEnter();
-				const refused = await awaitFrame(
-					setup,
-					(f) => f.includes("Ticket is not actionable because source data is stale"),
-					"the refused handoff",
-				);
+				await pressControl(setup, "handoff", { quiet: true });
+				const refused = await waitFor(setup, {
+					shows: "Ticket is not actionable because source data is stale",
+				});
 				expect(messageRowOf(refused)).toContain(
 					"Ticket is not actionable because source data is stale",
 				);
@@ -279,11 +260,7 @@ describe("source-driven frames", () => {
 		});
 		await withApp(
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("Add a webhook retry policy"),
-					"the handed-off ticket",
-				);
+				const frame = await waitFor(setup, { shows: "Add a webhook retry policy" });
 				// The handed-off ticket stays visible for observation...
 				expect(frame).toContain("Add a webhook retry policy");
 				// ...the open ticket from the removed source is gone...
@@ -312,10 +289,8 @@ describe("source-driven frames", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(success([ticket()]));
-				const frame = await awaitFrame(
-					setup,
-					(f) => detailPaneText(f).includes("Source issues: healthy"),
-					"the source detail",
+				const frame = await frameUntil(setup, "the source detail", (f) =>
+					detailPaneText(f).includes("Source issues: healthy"),
 				);
 				const detail = detailPaneText(frame);
 				// The source kind wraps in its Source column, so the fact's
@@ -371,18 +346,14 @@ describe("source-driven frames", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(success([ticket()]));
-				await awaitFrame(
-					setup,
-					(frame) => detailPaneText(frame).includes("Agent: codex"),
-					"the implement profile",
+				await frameUntil(setup, "the implement profile", (frame) =>
+					detailPaneText(frame).includes("Agent: codex"),
 				);
-				setup.mockInput.pressKey("r");
+				await pressControl(setup, "refresh", { quiet: true });
 				await callsReached(source, 2);
 				source.settle(success([{ ...ticket(), labels: ["ready-for-review"] }]));
-				const changed = await awaitFrame(
-					setup,
-					(frame) => detailPaneText(frame).includes("Suggested task type: review"),
-					"the review profile",
+				const changed = await frameUntil(setup, "the review profile", (frame) =>
+					detailPaneText(frame).includes("Suggested task type: review"),
 				);
 				const detail = detailPaneText(changed);
 				expect(detail).toContain("Agent: claude");
@@ -427,10 +398,10 @@ describe("source-driven frames", () => {
 				});
 				issuesSource.settle(success([fallbackTicket]));
 				pullsSource.settle(success([reviewTicket]));
-				const frame = await awaitFrame(
+				const frame = await frameUntil(
 					setup,
-					(f) => listRowOf(f, "Review ticket") >= 0 && listRowOf(f, "Fallback ticket") >= 0,
 					"both tickets",
+					(f) => listRowOf(f, "Review ticket") >= 0 && listRowOf(f, "Fallback ticket") >= 0,
 				);
 				// The badges ride the row the real path produced.
 				expect(rowsOf(frame)[listRowOf(frame, "Review ticket")]).toContain("[review]");
@@ -446,7 +417,8 @@ describe("source-driven frames", () => {
 					? "Suggested task type: implement"
 					: "Suggested task type: review";
 				expect(detailPaneText(frame)).toContain(firstLine);
-				await press(setup, "j", "the selection to move to the other ticket", (f) =>
+				await pressControl(setup, "move-list", { via: "j", quiet: true });
+				await frameUntil(setup, "the selection to move to the other ticket", (f) =>
 					detailPaneText(f).includes(secondLine),
 				);
 			},
@@ -524,13 +496,10 @@ describe("source-driven frames", () => {
 				// While both sources still load, both open tickets are not
 				// actionable, and the open band reads them by ticket number
 				// ascending (ADR 0065), not by the update that moved newest.
-				const loading = await awaitFrame(
-					setup,
-					(f) =>
-						["Run ticket", "Off ticket", "Open ticket", "Pending ticket", "Awaiting ticket"].every(
-							(title) => listRowOf(f, title) >= 0,
-						),
-					"all five tickets",
+				const loading = await frameUntil(setup, "all five tickets", (f) =>
+					["Run ticket", "Off ticket", "Open ticket", "Pending ticket", "Awaiting ticket"].every(
+						(title) => listRowOf(f, title) >= 0,
+					),
 				);
 				expect(listRowOf(loading, "Open ticket")).toBeLessThan(
 					listRowOf(loading, "Pending ticket"),
@@ -541,10 +510,10 @@ describe("source-driven frames", () => {
 				// becomes actionable and jumps above the pending one, whose
 				// source (pulls) stays in flight and remains not actionable.
 				issuesSource.settle(success([runTicket, offTicket, openTicket, awaitTicket]));
-				const frame = await awaitFrame(
+				const frame = await frameUntil(
 					setup,
-					(f) => listRowOf(f, "Open ticket") < listRowOf(f, "Pending ticket"),
 					"the settled source to make its ticket actionable",
+					(f) => listRowOf(f, "Open ticket") < listRowOf(f, "Pending ticket"),
 				);
 				const order = [
 					"Awaiting ticket",
@@ -581,7 +550,7 @@ describe("source-driven frames", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(success([first, second]));
-				await awaitFrame(setup, (f) => listRowOf(f, "First ticket") >= 0, "the first ticket");
+				await frameUntil(setup, "the first ticket", (f) => listRowOf(f, "First ticket") >= 0);
 
 				// A refresh alone no longer reorders the open band: the tickets
 				// read by ticket number (ADR 0065), and a number never changes.
@@ -592,13 +561,13 @@ describe("source-driven frames", () => {
 					"UPDATE tickets SET state = 'running' WHERE identity = 'github:github.com:I_6'",
 				).run();
 				db.close();
-				setup.mockInput.pressKey("r");
+				await pressControl(setup, "refresh", { quiet: true });
 				await callsReached(source, 2);
 				source.settle(success([first, second]));
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					(f) => listRowOf(f, "Second ticket") < listRowOf(f, "First ticket"),
 					"the list to reorder",
+					(f) => listRowOf(f, "Second ticket") < listRowOf(f, "First ticket"),
 				);
 				// The selection stayed on the first ticket, not the first row.
 				const frame = await settle(setup);
@@ -624,12 +593,12 @@ describe("source-driven frames", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(success([ticket()]));
-				await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+				await waitFor(setup, { shows: "Add a webhook retry policy" });
 				expect(source.calls).toBe(1);
 
 				// Two rapid manual refreshes start one fetch, not two.
-				setup.mockInput.pressKey("r");
-				setup.mockInput.pressKey("r");
+				await pressControl(setup, "refresh", { quiet: true });
+				await pressControl(setup, "refresh", { quiet: true });
 				await callsReached(source, 2);
 				const fresh = ticket("github:github.com:I_6", {
 					externalKey: "#6",
@@ -637,7 +606,7 @@ describe("source-driven frames", () => {
 					externalUpdatedAt: "2026-08-31T11:00:00Z",
 				});
 				source.settle(success([fresh, ticket()]));
-				await awaitFrame(setup, (f) => f.includes("Second ticket"), "the new ticket");
+				await waitFor(setup, { shows: "Second ticket" });
 				expect(source.calls).toBe(2);
 			},
 			{
@@ -672,24 +641,20 @@ describe("source-driven frames", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(success([ticket()]));
-				await awaitFrame(
-					setup,
-					(f) => detailPaneText(f).includes("Handoff: recovery required"),
-					"the recovery hint in the detail",
+				await frameUntil(setup, "the recovery hint in the detail", (f) =>
+					detailPaneText(f).includes("Handoff: recovery required"),
 				);
 
-				setup.mockInput.pressEnter();
-				const refused = await awaitFrame(
-					setup,
-					(f) => f.includes("Handoff recovery is required before another handoff"),
-					"the refused handoff",
-				);
+				await pressControl(setup, "handoff", { quiet: true });
+				const refused = await waitFor(setup, {
+					shows: "Handoff recovery is required before another handoff",
+				});
 				expect(messageRowOf(refused)).toContain(
 					"Handoff recovery is required before another handoff",
 				);
 
 				// The override path is refused the same way: no panel opens.
-				setup.mockInput.pressKey("e");
+				await pressControl(setup, "override", { quiet: true });
 				const panel = await settle(setup);
 				expect(panel).not.toContain("❯ Agent");
 				expect(messageRowOf(panel)).toContain(

@@ -136,7 +136,15 @@ a control whose hint the bar's own facts hold back (the Message key while the
 record holds nothing), and a control the bar leaves off on the surface. The
 key `guideKey` sends is read from the catalogue, the source the guide paints
 from, so the catalogue stays the single owner of key meaning, and a key the
-guide names nowhere for the control fails the press. The section cross-walk
+guide names nowhere for the control fails the press, naming the aliases the
+guide does name. A key the test sends while the plane runs a live cycle - a
+handoff in flight, an observation tick pending - names the press
+`immediate` and the key goes out at once, without the settle the press
+otherwise waits first: that settle would stand the plane's next tick out, and
+the tick can move the selection the key stands on before the key lands, so a
+key that settles first presses the row the cycle left behind. The wait after
+the key stays the test's own named wait, and a key the guide names nowhere
+for the control fails the immediate press the same way. The section cross-walk
 stands on the same list: crossing the unified cursor into another section is
 not one control press, it is the list's own Move keys walked to the boundary
 row and across, so the named `crossCursor` operation walks it with the walk
@@ -144,7 +152,14 @@ key read from the catalogue, and each step goes out straight after the frame
 it answers from: a settle before a step gives the plane the pass that commits
 the detail pane's identity reset before the cross's unmount saves the pane's
 offset, and a round trip through the other section loses the offset the
-operator left behind. A static check refuses
+operator left behind. The walk holds one blind key beside its walk keys: when
+the box the walk starts from holds no focus marker, the cursor stands where a
+named press resolves no hint - a detail, a section the walk steps away from,
+or a surface the frame's markers stand not on at all - and the step that
+brings it to the box the walk starts from goes out as the literal `h` the
+guide paints beside the pane-navigation arrows, waited on the walk's starting
+marker, because a frame the section markers name nowhere answers the back key
+to the section it leaves. A static check refuses
 a frame test that reaches for a raw key outside the list, in the shape of the
 assertion-architecture check and the shared-control check.
 
@@ -171,15 +186,22 @@ bar, that is a finding about the bar: it gets filed, not worked around.
 
 ## Consequences
 
-A key change lands in the Control catalogue and nowhere else. The suite follows
-at its next run, because it names the control and not the key.
+A key change lands in the Control catalogue and nowhere else, and the suite
+follows at its next run: a press that names no `via` takes the first key the
+bar painted, and the test names the control and not the key. A press that
+names a `via` token keeps that character: a re-key of the token the test names
+still fails the press at the resolution, and the suite pays for the alias it
+named in its own lines.
 
 A frame test reads as the operator's walk: one control and one outcome. A
 reviewer can check it against the Action bar and the Key guide without decoding a
 screen substring.
 
-The rig's interface shrinks and its implementation absorbs the waits, the flush,
-the key bus, and the deadline. The 42 frame suites lose their preamble.
+The rig's interface deepens where its raw input leaves: the hand-picked
+key operations and the per-poll bus waits go, and the named operations
+stand in their place, so the rig's export count grows rather than falls,
+and its implementation absorbs the waits, the flush, the key bus, and the
+deadline. The 42 frame suites lose their preamble.
 
 The flake class gets one home, which is what makes it fixable. Whether it closes
 the CI item is a measurement and not a claim: the migration records the counts
@@ -293,7 +315,240 @@ owner: the press of the record removal runs it, and the removal panel opens.
 The guard's throw is pinned in the rig's own suite on the shape the Seeded
 plane stands not: a bar that paints a hint's text twice.
 
+## Addendum: the delivered interface, and the flake class it reaches
+
+The decision above states that the key-ownership apparatus becomes
+internal. As delivered, it is internal to the frame suites and not fully
+internal to the rig: `keyBase`, `leftKeyHandler`, `staleKeyClaim`, and
+`releaseKeys` stay exported from the rig, and their callers are named and
+kept. The Live view's window test, the guard for the key that lands in the
+open window between a surface's last frame and its key release (issue
+#317), measures that window on the key bus, and the rig's own suite pins
+the close proof and the stale-line guard through the same reads. The rule
+that a frame suite names a control and an outcome, and never the bus,
+stands beside the kept exports: the architecture check reaches every suite
+that drives the bus or a raw key outside the closed escape list, and no
+owned surface reads either.
+
+The delivered interface does not shrink in export count. As the raw input
+operations leave, the named operations grow in their place, and the walk
+that commits with the campaign prints the count at each head it lands on:
+it stands above the base head's count at every landed head, this one
+included. The depth the decision names is enforced by the static
+architecture check, which refuses the two shapes a suite can opt out by -
+a hand-picked key outside the closed escape list, and a private press,
+open, close, or wait the rig should own - not by the count.
+
+The escape list reads every key from the catalogue with the pull that
+lands this addendum: the emergency exit, the last escape that sent a blind
+literal, takes its key from the catalogue the way the quit and the
+repository-init escapes do. The per-suite deadline loops the campaign left
+in the suites' own lines stand on the rig's one deadline through the
+rig's `waitCommands` and `waitUntil`, the consultation frame's local copy
+of the command-log wait among them, and the press re-send loops the suites
+carried on the deadline minus its margin ride the rig's `pressUntil`: the
+bar is read first, and a bar that paints no hint for the control takes the
+one key the catalogue names for the control on the surface, the way the
+rig's escapes read theirs, a control that wears more than one key taking
+the press's named token. The rig's interface loses the cross-walk exports
+no owned suite drives, `crossToConsultations` and `crossToTickets`.
+
+The flake class the context lists stands closed, issue by issue, or
+merged, pull by pull, by its own fixes at the head this addendum lands on,
+and the pull that carries it closes none of the twelve anew. It reaches
+the class in its mechanism: the one deadline, the named outcomes, and the
+loops above. The class-level CI item stays open in the quality gate's
+record: the load evidence on file shows the deadline miss surviving the
+earlier fixes under a loaded runner, and this pull runs no loaded runner
+of its own.
+
 The pull that lands this rule changes one line of production code: the export
 of `omitFromOtherSection` from the Control catalogue, the catalogue's own
 section-omission read the rig's read applies the way the Action bar does.
 Issue #387 closes with it.
+
+## Addendum: the closed walk stands on the painted bar, and the dead input operations leave the rig
+
+The spec's testing decision names the closed-surface walk over the control
+ids: one test walks every catalogue id the Action bar hints, boots the mode
+that owns it, and asserts the rig resolves it. The delivered walk stands on
+the operator's seam instead: it walks the painted bar of every frame the
+rig's suite stands - the three sections' base and detail frames, the
+consultation's response editor and the Agent interaction input, the Decision
+modal, the action panel, and the Message view - and every mode whose bar the
+rig's suite stands not is stood by the owning surface's suite: the override
+surface, the missing modal, the repository-select modal, the Live view, and
+the Key guide. Those suites press their controls through the rig on their
+own mode's bar, and the resolution reads that bar, so the drift the per-id
+walk would add - a hint the bar paints that the rig resolves to the wrong
+key on a mode the rig's suite stands not - is the drift those presses
+already fail. The per-id walk would also re-couple the rig's suite to the
+catalogue's mode list, the table the campaign removed from the suites, and
+boot the plane's hardest standings, the live cycle and the repository-select
+flow, in the rig's own suite. The delivered walk is the accepted shape, and
+the spec's sentence stands superseded by this addendum.
+
+The dead raw input operations of the old input face leave the rig's
+interface with the pull this addendum lands: the press, arrow, scroll, and
+function key helpers, the hand open, close, and confirm of a panel, guide,
+view, launcher, or surface, and the hand focus and scroll walks have no
+caller anywhere in the repo, and the architecture check reaches every owned
+surface from them, so they go. The module now stands on the named operations, the
+raw `press` and its waits, and the four kept bus reads named above, and the
+statement that the raw input operations go stands true of the module, not
+only of the suites.
+
+## Addendum: the wait side of the rule reaches the inline containment, and the check measures the residual
+
+The input side of the rule landed with a static check; the wait side of the
+rule - a frame test names one outcome from the rig's closed set, and the rig
+owns the wait - stood only as a convention the suites followed. The delivered
+wait-side check closes that gap: the architecture check now reads every
+`frameUntil` site of every owned surface, and it refuses the one shape the
+named outcomes name - an inline predicate that is a single containment of a
+painted string, or its negation, on the frame or its normalized text. A wait
+that shape stands goes to the rig's named outcome: the `shows` and `hides`
+fields of the rig's wait, or the string target of the named operations that
+carry a wait behind a press, `handoffEnter`, `liveEnter`, `closeSurface`, and
+`toConsultations`. Those operations take a string target or a predicate, and
+the string target reads through the rig's own `shows` and `hides` - the same
+normalized containment, not a second outcome vocabulary the wrapper defines.
+`namedStep` and `namedEnter` define no outcome of their own and take no
+string target: a wait their sites name not by containment - a focus the suite
+counts, a row the suite derives - keeps its predicate, and a wait that is one
+containment calls for no wrapper at all: the suite states the control's press
+and the rig's named outcome in the test's own lines, the way the rule reads.
+
+The check measures what it reaches not, and the residual stands measured
+rather than characterized. At the head this addendum lands on, the owned
+surfaces hold 604 frame waits: 531 of them an inline arrow the check reads
+and passes, and 73 a wait on a named predicate the suite keeps. The 531
+name facts a single containment names not - a row the test derives from the
+frame, a marker the test counts, a focus the test reads off a row - and they
+stand as predicates, the only shape left to them. The zero the check holds is
+the one that matters: no owned surface waits on a containment the `shows` and
+`hides` outcomes name, so a fact the frame paints in a string stands in the
+rig's closed vocabulary, and a review of a wait reads one line and knows the
+fact it waits on.
+
+One owned suite stands outside the check's owned list, and the check names
+why: `ticket-boot-order-frame.test.ts` drives no input of any kind. It boots
+the plane and reads the frame the order paints, and the input side of the
+rule reaches it nowhere; it joins the owned list the day it presses a key.
+
+## Addendum: the bus waits leave the interface, the press wait rides the full deadline, and the escapes name their frames
+
+The addendum that kept the four bus reads named one way too many: the two
+raw bus wait operations, `awaitNewKeyHandler` and `awaitGoneKeyHandler`,
+had no caller outside the rig, and the bus's own helpers - the listener
+snapshot, the base key handler set, and its wait - stood exported beside
+them for no owned surface that read them. They leave the rig's interface,
+and the bus now reaches the suites only through the four kept reads named
+in the delivered-interface addendum, `releaseKeys`, `keyBase`,
+`leftKeyHandler`, and `staleKeyClaim`. The static architecture check takes
+the wider raw-input rule with the removal: an owned surface that touches
+the renderer's `mockInput`, its `mockMouse`, or the `keyInput` bus directly
+fails it, in the shape the check already applies to the hand-picked keys
+outside the closed escape list.
+
+The rig's `pressUntil` stood its outer loop on the deadline minus a five
+hundred millisecond margin, a margin the inner press deadline preempts: a
+re-sent press that runs to its own deadline fails before the outer loop's
+earlier cut can, so the margin changed no outcome and the failure it
+sheltered named a number no deadline in the rig stands on. The outer loop
+rides the rig's one deadline in full, and the failure names it as the
+single deadline the wait ran to. The rig's own suite pins the operation on
+both sides: a timeout on a re-sending press names the control and the fact
+the wait stood on; a `via` token the press names is taken from the bar's
+painted hint; a `via` token the hint names nowhere fails the press; a bar
+that paints no hint for the control takes the key the catalogue names for
+it; and a deterministic re-send pin re-sends the press that left no frame
+the wait names, until the frame fact stands.
+
+The correction the migration met on the runner stands beside the pins:
+Bun's test runner reads no `[test] timeout` from `bunfig.toml` on the
+standalone `bun test` form, where the timeout is command-line only and the
+runner's five second per-test budget stands. The rig's long pins therefore
+pass the per-test sixty second budget themselves, and the `bunfig.toml`
+comment that stated the config stood has been corrected to say so: the
+budget stands above the deadline through the test script's `--timeout`,
+and a standalone run of a rig suite carries the flag or the per-test
+budget. The `--parallel --isolate` script form reads the config's
+`[test] preload`, which the probe that first reported the timeout unread
+confused with the timeout itself: its own write failed for a missing
+callback, and the corrected probe stands the preload honoured.
+
+The campaign's per-site pass over the suites' remaining `guideKey` calls
+lands with this addendum: a site whose frame's bar paints the control's
+hint presses the control through `pressControl` or its `pressUntil`
+sibling and names the outcome, and a site whose frame's bar paints no hint
+the control owns keeps the named escape and names the frame in the lines
+around it. The escape classes the record keeps, each named at its sites: a
+decision modal frame, whose bar documents the modal's own row actions,
+presses its row's Enter and its panel key through the escape the plane
+routes to the modal's own controls; a Missing modal frame, the same shape
+on its own bar; a detail-focused frame, whose bar paints the `↑↓/jk` hint
+owned by the detail's scroll control, not the list's Move hint, so its
+scroll keys stay on the escape; a packed base bar below the width its hints
+fit, where the e hint packs out on the 46 and 60 column frames and the
+below-minimum frames pack the Move hint away with it; a 24 by 6 panel
+frame whose bar stands down to its Help hint; a Work queue item row, whose
+Enter the bar documents as the queue's own action after an in-flight
+handoff settles the frame onto it; a missing ticket's row, whose bar
+documents the row's own recovery Enter; and the Key guide's frames, whose
+bar documents the guide's own keys. Home and End stand a class of their
+own: the catalogue assigns them to the move-list control, but the bar's
+Move hint names only the up, down, j, and k tokens, so no frame paints a
+hint that owns them, and the ticket-grouping suite's Home and End presses
+stay on the named escape, the class the suite's header names. The in-flight
+guard's two Enters stand beside the last: the second Enter of a guard that
+stands on the in-flight row goes out through the escape, because the
+settled frame the guard waits on can park the cursor on a row whose Enter
+the bar documents as another control's action, and a re-sent named press
+would run that row's action instead of waiting for the handoff the first
+press started.
+
+
+The rework round of this pull stood on the base's fix of the CI test flake,
+issue #398, which the pull's head carries: that fix's removal of the two
+ADR 0072 Live view follow-walks reached the branch's migrated copies of the
+same walks, and they went with their helper, the #317 window test the base
+kept taking the walk's boot inline. The interface this addendum names
+therefore stands on the tree beside that fix, and its pins are the suite's
+evidence at the head that lands the rework.
+
+## Addendum: the display pin stands on the catalogue's function, and the check's scope stands on the rig's import
+
+Two statements of the delivered rule stood on a copy and a list, and this
+rework stands them on the sources they read from.
+
+The rig keeps its own copy of the catalogue's key display names beside the
+f-key and control-key rules its display applies. The copy stood pinned by
+behavior: a re-label in the catalogue surfaced as a red page-key test in a
+migrated suite, and the drift stood unnamed until the red test named it. The
+catalogue's own display function, `keyName`, now stands exported, and the
+rig's own suite pins the copy against it, key by key, over the keys the
+rig's table holds and the keys the catalogue names in any mode: a re-label
+fails the pin, and the failure names every key the two functions disagree
+on. The export is this round's one line of production code, the second such
+line after the `omitFromOtherSection` export the delivered-interface
+addendum named, and it moves no control, key, or hint.
+
+The static architecture check stood its scope on the owned list, and a new
+frame suite that imported the rig without ever joining the list could bring
+the raw shape back without failing the check. The check now discovers its
+scope from the rig's own import: every suite that imports the rig stands
+under the input and wait rules, owned or not, and the owned list stands
+beneath the discovery as the pinned floor it never shrinks: a surface that
+leaves the rig's world fails the floor and is migrated again, not removed
+from the list. The two suites that imported the rig's input side without
+owning a plane surface stand on the rule's two honest answers: the
+harness's own contract suite takes the rig's named frame check and the
+`shows` outcome in place of its raw frame waits, and the region's component
+suite stops importing the rig and stands on the renderer's own seam beside
+the component it defines - the harness's keys bound in the harness, its
+feed the renderer's raw feeder, the shape the executable-boundary tests
+keep. Its frame wait stands on the rig's wait beside it: the same poll, the
+same passive flush on every poll, and the same one deadline. The closed set
+the outcome check's error lists stands whole: `immediate`, which the check
+accepted, is named in it.

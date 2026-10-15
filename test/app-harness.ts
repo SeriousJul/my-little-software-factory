@@ -1,11 +1,17 @@
 /**
  * The shared frame-test harness: boot the control plane at a fixed terminal
- * size, press keys, and wait for their effects.
+ * size, send input, and wait for its effects.
  *
- * Both frame test suites (the shell's and the handoff's) import from here so
- * they wait on the same frame semantics: a stale frame can never pass an
- * assertion, because the wait ends only when the effect appears or the
- * deadline dumps the last frame.
+ * The frame suites import from here so they wait on the same frame semantics:
+ * a stale frame can never pass an assertion, because the wait ends only when
+ * the effect appears or the deadline dumps the last frame. Every suite that
+ * drives the plane drives it through the rig's named controls and the closed
+ * set of outcomes (ADR 0128). The retired input surface has left the suites:
+ * what stands in the rig's interface beside the named operations is the raw
+ * press and its waits, and the four kept bus reads the rig's own suite and
+ * the Live view's window proof drive. The architecture check discovers its
+ * scope from this module's own imports, so a suite that brings the retired
+ * shape back fails the check instead of migrating again.
  */
 
 import { afterEach, beforeEach, expect, spyOn } from "bun:test";
@@ -20,6 +26,7 @@ import {
 	controlsForMode,
 	type InteractionMode,
 	keyLabelFor,
+	keyName,
 	omitFromOtherSection,
 } from "../src/components/controls.ts";
 import { controlInk } from "../src/components/shared/presentation.ts";
@@ -707,9 +714,9 @@ export async function awaitFrameChecking(
 
 /**
  * The keys `press` can send: one pressable character or named key.
- * Arrow keys, F1, F2, and Ctrl+C have their own helpers: the mock input
- * types a bare `"f1"` string as two characters, and arrows need their
- * escape sequences. Any single character is typable, which the override
+ * The mock input types a bare word it does not know as literal text, so
+ * the page, jump, and delete keys go out as their terminal escape
+ * sequences, and any single character is typable, which the override
  * text rows accept.
  */
 export type PressKey = (string & {}) | "return" | "escape" | "backspace";
@@ -761,62 +768,6 @@ function scrollKeyInput(key: string): string {
 	return key;
 }
 
-/**
- * The raw input bytes of the scroll keys the mock input cannot name.
- *
- * The mock input sends a plain string as typed characters, so the page and
- * jump keys must go out as their terminal sequences.
- */
-const SCROLL_KEY_BYTES: Record<"pageup" | "pagedown" | "home" | "end", string> = {
-	pageup: "\u001B[5~",
-	pagedown: "\u001B[6~",
-	home: "\u001B[H",
-	end: "\u001B[F",
-};
-
-/** Press a page or jump key by name, and wait for the effect it produces. */
-export async function pressScrollKey(
-	setup: Setup,
-	key: "pageup" | "pagedown" | "home" | "end",
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	// Settle before the key lands, for the reason `press` states: a key sent
-	// into a surface transition is dropped on a slow host.
-	await settle(setup);
-	setup.mockInput.pressKey(SCROLL_KEY_BYTES[key]);
-	return awaitFrame(setup, predicate, what);
-}
-
-/** Press the F1 key. The mock input takes the KeyCodes name, not `"f1"`. */
-export const pressF1 = (setup: Setup): void => {
-	setup.mockInput.pressKey("F1");
-};
-
-/** Press the F2 key. The mock input takes the KeyCodes name, not `"f2"`. */
-export const pressF2 = (setup: Setup): void => {
-	setup.mockInput.pressKey("F2");
-};
-
-/** Press Ctrl+C: the emergency exit control in every interaction mode. */
-export const pressCtrlC = (setup: Setup): void => {
-	setup.mockInput.pressCtrlC();
-};
-
-/** Press an arrow key and wait for the effect it should produce. */
-export async function pressArrow(
-	setup: Setup,
-	direction: "up" | "down" | "left" | "right",
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	// Settle before the key lands, for the reason `press` states: a key sent
-	// into a surface transition is dropped on a slow host.
-	await settle(setup);
-	setup.mockInput.pressArrow(direction);
-	return awaitFrame(setup, predicate, what);
-}
-
 /** Send production-format mouse input through OpenTUI parsing and hit testing. */
 export async function mouseClick(setup: Setup, x: number, y: number): Promise<void> {
 	await setup.mockMouse.click(x, y);
@@ -861,43 +812,6 @@ export async function mouseDrag(
 	await setup.mockMouse.release(to[0], to[1]);
 }
 
-/** Press `l` and wait for the detail pane to take focus. */
-export async function focusDetail(setup: Setup): Promise<string> {
-	return press(setup, "l", "the detail pane to take focus", detailFocused);
-}
-
-/**
- * Scroll the focused detail pane until one line shows, and return that frame.
- *
- * The detail is taller than a short terminal, so a test that needs a row
- * below the fold has to scroll to it, and the pane's row count is a product
- * decision that changes with the settings a Ticket carries. The walk presses
- * `j` until the line shows, so a test states what it looks for instead of
- * counting rows.
- */
-export async function scrollDetailUntil(
-	setup: Setup,
-	what: string,
-	predicate: (frame: string) => boolean,
-	maxSteps = 24,
-): Promise<string> {
-	for (let step = 0; step <= maxSteps; step += 1) {
-		const frame = setup.captureCharFrame();
-		if (predicate(frame)) return frame;
-		setup.mockInput.pressKey("j");
-		await settle(setup, SCROLL_STEP_MS);
-	}
-	throw new Error(`the detail never showed ${what}\nlast frame:\n${setup.captureCharFrame()}`);
-}
-
-/** How long one scroll step of the walk may take to go quiet. */
-const SCROLL_STEP_MS = 150;
-
-/** Press `h` and wait for the list pane to take focus. */
-export async function focusList(setup: Setup): Promise<string> {
-	return press(setup, "h", "the list pane to take focus", listFocused);
-}
-
 /**
  * The keypress handlers live on the renderer's key bus.
  *
@@ -915,7 +829,7 @@ export async function focusList(setup: Setup): Promise<string> {
  * length: a swap, where one overlay replaces another, leaves the count
  * unchanged while a new handler appears and an old one leaves.
  */
-export function keyHandlerListeners(setup: Setup): unknown[] {
+function keyHandlerListeners(setup: Setup): unknown[] {
 	return setup.renderer.keyInput.listeners("keypress");
 }
 
@@ -947,35 +861,6 @@ async function awaitKeyBus(
 		}
 		await sleep(FRAME_POLL_MS);
 	}
-}
-
-/**
- * Wait until the key bus holds a subscription that `before` did not.
- *
- * That is the moment a mounting surface's key handler takes the keys: until
- * it is subscribed, a key for the surface is dropped by the shell below.
- */
-export async function awaitNewKeyHandler(
-	setup: Setup,
-	before: unknown[],
-	what: string,
-): Promise<void> {
-	return awaitKeyBus(setup, what, (now) => now.some((handler) => !before.includes(handler)));
-}
-
-/**
- * Wait until the key bus drops one of the subscriptions `before` held.
- *
- * That is the moment an unmounting surface's key handler releases the keys:
- * until it is unsubscribed, a key still reaches the stale handler, which can
- * act on it with the closed surface's meaning.
- */
-export async function awaitGoneKeyHandler(
-	setup: Setup,
-	before: unknown[],
-	what: string,
-): Promise<void> {
-	return awaitKeyBus(setup, what, (now) => before.some((handler) => !now.includes(handler)));
 }
 
 /**
@@ -1011,7 +896,7 @@ export interface BaseKeyHandlers {
  * whether the walk ever mounted one. A snapshot taken too late - after the
  * surface mounted - is caught by the wait instead of passing silently.
  */
-export function baseKeyHandlers(setup: Setup): BaseKeyHandlers {
+function baseKeyHandlers(setup: Setup): BaseKeyHandlers {
 	const base = keyHandlerListeners(setup);
 	const bus = setup.renderer.keyInput;
 	let grew = false;
@@ -1038,24 +923,22 @@ export function baseKeyHandlers(setup: Setup): BaseKeyHandlers {
 /**
  * Wait until the key bus holds no subscription outside the snapshot's base.
  *
- * `awaitGoneKeyHandler` names the handler whose release a test waits on, and a
- * test cannot name one when the surface that holds the keys was mounted and
- * unmounted between two facts the test can see: a panel a confirm returns to
- * can have its reopen elided altogether when the transition that closes it
- * lands in the same render, so no handler of that surface ever joins the bus.
- * The fact that covers both branches is the one this waits on - every handler
- * the bus holds is one of the surfaces that already held keys when the base was
- * taken, so no closed surface is left holding a key the base mode means to
- * take.
+ * A test cannot name the handler whose release it waits on when the surface
+ * that holds the keys was mounted and unmounted between two facts the test can
+ * see: a panel a confirm returns to can have its reopen elided altogether when
+ * the transition that closes it lands in the same render, so no handler of that
+ * surface ever joins the bus. The fact that covers both branches is the one
+ * this waits on - every handler the bus holds is one of the surfaces that
+ * already held keys when the base was taken, so no closed surface is left
+ * holding a key the base mode means to take.
  *
  * The wait would return at once when the bus holds only the base, and that is
  * the branch a caller could fall into by taking the snapshot too late. The
  * snapshot watches the bus for its whole life, so the wait refuses that case
  * out loud: a walk that never mounted a surface with keys to release has no
- * release to wait for, and it should name its handler with
- * `awaitGoneKeyHandler` instead.
+ * release to wait for.
  */
-export async function awaitBaseKeyHandlers(
+async function awaitBaseKeyHandlers(
 	setup: Setup,
 	snapshot: BaseKeyHandlers,
 	what: string,
@@ -1071,115 +954,63 @@ export async function awaitBaseKeyHandlers(
 	}
 	if (!snapshot.grew) {
 		throw new Error(
-			`waiting for ${what} proved nothing: no key handler outside the base snapshot ever joined the bus, so this walk never mounted a surface that had a key to release. Take the snapshot before the surface opens, or wait with awaitGoneKeyHandler on the named handler`,
+			`waiting for ${what} proved nothing: no key handler outside the base snapshot ever joined the bus, so this walk never mounted a surface that had a key to release. Take the snapshot before the surface opens`,
 		);
 	}
 }
 
 /**
- * Press a key, wait for its effect, then wait for the app to go quiet.
- *
- * A key that lands while an update chain is still in flight - an observation
- * tick, a modal's pop-in, a render pass that subscribes the next handler -
- * can be dropped or can reach two handlers at once. A press whose effect
- * depends on what ran before it therefore waits for the frame to stop
- * changing before the next key goes out.
+ * The key release of a closed surface, by its own name: the bus is taken back
+ * to exactly the set the walk's base mode held.
  */
-export async function pressQuiet(
+export async function releaseKeys(
 	setup: Setup,
-	key: Parameters<typeof press>[1],
+	snapshot: BaseKeyHandlers,
 	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	const frame = await press(setup, key, what, predicate);
-	await settle(setup);
-	return frame;
-}
-
-/** Press Enter, wait for its effect, then wait for the app to go quiet. */
-export async function pressEnterQuiet(
-	setup: Setup,
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	setup.mockInput.pressEnter();
-	const frame = await awaitFrame(setup, predicate, what);
-	await settle(setup);
-	return frame;
+): Promise<void> {
+	return await awaitBaseKeyHandlers(setup, snapshot, what);
 }
 
 /**
- * Open the override panel, and wait until it owns the keys.
- *
- * Opening the panel renders it in the same commit as the press, but the
- * panel's key handler subscribes in an effect that flushes after the
- * commit. A panel key sent in that window reaches the app below and is
- * lost: the test would time out on its first panel key. The wait on the
- * key bus subscription closes the window deterministically: when this
- * returns, the panel's handler is live and the next key is safe.
+ * Snapshot the key bus at rest in the base mode, by its own name.
  */
-export async function openPanel(setup: Setup): Promise<string> {
-	const before = keyHandlerListeners(setup);
-	// The Action bar always shows the e Override hint, so the panel's own
-	// first row is the real open signal.
-	await press(setup, "e", "the override panel to open", (f) => f.includes("❯ Agent"));
-	await awaitNewKeyHandler(setup, before, "the override panel to take the keys");
-	return await settle(setup);
+export function keyBase(setup: Setup): BaseKeyHandlers {
+	return baseKeyHandlers(setup);
 }
 
 /**
- * Open the Key guide, and wait until it owns the keys.
- *
- * The open renders the guide in the same commit as the press, but the guide's
- * key handler subscribes in an effect that flushes after the commit. A guide
- * key sent in that window reaches the shell below, which drops non-emergency
- * keys while a utility is open, so the first guide key is lost and the test
- * times out on it. The wait on the key bus subscription closes the window
- * deterministically: when this returns, the guide's handler is live and the
- * next key is safe.
- *
- * `opener` is the key that opens the guide from the current mode: `?` in most
- * modes, `F1` where that is the mode's help alias. `title` is the open
- * signal, usually the guide's mode cell.
+ * The one key handler a closed surface left on the bus, taken before the
+ * release wait removes it: the handler the surface mounted, outside the base
+ * the walk returns to.
  */
-export async function openGuide(
-	setup: Setup,
-	opener: "?" | "F1" = "?",
-	title = "Key guide",
-): Promise<string> {
-	const before = keyHandlerListeners(setup);
-	if (opener === "F1") {
-		pressF1(setup);
-		await awaitFrame(setup, (f) => f.includes(title), "the key guide to open");
-	} else {
-		await press(setup, "?", "the key guide to open", (f) => f.includes(title));
+export function leftKeyHandler(setup: Setup, snapshot: BaseKeyHandlers): (key: unknown) => boolean {
+	const stale = keyHandlerListeners(setup).filter((handler) => !snapshot.base.includes(handler));
+	if (stale.length !== 1) {
+		throw new Error(
+			`the closed surface is expected to leave one key handler on the bus, and the bus holds ${stale.length} outside the base`,
+		);
 	}
-	await awaitNewKeyHandler(setup, before, "the key guide to take the keys");
-	return await settle(setup);
+	return stale[0] as (key: unknown) => boolean;
 }
 
 /**
- * Open the Message view, and wait until it owns the keys.
+ * The walk's Enter, dispatched to the handler a closed surface left on the
+ * bus: the guard of the undrawn surface must refuse the key and run nothing
+ * (issue #317). Returns whether the stale handler claimed it.
  *
- * The view mounts in the open's commit and its key handler subscribes after
- * it, so the first view key must wait for the subscription the same way the
- * Key guide does. `opener` is the key that opens the view from the current
- * mode: F2 anywhere, or `m` from the Message line's own hint.
+ * The walk's key is read off the same fields the dispatch loop reads: a plain
+ * Enter with no modifier, the key the route rows confirm on.
  */
-export async function openMessageView(
-	setup: Setup,
-	opener: "m" | "F2" = "F2",
-	title = "Message view",
-): Promise<string> {
-	const before = keyHandlerListeners(setup);
-	if (opener === "F2") {
-		pressF2(setup);
-	} else {
-		setup.mockInput.pressKey("m");
-	}
-	await awaitFrame(setup, (f) => f.includes(title), "the message view to open");
-	await awaitNewKeyHandler(setup, before, "the message view to take the keys");
-	return await settle(setup);
+export function staleKeyClaim(handler: (key: unknown) => boolean): boolean {
+	const key = {
+		name: "return",
+		ctrl: false,
+		meta: false,
+		shift: false,
+		option: false,
+		preventDefault(): void {},
+	};
+	return handler(key);
 }
 
 /**
@@ -1226,97 +1057,6 @@ export async function sendResponseDraft(setup: Setup): Promise<void> {
 	setup.mockInput.pressEnter();
 }
 
-/**
- * Open the Consultation launcher, and wait until it owns the keys.
- *
- * The launcher's fields take the first keys after the open: Tab to the input,
- * the typed request, Enter to launch. A key sent before the launcher's key
- * handler subscribes is dropped by the shell below, so the wait on the key
- * bus subscription runs before any of them.
- */
-export async function openLauncher(setup: Setup, title = "Consultation launcher"): Promise<string> {
-	const before = keyHandlerListeners(setup);
-	await press(setup, "c", "the launcher to open", (f) => f.includes(title));
-	await awaitNewKeyHandler(setup, before, "the Consultation launcher to take the keys");
-	return await settle(setup);
-}
-
-/**
- * Close an open key-owning surface, and wait until it releases the keys.
- *
- * The close unmounts the surface in the same commit, but the surface's key
- * handler is removed in an effect cleanup that flushes after it. A key sent
- * in that window reaches both the shell in the base mode and the stale
- * surface handler, and the two can act on it with different meanings: the
- * classic case is a guide closed and immediately reopened, where the stale
- * handler's close lands after the shell's open and the guide never appears.
- * The wait on the key bus subscription closes the window deterministically:
- * when this returns, no handler of the closed surface is still subscribed,
- * so the next key is safe.
- *
- * `title` is the substring that marks the surface open, and `closeKey` the
- * key that closes it (Escape by default, F1 or F2 where that is the
- * surface's own close alias).
- */
-export async function closeOverlay(
-	setup: Setup,
-	title: string,
-	what: string,
-	closeKey: "escape" | "F1" | "F2" = "escape",
-): Promise<string> {
-	// The snapshot must hold the closing surface's own handler. The surface
-	// is mounted and drawn, but its subscribe is a passive effect that the
-	// scheduler has not run yet, and a snapshot taken in that window holds
-	// only the shell's handlers, which never leave the bus: the gone-wait
-	// that follows can end on nothing and misses the deadline (issue #311).
-	// The flush lands every pending subscribe before the snapshot, in the
-	// rig's own turn, whatever the scheduler's clock is doing.
-	flushPassiveNow();
-	const before = keyHandlerListeners(setup);
-	if (closeKey === "F1") pressF1(setup);
-	else if (closeKey === "F2") pressF2(setup);
-	else setup.mockInput.pressEscape();
-	await awaitFrame(setup, (f) => !f.includes(title), what);
-	await awaitGoneKeyHandler(setup, before, `${what} to release the keys`);
-	return await settle(setup);
-}
-
-/**
- * Open a key-owning surface on a key, and wait until it owns the keys.
- *
- * The decision and missing modals open this way: Enter from the base mounts
- * the modal in the open's commit, and the test then sends the modal's own
- * keys. The modal's key handler subscribes in the passive effect after the
- * commit, so the wait on the key bus subscription runs before any modal key.
- */
-export async function openSurface(
-	setup: Setup,
-	key: string,
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	const before = keyHandlerListeners(setup);
-	await press(setup, key, what, predicate);
-	await awaitNewKeyHandler(setup, before, `${what} to take the keys`);
-	return await settle(setup);
-}
-
-/**
- * Delete, d, and Enter open a confirmation panel over the Consultation detail
- * for the states that need one. The panel's key handler subscribes after the
- * open commit, and the next key in the test is the panel's own, so wait for
- * the panel's subscription the same way.
- */
-export async function openConsultationPanel(
-	setup: Setup,
-	key: "delete" | "d" | "return",
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<void> {
-	const before = keyHandlerListeners(setup);
-	await press(setup, key, what, predicate);
-	await awaitNewKeyHandler(setup, before, "the confirmation panel to take the keys");
-}
 /**
  * Walk the unified cursor across the section boundary, and wait for it on
  * the other side.
@@ -1393,45 +1133,6 @@ export async function crossCursor(
 }
 
 /**
- * Walk the unified cursor into the Consultation list, and wait for it there.
- *
- * The retired spelling of `crossCursor(setup, "consultations")`: the suites
- * the rig owns walk with the named section, and the rest of the frame suites
- * ride this name until they migrate.
- */
-export async function crossToConsultations(setup: Setup, maxSteps = 30): Promise<string> {
-	return crossCursor(setup, "consultations", maxSteps);
-}
-/**
- * Walk the unified cursor back to the Ticket list, and wait for it there.
- *
- * The retired spelling of `crossCursor(setup, "tickets")`: the suites the rig
- * owns walk with the named section, and the rest of the frame suites ride
- * this name until they migrate.
- */
-export async function crossToTickets(setup: Setup, maxSteps = 30): Promise<string> {
-	return crossCursor(setup, "tickets", maxSteps);
-}
-
-/**
- * Confirm an open action panel on Enter, and wait until the panel
- * releases the keys. A key sent while the panel's unsubscribe is still
- * pending reaches the stale handler, which would run the panel's own action
- * again on the same key.
- */
-export async function confirmPanel(
-	setup: Setup,
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	const before = keyHandlerListeners(setup);
-	setup.mockInput.pressEnter();
-	const frame = await awaitFrame(setup, predicate, what);
-	await awaitGoneKeyHandler(setup, before, `${what} to release the keys`);
-	return frame;
-}
-
-/**
  * Wait for the frame to stop changing, and return it.
  *
  * For keys that should change nothing, stability is the assertion, and this is
@@ -1490,10 +1191,12 @@ export async function waitSourceHealthy(state: FactoryState): Promise<void> {
 }
 
 /**
- * Wait for the runner's log to satisfy `check`, reading it on a short sleep
+ * Wait for the runner's log to satisfy the check, reading it on a short sleep
  * the way `waitSourceHealthy` waits on state: the rig's own turn keeps the app
  * moving while the wait sleeps, so a command the settled effect records lands
- * in the log before the deadline names a slow plane.
+ * in the log before the deadline names a slow plane. The check is the test's
+ * own read of the log, or the needles the test names, each of which must show
+ * up in the log as a line of it.
  *
  * A painted frame can stand ahead of the commands the same effect records:
  * the paint and the runner log are two facts one effect settles, and a tree
@@ -1504,18 +1207,60 @@ export async function waitSourceHealthy(state: FactoryState): Promise<void> {
  * write, where the clean tree stood the paint behind both. A test that reads
  * the log the moment its frame wait ends races that window; it waits on the
  * log instead, the frame facts it already pinned standing unchanged.
+ *
+ * The wait stands on the rig's one deadline, `FRAME_DEADLINE_MS`: a per-suite
+ * deadline for the runner's log would be the same wall-clock stand-in the
+ * change removes from the frame waits (ADR 0128).
  */
+export async function waitCommands(
+	commands: () => readonly string[],
+	needles: readonly string[],
+	what: string,
+	deadlineMs?: number,
+): Promise<void>;
 export async function waitCommands(
 	commands: () => readonly string[],
 	check: (commands: readonly string[]) => boolean,
 	what: string,
+	deadlineMs?: number,
+): Promise<void>;
+export async function waitCommands(
+	commands: () => readonly string[],
+	needlesOrCheck: readonly string[] | ((commands: readonly string[]) => boolean),
+	what: string,
 	deadlineMs: number = FRAME_DEADLINE_MS,
 ): Promise<void> {
+	let check: (commands: readonly string[]) => boolean;
+	if (typeof needlesOrCheck === "function") {
+		check = needlesOrCheck;
+	} else {
+		const needles = needlesOrCheck;
+		check = (log) => {
+			const text = log.join("\n");
+			return needles.every((needle) => text.includes(needle));
+		};
+	}
 	const deadline = Date.now() + deadlineMs;
 	for (;;) {
 		if (check(commands())) return;
 		if (Date.now() >= deadline)
 			throw new Error(`timed out waiting for ${what}\nlog:\n${commands().join("\n")}`);
+		await sleep(10);
+	}
+}
+
+/**
+ * Wait for a fact no frame read names: the state's rows, the source's calls,
+ * the dispatch's recorder. The same shape as `frameUntil` off the frame: one
+ * check, one name, the rig's one deadline, and a miss that names the wait.
+ * A wait that stood on the suite's own deadline would be the same wall-clock
+ * stand-in the change removes from the frame waits (ADR 0128).
+ */
+export async function waitUntil(check: () => boolean, what: string): Promise<void> {
+	const deadline = Date.now() + FRAME_DEADLINE_MS;
+	for (;;) {
+		if (check()) return;
+		if (Date.now() >= deadline) throw new Error(`timed out waiting for ${what}`);
 		await sleep(10);
 	}
 }
@@ -1591,6 +1336,21 @@ export function spanColorAt(
 //     catalogue, the guide's own source, never picked by the test
 //   frameUntil                        a custom frame check, named for what it
 //                                     waits for, where no named outcome fits
+//   waitUntil                         a fact no frame read names - the state's
+//                                     rows, the source's calls, the dispatch's
+//                                     recorder - waited on the rig's one deadline
+//   waitCommands                      the runner's log: the needles the test names, or
+//                                     its own read of the log, on the rig's one deadline
+//   pressUntil                        press a control, and re-send it inside the rig's
+//                                     one deadline until the frame holds the fact the
+//                                     test names: a key that lands mid-update is dropped
+//                                     by the plane, so a press that left no frame the wait
+//                                     names goes out again. The bar is read first, the way
+//                                     `pressControl` reads it, the `via` token the press
+//                                     names when the control wears more than one key, and a
+//                                     bar that paints no hint for the control takes the key
+//                                     from the catalogue, the way the rig's escapes read
+//                                     theirs
 //
 // `opens` and `closes` pair: the opening press records the key bus as it was
 // and watches it; the closing press waits for the surface's handlers to give
@@ -1635,6 +1395,15 @@ export interface ControlOutcomeFields {
 	moved?: string;
 	/** The app is quiet after the input: the frame rests. */
 	quiet?: boolean;
+	/**
+	 * The key goes out at once, without the pre-press settle. The settle
+	 * guards a key that lands before a handler it waits for is live; a key
+	 * the test sends while the plane runs a live cycle - a handoff in
+	 * flight, an observation tick pending - must not wait the settle out,
+	 * because the plane's next tick can move the selection the key stands
+	 * on before the key lands.
+	 */
+	immediate?: boolean;
 }
 
 export interface PressControlFields extends ControlOutcomeFields {
@@ -1650,8 +1419,10 @@ const OUTCOME_FIELDS = new Set(["opens", "closes", "refuses", "shows", "hides", 
 
 /** The outcomes are a closed set: a misspelled one is a rig error, not a quiet no-op. */
 function checkOutcomeFields(fields: ControlOutcomeFields, viaAllowed: boolean): void {
-	const known = viaAllowed ? new Set([...OUTCOME_FIELDS, "via"]) : OUTCOME_FIELDS;
-	const words = [...OUTCOME_FIELDS, ...(viaAllowed ? ["via"] : [])].join(", ");
+	const known = viaAllowed
+		? new Set([...OUTCOME_FIELDS, "via", "immediate"])
+		: new Set([...OUTCOME_FIELDS, "immediate"]);
+	const words = [...OUTCOME_FIELDS, "immediate", ...(viaAllowed ? ["via"] : [])].join(", ");
 	for (const key of Object.keys(fields)) {
 		if (!known.has(key))
 			throw new Error(`the frame rig's outcomes are a closed set: no "${key}" (the set: ${words})`);
@@ -1673,8 +1444,9 @@ const DUMMY_FACTS = {} as never;
 
 /**
  * The display form of a raw key: the rig's own copy of the catalogue's key
- * names. A re-key flows from the catalogue, and the rig's suite pins the
- * agreement on the one frame it walks.
+ * names. A re-key flows from the catalogue, and the rig's own suite pins
+ * the agreement key by key against the catalogue's display function, the
+ * drift read beside this table naming every key it disagrees on.
  */
 const KEY_DISPLAY: Record<string, string> = {
 	up: "↑",
@@ -1788,6 +1560,30 @@ function paintedKeyLabels(setup: Setup, control: ControlDefinition): Set<string>
 }
 
 /**
+ * The keys on which the rig's key display names disagree with the
+ * catalogue's display function: the rig walks its own table of display
+ * names beside every raw key the catalogue names in any mode, reading both
+ * sides through their own display functions. The rig's own suite pins the
+ * empty read (ADR 0128): a re-label in the catalogue - a display name moved,
+ * dropped, or gained - fails the pin naming every drifted key, instead of
+ * surfacing as a red page-key test in a migrated suite.
+ */
+export function keyDisplayDrift(): string[] {
+	const domain = new Set<string>(Object.keys(KEY_DISPLAY));
+	for (const control of allControls()) {
+		for (const mode of control.modes) {
+			try {
+				for (const raw of control.keys(mode, DUMMY_FACTS)) domain.add(raw);
+			} catch {
+				// A keys rule that reads facts the dummy carries none of names
+				// no key in that mode.
+			}
+		}
+	}
+	return [...domain].filter((raw) => displayKey(raw) !== keyName(raw as never)).sort();
+}
+
+/**
  * The label wordings a control's bar hint can be painted with: the
  * control's static label, plus the wordings its dynamic `barLabel` produces
  * that the static label cannot read back. The bar paints the `barLabel`'s
@@ -1848,9 +1644,21 @@ function titledSurfaceModes(frame: string, barLabels: string[]): InteractionMode
 	if (frame.includes("┌─Missing: ")) return ["missing-modal"];
 	if (frame.includes("┌─Close: ")) return ["action-panel"];
 	// Two panels share the Init a repository title: the repository-select
-	// panel and the repository-init panel. The bar's hints split them.
+	// panel and the repository-init panel. The bar's hints split them. The
+	// select list's confirm rewords its hint to Start queue on a marking of
+	// two or more, so the read stands on the list's own Toggle hint first and
+	// keeps the Select hint for a marking of one.
 	if (frame.includes("┌─Init a repository"))
-		return barLabels.includes("Select") ? ["repository-select"] : ["action-panel"];
+		return barLabels.includes("Toggle") || barLabels.includes("Select")
+			? ["repository-select"]
+			: ["action-panel"];
+	// The response editor is the shared form in the consultations view's own
+	// column: the section boxes stay up behind it, and the detail beside it
+	// can show the saved draft too. The read therefore stands on the form
+	// bar's Field hint, which no section bar paints, beside the editor's
+	// own Draft label.
+	if (frame.includes("Response draft") && barLabels.includes("Field"))
+		return ["form-field", "form-selector", "form-action"];
 	// The launcher is the one shared form surface: its frame stands on the
 	// form's three slot modes at once, the slot the focus holds naming one.
 	if (frame.includes("┌─Consultation launcher"))
@@ -1863,7 +1671,10 @@ function sectionSurfaceModes(frame: string, barLabels: string[]): InteractionMod
 	// The section boxes and the detail panes carry the focus marker on the
 	// pane the cursor holds.
 	if (frame.includes("┌─❯ Tickets")) return ["ticket-list"];
-	if (frame.includes("┌─❯ Consultations")) return ["consultation-list"];
+	if (frame.includes("┌─❯ Consultations"))
+		return barLabels.some((label) => label.endsWith("Exit interaction"))
+			? ["consultation-list", "consultation-interaction"]
+			: ["consultation-list"];
 	if (frame.includes("┌─❯ Work queue")) return ["work-queue-list"];
 	if (frame.includes("┌─❯ Detail")) return ["ticket-detail"];
 	if (frame.includes("┌─❯ Agent view") || frame.includes("┌─❯ Session view"))
@@ -2326,8 +2137,23 @@ function sendKey(setup: Setup, token: string): void {
 		input.pressArrow(arrow);
 		return;
 	}
-	if (/^F\d{1,2}$/.test(token)) {
-		input.pressKey(token);
+	const fmatch = /^F(\d{1,2})$/.exec(token);
+	if (fmatch !== null) {
+		const fnum = Number(fmatch[1]);
+		if (fnum <= 12) {
+			input.pressKey(token);
+			return;
+		}
+		// Beyond the terminal's F1-F12 the mock's key names end: the renderer
+		// parses the Kitty code the key stands for, the way the operator's
+		// terminal sends it.
+		input.pressKey(`\u001b[${57376 + (fnum - 13)}u`);
+		return;
+	}
+	if (/^Ctrl\+[A-Z]$/.test(token)) {
+		// The configured interaction exit key: the base letter out with the
+		// modifier, the way the terminal sends it.
+		input.pressKey(token.slice(5).toLowerCase(), { ctrl: true });
 		return;
 	}
 	switch (token) {
@@ -2467,7 +2293,7 @@ export async function pressControl(
 		Object.keys(fields).filter((key) => key !== "via").length === 0
 			? { ...fields, quiet: true }
 			: fields;
-	const preFrame = await settle(setup);
+	const preFrame = fields.immediate ? setup.captureCharFrame() : await settle(setup);
 	const resolution = resolveControl(setup, controlId, effective.via);
 	if (effective.refuses !== undefined) {
 		// A hint the bar painted in its available ink will run the control,
@@ -2664,7 +2490,8 @@ export async function pasteText(setup: Setup, text: string): Promise<void> {
  * which the plane dispatches itself and the Action bar names nowhere. The
  * named keys stand as the guide shows them, and the type closes on them: a
  * character the test wants in the field goes through `typeText`, not a key
- * the rig would have to invent.
+ * the rig would have to invent. Escape stands as the guide names it, the way
+ * the direct-render gallery's examples exit theirs.
  */
 export type FieldKey =
 	| "left"
@@ -2685,8 +2512,11 @@ export type FieldKey =
 	| "ctrl+z"
 	| "ctrl+y"
 	| "ctrl+a"
+	| "escape"
 	| "enter"
 	| "tab"
+	| "shift+tab"
+	| "ctrl+delete"
 	| "space"
 	| `F${number}`;
 
@@ -2722,16 +2552,19 @@ export function fieldKey(setup: Setup, key: FieldKey): void {
 			input.pressKey("END");
 			return;
 		case "DELETE":
-			input.pressKey("DELETE");
+			input.pressKey("DELETE", mods);
 			return;
 		case "BACKSPACE":
 			input.pressBackspace(mods);
+			return;
+		case "ESCAPE":
+			input.pressEscape();
 			return;
 		case "ENTER":
 			input.pressEnter();
 			return;
 		case "TAB":
-			input.pressTab();
+			input.pressTab(mods);
 			return;
 		case "SPACE":
 			input.pressKey(" ");
@@ -2742,13 +2575,14 @@ export function fieldKey(setup: Setup, key: FieldKey): void {
 		return;
 	}
 	// The Ctrl plus a letter rows: undo, redo, and select all in the field's
-	// editor, which the plane dispatches off the terminal's own modifiers.
+	// editor, which the plane dispatches off the terminal's own modifiers. The
+	// mock resolves the base key name with the modifier, never the alias.
 	if (mods.ctrl && /^[a-z]$/.test(base)) {
-		input.pressKey(key, mods);
+		input.pressKey(base, mods);
 		return;
 	}
 	throw new Error(
-		`the frame rig cannot send "${key}" to a field: name a field-editing key (an arrow, Home, End, Delete, Backspace, Enter, Tab, Space, a Ctrl plus a letter, or a function key); the field's characters go through \`typeText\``,
+		`the frame rig cannot send "${key}" to a field: name a field-editing key (an arrow, Home, End, Delete, Backspace, Escape, Enter, Tab, Space, a Ctrl plus a letter, or a function key; Ctrl+Delete and Shift+Tab ride the same names); the field's characters go through \`typeText\``,
 	);
 }
 
@@ -2773,16 +2607,30 @@ function textEntryFocused(setup: Setup): boolean {
 }
 
 /**
+ * The named input operations settle the app to quiet after their key when the
+ * test names no outcome: the app rests where the key left it, and the next
+ * read stands on a frame the plane owes. `pressControl` and `guideKey` hold
+ * the same default, and a test that names an outcome opts out of it.
+ */
+function quietUnlessNamed(fields: ControlOutcomeFields): ControlOutcomeFields {
+	return Object.keys(fields).length === 0 ? { ...fields, quiet: true } : fields;
+}
+
+/**
  * Press the controls the Action bar never hints, one named operation each:
  * the quit key, the emergency exit, the repository-init key, and the
- * auto-handoff toggle, whose key the rig reads off the mode the frame shows.
+ * auto-handoff toggle. Each reads its key from the catalogue, the source the
+ * Key guide paints from, never a literal the rig stands blind on: the
+ * auto-handoff toggle off the mode the frame shows, the rest off the mode
+ * the control runs in.
  */
 export async function quitApp(setup: Setup, fields: ControlOutcomeFields = {}): Promise<string> {
 	checkOutcomeFields(fields, false);
+	const effective = quietUnlessNamed(fields);
 	const key = catalogueKey("quit", "ticket-list");
 	const preFrame = await settle(setup);
 	sendKey(setup, key);
-	return runOutcomes(setup, fields, {
+	return runOutcomes(setup, effective, {
 		preFrame,
 		preLine: messageRowOf(preFrame),
 		press: "the quit key",
@@ -2794,9 +2642,11 @@ export async function emergencyExit(
 	fields: ControlOutcomeFields = {},
 ): Promise<string> {
 	checkOutcomeFields(fields, false);
+	const effective = quietUnlessNamed(fields);
+	const key = catalogueKey("emergency-exit", "ticket-list");
 	const preFrame = await settle(setup);
-	sendKey(setup, "Ctrl+C");
-	return runOutcomes(setup, fields, {
+	sendKey(setup, key);
+	return runOutcomes(setup, effective, {
 		preFrame,
 		preLine: messageRowOf(preFrame),
 		press: "the emergency exit",
@@ -2808,10 +2658,11 @@ export async function initRepository(
 	fields: ControlOutcomeFields = {},
 ): Promise<string> {
 	checkOutcomeFields(fields, false);
+	const effective = quietUnlessNamed(fields);
 	const key = catalogueKey("repository-init", "ticket-list");
 	const preFrame = await settle(setup);
 	sendKey(setup, key);
-	return runOutcomes(setup, fields, {
+	return runOutcomes(setup, effective, {
 		preFrame,
 		preLine: messageRowOf(preFrame),
 		press: "the repository-init key",
@@ -2823,10 +2674,11 @@ export async function toggleAutoHandoff(
 	fields: ControlOutcomeFields = {},
 ): Promise<string> {
 	checkOutcomeFields(fields, false);
+	const effective = quietUnlessNamed(fields);
 	const preFrame = await settle(setup);
 	const key = catalogueKey("auto-handoff", textEntryFocused(setup) ? "form-field" : "ticket-list");
 	sendKey(setup, key);
-	return runOutcomes(setup, fields, {
+	return runOutcomes(setup, effective, {
 		preFrame,
 		preLine: messageRowOf(preFrame),
 		press: "the auto-handoff toggle",
@@ -2842,7 +2694,9 @@ export type PageKey = "pageup" | "pagedown" | "home" | "end";
  * page or jump keys, so they resolve off the bar: the rig sends the terminal
  * sequence the plane parses for the key, after the pre-press settle, on the
  * rig's one deadline. The plane routes the key to whatever scroll surface the
- * frame focuses: the list, the detail, the body, or the guide's rows.
+ * frame focuses: the list, the detail, the body, or the guide's rows. Like
+ * its siblings on the escape list, it settles the app to quiet after the key
+ * when the test names no outcome.
  */
 export async function pageKey(
 	setup: Setup,
@@ -2850,9 +2704,10 @@ export async function pageKey(
 	fields: ControlOutcomeFields = {},
 ): Promise<string> {
 	checkOutcomeFields(fields, false);
+	const effective = quietUnlessNamed(fields);
 	const preFrame = await settle(setup);
 	sendKey(setup, displayKey(key));
-	return runOutcomes(setup, fields, {
+	return runOutcomes(setup, effective, {
 		preFrame,
 		preLine: messageRowOf(preFrame),
 		press: `the ${displayKey(key)} key`,
@@ -2872,6 +2727,12 @@ export async function pageKey(
  * control and the key as the guide names it, and never a character the plane
  * might no longer accept. A key the guide names nowhere for the control fails
  * the press, naming the aliases the guide does name (ADR 0128, addendum).
+ *
+ * The key settles before it goes out, so a press right after a surface
+ * change lands on a handler that is live. A key the test sends while the
+ * plane runs a live cycle names `immediate` and goes out at once: the
+ * pre-press settle would wait the plane's next tick out, and that tick can
+ * move the selection the key stands on.
  */
 export async function guideKey(
 	setup: Setup,
@@ -2881,9 +2742,8 @@ export async function guideKey(
 ): Promise<string> {
 	const control = catalogueControl(controlId);
 	checkOutcomeFields(fields, false);
-	const effective: ControlOutcomeFields =
-		Object.keys(fields).length === 0 ? { ...fields, quiet: true } : fields;
-	const preFrame = await settle(setup);
+	const effective = quietUnlessNamed(fields);
+	const preFrame = fields.immediate ? setup.captureCharFrame() : await settle(setup);
 	const aliases = new Set<string>();
 	for (const mode of control.modes) {
 		try {
@@ -2909,5 +2769,100 @@ export async function guideKey(
 	} catch (error) {
 		holding?.stop();
 		throw error;
+	}
+}
+
+/**
+ * The key the catalogue names for a control on the surface the frame stands
+ * on, for a press whose bar paints no hint for the control: the guide
+ * paints the control's own key, and the key the catalogue names in the
+ * surface's modes is the key the plane accepts there. A control that names
+ * no key on the surface, or more than one, fails the read and names the
+ * labels it found, so a press never stands on a key the catalogue does not
+ * name (ADR 0128).
+ */
+function catalogueGuideKey(control: ControlDefinition, modes: InteractionMode[] | null): string {
+	const candidates = modes ?? control.modes;
+	const labels = new Set<string>();
+	for (const mode of candidates) {
+		try {
+			const label = keyLabelFor(mode, control, DUMMY_FACTS);
+			if (label !== "") labels.add(label);
+		} catch {
+			// A key rule that reads facts the dummy carries none of names no
+			// alias in that mode; the press fails on the empty read.
+		}
+	}
+	if (labels.size === 0)
+		throw new Error(
+			`the frame rig cannot press "${control.id}": the bar paints no hint for it, and the catalogue names no key for it on the surface`,
+		);
+	if (labels.size > 1)
+		throw new Error(
+			`the frame rig cannot press "${control.id}": the catalogue names ${[...labels].join(", ")} for it on the surface; name the key you mean in the press's fields`,
+		);
+	return [...labels][0];
+}
+
+/** The fields a re-sending press of a control waits out. */
+export interface PressUntilFields {
+	/** The frame fact the wait names: the deadline error reads it back. */
+	what: string;
+	/** The frame fact, read off the frame, in the shape `frameUntil` reads. */
+	check: (frame: string) => boolean;
+	/**
+	 * The key token the press sends where the control wears more than one:
+	 * one the control's hint names, the way `pressControl`'s `via` names it.
+	 * Unnamed, the bar route sends the hint's first token, and a bar that
+	 * paints no hint for the control takes the one key the catalogue names
+	 * for it on the surface.
+	 */
+	via?: string;
+}
+
+/**
+ * Press a control, and re-send it until the frame holds the fact the test
+ * names: a key that lands mid-update is dropped by the plane, so a press that
+ * left no frame the wait names goes out again, inside the rig's one
+ * deadline. A re-send that never settles reaches the press's own deadline
+ * first, and its error names the press; the loop's own deadline names the
+ * control and the fact it waited for.
+ *
+ * The test names the control and the frame fact, and the rig reads every key
+ * from the catalogue, the source the Key guide paints from: a painted bar
+ * hint the control owns sends the hint's key, the way `pressControl` sends
+ * it, or the `via` token the press names, and a bar that paints no hint for
+ * the control takes the key from the catalogue, the way the rig's escapes
+ * read theirs, so a packed bar withholds no key the guide names. A control
+ * the catalogue names no key for on the surface fails the press, naming the
+ * control, and the deadline names the control and the fact it waited for.
+ * The check is the same shape as `frameUntil`'s: a frame fact no named
+ * outcome names, named for the frame it waits for.
+ */
+export async function pressUntil(
+	setup: Setup,
+	controlId: string,
+	fields: PressUntilFields,
+): Promise<string> {
+	const control = catalogueControl(controlId);
+	const deadline = Date.now() + FRAME_DEADLINE_MS;
+	for (;;) {
+		const preFrame = await settle(setup);
+		const modes = surfaceModes(preFrame);
+		const owned = barHints(setup).filter((hint) => hintOwnedBy(setup, control, hint, modes));
+		const press: PressControlFields = { quiet: true };
+		if (fields.via !== undefined) press.via = fields.via;
+		const frame =
+			owned.length > 0
+				? await pressControl(setup, controlId, press)
+				: await guideKey(setup, controlId, fields.via ?? catalogueGuideKey(control, modes), {
+						quiet: true,
+					});
+		if (fields.check(frame)) return frame;
+		if (Date.now() >= deadline)
+			throw new Error(
+				`the control "${controlId}" never left ${fields.what}: the rig re-sent it inside its one deadline, and the frame still stands without it\nlast frame:\n${frame}`,
+			);
+		await sleep(50);
 	}
 }

@@ -122,7 +122,7 @@ tree, in this order:
 CI runs the same `bun run test` step. The serial variant was measured on
 this checkout and rejected on 2026-10-15: on the runner's two vCPUs the
 parallel pool is no slower than the serial step, and a steady co-tenant load
-red both the same way, so the split would have bought wall time for no
+reds both the same way, so the split would have bought wall time for no
 robustness (issue #398, [the verification record](../verification/quality-gate.md)).
 
 A branch that falls behind `origin/main` again during a rework round rebases and
@@ -223,15 +223,21 @@ is recorded beside it. The runner's own budget, which the test script
 carries as one timeout of sixty seconds, local and CI alike, stands above
 twice the frame rig's one deadline of twenty seconds, so a test's waits
 fail on the rig's deadline, which dumps the last frame, before the runner's
-budget can end the test without one. The CI frame-test flake the rule named
-was investigated on 2026-10-15 and answered in three parts (issue #398, in
+budget can end the test without one. The frame rig's one deadline owns the
+frame tests' waits, local and CI alike (ADR 0128), and the rework of that
+rule in [pull request #395](https://github.com/SeriousJul/my-little-software-factory/pull/395)
+moves the suites' remaining deadline loops onto it. The CI frame-test flake
+the rule named was investigated on 2026-10-15 and answered in three parts
+(issue #398, in
 [the verification record](../verification/quality-gate.md)): the three fixable
 classes - the audit test's ref its runner does not hold, the log read at the
 painted frame, and a Consultation operation settling after the run's state
 closed - were fixed; the serial CI step was measured and rejected; and the two
 Live view walks that stall past any deadline on a loaded runner were removed,
 the case for the stall mechanism standing open on issue #302, which owns the
-rig's remaining wall-clock exposure.
+rig's remaining wall-clock exposure. The frame-rig section of
+[the shared-control record](../verification/shared-controls.md) names the
+twelve filed issues of the class and which of them the rule reaches.
 
 ## A fake carries every field of the seam it stands for
 

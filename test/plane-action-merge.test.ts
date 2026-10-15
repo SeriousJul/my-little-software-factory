@@ -38,14 +38,16 @@ import { createTicketSource, type FetchOutcome, SEARCH_QUERY } from "../src/tick
 import { firePlaneActionOutcome } from "../src/workflow.ts";
 import {
 	type AppSetup,
-	awaitFrame,
+	frameUntil,
 	messageRowOf,
 	mouseClick,
-	press,
-	pressArrow,
+	pressControl,
 	rowsOf,
 	settle,
 	WIDTH,
+	waitCommands,
+	waitFor,
+	waitUntil,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -1750,260 +1752,246 @@ describe("the dispatch's ask and pickup", () => {
 		state.close();
 	});
 
-	test(
-		"the decision screen's merge ask closes the settled turn's environment at the ask",
-		async () => {
-			const state = planeState();
-			withIssueSource(state);
-			// The issue's settled turn stored its environment: the environment
-			// the decision screen's ask asks to close, the way the route's ask
-			// does (ADR 0046).
-			const claim = state.handoff.claimHandoff(
-				issueIdentity,
-				{
-					agentType: "pi",
-					environment: "live-worktree",
-					taskType: "rework",
-					model: "",
-					thinking: "",
-					contextWindow: "",
-				},
-				"open",
-			);
-			if (!claim.ok) throw new Error(claim.reason);
-			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-				paneId: "pane-1",
-				tabId: "tab-1",
-				workspaceId: "ws-1",
-			});
-			state.ticketWorkCycle.settleTurn({
-				ticketIdentity: issueIdentity,
-				handoffId: claim.claim.attemptId,
+	test("the decision screen's merge ask closes the settled turn's environment at the ask", async () => {
+		const state = planeState();
+		withIssueSource(state);
+		// The issue's settled turn stored its environment: the environment
+		// the decision screen's ask asks to close, the way the route's ask
+		// does (ADR 0046).
+		const claim = state.handoff.claimHandoff(
+			issueIdentity,
+			{
+				agentType: "pi",
+				environment: "live-worktree",
 				taskType: "rework",
-				agentType: "pi",
-				message: "The turn is done.",
-				turnLog: [{ kind: "text", text: "The turn is done." }],
-				completedAt: "2026-08-31T11:00:00Z",
-				cause: "completed",
-				transition: mergeRoute(),
-			});
-			const runner = new FakeRunner();
-			stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
-			stubMerge(runner, 0);
-			const events: string[] = [];
-			const dispatch = createHandoffDispatch({
-				state,
-				runner,
-				config: () => PLANE_CONFIG,
-				seatCount: () => 0,
-				home: home(),
-				...recorder(events),
-			});
-			// The operator's ask: no `automatic` word, the way the decision
-			// screen's confirm dispatches it.
-			const result = await dispatch.dispatchPlaneAction({
-				origin: "workflow",
-				ticketIdentity: pullIdentity,
-				routeFromIdentity: issueIdentity,
-				taskType: "merge",
-			});
-			expect(result).toEqual({ ok: true });
-			// The close takes the seat, the way every environment change does,
-			// so it lands behind the ask's answer, on the cleanup's own pass.
-			const deadline = Date.now() + 5000;
-			while (
-				!runner.commands().includes("herdr tab close tab-1") ||
-				!events.some((event) => event.startsWith(`starting off: ${pullIdentity}`))
-			) {
-				// The Starting window's close stands behind the run's whole
-				// settle: the state's writes are all in when it lands, and the
-				// state may close behind it.
-				if (Date.now() >= deadline) throw new Error("the ask did not settle");
-				await new Promise((resolve) => setTimeout(resolve, 20));
-			}
-			state.close();
-		},
-		{ timeout: 15_000 },
-	);
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: issueIdentity,
+			handoffId: claim.claim.attemptId,
+			taskType: "rework",
+			agentType: "pi",
+			message: "The turn is done.",
+			turnLog: [{ kind: "text", text: "The turn is done." }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+			transition: mergeRoute(),
+		});
+		const runner = new FakeRunner();
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const events: string[] = [];
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			seatCount: () => 0,
+			home: home(),
+			...recorder(events),
+		});
+		// The operator's ask: no `automatic` word, the way the decision
+		// screen's confirm dispatches it.
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "workflow",
+			ticketIdentity: pullIdentity,
+			routeFromIdentity: issueIdentity,
+			taskType: "merge",
+		});
+		expect(result).toEqual({ ok: true });
+		// The close takes the seat, the way every environment change does,
+		// so it lands behind the ask's answer, on the cleanup's own pass. The
+		// Starting window's close stands behind the run's whole settle: the
+		// state's writes are all in when it lands, and the state may close
+		// behind it.
+		await waitUntil(
+			() =>
+				runner.commands().includes("herdr tab close tab-1") &&
+				events.some((event) => event.startsWith(`starting off: ${pullIdentity}`)),
+			"the ask to settle",
+		);
+		state.close();
+	});
 
-	test(
-		"the automatic merge ask takes the settled turn's checkout down with its workspace",
-		async () => {
-			const state = planeState();
-			withIssueSource(state);
-			// The settled turn ran in the shipped machine's own environment: the
-			// worktree environment, so herdr holds a workspace the merge must take
-			// down.
-			const claim = state.handoff.claimHandoff(
-				issueIdentity,
-				{
-					agentType: "pi",
-					environment: "worktree",
-					taskType: "review",
-					model: "",
-					thinking: "",
-					contextWindow: "",
-				},
-				"open",
-			);
-			if (!claim.ok) throw new Error(claim.reason);
-			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-				paneId: "pane-1",
-				tabId: "tab-1",
-				workspaceId: "ws-1",
-			});
-			state.ticketWorkCycle.settleTurn({
-				ticketIdentity: issueIdentity,
-				handoffId: claim.claim.attemptId,
-				taskType: "review",
+	test("the automatic merge ask takes the settled turn's checkout down with its workspace", async () => {
+		const state = planeState();
+		withIssueSource(state);
+		// The settled turn ran in the shipped machine's own environment: the
+		// worktree environment, so herdr holds a workspace the merge must take
+		// down.
+		const claim = state.handoff.claimHandoff(
+			issueIdentity,
+			{
 				agentType: "pi",
-				message: "Score: 95 / 100.",
-				turnLog: [{ kind: "text", text: "Score: 95 / 100." }],
-				completedAt: "2026-08-31T11:00:00Z",
-				cause: "completed",
-				transition: mergeRoute(),
-			});
-			const runner = new FakeRunner();
-			stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
-			stubMerge(runner, 0);
-			const events: string[] = [];
-			let resolveStarted: () => void = () => {};
-			const startedSettled = new Promise<void>((resolve) => {
-				resolveStarted = resolve;
-			});
-			const dispatch = createHandoffDispatch({
-				state,
-				runner,
-				config: () => PLANE_CONFIG,
-				seatCount: () => 0,
-				home: home(),
-				...recorder(events),
-			});
-			const result = await dispatch.dispatchPlaneAction({
-				origin: "workflow",
-				automatic: true,
-				ticketIdentity: pullIdentity,
-				routeFromIdentity: issueIdentity,
-				taskType: "merge",
-				onStarted: (started) => {
-					expect(started).toEqual({ ok: true });
-					resolveStarted();
-				},
-			});
-			expect(result).toEqual({ ok: true });
-			await startedSettled;
-			// The close takes the seat, the way every environment change does, so
-			// it lands behind the ask's answer on the cleanup's own pass, and the
-			// merge run stands beside it.
-			const deadline = Date.now() + 5000;
-			while (!runner.commands().includes("herdr worktree remove --workspace ws-1")) {
-				if (Date.now() >= deadline) throw new Error("the ask never closed the environment");
-				await new Promise((resolve) => setTimeout(resolve, 20));
-			}
-			// The merge still ran, and the close is the ask's whole act on the
-			// environment: herdr `worktree remove` takes the checkout and the
-			// workspace behind it in one command, and leaves the branch, so no
-			// checkout stands on disk under a retired ticket (issue #327, ADR 0124).
-			expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
-			expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([
-				"herdr worktree remove --workspace ws-1",
-			]);
-			state.close();
-		},
-		{ timeout: 15_000 },
-	);
+				environment: "worktree",
+				taskType: "review",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: issueIdentity,
+			handoffId: claim.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "Score: 95 / 100.",
+			turnLog: [{ kind: "text", text: "Score: 95 / 100." }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+			transition: mergeRoute(),
+		});
+		const runner = new FakeRunner();
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		const events: string[] = [];
+		let resolveStarted: () => void = () => {};
+		const startedSettled = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			seatCount: () => 0,
+			home: home(),
+			...recorder(events),
+		});
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			routeFromIdentity: issueIdentity,
+			taskType: "merge",
+			onStarted: (started) => {
+				expect(started).toEqual({ ok: true });
+				resolveStarted();
+			},
+		});
+		expect(result).toEqual({ ok: true });
+		await startedSettled;
+		// The close takes the seat, the way every environment change does, so
+		// it lands behind the ask's answer on the cleanup's own pass, and the
+		// merge run stands beside it.
+		await waitCommands(
+			() => runner.commands(),
+			["herdr worktree remove --workspace ws-1"],
+			"the ask to close the environment",
+		);
+		// The merge still ran, and the close is the ask's whole act on the
+		// environment: herdr `worktree remove` takes the checkout and the
+		// workspace behind it in one command, and leaves the branch, so no
+		// checkout stands on disk under a retired ticket (issue #327, ADR 0124).
+		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("merged");
+		expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([
+			"herdr worktree remove --workspace ws-1",
+		]);
+		state.close();
+	});
 
-	test(
-		"the blocked merge ask takes the settled turn's checkout down, the way a landing one does",
-		async () => {
-			const state = planeState();
-			withIssueSource(state);
-			// The settled turn ran in the shipped machine's own environment: the
-			// worktree environment, so herdr holds a workspace the merge must take
-			// down. The reach is the ask's act, so a merge that blocks runs the
-			// same close as one that lands (issue #327, ADR 0124).
-			const claim = state.handoff.claimHandoff(
-				issueIdentity,
-				{
-					agentType: "pi",
-					environment: "worktree",
-					taskType: "review",
-					model: "",
-					thinking: "",
-					contextWindow: "",
-				},
-				"open",
-			);
-			if (!claim.ok) throw new Error(claim.reason);
-			state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-				paneId: "pane-1",
-				tabId: "tab-1",
-				workspaceId: "ws-1",
-			});
-			state.ticketWorkCycle.settleTurn({
-				ticketIdentity: issueIdentity,
-				handoffId: claim.claim.attemptId,
-				taskType: "review",
+	test("the blocked merge ask takes the settled turn's checkout down, the way a landing one does", async () => {
+		const state = planeState();
+		withIssueSource(state);
+		// The settled turn ran in the shipped machine's own environment: the
+		// worktree environment, so herdr holds a workspace the merge must take
+		// down. The reach is the ask's act, so a merge that blocks runs the
+		// same close as one that lands (issue #327, ADR 0124).
+		const claim = state.handoff.claimHandoff(
+			issueIdentity,
+			{
 				agentType: "pi",
-				message: "Score: 95 / 100.",
-				turnLog: [{ kind: "text", text: "Score: 95 / 100." }],
-				completedAt: "2026-08-31T11:00:00Z",
-				cause: "completed",
-				transition: mergeRoute(),
-			});
-			const runner = new FakeRunner();
-			// The run's fresh read finds the pull request open, and the fire's read
-			// finds it open too: the block's path, which writes the needs-work fact
-			// on the pull request.
-			stubReadSequence(runner, [{ state: "open" }, { state: "open" }]);
-			stubMerge(runner, 1, "GraphQL: PullRequest is not mergeable.\n");
-			const events: string[] = [];
-			let resolveStarted: () => void = () => {};
-			const startedSettled = new Promise<void>((resolve) => {
-				resolveStarted = resolve;
-			});
-			const dispatch = createHandoffDispatch({
-				state,
-				runner,
-				config: () => PLANE_CONFIG,
-				seatCount: () => 0,
-				home: home(),
-				...recorder(events),
-			});
-			const result = await dispatch.dispatchPlaneAction({
-				origin: "workflow",
-				automatic: true,
-				ticketIdentity: pullIdentity,
-				routeFromIdentity: issueIdentity,
-				taskType: "merge",
-				onStarted: (started) => {
-					expect(started).toEqual({ ok: true });
-					resolveStarted();
-				},
-			});
-			expect(result).toEqual({ ok: true });
-			await startedSettled;
-			// The close takes the seat, the way every environment change does, so
-			// it lands behind the ask's answer on the cleanup's own pass, and the
-			// merge run stands beside it.
-			const deadline = Date.now() + 5000;
-			while (!runner.commands().includes("herdr worktree remove --workspace ws-1")) {
-				if (Date.now() >= deadline) throw new Error("the ask never closed the environment");
-				await new Promise((resolve) => setTimeout(resolve, 20));
-			}
-			// The merge blocked, and the close still ran: the block is the run's
-			// outcome, and the close is the ask's whole act on the environment, the
-			// same command a landing merge sends. herdr `worktree remove` takes the
-			// checkout and the workspace behind it in one command, and leaves the
-			// branch (issue #327, ADR 0124).
-			expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("blocked");
-			expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([
-				"herdr worktree remove --workspace ws-1",
-			]);
-			state.close();
-		},
-		{ timeout: 15_000 },
-	);
+				environment: "worktree",
+				taskType: "review",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: issueIdentity,
+			handoffId: claim.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "Score: 95 / 100.",
+			turnLog: [{ kind: "text", text: "Score: 95 / 100." }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+			transition: mergeRoute(),
+		});
+		const runner = new FakeRunner();
+		// The run's fresh read finds the pull request open, and the fire's read
+		// finds it open too: the block's path, which writes the needs-work fact
+		// on the pull request.
+		stubReadSequence(runner, [{ state: "open" }, { state: "open" }]);
+		stubMerge(runner, 1, "GraphQL: PullRequest is not mergeable.\n");
+		const events: string[] = [];
+		let resolveStarted: () => void = () => {};
+		const startedSettled = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		const dispatch = createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			seatCount: () => 0,
+			home: home(),
+			...recorder(events),
+		});
+		const result = await dispatch.dispatchPlaneAction({
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: pullIdentity,
+			routeFromIdentity: issueIdentity,
+			taskType: "merge",
+			onStarted: (started) => {
+				expect(started).toEqual({ ok: true });
+				resolveStarted();
+			},
+		});
+		expect(result).toEqual({ ok: true });
+		await startedSettled;
+		// The close takes the seat, the way every environment change does, so
+		// it lands behind the ask's answer on the cleanup's own pass, and the
+		// merge run stands beside it.
+		await waitCommands(
+			() => runner.commands(),
+			["herdr worktree remove --workspace ws-1"],
+			"the ask to close the environment",
+		);
+		// The merge blocked, and the close still ran: the block is the run's
+		// outcome, and the close is the ask's whole act on the environment, the
+		// same command a landing merge sends. herdr `worktree remove` takes the
+		// checkout and the workspace behind it in one command, and leaves the
+		// branch (issue #327, ADR 0124).
+		expect(state.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome).toBe("blocked");
+		expect(runner.commands().filter((command) => command.startsWith("herdr"))).toEqual([
+			"herdr worktree remove --workspace ws-1",
+		]);
+		state.close();
+	});
 
 	test("a dropped merge settles its route's source, the way the cancel does", async () => {
 		const state = planeState();
@@ -2140,6 +2128,33 @@ describe("the decision screen's merge", () => {
 		});
 	}
 
+	/**
+	 * Boot the app on the decision plane, and run the body on that boot. The
+	 * body receives the rig's setup and the plane record beside it; the boot
+	 * stands at the decision frame's own size with the minute poll, and the
+	 * record comes back to the test.
+	 */
+	async function appOnDecision(
+		state: FactoryState,
+		runner: FakeRunner,
+		fn: (setup: AppSetup, planeRecord: Plane) => Promise<void>,
+		extra: Partial<FactoryConfig> = {},
+	): Promise<Plane> {
+		const record = await decisionPlane(state, runner, extra);
+		await withApp(
+			async (setup) => {
+				await fn(setup, record);
+			},
+			{
+				width: WIDTH,
+				height: 30,
+				plane: record,
+				loopPolicy: { kind: "polled", intervalMs: 60_000 },
+			},
+		);
+		return record;
+	}
+
 	test("the confirm runs the merge with no agent and no worktree, and the record stands", async () => {
 		const state = planeState();
 		seed(state, "awaiting", mergeRoute());
@@ -2147,33 +2162,25 @@ describe("the decision screen's merge", () => {
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const planeRecord = await decisionPlane(state, runner);
-
-		await withApp(
-			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-				// The decision modal: the merge row stands beside Close and Goto.
-				await press(
-					setup,
-					"return",
-					"the decision modal",
-					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
-				);
-				await pressArrow(setup, "down", "the Goto row", () => true);
-				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
-				// The confirm closes the modal, the way the route's does, and
-				// the run's line lands on the Message line.
-				await press(setup, "return", "the run's line", (f) =>
-					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
-				);
-			},
-			{
-				width: WIDTH,
-				height: 30,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 60_000 },
-			},
-		);
+		await appOnDecision(state, runner, async (setup, _planeRecord) => {
+			await waitFor(setup, { shows: pullTitle.slice(0, 3) });
+			// The decision modal: the merge row stands beside Close and Goto.
+			await pressControl(setup, "decide-completion", { quiet: true });
+			await frameUntil(
+				setup,
+				"the decision modal",
+				(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+			);
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+			// The confirm closes the modal, the way the route's does, and
+			// the run's line lands on the Message line.
+			await pressControl(setup, "confirm-action", { quiet: true });
+			await frameUntil(setup, "the run's line", (f) =>
+				messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
+			);
+		});
 
 		// The record: the operator's decision word, the merged outcome, and
 		// the settled turn's decision in the trace.
@@ -2210,18 +2217,20 @@ describe("the decision screen's merge", () => {
 
 		await withApp(
 			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-				await press(
+				await waitFor(setup, { shows: pullTitle.slice(0, 3) });
+				await pressControl(setup, "decide-completion", { quiet: true });
+				await frameUntil(
 					setup,
-					"return",
 					"the decision modal",
 					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
 				);
 				const modal = await settle(setup);
 				expect(modal).toContain("the Next step is held: the task type carries Operator-decides");
-				await pressArrow(setup, "down", "the Goto row", () => true);
-				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
-				await press(setup, "return", "the run's line", (f) =>
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+				await pressControl(setup, "confirm-action", { quiet: true });
+				await frameUntil(setup, "the run's line", (f) =>
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
@@ -2252,44 +2261,35 @@ describe("the decision screen's merge", () => {
 			// the fire's fresh read still reads it open: the needs-work branch holds.
 			stubReadSequence(runner, [{ state: "open" }, { state: "open" }]);
 			stubMerge(runner, 1, "GraphQL: PullRequest is not mergeable.\n");
-			const planeRecord = await decisionPlane(state, runner);
-
-			await withApp(
-				async (setup) => {
-					await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-					await press(setup, "return", "the decision modal", (f) =>
-						f.includes("Merge pull request"),
-					);
-					await pressArrow(setup, "down", "the Goto row", () => true);
-					await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
-					// The block keeps the ticket listed, open with the needs-work
-					// fact, and the run's line lands on the Message line.
-					const frame = await press(setup, "return", "the block's line", (f) =>
-						messageRowOf(f).includes(
-							`the merge of "${pullTitle}" was blocked: GraphQL: PullRequest is not mergeable.`,
-						),
-					);
-					// The ticket's row: the click lands the cursor on it, and the
-					// detail pane stands beside the list.
-					const rows = rowsOf(frame);
-					const rowIndex = rows.findIndex((row) => row.includes(pullTitle.slice(0, 3)));
-					expect(rowIndex).toBeGreaterThanOrEqual(0);
-					await mouseClick(setup, 2, rowIndex);
-					// The reason wraps at the pane's width, so the wait takes the
-					// line's head, and the assertion takes the reason as facts.
-					await awaitFrame(
-						setup,
-						(f) => f.includes("Merge:") && f.includes("blocked - GraphQL: PullRequest"),
-						"the attempt's line",
-					);
-				},
-				{
-					width: WIDTH,
-					height: 30,
-					plane: planeRecord,
-					loopPolicy: { kind: "polled", intervalMs: 60_000 },
-				},
-			);
+			await appOnDecision(state, runner, async (setup, _planeRecord) => {
+				await waitFor(setup, { shows: pullTitle.slice(0, 3) });
+				await pressControl(setup, "decide-completion", { quiet: true });
+				await waitFor(setup, { shows: "Merge pull request" });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+				// The block keeps the ticket listed, open with the needs-work
+				// fact, and the run's line lands on the Message line.
+				await pressControl(setup, "confirm-action", { quiet: true });
+				const frame = await frameUntil(setup, "the block's line", (f) =>
+					messageRowOf(f).includes(
+						`the merge of "${pullTitle}" was blocked: GraphQL: PullRequest is not mergeable.`,
+					),
+				);
+				// The ticket's row: the click lands the cursor on it, and the
+				// detail pane stands beside the list.
+				const rows = rowsOf(frame);
+				const rowIndex = rows.findIndex((row) => row.includes(pullTitle.slice(0, 3)));
+				expect(rowIndex).toBeGreaterThanOrEqual(0);
+				await mouseClick(setup, 2, rowIndex);
+				// The reason wraps at the pane's width, so the wait takes the
+				// line's head, and the assertion takes the reason as facts.
+				await frameUntil(
+					setup,
+					"the attempt's line",
+					(f) => f.includes("Merge:") && f.includes("blocked - GraphQL: PullRequest"),
+				);
+			});
 
 			// The line the pane painted is the block the run recorded: the record
 			// beside the handoff facts names the reason the source gave.
@@ -2306,25 +2306,18 @@ describe("the decision screen's merge", () => {
 		seed(state, "awaiting", mergeRoute());
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const planeRecord = await decisionPlane(state, runner);
-
-		await withApp(
-			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-				await press(setup, "return", "the decision modal", (f) => f.includes("Merge pull request"));
-				await pressArrow(setup, "down", "the Goto row", () => true);
-				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
-				await press(setup, "e", "the unavailable reason", (f) =>
-					messageRowOf(f).includes("the plane action holds no settings"),
-				);
-			},
-			{
-				width: WIDTH,
-				height: 30,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 60_000 },
-			},
-		);
+		await appOnDecision(state, runner, async (setup, _planeRecord) => {
+			await waitFor(setup, { shows: pullTitle.slice(0, 3) });
+			await pressControl(setup, "decide-completion", { quiet: true });
+			await waitFor(setup, { shows: "Merge pull request" });
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+			await pressControl(setup, "edit-action", { quiet: true });
+			await frameUntil(setup, "the unavailable reason", (f) =>
+				messageRowOf(f).includes("the plane action holds no settings"),
+			);
+		});
 	});
 
 	test("a blocked attempt from an earlier turn does not hold the row the newer turn offers", async () => {
@@ -2343,28 +2336,18 @@ describe("the decision screen's merge", () => {
 		});
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-		const planeRecord = await decisionPlane(state, runner);
-
-		await withApp(
-			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-				// The decision modal re-stands the merge row for the newer turn,
-				// and the earlier block's line does not stand in its place.
-				const frame = await press(
-					setup,
-					"return",
-					"the decision modal",
-					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
-				);
-				expect(frame).not.toContain("the merge was blocked");
-			},
-			{
-				width: WIDTH,
-				height: 30,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 60_000 },
-			},
-		);
+		await appOnDecision(state, runner, async (setup, _planeRecord) => {
+			await waitFor(setup, { shows: pullTitle.slice(0, 3) });
+			// The decision modal re-stands the merge row for the newer turn,
+			// and the earlier block's line does not stand in its place.
+			await pressControl(setup, "decide-completion", { quiet: true });
+			const frame = await frameUntil(
+				setup,
+				"the decision modal",
+				(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+			);
+			expect(frame).not.toContain("the merge was blocked");
+		});
 	});
 
 	test("the operator's confirm passes the Handoff limit the top-up's ask obeys", async () => {
@@ -2384,31 +2367,28 @@ describe("the decision screen's merge", () => {
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const planeRecord = await decisionPlane(state, runner, { maxHandoffsPerTicket: 1 });
-
-		await withApp(
-			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-				await press(
+		await appOnDecision(
+			state,
+			runner,
+			async (setup, _planeRecord) => {
+				await waitFor(setup, { shows: pullTitle.slice(0, 3) });
+				await pressControl(setup, "decide-completion", { quiet: true });
+				await frameUntil(
 					setup,
-					"return",
 					"the decision modal",
 					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
 				);
-				await pressArrow(setup, "down", "the Goto row", () => true);
-				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await pressControl(setup, "select-action", { via: "↓", quiet: true });
+				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
 				// The confirm enters the queue like any start, and the run's
 				// line lands on the Message line past the full count.
-				await press(setup, "return", "the run's line", (f) =>
+				await pressControl(setup, "confirm-action", { quiet: true });
+				await frameUntil(setup, "the run's line", (f) =>
 					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
-			{
-				width: WIDTH,
-				height: 30,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 60_000 },
-			},
+			{ maxHandoffsPerTicket: 1 },
 		);
 
 		// The confirm passed the full count: the run's attempt stands as the
@@ -2418,103 +2398,87 @@ describe("the decision screen's merge", () => {
 		expect(attempt?.decision).toBe("merged");
 	});
 
-	test(
-		"the outcome settles on the list, and the screen fell back at the ask (ADR 0072)",
-		async () => {
-			// A runner that delays the pull request's fresh read, so the window
-			// between the attempt's record and the route's settle stands long
-			// enough for the decision screen to open on it.
-			class SlowReadRunner extends FakeRunner {
-				private readonly delayMs: number;
+	test("the outcome settles on the list, and the screen fell back at the ask (ADR 0072)", async () => {
+		// A runner that delays the pull request's fresh read, so the window
+		// between the attempt's record and the route's settle stands long
+		// enough for the decision screen to open on it.
+		class SlowReadRunner extends FakeRunner {
+			private readonly delayMs: number;
 
-				constructor(delayMs: number) {
-					super();
-					this.delayMs = delayMs;
-				}
-
-				async run(
-					command: string,
-					args: readonly string[],
-					options?: CommandOptions,
-				): Promise<CommandResult> {
-					if (command === "gh" && args.slice(0, 2).join(" ") === "api --hostname") {
-						await new Promise((resolve) => setTimeout(resolve, this.delayMs));
-					}
-					return super.run(command, args, options);
-				}
+			constructor(delayMs: number) {
+				super();
+				this.delayMs = delayMs;
 			}
 
-			const state = planeState();
-			seed(state, "awaiting", mergeRoute());
-			const runner = new SlowReadRunner(1500);
-			runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-			// The run's fresh read finds the pull request open, the merge lands,
-			// and the fire's fresh read finds it merged: the run and the fire
-			// each take one read, in that order.
-			stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
-			stubMerge(runner, 0);
-			const planeRecord = await decisionPlane(state, runner);
+			async run(
+				command: string,
+				args: readonly string[],
+				options?: CommandOptions,
+			): Promise<CommandResult> {
+				if (command === "gh" && args.slice(0, 2).join(" ") === "api --hostname") {
+					await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+				}
+				return super.run(command, args, options);
+			}
+		}
 
-			await withApp(
-				async (setup) => {
-					await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-					// The decision modal: the merge row stands beside Close and Goto.
-					await press(
-						setup,
-						"return",
-						"the decision modal",
-						(f) => f.includes("Decision:") && f.includes("Merge pull request"),
-					);
-					await pressArrow(setup, "down", "the Goto row", () => true);
-					await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
-					// The confirm ended the ticket's cycle in the same write (ADR
-					// 0072): the ticket rests open, the wait stands in the Work
-					// queue, and the Decision screen - an awaiting screen again -
-					// fell back to the list with the ask's line on the Message line.
-					// The ask's line and the fallback are two renders, not one, and the
-					// frame that carries the line alone is quiet, so the wait takes the
-					// absence the assertion reads (issue #304).
-					const fallback = await press(
-						setup,
-						"return",
-						"the ask's line and the fallen-back list",
-						(f) =>
-							messageRowOf(f).includes(`the merge of "${pullTitle}" is in the Work queue`) &&
-							!f.includes("Decision:"),
-					);
-					expect(fallback).not.toContain("Decision:");
-					expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
-					// The attempt stands in the state before the fire's fresh read
-					// answers, and the run's settle waits on that read.
-					const attemptDeadline = Date.now() + 5000;
-					for (;;) {
-						if (state.planeAction.latestPlaneActionAttempt(pullIdentity) !== null) break;
-						if (Date.now() >= attemptDeadline)
-							throw new Error("the attempt did not stand in the state");
-						await new Promise((resolve) => setTimeout(resolve, 20));
-					}
-					// The run settles on the list, the way every other settle does:
-					// the outcome's line stands, and no decision screen stands for
-					// the open ticket.
-					const list = await settle(setup);
-					expect(list).not.toContain("Decision:");
-				},
-				{
-					width: WIDTH,
-					height: 30,
-					plane: planeRecord,
-					loopPolicy: { kind: "polled", intervalMs: 60_000 },
-				},
+		const state = planeState();
+		seed(state, "awaiting", mergeRoute());
+		const runner = new SlowReadRunner(1500);
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		// The run's fresh read finds the pull request open, the merge lands,
+		// and the fire's fresh read finds it merged: the run and the fire
+		// each take one read, in that order.
+		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
+		stubMerge(runner, 0);
+		await appOnDecision(state, runner, async (setup, _planeRecord) => {
+			await waitFor(setup, { shows: pullTitle.slice(0, 3) });
+			// The decision modal: the merge row stands beside Close and Goto.
+			await pressControl(setup, "decide-completion", { quiet: true });
+			await frameUntil(
+				setup,
+				"the decision modal",
+				(f) => f.includes("Decision:") && f.includes("Merge pull request"),
 			);
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+			// The confirm ended the ticket's cycle in the same write (ADR
+			// 0072): the ticket rests open, the wait stands in the Work
+			// queue, and the Decision screen - an awaiting screen again -
+			// fell back to the list with the ask's line on the Message line.
+			// The ask's line and the fallback are two renders, not one, and the
+			// frame that carries the line alone is quiet, so the wait takes the
+			// absence the assertion reads (issue #304).
+			await pressControl(setup, "confirm-action", { quiet: true });
+			const fallback = await frameUntil(
+				setup,
+				"the ask's line and the fallen-back list",
+				(f) =>
+					messageRowOf(f).includes(`the merge of "${pullTitle}" is in the Work queue`) &&
+					!f.includes("Decision:"),
+			);
+			expect(fallback).not.toContain("Decision:");
+			expect(state.ticketWorkCycle.ticketState(pullIdentity)).toBe("open");
+			// The attempt stands in the state before the fire's fresh read
+			// answers, and the run's settle waits on that read.
+			await waitUntil(
+				() => state.planeAction.latestPlaneActionAttempt(pullIdentity) !== null,
+				"the attempt to stand in the state",
+			);
+			// The run settles on the list, the way every other settle does:
+			// the outcome's line stands, and no decision screen stands for
+			// the open ticket.
+			const list = await settle(setup);
+			expect(list).not.toContain("Decision:");
+		});
 
-			// The record stands for the outcome the screen read: the operator's
-			// decision word on the merged outcome.
-			const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
-			expect(attempt?.outcome).toBe("merged");
-			expect(attempt?.decision).toBe("merged");
-		},
-		{ timeout: 20_000 },
-	);
+		// The record stands for the outcome the screen read: the operator's
+		// decision word on the merged outcome.
+		const attempt = state.planeAction.latestPlaneActionAttempt(pullIdentity);
+		expect(attempt?.outcome).toBe("merged");
+		expect(attempt?.decision).toBe("merged");
+	});
 
 	test("the outcome stands on the Message line, and the merged row leaves the list", async () => {
 		const state = planeState();
@@ -2526,39 +2490,31 @@ describe("the decision screen's merge", () => {
 		// each take one read, in that order.
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
-		const planeRecord = await decisionPlane(state, runner);
-
-		await withApp(
-			async (setup) => {
-				await awaitFrame(setup, (f) => f.includes(pullTitle.slice(0, 3)), "the row");
-				// The decision modal: the merge row stands beside Close and Goto.
-				await press(
-					setup,
-					"return",
-					"the decision modal",
-					(f) => f.includes("Decision:") && f.includes("Merge pull request"),
-				);
-				await pressArrow(setup, "down", "the Goto row", () => true);
-				await pressArrow(setup, "down", "the merge row's focus", mergeRowFocused);
-				// The confirm closes the modal and the run settles behind it:
-				// the run's line stands on the Message line, and the merged
-				// ticket's row leaves the list the moment the run settles.
-				const frame = await press(setup, "return", "the run's line", (f) =>
-					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
-				);
-				// The run's line alone names the ticket still: the row and the
-				// detail pane both left it.
-				const naming = rowsOf(frame).filter((row) => row.includes(pullTitle.slice(0, 3)));
-				expect(naming).toHaveLength(1);
-				expect(naming[0]).toContain("ran from the Work queue");
-			},
-			{
-				width: WIDTH,
-				height: 30,
-				plane: planeRecord,
-				loopPolicy: { kind: "polled", intervalMs: 60_000 },
-			},
-		);
+		await appOnDecision(state, runner, async (setup, _planeRecord) => {
+			await waitFor(setup, { shows: pullTitle.slice(0, 3) });
+			// The decision modal: the merge row stands beside Close and Goto.
+			await pressControl(setup, "decide-completion", { quiet: true });
+			await frameUntil(
+				setup,
+				"the decision modal",
+				(f) => f.includes("Decision:") && f.includes("Merge pull request"),
+			);
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await pressControl(setup, "select-action", { via: "↓", quiet: true });
+			await frameUntil(setup, "the merge row's focus", mergeRowFocused);
+			// The confirm closes the modal and the run settles behind it:
+			// the run's line stands on the Message line, and the merged
+			// ticket's row leaves the list the moment the run settles.
+			await pressControl(setup, "confirm-action", { quiet: true });
+			const frame = await frameUntil(setup, "the run's line", (f) =>
+				messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
+			);
+			// The run's line alone names the ticket still: the row and the
+			// detail pane both left it.
+			const naming = rowsOf(frame).filter((row) => row.includes(pullTitle.slice(0, 3)));
+			expect(naming).toHaveLength(1);
+			expect(naming[0]).toContain("ran from the Work queue");
+		});
 
 		// The record stands for the outcome the line read: the operator's
 		// decision word on the merged outcome, and the ticket's membership
@@ -2620,10 +2576,8 @@ describe("the auto top-up merge", () => {
 			async (setup) => {
 				// The open walk's add and the run's line land on the Message
 				// line; the run's line is the one that settles the wait.
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
-					"the run's line",
+				await frameUntil(setup, "the run's line", (f) =>
+					messageRowOf(f).includes(`the merge of "${pullTitle}" ran from the Work queue`),
 				);
 			},
 			(runner) => {
@@ -2664,10 +2618,10 @@ describe("the auto top-up merge", () => {
 					// handoff's working line, which the converged position asks
 					// on the next cycle, so the wait reads the attempt from the
 					// state the line would state.
-					await awaitFrame(
+					await frameUntil(
 						setup,
-						() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
 						"the block's attempt",
+						() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
 					);
 				},
 				(runner) => {
@@ -2722,10 +2676,10 @@ describe("the auto top-up merge", () => {
 		let heldRunner: FakeRunner;
 		const { state, runner } = await topUpApp(
 			async (setup) => {
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
 					"the block's attempt",
+					() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "blocked",
 				);
 				// The failed write converged nothing (ADR 0079): the labels the
 				// source last fetched still wear the merge position, and the
@@ -2751,12 +2705,12 @@ describe("the auto top-up merge", () => {
 					pullsSource,
 					pullSuccess(new Date(Date.now() + 60_000).toISOString()),
 				);
-				await awaitFrame(
+				await frameUntil(
 					setup,
+					"the re-ask's merge",
 					() =>
 						heldRunner.commands().filter((command) => command.startsWith("gh pr merge ")).length >=
 						2,
-					"the re-ask's merge",
 				);
 			},
 			(runner) => {
@@ -2831,10 +2785,10 @@ describe("the auto top-up merge", () => {
 	test("the queue pause holds the merge item standing, and the row and detail name the action", async () => {
 		const { state } = await topUpApp(
 			async (setup) => {
-				const frame = await awaitFrame(
+				const frame = await frameUntil(
 					setup,
-					(f) => f.includes("Work") && f.includes("waiting: 1"),
 					"the waiting item's count",
+					(f) => f.includes("Work") && f.includes("waiting: 1"),
 				);
 				// The row carries the merge's word beside the title.
 				const rows = rowsOf(frame);
@@ -2848,11 +2802,7 @@ describe("the auto top-up merge", () => {
 					.slice(boxTop + 1)
 					.findIndex((row) => row.includes(pullTitle.slice(0, 3)));
 				await mouseClick(setup, 2, boxTop + 1 + rowIndex);
-				const detail = await awaitFrame(
-					setup,
-					(f) => f.includes("Task type: merge"),
-					"the item's detail",
-				);
+				const detail = await waitFor(setup, { shows: "Task type: merge" });
 				expect(detail).toContain("Origin: merge");
 				expect(detail).toContain("Method: squash");
 				expect(detail).toContain("The action holds no settings to edit");
@@ -2885,16 +2835,12 @@ describe("the auto top-up merge", () => {
 		// the way the route's wait wears the badge on the position's row.
 		const { state } = await topUpApp(
 			async (setup) => {
-				const frame = await awaitFrame(
-					setup,
-					(f) => {
-						const rows = rowsOf(f);
-						return rows.some(
-							(row) => row.includes(pullTitle.slice(0, 3)) && row.includes("[queued]"),
-						);
-					},
-					"the position's row",
-				);
+				const frame = await frameUntil(setup, "the position's row", (f) => {
+					const rows = rowsOf(f);
+					return rows.some(
+						(row) => row.includes(pullTitle.slice(0, 3)) && row.includes("[queued]"),
+					);
+				});
 				const row = rowsOf(frame).find((row) => row.includes(pullTitle.slice(0, 3))) ?? "";
 				expect(row).toContain("[queued]");
 				expect(row).not.toContain("[open]");
@@ -2961,10 +2907,10 @@ describe("the auto top-up merge", () => {
 					decision: "closed",
 					decidedAt: new Date().toISOString(),
 				});
-				await awaitFrame(
+				await frameUntil(
 					setup,
-					() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "merged",
 					"the merge run",
+					() => held.planeAction.latestPlaneActionAttempt(pullIdentity)?.outcome === "merged",
 				);
 			},
 			(runner) => {
