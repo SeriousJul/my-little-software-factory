@@ -1883,9 +1883,10 @@ always held it. A skipped required check is not a pass.
 
 Status: the automated checks pass for the rig and every frame surface it
 owns. The frame suites that stood on raw keys now run the rig's controls
-and wait on its named outcomes, and the owned list in the architecture
-check, which grew one surface at a time and never shrinks, is the record
-of what has landed. Its head names every frame suite that drives input.
+and wait on its named outcomes, and the architecture check reads every
+suite that imports the rig, the owned list standing beneath the discovery
+as the floor that never shrinks: a surface that leaves the rig's world
+fails the floor and is migrated again, not removed from the list.
 
 What was measured: the frame rig in `test/app-harness.ts` now resolves a
 control to the key the Action bar painted for it and owns the input end to
@@ -2421,3 +2422,76 @@ label span, and the resolution fails loudly on the hint it cannot split. The
 plane's own themes keep the tested pairs, and the inherited-theme walks
 stand on that limit. The terminal walks and the screen-reader
 path stand as they do for the rest of this record: not walked, not verified.
+
+The rework of this pull stands two statements of the delivered rule on the
+sources they read from, and it moves the last of the suites' own raw input
+off the rig's retired surface:
+
+- The rig's copy of the catalogue's key display names stands pinned
+  against the catalogue's own display function, `keyName`: the function
+  takes the one production line this round moves, the `export` beside it,
+  the second such line after the `omitFromOtherSection` export, and the
+  rig's own suite walks the two functions key by key over the keys the
+  rig's table holds and the keys the catalogue names in any mode, failing
+  on the empty read with every drifted key named. The pin's red edge is
+  measured: a re-label of `pageup` in the catalogue's display table fails
+  the pin and names the key, and the table is restored byte-identical
+  after the run.
+- The static architecture check discovers its scope from the rig's own
+  import: every test file that imports the rig stands under the input and
+  wait rules, owned or not, and the owned list stands beneath the discovery
+  as the pinned floor it never shrinks: a surface on the list that stops
+  importing the rig fails the floor and is migrated again, not removed.
+  The discovery reads the import at every relative depth the tree holds,
+  and it pins its positive and negative edges beside itself, the positive
+  edges spelled in split parts so the check's own source holds no match
+  for the discovery it applies and the campaign's walk counts no check as
+  a suite. The two suites that imported the rig's input side without
+  owning a plane surface leave it: the harness's own contract suite takes
+  the rig's named frame check beside its stored and compound predicates
+  and the `shows` outcome for the one it named by containment, its per-wait
+  five second budgets standing below the rig's one deadline gone, and the
+  region's component suite stops importing the rig and stands on the
+  renderer's own seam beside the component it defines, the harness's keys
+  bound in the harness and its feed the renderer's raw feeder, the shape
+  the executable-boundary tests keep: its frame wait stands on the rig's
+  wait beside it, the same poll, the same passive flush on every poll, and
+  the same one deadline, and its flat read stands for the frame's own
+  whitespace, the frame the harness paints wearing no box border.
+- The closed set the outcome check's error lists stands whole: `immediate`,
+  which the check accepted, is named in it.
+
+The walk at the head that lands this rework, `e28652ce`, stands at no
+press-family call, no hand operation, no raw wait, and no handler probe on
+the suites it reads, 212 inline containment predicates, no reach to the
+renderer's input, and 20 helper copies over the rig's 96 exports: the raw
+waits fall from the 23 the landed head above stood, the harness's contract
+suite's five raw waits and the region's component suite's eighteen leaving
+with the two migrations, the renderer's reaches fall from the 18 the
+region's component suite stood alone, and the inline containment falls from
+the 213 on the harness's contract suite's one named-containment wait
+standing on the `shows` outcome. The export count grows from the 95 above
+on the rig's one new read, the display drift the rig's own suite pins. The
+test-tree duplication clone count stands at 168 at that head, the baseline
+it holds, unchanged by the rework, so the Quality baseline is rewritten
+not.
+
+The scoped run over the six suites this rework touches - the rig's own,
+the architecture check, the harness's contract, the region's component
+suite, the Seeded plane check, and the Control catalogue's own - ran its
+114 tests in 63.87 seconds, 0 fail, at that head (this machine, 32 cores,
+60 GB RAM, 2 GB available, load 1.73 at its run, one dev process standing,
+no other test run standing). The push gate's full suite on the tree merged
+with `origin/main` ran its 3,456 tests on this machine at that same head:
+3,455 pass, 1 fail, in 130.16 s, over 156 files and 17,391 `expect()`
+calls. The failing test, `repository-select-panel > a marking of two runs
+the queue, one confirmation per row, in list order`, missed the rig's 20 s
+deadline at 20,581 ms, and it ran 14 of 14 alone in 4.57 s on the same
+tree: it is named as a load flake per the triage rule, in the shape the
+record's #317 line names, beside the same file's fail and solo pass at the
+landed head above. No wait in the run's passes that stands on this rework
+reaches the deadline, and the class-level CI item stays open as the
+record's #398 line states: the loaded-runner evidence it names is
+unmeasured here, and no loaded runner of this rework's own stands on file.
+The screen-reader path and the terminal walks stand as for the rest of the
+record: not walked, not verified.
