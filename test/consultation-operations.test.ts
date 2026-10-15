@@ -940,6 +940,49 @@ describe("Consultation operations: launch", () => {
 	});
 });
 
+describe("Consultation operations: the run's stop", () => {
+	/**
+	 * The teardown ordering the app's stop runs: the plane's stop lands before
+	 * the state's close, so an opening that stands mid-flight at the stop runs
+	 * its remaining commands and settles nothing into the record the close
+	 * takes down (issue #398, the rule the Handoff dispatch's stop already
+	 * keeps). Before the stop existed, the flight's first settlement after the
+	 * close wrote into a closed database and named it out of the test.
+	 */
+	test("a stop over an opening settles nothing into the record the close takes down", async () => {
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
+		const id = uid("b");
+		const consultation = seed(fixture.state, fixture, id);
+		// The start is the command the opening stands on at the stop: the hold
+		// keeps it in flight, so the flight outlives the close the way a loaded
+		// runner made it outlive one.
+		runner.holdWhile((command) => command.startsWith("herdr agent start"));
+		const harness = makeHarness(fixture, runner);
+
+		const flight = harness.operations.launch(consultation);
+		await until(
+			() => runner.attempts.some((command) => command.startsWith("herdr agent start")),
+			"the held start",
+		);
+		harness.operations.stop();
+		// The stop settles nothing on its own: the record stands where the
+		// in-flight start left it.
+		expect(current(fixture.state, id)).toMatchObject({ state: "opening", paneId: null });
+		// The owner's ordering: the stop, then the state's close behind it.
+		fixture.state.close();
+		runner.release();
+		await flight;
+		// The flight ran its remaining commands and settled no fact: a
+		// settlement that landed after the close would have rejected the
+		// flight with the closed database's named error instead of settling.
+		expect(harness.changes).toBe(0);
+		expect(
+			runner.commands().filter((command) => command.startsWith("herdr agent prompt")),
+		).toHaveLength(1);
+	});
+});
+
 describe("Consultation operations: live checkout confirmation lifetime", () => {
 	/** A running ticket whose live-worktree handoff occupies the named pane. */
 	function runningTicket(identity: string, paneId: string): Ticket {

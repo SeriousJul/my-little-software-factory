@@ -1516,6 +1516,7 @@ function useAppObservationFields(props: AppProps, prev: AppSessionRefreshStage) 
 			observationRef: prev.observationRef,
 			coordinatorRef: prev.coordinatorRef,
 			handoffDispatchRef: prev.handoffDispatchRef,
+			consultationOperationsRef: prev.consultationOperationsRef,
 		}),
 		[
 			props.state,
@@ -1539,6 +1540,7 @@ function useAppObservationFields(props: AppProps, prev: AppSessionRefreshStage) 
 			prev.observationRef,
 			prev.coordinatorRef,
 			prev.handoffDispatchRef,
+			prev.consultationOperationsRef,
 		],
 	);
 	return { ...prev, observationFields };
@@ -5504,6 +5506,7 @@ interface AppObservationFields {
 	handoffDispatchRef: RefObject<
 		{ state: HandoffDispatchAggregates; dispatch: HandoffDispatch } | undefined
 	>;
+	consultationOperationsRef: RefObject<ConsultationOperations | undefined>;
 }
 
 /** The coordinator's base options: the plane's reads and the report lines. */
@@ -5637,6 +5640,11 @@ function appObservationCoordinator(f: AppObservationFields): (() => void) | unde
 			// state: its run settles asynchronously, so stop it before the
 			// owner closes the state, or the settlement reads a closed database.
 			f.handoffDispatchRef.current?.dispatch.stop();
+			// The Consultation operations settle the same way: an opening that
+			// stands mid-flight at the stop runs its remaining commands but
+			// settles nothing into the record the owner closes beside it
+			// (issue #398).
+			f.consultationOperationsRef.current?.stop();
 		},
 	});
 	if (f.loopPolicy.kind === "held") return undefined;
