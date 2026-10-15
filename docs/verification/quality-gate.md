@@ -1020,12 +1020,15 @@ same probe at 10.05 s.
 ### What the fix holds
 
 - `test/app-harness.ts`: every `awaitFrame` poll flushes before it captures;
-  `closeOverlay` flushes before it snapshots; the key-bus waits flush per poll
-  through the shared `awaitKeyBus` loop. The fixpoint the walk takes is named
-  in the hold's file as `FLUSH_FIXPOINT_ROUNDS` (8): a commit the walk lands
-  queues one flush, and a flush it runs can queue the update it settles, so
-  two rounds settle a commit and its flush, and the bound is a margin over
-  that shape, not a measured depth.
+  the key-bus waits flush per poll through the shared `awaitKeyBus` loop. The
+  close-side flush the fix added to the retired `closeOverlay` stands in the
+  rig's named close operations now: the dead raw input operations, the
+  operation among them, left the rig's interface with ADR 0128's addendum.
+  The fixpoint the walk takes is named in the hold's file as
+  `FLUSH_FIXPOINT_ROUNDS` (8): a commit the walk lands queues one flush, and a
+  flush it runs can queue the update it settles, so two rounds settle a commit
+  and its flush, and the bound is a margin over that shape, not a measured
+  depth.
 - `package.json` / `bun.lock`: `scheduler` as a dev dependency, the same
   0.27.0 the reconciler already resolves.
 - No `src/` change: the app was sound; the waits owed themselves a flush they

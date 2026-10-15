@@ -366,3 +366,34 @@ The pull that lands this rule changes one line of production code: the export
 of `omitFromOtherSection` from the Control catalogue, the catalogue's own
 section-omission read the rig's read applies the way the Action bar does.
 Issue #387 closes with it.
+
+## Addendum: the closed walk stands on the painted bar, and the dead input operations leave the rig
+
+The spec's testing decision names the closed-surface walk over the control
+ids: one test walks every catalogue id the Action bar hints, boots the mode
+that owns it, and asserts the rig resolves it. The delivered walk stands on
+the operator's seam instead: it walks the painted bar of every frame the
+rig's suite stands - the three sections' base and detail frames, the
+consultation's response editor and the Agent interaction input, the Decision
+modal, the action panel, and the Message view - and every mode whose bar the
+rig's suite stands not is stood by the owning surface's suite: the override
+surface, the missing modal, the repository-select modal, the Live view, and
+the Key guide. Those suites press their controls through the rig on their
+own mode's bar, and the resolution reads that bar, so the drift the per-id
+walk would add - a hint the bar paints that the rig resolves to the wrong
+key on a mode the rig's suite stands not - is the drift those presses
+already fail. The per-id walk would also re-couple the rig's suite to the
+catalogue's mode list, the table the campaign removed from the suites, and
+boot the plane's hardest standings, the live cycle and the repository-select
+flow, in the rig's own suite. The delivered walk is the accepted shape, and
+the spec's sentence stands superseded by this addendum.
+
+The dead raw input operations of the old input face leave the rig's
+interface with the pull this addendum lands: the press, arrow, scroll, and
+function key helpers, the hand open, close, and confirm of a panel, guide,
+view, launcher, or surface, and the hand focus and scroll walks have no
+caller anywhere in the repo, and the architecture check reaches every owned
+surface from them, so they go. The module now stands on the named operations, the
+raw `press` and its waits, and the four kept bus reads named above, and the
+statement that the raw input operations go stands true of the module, not
+only of the suites.

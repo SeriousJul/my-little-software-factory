@@ -203,7 +203,7 @@ describe("the repository select panel", () => {
 	 *
 	 * The fixed wait runs what the rig holds before it reads the state it
 	 * waits on: each `awaitFrame` poll flushes before it captures, and
-	 * `closeOverlay` and the key-handler waits flush before they read,
+	 * the rig's named operations flush before their key-bus reads,
 	 * through `flushPassiveNow` in `test/passive-flush-hold.ts`, which
 	 * walks to the fixpoint a commit and its flush need, in the rig's
 	 * own turn, on every poll, hold up or not.

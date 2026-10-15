@@ -2144,14 +2144,16 @@ builder - not input the rig should own. The escape list's named `frameUntil`
 check, which the closed set of outcomes does not reach, is invisible to the
 walk's line-based metric: its arrow and its containment test stand on
 different lines. The test-tree duplication clone count, the Quality audit's
-own metric, stands at 211 at the base head `a5a947dd`, at 197 at the head
-this branch rebases onto - the Quality baseline, which only shrinks, holds
-that count, measured on `d2a380ff` - and at 196 at the head that lands the
-rework above: the branch's own work takes the count down by one, and this
-change rewrites the baseline down to the rework's 196, which the audit then
-holds. At the head that lands the Work queue section above, the count
-measures 195, and this change rewrites the baseline down to that count,
-which the audit then holds. The walk counts in this
+own metric, stands at 211 at the base head `a5a947dd`, and at 197 at the
+head this branch rebases onto, measured on `d2a380ff` - the Quality
+baseline, which only shrinks, holds that count. The count measures 196 at
+the head that lands the rework above, measured on `85c46225`: the branch's
+own work takes the count down by one, and the baseline rewrite down to it
+lands on head `51779392`, which the audit then holds. The count measures
+195 at the head that lands the Work queue section above, measured on
+`49dc1d1a`: the baseline rewrite down to it lands on head `e23d29a5`, the
+head that names the Work queue and the Decision modal migrations, which the
+audit then holds. The walk counts in this
 paragraph re-derive from the committed walk at the named heads: the
 script run at either head prints them, and a head that moves the suites
 re-records them here from the same script.
@@ -2206,6 +2208,21 @@ the count. The inline containment the walk still counts stands on the
 named `frameUntil` checks the walk keeps, and the helper copies it still
 counts are the domain fixtures the named stems reach not.
 
+The rework of this pull removes the dead raw input operations of the
+rig's old input face: the press, arrow, scroll, and function key
+helpers, the hand open, close, and confirm of a panel, guide, view,
+launcher, or surface, and the hand focus and scroll walks, named in ADR
+0128's addendum. No suite calls one, and the architecture check reaches every
+owned surface from them, so the module's interface stands on the named
+operations, the raw `press` and its waits, and the four kept bus reads.
+The walk at the head that lands it stands at the suite counts of the
+rework above - no press-family call, no hand operation, and no handler
+probe on the owned surfaces, 23 raw waits, 500 inline containment
+predicates, 18 reaches to the renderer's input, and 20 helper copies -
+over the rig's 100 exports, against the base head's 79. The test-tree
+duplication clone count stands at 189 at that head, unchanged by the
+removal, so the Quality baseline holds it as is.
+
 The twelve flake issues the ADR lists - #302, #303, #304, #310, #311,
 #312, #314, #316, #318, #323, #326, and #342 - stand closed, issue by
 issue, or merged, pull by pull, by their own fixes at the head this
@@ -2224,10 +2241,14 @@ stands outside the rig's ownership on the owned surfaces, as the walk at
 the head that lands this record prints. The raw waits and the inline
 containment predicates the walk still counts are the named `frameUntil`
 waits and the stable-frame reads no named outcome names - the walk's own
-escape, kept closed. The closed walk still does not boot the mode that
-owns each hinted catalogue id, the shape the spec's walk names: it stands
-on the bar of the frame it walks, and each walk boots the frame the bar
-stands on. No screen reader has read any of the migrated surfaces, and no
+escape, kept closed. The closed walk walks the painted bar of the frames
+it stands, and the mode the spec's walk names - the mode that owns each
+hinted catalogue id, booted by the walk - stands superseded by ADR 0128's
+addendum: the delivered walk is the accepted shape, and every mode whose
+bar the rig's suite stands not - the override surface, the missing modal,
+the repository-select modal, the Live view, and the Key guide - is stood
+by the owning surface's suite, which presses its controls through the rig
+on that bar. No screen reader has read any of the migrated surfaces, and no
 terminal walk has been re-run on the migrated frames, so both stand as
 unverified here as in every other entry of this record. Two gaps the migration met are now closed: the panes' focus
 moves stand in the catalogue as the pane's own controls the bar hints (the
