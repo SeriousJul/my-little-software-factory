@@ -43,6 +43,7 @@ import {
 	rowsOf,
 	settle,
 	WIDTH,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -352,7 +353,7 @@ async function bootGrouped(
 		async (setup) => {
 			sources[0].settle(success(listed));
 			sources[1].settle(success(triageListing()));
-			await frameUntil(setup, "the ticket list", (frame) => frame.includes("❯ Tickets"));
+			await waitFor(setup, { shows: "❯ Tickets" });
 			await body(setup, { state: planeRecord.state, sources });
 		},
 		{
@@ -990,7 +991,7 @@ describe("the Ticket section's Groups", () => {
 				for (const value of ["implement", "review", "parked"]) {
 					const before = setup.captureCharFrame();
 					await mouseClick(setup, 4, rowIndexOf(before, new RegExp(`▾ ${value}`)));
-					await frameUntil(setup, `the ${value} fold`, (f) => f.includes(`▸ ${value}`));
+					await waitFor(setup, { shows: `▸ ${value}` });
 				}
 				const frame = setup.captureCharFrame();
 				expect(ticketRows(frame)).toEqual([]);
@@ -1082,7 +1083,7 @@ describe("the Ticket section's Groups", () => {
 			async (setup) => {
 				issues.settle(success([]));
 				triage.settle(success([]));
-				await frameUntil(setup, "the empty list", (f) => f.includes("no tickets"));
+				await waitFor(setup, { shows: "no tickets" });
 				const frame = await pressUntil(setup, "group-axis", {
 					what: "the repository axis",
 					check: (f) => /Group: repository/.test(actionBarRowOf(f)),
@@ -1110,7 +1111,7 @@ describe("the Ticket section's Groups", () => {
 			async (setup) => {
 				(first.sources[0] as FakeSource).settle(success(tickets()));
 				(first.sources[1] as FakeSource).settle(success(triageListing()));
-				await frameUntil(setup, "the ticket list", (f) => f.includes("❯ Tickets"));
+				await waitFor(setup, { shows: "❯ Tickets" });
 				await pressUntil(setup, "group-axis", {
 					what: "the repository Groups",
 					check: (f) => headers(f).length === 2,
@@ -1155,7 +1156,7 @@ describe("the Ticket section's Groups", () => {
 			async (setup) => {
 				(planeRecord.sources[0] as FakeSource).settle(success(tickets()));
 				(planeRecord.sources[1] as FakeSource).settle(success(triageListing()));
-				await frameUntil(setup, "the ticket list", (f) => f.includes("❯ Tickets"));
+				await waitFor(setup, { shows: "❯ Tickets" });
 				const told = await pressUntil(setup, "group-axis", {
 					what: "the refused write",
 					check: (f) => messageRowOf(f).includes("the grouping axis did not save"),
@@ -1226,7 +1227,7 @@ describe("the Ticket section's Groups", () => {
 				issues.settle(
 					success([issue(1, "Webhook retry", FACTORY, { labels: ["ready-for-agent"] })]),
 				);
-				await frameUntil(setup, "the ticket list", (f) => f.includes("❯ Tickets"));
+				await waitFor(setup, { shows: "❯ Tickets" });
 				// The ladder climbs one axis per press: from the flat list the
 				// first press lands on the repository axis, the second on source.
 				await pressUntil(setup, "group-axis", {
@@ -1257,7 +1258,7 @@ describe("the Ticket section's Groups", () => {
 			});
 			// Fold the billing run.
 			await mouseClick(setup, 4, rowIndexOf(setup.captureCharFrame(), /▾ acme\/billing/));
-			await frameUntil(setup, "the fold", (f) => f.includes("▸ acme/billing"));
+			await waitFor(setup, { shows: "▸ acme/billing" });
 			// A refresh brings a healthy ticket into the folded Group: the fold
 			// the operator made stays shut, and the header's count follows the
 			// rows behind it (story 35).
@@ -1360,7 +1361,7 @@ describe("the Ticket section's Groups", () => {
 				check: (f) => headers(f).length === 2,
 			});
 			await mouseClick(setup, 4, rowIndexOf(setup.captureCharFrame(), /▾ acme\/billing/));
-			await frameUntil(setup, "the fold", (f) => f.includes("▸ acme/billing"));
+			await waitFor(setup, { shows: "▸ acme/billing" });
 			// Leave grouping and return: the fold the operator made stands.
 			await pressUntil(setup, "group-axis", {
 				what: "off grouping",
@@ -1436,7 +1437,7 @@ describe("the Ticket section's Groups", () => {
 				check: (f) => headers(f).length === 2,
 			});
 			await mouseClick(setup, 4, rowIndexOf(setup.captureCharFrame(), /▾ acme\/factory/));
-			await frameUntil(setup, "the fold", (f) => f.includes("▸ acme/factory"));
+			await waitFor(setup, { shows: "▸ acme/factory" });
 			setup.resize(96, 30);
 			const narrow = await settle(setup);
 			setup.resize(WIDTH, 34);
@@ -1726,7 +1727,7 @@ describe("the operator's Group order (ADR 0071)", () => {
 			async (setup) => {
 				(first.sources[0] as FakeSource).settle(success(tickets()));
 				(first.sources[1] as FakeSource).settle(success(triageListing()));
-				await frameUntil(setup, "the ticket list", (f) => f.includes("❯ Tickets"));
+				await waitFor(setup, { shows: "❯ Tickets" });
 				await guideKey(setup, "move-list", "Home", { moved: "▾ acme/billing" });
 				// At this width the bar packs the demote hint off, so the key
 				// rides the rig's named guide key.
@@ -1771,7 +1772,7 @@ describe("the operator's Group order (ADR 0071)", () => {
 			async (setup) => {
 				(planeRecord.sources[0] as FakeSource).settle(success(tickets()));
 				(planeRecord.sources[1] as FakeSource).settle(success(triageListing()));
-				await frameUntil(setup, "the ticket list", (f) => f.includes("❯ Tickets"));
+				await waitFor(setup, { shows: "❯ Tickets" });
 				await guideKey(setup, "move-list", "Home", { moved: "▾ acme/billing" });
 				const told = await guideKey(setup, "group-move-down", "-", {
 					shows: "the group order did not save",

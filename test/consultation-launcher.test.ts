@@ -13,7 +13,7 @@ import { testRender } from "@opentui/react/test-utils";
 
 import { ConsultationLauncher } from "../src/components/consultation-launcher.ts";
 import type { StandingFacts } from "../src/components/controls.ts";
-import { frameText, frameUntil, launchConsultationDraft } from "./app-harness.ts";
+import { frameText, launchConsultationDraft, waitFor } from "./app-harness.ts";
 
 const types = {
 	grill: { agent: "pi", environment: "worktree" as const, template: "/grill {input}" },
@@ -145,9 +145,7 @@ describe("Consultation launcher input", () => {
 			// The draft holds the oversized input, so the route types nothing
 			// into it and runs the visible action on the draft's own value.
 			await launchConsultationDraft(setup, "");
-			const frame = await frameUntil(setup, "the oversized-input refusal", (candidate) =>
-				frameText(candidate).includes(`initial input is ${bytes} UTF-8 bytes`),
-			);
+			const frame = await waitFor(setup, { shows: `initial input is ${bytes} UTF-8 bytes` });
 			expect(frameText(frame)).toContain(`UTF-8 bytes: ${bytes}/65536`);
 			expect(onLaunch).not.toHaveBeenCalled();
 		} finally {

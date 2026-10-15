@@ -16,13 +16,13 @@ import { join } from "node:path";
 import { resolveTheme } from "../src/components/shared/theme.ts";
 import {
 	cellColors,
-	frameUntil,
 	pressControl,
 	rgb,
 	rowsOf,
 	settle,
 	spanColorAt,
 	startingFaceOf,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 
@@ -84,9 +84,7 @@ describe("theme inheritance", () => {
 			await withApp(async (setup) => {
 				// The fallback lands as the boot's info notice (ADR 0118): a fact
 				// the plane met on its own degraded boot, stated without a fault.
-				const frame = await frameUntil(setup, "the fallback notice on the Message line", (f) =>
-					f.includes("Info:"),
-				);
+				const frame = await waitFor(setup, { shows: "Info:" });
 				expect(frame).toContain(`unknown theme name "frobnicate" in herdr's config`);
 				expect(frame).toContain("using the built-in default catppuccin");
 				// The plane paints the fallback theme itself.

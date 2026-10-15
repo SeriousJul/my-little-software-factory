@@ -52,6 +52,7 @@ import {
 	typeText,
 	WIDTH,
 	waitCommands,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -712,9 +713,11 @@ async function settleReverify(src: FakeSource, outcome: FetchOutcome): Promise<v
 async function handoffEnter(
 	setup: AppSetup,
 	what: string,
-	predicate: (frame: string) => boolean,
+	target: string | ((frame: string) => boolean),
 ): Promise<string> {
 	await guideKey(setup, "handoff", "Enter", { quiet: true });
+	const predicate =
+		typeof target === "string" ? (frame: string) => frameText(frame).includes(target) : target;
 	return await frameUntil(setup, what, predicate);
 }
 
@@ -722,9 +725,11 @@ async function handoffEnter(
 async function closeSurface(
 	setup: AppSetup,
 	what: string,
-	predicate: (frame: string) => boolean,
+	target: string | ((frame: string) => boolean),
 ): Promise<string> {
 	await guideKey(setup, "cancel-action", "Esc", { quiet: true });
+	const predicate =
+		typeof target === "string" ? (frame: string) => !frameText(frame).includes(target) : target;
 	return await frameUntil(setup, what, predicate);
 }
 
@@ -754,15 +759,15 @@ describe("the mode cell and the a key", () => {
 			app,
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
+				await waitFor(setup, { shows: "● manual 0/2" });
 				await toggleAutoHandoff(setup, { quiet: true });
-				await frameUntil(setup, "auto on", (f) => f.includes("○ auto 0/2"));
+				await waitFor(setup, { shows: "○ auto 0/2" });
 				// The flip is factory state (ADR 0036): it is on the state file the
 				// moment the key lands, and the toggle never writes the config file.
 				expect(app.state.handoff.autoHandoffMode()).toBe(true);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 				await toggleAutoHandoff(setup, { quiet: true });
-				await frameUntil(setup, "auto off", (f) => f.includes("● manual 0/2"));
+				await waitFor(setup, { shows: "● manual 0/2" });
 				expect(app.state.handoff.autoHandoffMode()).toBe(false);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 			},
@@ -778,9 +783,9 @@ describe("the mode cell and the a key", () => {
 			app,
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
+				await waitFor(setup, { shows: "● manual 0/2" });
 				await toggleAutoHandoff(setup, { quiet: true });
-				await frameUntil(setup, "auto on", (f) => f.includes("○ auto 0/2"));
+				await waitFor(setup, { shows: "○ auto 0/2" });
 			},
 			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
@@ -801,9 +806,7 @@ describe("the mode cell and the a key", () => {
 		await withApp(
 			async (setup) => {
 				src.settle(success);
-				const frame = await frameUntil(setup, "the restarted mode cell", (f) =>
-					f.includes("○ auto 0/2"),
-				);
+				const frame = await waitFor(setup, { shows: "○ auto 0/2" });
 				expect(frame).not.toContain("● manual");
 			},
 			{ width: WIDTH, height: HEIGHT, plane: restarted, loopPolicy: LOOP_60S },
@@ -818,7 +821,7 @@ describe("the mode cell and the a key", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
+				const frame = await waitFor(setup, { shows: "● manual 0/2" });
 				expect(frame).not.toContain("○ auto");
 				expect(app.state.handoff.autoHandoffMode()).toBe(false);
 			},
@@ -839,11 +842,11 @@ describe("the mode cell and the a key", () => {
 			app,
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
+				await waitFor(setup, { shows: "● manual 0/2" });
 				await toggleAutoHandoff(setup, { quiet: true });
-				await frameUntil(setup, "auto on", (f) => f.includes("○ auto 0/2"));
+				await waitFor(setup, { shows: "○ auto 0/2" });
 				await toggleAutoHandoff(setup, { quiet: true });
-				await frameUntil(setup, "auto off", (f) => f.includes("● manual 0/2"));
+				await waitFor(setup, { shows: "● manual 0/2" });
 				// One line per key, in the order the keys landed, each at the `info` level
 				// the configuration reference states for it. The `mode:` prefix is the
 				// record's family for the facts the operator sets by key. The cycle's own hold
@@ -866,7 +869,7 @@ describe("the mode cell and the a key", () => {
 			app,
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
+				await waitFor(setup, { shows: "● manual 0/2" });
 				// The real write path, made to fail: the mode table is gone from the
 				// state file, so the plane's next write to it is refused by SQLite.
 				// The busy timeout covers the refresh write still in flight.
@@ -875,7 +878,7 @@ describe("the mode cell and the a key", () => {
 				damage.exec("DROP TABLE auto_handoff_mode;");
 				damage.close();
 				await toggleAutoHandoff(setup, { quiet: true });
-				await frameUntil(setup, "auto on", (f) => f.includes("○ auto 0/2"));
+				await waitFor(setup, { shows: "○ auto 0/2" });
 				// The in-session flip stands, and the failure names the state file
 				// the plane could not write and says how long the flip lives.
 				const frame = await settle(setup);
@@ -911,9 +914,7 @@ describe("the mode cell and the a key", () => {
 			app,
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				const frame = await frameUntil(setup, "the unlimited mode cell", (f) =>
-					f.includes("● manual 1"),
-				);
+				const frame = await waitFor(setup, { shows: "● manual 1" });
 				// The count stands without a limit after it: no `/0` anywhere.
 				expect(frame).toContain("● manual 1");
 				expect(frame).not.toContain("/0");
@@ -966,7 +967,7 @@ describe("the mode cell and the a key", () => {
 				app.src.settle(success);
 				// The ticket seat and the Consultation seat fill the limit of
 				// two in one number on the mode cell.
-				await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 2/2"));
+				await waitFor(setup, { shows: "● manual 2/2" });
 			},
 			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
@@ -1020,14 +1021,14 @@ describe("the failure markers", () => {
 				expect(ticketRow(frame)).toContain("missing");
 
 				// Enter on the in-flight missing ticket opens the missing modal.
-				await handoffEnter(setup, "the missing modal", (f) => f.includes("Missing:"));
+				await handoffEnter(setup, "the missing modal", "Missing:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Restart");
 				expect(panel).toContain("Abandon");
 
 				// Abandon is the last action: one down, confirm.
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await waitFor(setup, { shows: "❯ Abandon" });
 				console.log(
 					"ABANDON-SEL",
 					rowsOf(setup.captureCharFrame()).slice(2, 12).join(" | ").slice(0, 500),
@@ -1060,7 +1061,7 @@ describe("the failure markers", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
-				await handoffEnter(setup, "the Missing modal", (f) => f.includes("Missing:"));
+				await handoffEnter(setup, "the Missing modal", "Missing:");
 				const modal = frameText(await settle(setup));
 				expect(modal).toContain("Restart");
 				expect(modal).toContain("same task type, same workspace");
@@ -1093,9 +1094,9 @@ describe("the failure markers", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
-				await handoffEnter(setup, "the Missing modal", (f) => f.includes("Missing:"));
+				await handoffEnter(setup, "the Missing modal", "Missing:");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await waitFor(setup, { shows: "❯ Abandon" });
 				await handoffEnter(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
@@ -1134,13 +1135,11 @@ describe("the failure markers", () => {
 				await frameUntil(setup, "the blocked badge", (f) => ticketRow(f).includes("blocked"));
 				// Enter on the blocked ticket opens the Live view: the Goto is
 				// one confirm away, and nothing focuses before it.
-				await handoffEnter(setup, "the Live view", (f) =>
-					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await handoffEnter(setup, "the Live view", `Live: ${DEFAULT_TICKET_TITLE}`);
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent focus");
 				// The stream shows the pane output under the ticket's context,
 				// and the blocked status stands on the context line.
-				await frameUntil(setup, "the stream", (f) => f.includes("the agent is waiting on a build"));
+				await waitFor(setup, { shows: "the agent is waiting on a build" });
 				expect(frameText(setup.captureCharFrame())).toContain("acme/factory · implement · pi");
 				// The pop-in fades in for a little while, so wait it out before
 				// reading the painted colors: mid-fade they are blended.
@@ -1148,7 +1147,7 @@ describe("the failure markers", () => {
 				expect(spanColors(setup, "blocked")).toContainEqual(rgb(roleColor("yellow")));
 				// Enter confirms the Goto: the focus runs, the view closes, and
 				// the ticket stays in flight with the blocked badge standing.
-				await handoffEnter(setup, "the focus", (f) => f.includes("focused the agent"));
+				await handoffEnter(setup, "the focus", "focused the agent");
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(ticketRow(await settle(setup))).toContain("blocked");
@@ -1167,12 +1166,12 @@ describe("the failure markers", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
-				await handoffEnter(setup, "the missing modal", (f) => f.includes("Missing:"));
+				await handoffEnter(setup, "the missing modal", "Missing:");
 				// The panel key handler subscribes in an effect that flushes after
 				// the commit; a settled frame proves the panel is open and ready.
 				await settle(setup);
 				// Esc cancels: nothing runs, no decision lands.
-				await closeSurface(setup, "the panel to close", (f) => !f.includes("Missing:"));
+				await closeSurface(setup, "the panel to close", "Missing:");
 				// The ticket is still in flight with its missing agent.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(ticketRow(await settle(setup))).toContain("missing");
@@ -1258,9 +1257,7 @@ describe("the Ticket Close key", () => {
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				const before = app.runner.commands();
 				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
-				const opened = await frameUntil(setup, "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				const opened = await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				const body = frameText(opened);
 				// The first line names who is alive - here, the fact the last
 				// observation saw: herdr no longer lists the pane the handoff
@@ -1281,7 +1278,7 @@ describe("the Ticket Close key", () => {
 				const cancelled = await closeSurface(
 					setup,
 					"the base view",
-					(f) => !f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
+					`Close: ${DEFAULT_TICKET_TITLE}`,
 				);
 				await settle(setup);
 				// Cancel is the way out with nothing changed: the ticket, its
@@ -1320,9 +1317,7 @@ describe("the Ticket Close key", () => {
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				await guideKey(setup, "detail", "l", { quiet: true });
 				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
-				const opened = await frameUntil(setup, "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				const opened = await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				expect(frameText(opened)).toContain(
 					"Close removes the worktree checkout; a dirty checkout stays as a leftover.",
 				);
@@ -1346,9 +1341,7 @@ describe("the Ticket Close key", () => {
 				// with no Agent to stop, and the close is the way out of it.
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
-				const opened = await frameUntil(setup, "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				const opened = await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				const body = frameText(opened);
 				expect(body).toContain(
 					"Close closes the Agent's herdr tab, and keeps the checkout and the workspace.",
@@ -1485,9 +1478,7 @@ describe("the Ticket Close key", () => {
 				// with no Agent to stop, and the close is the way out of it.
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
-				await frameUntil(setup, "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
 				const frame = await frameUntil(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				// The cycle ended and the ticket is open with its next number, and
@@ -1531,9 +1522,7 @@ describe("the Ticket Close key", () => {
 				// with no Agent to stop, and the close is the way out of it.
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
 				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
-				await frameUntil(setup, "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				// The dialog warned about this outcome before the answer was given.
 				expect(frameText(setup.captureCharFrame())).toContain(
 					"a dirty checkout stays as a leftover",
@@ -1582,9 +1571,7 @@ describe("the Ticket Close key", () => {
 					detailPaneText(f).includes("[running]"),
 				);
 				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
-				await frameUntil(setup, "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				// The Agent dies while the dialog stands: the world stops holding it,
 				// and the next poll's list no longer reports it. Auto mode ends the
 				// missing cycle at the handoff limit, so the ticket returns to open
@@ -1622,9 +1609,7 @@ describe("the Ticket Close key", () => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
-				const opened = await frameUntil(setup, "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				const opened = await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				expect(frameText(opened)).toContain("The turn has settled, and no Agent works.");
 				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");
 				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
@@ -1683,7 +1668,7 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("The turn is done.");
 				expect(panel).toContain("Handoff: review");
@@ -1697,14 +1682,9 @@ describe("the decision modal", () => {
 
 				// Close is the default; the workflow handoff is the last row: down twice.
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await handoffEnter(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				// The prompt carried the last captured message, and the
 				// settled agent's tab was closed once the new agent started.
@@ -1744,7 +1724,7 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("no linked pull request was found for the ticket");
 				// No position: no handoff row stands.
@@ -1772,7 +1752,7 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Handoff: review");
 				expect(panel).toContain("the Next step is held: the position no longer offers the task");
@@ -1804,7 +1784,7 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(landed);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Handoff: review");
 				expect(panel).toContain("the Next step is held: the position is at the handoff limit");
@@ -1834,7 +1814,7 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(landed);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Handoff: review");
 				expect(panel).not.toContain("the Next step is held");
@@ -1870,7 +1850,7 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain(
 					"no transition branch held: the pull request carries no review score",
@@ -1880,12 +1860,9 @@ describe("the decision modal", () => {
 
 				// Close is the default, Goto the second row, Re-fire the third.
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the re-fire row", (f) => frameText(f).includes("❯ Re-fire"));
-				await handoffEnter(setup, "the re-fire lands", (f) =>
-					frameText(f).includes("Handoff: review"),
-				);
+				await handoffEnter(setup, "the re-fire lands", "Handoff: review");
 				const after = frameText(await settle(setup));
 				// The fact lines stand on the re-fired outcome, the Re-fire row
 				// stands down, and the Message line reports the landing. The fact
@@ -1940,7 +1917,7 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("label write failed: gh pr edit #12 failed");
 				// The write did not complete: the Re-fire row stands on it too.
@@ -2035,7 +2012,7 @@ describe("the decision modal", () => {
 						"the pull request to leave its source",
 						() => app.state.sourceFact.stillListed(pullIdentity) === false,
 					);
-					await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+					await handoffEnter(setup, "the decision modal", "Decision:");
 					const panel = frameText(await settle(setup));
 					// The position's ticket is in no list: the handoff row
 					// stands withdrawn, and the fact line takes its place.
@@ -2073,7 +2050,7 @@ describe("the decision modal", () => {
 					await frameUntil(setup, "the pull request to list", () =>
 						app.state.sourceFact.stillListed(pullIdentity),
 					);
-					await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+					await handoffEnter(setup, "the decision modal", "Decision:");
 					const panel = frameText(await settle(setup));
 					expect(panel).toContain("Handoff: review");
 					expect(panel).not.toContain("no handoff stands");
@@ -2102,7 +2079,7 @@ describe("the decision modal", () => {
 					await frameUntil(setup, "the awaiting ticket", (f) =>
 						ticketRow(f).includes("[awaiting]"),
 					);
-					await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+					await handoffEnter(setup, "the decision modal", "Decision:");
 					// The row stands while the pull request still lists: the
 					// refresh is in flight, and the state lists it.
 					const before = frameText(await settle(setup));
@@ -2142,16 +2119,11 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await handoffEnter(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 				// The name holder is gone with its predecessor tab. It is not a
 				// leftover fact, and the row must not carry a false marker.
@@ -2186,16 +2158,11 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision panel", "Decision:");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await handoffEnter(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				const start = app.runner
 					.commands()
@@ -2236,16 +2203,11 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision panel", "Decision:");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await handoffEnter(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				const start = app.runner
 					.commands()
@@ -2296,23 +2258,21 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				// The first row ends the cycle: it has no Handoff settings to
 				// edit, so e there opens nothing.
 				await guideKey(setup, "override", "e", { quiet: true });
-				await frameUntil(setup, "the decision modal to hold", (f) => f.includes("Decision:"));
+				await waitFor(setup, { shows: "Decision:" });
 				expect(frameText(await settle(setup))).not.toContain("Override");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
+				await waitFor(setup, { shows: "❯ Handoff: review" });
 
 				// e opens the panel on the choice the edge resolved: the pinned
 				// pi agent, and the target profile's model and context window.
 				await guideKey(setup, "override", "e", { quiet: true });
-				await frameUntil(setup, "the route override panel", (f) => f.includes("Override"));
+				await waitFor(setup, { shows: "Override" });
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Agent pi");
 				expect(panel).toContain("Model review-model");
@@ -2323,23 +2283,18 @@ describe("the decision modal", () => {
 
 				// The operator replaces the resolved model for this one handoff.
 				await guideKey(setup, "move-list", "↓", { quiet: true });
-				await frameUntil(setup, "the environment row", (f) => f.includes("❯ Environment"));
+				await waitFor(setup, { shows: "❯ Environment" });
 				await guideKey(setup, "move-list", "↓", { quiet: true });
-				await frameUntil(setup, "the task type row", (f) => f.includes("❯ Task type"));
+				await waitFor(setup, { shows: "❯ Task type" });
 				await guideKey(setup, "move-list", "↓", { quiet: true });
-				await frameUntil(setup, "the model row", (f) => f.includes("❯ Model"));
+				await waitFor(setup, { shows: "❯ Model" });
 				// The row's input takes focus on its own render pass: let that
 				// land, and the frame settle, before the edit keys go in.
 				await settle(setup);
 				fieldKey(setup, "home");
 				for (const _ of "review-model") fieldKey(setup, "delete");
 				await typeText(setup, "one-shot-model");
-				await frameUntil(setup, "the typed model", (f) =>
-					frameText(f).includes("Model one-shot-model"),
-				);
-				await handoffEnter(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				// The override is the last writer: the agent started on the
 				// operator's model, not the profile's. The context window the
@@ -2397,15 +2352,13 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
+				await waitFor(setup, { shows: "❯ Handoff: review" });
 				await guideKey(setup, "override", "e", { quiet: true });
-				await frameUntil(setup, "the route override panel", (f) => f.includes("Override"));
+				await waitFor(setup, { shows: "Override" });
 				const opened = frameText(await settle(setup));
 				// The panel starts on the route the edge resolved: its pinned Agent,
 				// and the target profile's Model.
@@ -2413,21 +2366,19 @@ describe("the decision modal", () => {
 				expect(opened).toContain("Model review-model");
 
 				await guideKey(setup, "move-list", "↓", { quiet: true });
-				await frameUntil(setup, "the environment row", (f) => f.includes("❯ Environment"));
+				await waitFor(setup, { shows: "❯ Environment" });
 				await guideKey(setup, "move-list", "↓", { quiet: true });
-				await frameUntil(setup, "the task type row", (f) => f.includes("❯ Task type"));
+				await waitFor(setup, { shows: "❯ Task type" });
 				// Left from `review` lands on `fix`, whose profile names its own
 				// Agent and Model. Both rows are untouched, so both follow it, and
 				// the edge's pin is gone with the edge's target.
 				await guideKey(setup, "cycle-choice", "←", { quiet: true });
-				await frameUntil(setup, "the fix task type", (f) => frameText(f).includes("Task type fix"));
+				await waitFor(setup, { shows: "Task type fix" });
 				const moved = frameText(await settle(setup));
 				expect(moved).toContain("Agent pi");
 				expect(moved).toContain("Model fix-model");
 
-				await handoffEnter(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: fix"),
-				);
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: fix");
 				const start = app.runner
 					.commands()
 					.find((command) => command.startsWith("herdr agent start"));
@@ -2450,15 +2401,13 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
+				await waitFor(setup, { shows: "❯ Handoff: review" });
 				await guideKey(setup, "override", "e", { quiet: true });
-				await frameUntil(setup, "the route override panel", (f) => f.includes("Override"));
+				await waitFor(setup, { shows: "Override" });
 				await settle(setup);
 				// Esc drops the edit and returns to the decision still being made.
 				const back = await closeSurface(
@@ -2482,9 +2431,7 @@ describe("the decision modal", () => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await guideKey(setup, "override", "e", { quiet: true });
-				const frame = await frameUntil(setup, "the hint on the status line", (f) =>
-					frameText(f).includes("press Enter, then e on a Handoff row"),
-				);
+				const frame = await waitFor(setup, { shows: "press Enter, then e on a Handoff row" });
 				// The bar carries the e Override hint with its reason; the panel's
 				// box title is the open signal.
 				expect(frame).not.toContain("┌─Override");
@@ -2514,7 +2461,7 @@ describe("the decision modal", () => {
 				await frameUntil(setup, "the awaiting ticket", (frame) =>
 					ticketRow(frame).includes("[awaiting]"),
 				);
-				await handoffEnter(setup, "the decision modal", (frame) => frame.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				expect(frameText(await settle(setup))).toContain("Handoff: review agent codex");
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: LOOP_60S },
@@ -2553,16 +2500,11 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision panel", "Decision:");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await handoffEnter(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				const start = app.runner
 					.commands()
@@ -2603,7 +2545,7 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = frameText(await settle(setup));
 				// One position, one row: the facts offer review, so the modal
 				// shows the route once, with the pinning in its detail.
@@ -2612,14 +2554,9 @@ describe("the decision modal", () => {
 
 				// The route row is the last one: down twice, confirm.
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the route row", (f) =>
-					frameText(f).includes("❯ Handoff: review agent codex"),
-				);
-				await handoffEnter(setup, "the routed handoff", (f) =>
-					f.includes("Handoff task type: review"),
-				);
+				await handoffEnter(setup, "the routed handoff", "Handoff task type: review");
 
 				// The handoff ran with the transition's pinned agent, and the
 				// route's decision landed on the settled turn's trace when the
@@ -2653,14 +2590,11 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
-				await handoffEnter(setup, "the failed route", (f) => f.includes("the workspace is gone"));
+				await handoffEnter(setup, "the failed route", "the workspace is gone");
 
 				// The handoff never started: the ask ended the cycle in the
 				// same write that landed the decision (ADR 0064, ADR 0072), so
@@ -2696,10 +2630,10 @@ describe("the decision modal", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				// Goto is the second row: one down, confirm.
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
 				await frameUntil(setup, "the focus", () =>
 					app.runner.commands().includes("herdr agent focus pane-1"),
@@ -2771,7 +2705,7 @@ describe("the decision modal", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const panel = await settle(setup);
 				const text = frameText(panel);
 				// The near-fullscreen modal gives the terminal's last two rows to
@@ -2811,9 +2745,9 @@ describe("the decision modal", () => {
 
 				// up and down move the action row.
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "move-list", "↑", { quiet: true });
-				await frameUntil(setup, "back to close", (f) => frameText(f).includes("❯ Close"));
+				await waitFor(setup, { shows: "❯ Close" });
 			},
 			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
 		);
@@ -2826,12 +2760,12 @@ describe("the decision modal", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				// The panel key handler subscribes in an effect that flushes after
 				// the commit; a settled frame proves the panel is open and ready.
 				await settle(setup);
 				// Esc cancels: nothing runs, no decision lands.
-				await closeSurface(setup, "the panel to close", (f) => !f.includes("Decision:"));
+				await closeSurface(setup, "the panel to close", "Decision:");
 				// The ticket is still awaiting, and the turn is still pending.
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
@@ -2862,8 +2796,7 @@ describe("the decision modal", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await guideKey(setup, "handoff", "Enter", { quiet: true });
-				await frameUntil(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				const modal = frameText(await settle(setup));
 				// The border names the ticket, and the context line names the
 				// repository, the task type, the agent, and the completion time.
@@ -2910,7 +2843,7 @@ describe("the decision modal", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await settle(setup);
 
 				// The modal opens at the bottom, where the agent's conclusion is.
@@ -2930,7 +2863,7 @@ describe("the decision modal", () => {
 				);
 				// pageup pages back up, out of the conclusion.
 				await pageKey(setup, "pageup", { quiet: true });
-				await frameUntil(setup, "a page up", (f) => !f.includes("log 040"));
+				await waitFor(setup, { hides: "log 040" });
 				// pagedown pages back down to the bottom.
 				await pageKey(setup, "pagedown", { quiet: true });
 				await frameUntil(
@@ -2955,9 +2888,7 @@ describe("the herdr-unreachable line", () => {
 			app,
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await frameUntil(setup, "the herdr-unreachable warning", (f) =>
-					f.includes("herdr is unreachable"),
-				);
+				await waitFor(setup, { shows: "herdr is unreachable" });
 				// The loop holds: the failed list marks nothing, so the
 				// in-flight ticket runs on without a marker.
 				expect(ticketRow(setup.captureCharFrame())).not.toContain("missing");
@@ -2980,7 +2911,7 @@ describe("the Close cleanup", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				// Close is the default row: confirm.
 				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
@@ -3009,7 +2940,7 @@ describe("the Close cleanup", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
 				expect(commands).toContain("herdr tab close tab-1");
@@ -3034,9 +2965,9 @@ describe("the Close cleanup", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
-				await handoffEnter(setup, "the missing modal", (f) => f.includes("Missing:"));
+				await handoffEnter(setup, "the missing modal", "Missing:");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await waitFor(setup, { shows: "❯ Abandon" });
 				await handoffEnter(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
 				// herdr worktree remove closes the workspace with the checkout
@@ -3062,9 +2993,9 @@ describe("the Close cleanup", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
-				await handoffEnter(setup, "the missing modal", (f) => f.includes("Missing:"));
+				await handoffEnter(setup, "the missing modal", "Missing:");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await waitFor(setup, { shows: "❯ Abandon" });
 				await handoffEnter(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
 				expect(commands).toContain("herdr tab close tab-1");
@@ -3093,7 +3024,7 @@ describe("the leftover environment", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 				// The state transition stands: the cycle closed. What failed is
 				// now a fact on the ticket, not only a message line that fades.
@@ -3135,7 +3066,7 @@ describe("the leftover environment", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 				const commandsBefore = app.runner.commands();
 				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
@@ -3184,7 +3115,7 @@ describe("the leftover environment", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the first decision", "Decision:");
 				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
 				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
@@ -3264,9 +3195,9 @@ describe("the leftover environment", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the missing badge", (f) => ticketRow(f).includes("missing"));
-				await handoffEnter(setup, "the missing modal", (f) => f.includes("Missing:"));
+				await handoffEnter(setup, "the missing modal", "Missing:");
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await waitFor(setup, { shows: "❯ Abandon" });
 				await handoffEnter(setup, "the abandonment", (f) => ticketRow(f).includes("leftover"));
 				expect(app.runner.commands()).toContain("herdr worktree remove --workspace ws-1");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("open");
@@ -3362,15 +3293,15 @@ describe("the leftover environment", () => {
 				await frameUntil(setup, "the first awaiting ticket", (f) =>
 					ticketRow(f).includes("[awaiting]"),
 				);
-				await handoffEnter(setup, "the first decision", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the second decision", "Decision:");
 				await handoffEnter(setup, "the first Close cleanup", () => gate.busy());
-				await frameUntil(setup, "the first panel closing", (f) => !f.includes("Decision:"));
+				await waitFor(setup, { hides: "Decision:" });
 
 				await guideKey(setup, "move-list", "↑", { quiet: true });
 				await frameUntil(setup, "the second ticket", (f) =>
 					detailPaneText(f).includes("External key: #6"),
 				);
-				await handoffEnter(setup, "the second decision", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await handoffEnter(setup, "the queued second Close cleanup", (f) =>
 					ticketRow(f, "Watch agent turns").includes("[open]"),
 				);
@@ -3448,8 +3379,8 @@ describe("the leftover environment", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await handoffEnter(setup, "the close", (f) => f.includes(" closed"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
+				await handoffEnter(setup, "the close", " closed");
 				// Nothing to close means nothing reached: the fact of the row the
 				// cleanup did not reach stands, and no command resolved it.
 				expect(app.runner.commands().join("\n")).not.toContain("herdr worktree remove");
@@ -3476,7 +3407,7 @@ describe("the leftover environment", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 				// The detail block is one warning the operator can act on: the
 				// fact, its reason, and its herdr pointer all carry it.
@@ -3529,7 +3460,7 @@ describe("the leftover environment", () => {
 	 */
 	async function closeAndHandOffAgain(setup: AppSetup, src: FakeSource): Promise<void> {
 		await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-		await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+		await handoffEnter(setup, "the decision modal", "Decision:");
 		await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 		await settleReverify(src, success);
 		// Enter on the open ticket: the leftover does not stop it. The row
@@ -3601,15 +3532,13 @@ describe("the leftover environment", () => {
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await handoffEnter(setup, "the decision modal", "Decision:");
 				await handoffEnter(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				await settleReverify(app.src, success);
 				// The drop warning prefixes the reason, and the line truncates at
 				// the terminal width, so the test renders wide enough to hold
 				// the whole of it.
-				await handoffEnter(setup, "the handoff stopped by the stranger", (f) =>
-					f.includes("pane pane-stranger"),
-				);
+				await handoffEnter(setup, "the handoff stopped by the stranger", "pane pane-stranger");
 				// The stranger blocks the new name, but the stable name was still
 				// this ticket's own leftover. That first collision remains a fact.
 				expect(app.state.handoff.leftoverEnvironment(identity)).toEqual(
@@ -3749,7 +3678,7 @@ describe("the auto dispatch", () => {
 				// pane, so the wait resolves on the handoff itself: the pane's
 				// task type row says `Handoff` only once the ticket is no longer
 				// open, and the start command lands before that claim.
-				await frameUntil(setup, "the dispatch", (f) => f.includes("Handoff task type: implement"));
+				await waitFor(setup, { shows: "Handoff task type: implement" });
 				const start = app.runner
 					.commands()
 					.find((command) => command.startsWith("herdr agent start"));
@@ -3784,7 +3713,7 @@ describe("the auto dispatch", () => {
 			app,
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				await frameUntil(setup, "the refused dispatch", (f) => f.includes("has no model"));
+				await waitFor(setup, { shows: "has no model" });
 				// The handoff never reached herdr: no workspace, no agent start.
 				expect(app.runner.commands().some((c) => c.startsWith("herdr workspace"))).toBe(false);
 				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
@@ -3984,9 +3913,7 @@ describe("the auto dispatch", () => {
 			app,
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				const failed = await frameUntil(setup, "the failed automatic handoff", (f) =>
-					frameText(f).includes("queued handoff for"),
-				);
+				const failed = await waitFor(setup, { shows: "queued handoff for" });
 				expect(frameText(failed)).toContain("no model setting");
 				// Nothing ran, and the ticket stayed the open ticket it was.
 				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
@@ -4003,7 +3930,7 @@ describe("the auto dispatch", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await frameUntil(setup, "the mode cell", (f) => f.includes("● manual 0/2"));
+				const frame = await waitFor(setup, { shows: "● manual 0/2" });
 				expect(ticketRow(frame)).toContain("[open]");
 				// No herdr handoff commands: only the agent list polls.
 				// No herdr handoff commands: only agent list polls plus the
@@ -4168,9 +4095,7 @@ describe("the auto decision", () => {
 				});
 				// The loud reason reaches the status line as the drop warning, and
 				// it names the ticket the route was for.
-				const failed = await frameUntil(setup, "the failed automatic route", (f) =>
-					frameText(f).includes("queued handoff for"),
-				);
+				const failed = await waitFor(setup, { shows: "queued handoff for" });
 				expect(frameText(failed)).toContain("no model setting");
 				// Nothing the record claims started did start: no agent ran, and
 				// the drop keeps the decision the ask recorded, with the ticket
@@ -4276,9 +4201,7 @@ describe("the auto decision", () => {
 				// The route waits for the free seat: the ticket stays awaiting.
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				// Enter does not open the decision modal: the factory decides.
-				await handoffEnter(setup, "the factory's notice", (f) =>
-					f.includes("the factory decides this ticket"),
-				);
+				await handoffEnter(setup, "the factory's notice", "the factory decides this ticket");
 				const frame = await settle(setup);
 				expect(frame).not.toContain("Decision:");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
@@ -4428,9 +4351,7 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				// re-derives where the machine offers it next - open, and ready
 				// to be offered for implementation.
 				await guideKey(setup, "ticket-close", "Delete", { quiet: true });
-				const opened = await frameUntil(setup, "the Close confirmation", (f) =>
-					f.includes(`Close: ${DEFAULT_TICKET_TITLE}`),
-				);
+				const opened = await waitFor(setup, { shows: `Close: ${DEFAULT_TICKET_TITLE}` });
 				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");
 				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
 				await frameUntil(setup, "the close", (f) => ticketRow(f).includes("[open]"));
@@ -4594,7 +4515,8 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(app.runner.commands().filter((c) => c.startsWith("herdr tab close"))).toHaveLength(
 					0,
 				);
-				await handoffEnter(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { shows: "Decision:" });
 				const panel = frameText(await settle(setup));
 				// The Decision region offers the review the fire's labels put the
 				// fixing pull request on, beside the write it states, and no gate
@@ -4664,9 +4586,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 				// The operator's handoff is the operator's: Enter on the row hands the
 				// ticket off with the position's suggestion, and the start runs the
 				// flagged type.
-				await handoffEnter(setup, "the settled handoff", (f) =>
-					frameText(f).includes("Handoff task type: analyze"),
-				);
+				await handoffEnter(setup, "the settled handoff", "Handoff task type: analyze");
 				expect(
 					app.runner.commands().some((command) => command.startsWith("herdr agent start")),
 				).toBe(true);
@@ -4715,7 +4635,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 				// mode never opens it: the flip to manual is the operator's act,
 				// and the Enter on the parked ticket opens the modal.
 				await toggleAutoHandoff(setup, { quiet: true });
-				await frameUntil(setup, "manual mode", (f) => f.includes("manual"));
+				await waitFor(setup, { shows: "manual" });
 				await handoffEnter(
 					setup,
 					"the decision modal",
@@ -4727,12 +4647,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 				await guideKey(setup, "select-action", "↓", { quiet: true });
 				await frameUntil(setup, "the goto row", () => true);
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: analyze"),
-				);
-				await handoffEnter(setup, "the settled handoff", (f) =>
-					frameText(f).includes("Handoff task type: analyze"),
-				);
+				await handoffEnter(setup, "the settled handoff", "Handoff task type: analyze");
 				expect(
 					app.runner.commands().some((command) => command.startsWith("herdr agent start")),
 				).toBe(true);
@@ -4771,7 +4686,7 @@ describe("auto handoff should not pickup operator tasks (ADR 0117)", () => {
 				).toHaveLength(0);
 				// The Missing modal is the operator's surface, and its Restart is the
 				// operator's act.
-				await handoffEnter(setup, "the Missing modal", (f) => f.includes("Missing:"));
+				await handoffEnter(setup, "the Missing modal", "Missing:");
 				await handoffEnter(setup, "the restart handoff", (_f) =>
 					app.runner.commands().some((command) => command.startsWith("herdr agent prompt")),
 				);
@@ -4930,12 +4845,15 @@ describe("the handoff queue", () => {
 				// move down lands the marker on line four - a line it was not
 				// on, so the key is applied before the next key is pressed.
 				await namedStep("j", "select the open ticket", (f) => markerRowOf(f) === 4);
-				await namedEnter("the handoff to start", (f) => f.includes("handing off"));
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { shows: "handing off" });
 				// Back to the missing ticket: its restart queues behind the
 				// handoff in flight.
 				await namedStep("k", "select the missing ticket", (f) => markerRowOf(f) === 3);
-				await namedEnter("the missing modal", (f) => f.includes("Missing:"));
-				await namedEnter("the restart to queue", (f) => !f.includes("Missing:"));
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { shows: "Missing:" });
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { hides: "Missing:" });
 				// And while the restart is queued, the ticket moves on:
 				// abandon it. Enter on the row jumps to the queued item
 				// (ADR 0049), and the operator removes it there; the queue
@@ -4970,9 +4888,10 @@ describe("the handoff queue", () => {
 				);
 				await namedStep("k", "the last Ticket", (f) => markerRowOf(f) === 4);
 				await namedStep("k", "the missing row", (f) => markerRowOf(f) === 3);
-				await namedEnter("the missing modal", (f) => f.includes("Missing:"));
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { shows: "Missing:" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await waitFor(setup, { shows: "❯ Abandon" });
 				// The abandonment closes the modal, and the row reads open at
 				// once: the waiting restart never claimed a seat - the cap held
 				// it in the Work queue - so no Starting window covers the badge
@@ -5224,9 +5143,7 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 					fetchedAt: "2026-08-31T10:02:00Z",
 					tickets: [pullFetched()],
 				});
-				await frameUntil(setup, "the pull request row", (f) =>
-					f.includes("Persist source facts in state"),
-				);
+				await waitFor(setup, { shows: "Persist source facts in state" });
 				// The re-fire's fire re-reads the pull request source before it
 				// writes (ADR 0076): the read is its own fetch, and the fetch
 				// the test settles is that one. The label has not landed in the

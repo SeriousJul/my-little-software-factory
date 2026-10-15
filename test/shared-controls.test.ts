@@ -32,6 +32,7 @@ import {
 	sleep,
 	spanColors,
 	typeText,
+	waitFor,
 } from "./app-harness.ts";
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
@@ -483,9 +484,7 @@ describe("the shared Text field", () => {
 					// A paste that would cross the limit is refused whole, and the row
 					// states the limit in the field's own words.
 					await pasteText(setup, "12345");
-					await frameUntil(setup, "the limit refusal to be stated on the screen", (f) =>
-						frameText(f).includes("the pasted text was refused as a whole"),
-					);
+					await waitFor(setup, { shows: "the pasted text was refused as a whole" });
 					expect(onRefuse).toHaveBeenCalledWith(
 						"This field holds at most 5 characters: the pasted text was refused as a whole",
 					);
@@ -506,9 +505,7 @@ describe("the shared Text field", () => {
 					// ...and the one that crosses it is refused, with the limit stated.
 					typeText(setup, "f");
 					await frameUntil(setup, "the second refusal", () => onRefuse.mock.calls.length === 2);
-					await frameUntil(setup, "the second refusal to be stated on the screen", (f) =>
-						frameText(f).includes("This field holds at most 5 characters"),
-					);
+					await waitFor(setup, { shows: "This field holds at most 5 characters" });
 					expect(onRefuse).toHaveBeenLastCalledWith("This field holds at most 5 characters");
 					expect(field.current?.value()).toBe("abcde");
 				},
@@ -533,11 +530,7 @@ describe("the shared Text field", () => {
 				height: 6,
 				body: async (setup) => {
 					await typeText(setup, "007");
-					const _folded = await frameUntil(
-						setup,
-						"the row to hold one spelling of the count",
-						(f) => frameText(f).includes("Context 7"),
-					);
+					const _folded = await waitFor(setup, { shows: "Context 7" });
 					expect(field.current?.value()).toBe("7");
 					expect(field.current?.caret()).toBe(1);
 				},
@@ -632,9 +625,7 @@ describe("the written reason a control states", () => {
 			{
 				height: 6,
 				body: async (setup) => {
-					const frame = await frameUntil(setup, "the whole reason under the field", (candidate) =>
-						candidate.includes(REASON),
-					);
+					const frame = await waitFor(setup, { shows: REASON });
 					expect(frameText(reasonRow(frame)).trim()).toBe(`Error: Context: ${REASON}`);
 				},
 			},
@@ -656,9 +647,7 @@ describe("the written reason a control states", () => {
 			{
 				height: 6,
 				body: async (setup) => {
-					const frame = await frameUntil(setup, "the reason under the field", (candidate) =>
-						candidate.includes("Error: Context:"),
-					);
+					const frame = await waitFor(setup, { shows: "Error: Context:" });
 					expect(frameText(reasonRow(frame)).trim()).toBe(
 						`Error: Context: ${REASON}`.slice(0, cells).trim(),
 					);
@@ -684,11 +673,7 @@ describe("the written reason a control states", () => {
 			{
 				height: 8,
 				body: async (setup) => {
-					const frame = await frameUntil(
-						setup,
-						"the reason under the value the row stands on",
-						(candidate) => candidate.includes(REASON),
-					);
+					const frame = await waitFor(setup, { shows: REASON });
 					expect(frameText(reasonRow(frame)).trim()).toBe(`Error: Model: ${REASON}`);
 				},
 			},
@@ -744,9 +729,7 @@ describe("the shared spinner", () => {
 		await withField(createElement(Spinner, { word: "starting", width: 12, frame: 0 }), 30, {
 			height: 3,
 			body: async (setup) => {
-				const frame = await frameUntil(setup, "the first frame beside its word", (candidate) =>
-					candidate.includes(`${SPINNER_FRAMES[0]} starting`),
-				);
+				const frame = await waitFor(setup, { shows: `${SPINNER_FRAMES[0]} starting` });
 				// The face holds its slot whole: glyph, a cell of air, the word,
 				// padded to the cells the surface names.
 				const row = rowsOf(frame).find((line) => line.includes("starting"));
@@ -766,9 +749,7 @@ describe("the shared spinner", () => {
 			{
 				height: 3,
 				body: async (setup) => {
-					await frameUntil(setup, "the face beside its word", (candidate) =>
-						candidate.includes(`${SPINNER_FRAMES[2]} starting`),
-					);
+					await waitFor(setup, { shows: `${SPINNER_FRAMES[2]} starting` });
 					// The word stands as the whole message. The renderer's own default
 					// is the paint, and the default is not a paint: no color of the
 					// face's own shows anywhere on the row.

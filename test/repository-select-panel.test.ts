@@ -30,6 +30,7 @@ import {
 	settle,
 	typeText,
 	WIDTH,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import { agentListJson, type FakeRunner } from "./fake-runner.ts";
@@ -144,7 +145,7 @@ describe("the repository select panel", () => {
 		await withApp(
 			async (setup) => {
 				await guideKey(setup, "repository-select-open", "o", { shows: "Init a repository" });
-				await frameUntil(setup, "the list rows to settle", (f) => f.includes("acme/billing"));
+				await waitFor(setup, { shows: "acme/billing" });
 				// The query filters by substring of the display name.
 				await typeText(setup, "billing");
 				const filtered = await frameUntil(
@@ -277,7 +278,7 @@ describe("the repository select panel", () => {
 			async (setup) => {
 				await guideKey(setup, "repository-select-open", "o", { shows: "acme/billing" });
 				await typeText(setup, "billing");
-				await frameUntil(setup, "the filter to settle", (f) => !f.includes("acme/factory"));
+				await waitFor(setup, { hides: "acme/factory" });
 				// The bar states the act available: the row stands, so the press
 				// runs the control and the refusal lands on the act's own read,
 				// after the key.
@@ -484,7 +485,7 @@ describe("the repository select panel", () => {
 				});
 				expect(frame).not.toContain("Init a repository");
 				// The plan lands, and the panel stands where the open asked for.
-				await frameUntil(setup, "the confirmation", (f) => f.includes("Init acme/factory"));
+				await waitFor(setup, { shows: "Init acme/factory" });
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord, loopPolicy: { kind: "production" } },
 		);
@@ -552,7 +553,7 @@ describe("the repository select panel", () => {
 				await pressControl(setup, "select-repository", { opens: "Init acme/factory" });
 				// Cancel skips the entry, and the next row's panel stands in its place.
 				await pressControl(setup, "cancel-action", { closes: "Init acme/factory" });
-				await frameUntil(setup, "the second confirmation", (f) => f.includes("Init acme/billing"));
+				await waitFor(setup, { shows: "Init acme/billing" });
 				// The drained queue leaves its settled line on the Message line.
 				await pressControl(setup, "cancel-action", {
 					shows: "the init queue settled: 0 ran, 2 skipped, 0 refused",
@@ -595,9 +596,7 @@ describe("the repository select panel", () => {
 				await new Promise((r) => setTimeout(r, 25));
 				await pressControl(setup, "repository-select-toggle", { shows: "queued" });
 				await pressControl(setup, "move-list", { via: "j", quiet: true });
-				await frameUntil(setup, "the cursor on the second row", (f) =>
-					f.includes("❯ acme/billing"),
-				);
+				await waitFor(setup, { shows: "❯ acme/billing" });
 				await pressControl(setup, "repository-select-toggle", { quiet: true });
 				await frameUntil(setup, "the second mark", (f) => (f.match(/queued/gu) ?? []).length === 2);
 				// The head has no checkout: the refusal names its path, and the
@@ -666,9 +665,7 @@ describe("the repository select panel", () => {
 				await new Promise((r) => setTimeout(r, 25));
 				await pressControl(setup, "repository-select-toggle", { shows: "queued" });
 				await pressControl(setup, "move-list", { via: "j", quiet: true });
-				await frameUntil(setup, "the cursor on the second row", (f) =>
-					f.includes("❯ acme/billing"),
-				);
+				await waitFor(setup, { shows: "❯ acme/billing" });
 				await pressControl(setup, "repository-select-toggle", { quiet: true });
 				await frameUntil(setup, "the second mark", (f) => (f.match(/queued/gu) ?? []).length === 2);
 				await pressControl(setup, "select-repository", { opens: "Init acme/factory" });

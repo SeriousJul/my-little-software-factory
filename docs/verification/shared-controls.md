@@ -2223,6 +2223,35 @@ over the rig's 100 exports, against the base head's 79. The test-tree
 duplication clone count stands at 189 at that head, unchanged by the
 removal, so the Quality baseline holds it as is.
 
+The rework of this pull lands the wait side of the rule the record's
+rework above delivered on the input side: the static architecture check
+now reads the wait as well as the press. It refuses, on every owned
+surface, the inline predicate that is one containment of a painted string,
+or its negation, on the frame or its normalized text - the shape the rig's
+named outcomes name - and it refuses it wherever the wait stands: at the
+`frameUntil` site itself and at the named operations that carry a wait
+behind a press. Those operations take a string target or a predicate, and
+the string target reads through the rig's own `shows` and `hides` - the
+same normalized containment, not a second outcome vocabulary the wrapper
+defines. `namedStep` and `namedEnter` take no string target: a wait they
+name not by containment keeps its predicate, and a wait that is one
+containment calls for no wrapper. One suite stands outside the owned list,
+and the check names why it stands there: `ticket-boot-order-frame.test.ts`
+drives no input of any kind, it boots the plane and reads the frame the
+order paints, so the input side of the rule reaches it nowhere.
+
+The check measures the residual rather than characterizing it. At the head
+that lands this round, the owned surfaces hold 604 frame waits: 531 of them
+an inline arrow the check reads and passes, each naming a fact a single
+containment names not - a row the suite derives from the frame, a marker it
+counts, a focus it reads off a row - and 73 a wait on a named predicate the
+suite keeps. The count the check holds at zero is the one that matters: no
+owned surface waits on a containment the `shows` and `hides` outcomes name.
+The named outcomes' unification of the suites' wait vocabulary takes the
+test-tree duplication clone count from 189 to 178, and the Quality
+baseline, which only shrinks, is rewritten down to the new count in the
+same change, which the audit then holds.
+
 The pull's repository-select queue walk reaches the open window the
 record's #317 line names: the queue's advance can stand its cleanup
 outside the flush the close proof runs on every poll, and the replaced
@@ -2241,17 +2270,27 @@ class in its mechanism: the one deadline, the named outcomes, and the
 loops above. The class-level CI flake item stays open in the quality
 gate's record: the load evidence on file shows the deadline miss
 surviving the earlier fixes under a loaded runner, and this rework runs
-no loaded runner of its own; the push gate's full-suite run at the pushed
-head is this round's measurement, and a file that fails it and passes
-alone is named as a load flake in the pull.
+no loaded runner of its own. At the pushed head `72ff79a0` of this rework,
+the push gate's full suite on the tree merged with `origin/main` ran its
+3,448 tests on this machine (32 cores, 60 GB RAM): 3,447 pass, 1 fail. The
+failing file, `test/repository-select-panel.test.ts`, ran 6 of 6 solo at
+the `origin/main` base in about 2.0 s and 4 of 5 on the branch's tree in
+about 4.6 s: the migrated queue walk takes 2.3 times the budget it ran at
+the base and stands the deadline's edge under the run's load. It is named
+as a load flake of the record's #317 class, and no production code moves in
+this pull, so the pull's own change stands cleared of the failure. At the
+head that lands this round the push gate re-runs the full suite, and the
+record carries that run beside the one above.
 
 What was not measured: every frame surface that boots the app on the plane
 has been migrated, so no press-family call, hand operation, or raw wait
 stands outside the rig's ownership on the owned surfaces, as the walk at
-the head that lands this record prints. The raw waits and the inline
-containment predicates the walk still counts are the named `frameUntil`
-waits and the stable-frame reads no named outcome names - the walk's own
-escape, kept closed. The closed walk walks the painted bar of the frames
+the head that lands this record prints. The raw waits and the inline containment predicates the walk still counts
+are the named `frameUntil` waits and the stable-frame reads a named outcome
+names not, and the wait-side check above measures that residual at the head
+it lands on rather than characterizing it: the 531 inline arrows and the 73
+named-predicate waits named in that paragraph, the walk's own escape, kept
+closed at the one shape the named outcomes name. The closed walk walks the painted bar of the frames
 it stands, and the mode the spec's walk names - the mode that owns each
 hinted catalogue id, booted by the walk - stands superseded by ADR 0128's
 addendum: the delivered walk is the accepted shape, and every mode whose

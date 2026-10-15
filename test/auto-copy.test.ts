@@ -22,6 +22,7 @@ import {
 	mouseDrag,
 	paneRow,
 	settle,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 
@@ -113,11 +114,7 @@ describe("Auto copy", () => {
 				expect(clipboard.writes).toHaveLength(1);
 				// The refusal is the shared warning the field Copy control says,
 				// carried on the Message line with its warning prefix.
-				const warned = await frameUntil(
-					setup,
-					"the refused-copy warning on the Message line",
-					(frame) => frameText(frame).includes(COPY_REFUSED_TEXT),
-				);
+				const warned = await waitFor(setup, { shows: COPY_REFUSED_TEXT });
 				expect(messageRowOf(warned)).toContain(`Warning: ${COPY_REFUSED_TEXT}`);
 			} finally {
 				clipboard.restore();

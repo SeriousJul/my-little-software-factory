@@ -46,6 +46,7 @@ import {
 	settle,
 	WIDTH,
 	waitCommands,
+	waitFor,
 	waitUntil,
 	withApp,
 } from "./app-harness.ts";
@@ -2162,7 +2163,7 @@ describe("the decision screen's merge", () => {
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
 		await appOnDecision(state, runner, async (setup, _planeRecord) => {
-			await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+			await waitFor(setup, { shows: pullTitle.slice(0, 3) });
 			// The decision modal: the merge row stands beside Close and Goto.
 			await pressControl(setup, "decide-completion", { quiet: true });
 			await frameUntil(
@@ -2216,7 +2217,7 @@ describe("the decision screen's merge", () => {
 
 		await withApp(
 			async (setup) => {
-				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+				await waitFor(setup, { shows: pullTitle.slice(0, 3) });
 				await pressControl(setup, "decide-completion", { quiet: true });
 				await frameUntil(
 					setup,
@@ -2261,9 +2262,9 @@ describe("the decision screen's merge", () => {
 			stubReadSequence(runner, [{ state: "open" }, { state: "open" }]);
 			stubMerge(runner, 1, "GraphQL: PullRequest is not mergeable.\n");
 			await appOnDecision(state, runner, async (setup, _planeRecord) => {
-				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+				await waitFor(setup, { shows: pullTitle.slice(0, 3) });
 				await pressControl(setup, "decide-completion", { quiet: true });
-				await frameUntil(setup, "the decision modal", (f) => f.includes("Merge pull request"));
+				await waitFor(setup, { shows: "Merge pull request" });
 				await pressControl(setup, "select-action", { via: "↓", quiet: true });
 				await pressControl(setup, "select-action", { via: "↓", quiet: true });
 				await frameUntil(setup, "the merge row's focus", mergeRowFocused);
@@ -2306,9 +2307,9 @@ describe("the decision screen's merge", () => {
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		await appOnDecision(state, runner, async (setup, _planeRecord) => {
-			await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+			await waitFor(setup, { shows: pullTitle.slice(0, 3) });
 			await pressControl(setup, "decide-completion", { quiet: true });
-			await frameUntil(setup, "the decision modal", (f) => f.includes("Merge pull request"));
+			await waitFor(setup, { shows: "Merge pull request" });
 			await pressControl(setup, "select-action", { via: "↓", quiet: true });
 			await pressControl(setup, "select-action", { via: "↓", quiet: true });
 			await frameUntil(setup, "the merge row's focus", mergeRowFocused);
@@ -2336,7 +2337,7 @@ describe("the decision screen's merge", () => {
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		await appOnDecision(state, runner, async (setup, _planeRecord) => {
-			await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+			await waitFor(setup, { shows: pullTitle.slice(0, 3) });
 			// The decision modal re-stands the merge row for the newer turn,
 			// and the earlier block's line does not stand in its place.
 			await pressControl(setup, "decide-completion", { quiet: true });
@@ -2370,7 +2371,7 @@ describe("the decision screen's merge", () => {
 			state,
 			runner,
 			async (setup, _planeRecord) => {
-				await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+				await waitFor(setup, { shows: pullTitle.slice(0, 3) });
 				await pressControl(setup, "decide-completion", { quiet: true });
 				await frameUntil(
 					setup,
@@ -2431,7 +2432,7 @@ describe("the decision screen's merge", () => {
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
 		await appOnDecision(state, runner, async (setup, _planeRecord) => {
-			await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+			await waitFor(setup, { shows: pullTitle.slice(0, 3) });
 			// The decision modal: the merge row stands beside Close and Goto.
 			await pressControl(setup, "decide-completion", { quiet: true });
 			await frameUntil(
@@ -2490,7 +2491,7 @@ describe("the decision screen's merge", () => {
 		stubReadSequence(runner, [{ state: "open" }, { merged: true }]);
 		stubMerge(runner, 0);
 		await appOnDecision(state, runner, async (setup, _planeRecord) => {
-			await frameUntil(setup, "the row", (f) => f.includes(pullTitle.slice(0, 3)));
+			await waitFor(setup, { shows: pullTitle.slice(0, 3) });
 			// The decision modal: the merge row stands beside Close and Goto.
 			await pressControl(setup, "decide-completion", { quiet: true });
 			await frameUntil(
@@ -2801,9 +2802,7 @@ describe("the auto top-up merge", () => {
 					.slice(boxTop + 1)
 					.findIndex((row) => row.includes(pullTitle.slice(0, 3)));
 				await mouseClick(setup, 2, boxTop + 1 + rowIndex);
-				const detail = await frameUntil(setup, "the item's detail", (f) =>
-					f.includes("Task type: merge"),
-				);
+				const detail = await waitFor(setup, { shows: "Task type: merge" });
 				expect(detail).toContain("Origin: merge");
 				expect(detail).toContain("Method: squash");
 				expect(detail).toContain("The action holds no settings to edit");

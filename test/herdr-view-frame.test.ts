@@ -25,13 +25,13 @@ import type { TicketSourceConfig, TransitionOutcome } from "../src/config.ts";
 import type { EnvironmentKind, FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import {
 	FRAME_DEADLINE_MS,
-	frameText,
 	frameUntil,
 	guideKey,
 	messageRowOf,
 	pressControl,
 	sleep,
 	WIDTH,
+	waitFor,
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
@@ -224,13 +224,11 @@ describe("the route close moves no view", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await frameUntil(setup, "the awaiting ticket", (f) => f.includes("[awaiting]"));
+				await waitFor(setup, { shows: "[awaiting]" });
 				await pressControl(setup, "decide-completion", { shows: "Decision:" });
 				await pressControl(setup, "select-action", { via: "↓", shows: "❯ Goto" });
 				await pressControl(setup, "select-action", { via: "↓", quiet: true });
-				await frameUntil(setup, "the route row", (f) =>
-					frameText(f).includes("❯ Handoff: implement"),
-				);
+				await waitFor(setup, { shows: "❯ Handoff: implement" });
 				// The routed handoff started beside the workspace the ask took
 				// down; the egress list is the fact the rule reads.
 				await pressControl(setup, "confirm-action", { quiet: true });
@@ -329,19 +327,15 @@ describe("the route close moves no view", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await frameUntil(setup, "the awaiting ticket", (f) => f.includes("[awaiting]"));
+				await waitFor(setup, { shows: "[awaiting]" });
 				await pressControl(setup, "decide-completion", { shows: "Decision:" });
 				await pressControl(setup, "select-action", { via: "↓", shows: "❯ Goto" });
 				await pressControl(setup, "select-action", { via: "↓", quiet: true });
-				await frameUntil(setup, "the route row", (f) =>
-					frameText(f).includes("❯ Handoff: implement"),
-				);
+				await waitFor(setup, { shows: "❯ Handoff: implement" });
 				// The route cannot take a seat: it waits in the Work queue,
 				// and nothing has closed yet.
 				await pressControl(setup, "confirm-action", { quiet: true });
-				await frameUntil(setup, "the route to wait", (f) =>
-					frameText(f).includes("is in the Work queue"),
-				);
+				await waitFor(setup, { shows: "is in the Work queue" });
 				// The close is the ask's own act, queued as cleanup work, so it
 				// runs while nothing starts (ADR 0046).
 				const waiting = await frameUntil(setup, "the queued route's close at the ask", () =>
@@ -400,15 +394,11 @@ describe("the Close cleanup moves no view", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await frameUntil(setup, "the in-flight ticket", (f) => f.includes("missing"));
+				await waitFor(setup, { shows: "missing" });
 				await guideKey(setup, "consultation-close", "Delete", { quiet: true });
-				await frameUntil(setup, "the Close confirmation", (f) =>
-					f.includes("Close: Add a webhook retry policy"),
-				);
+				await waitFor(setup, { shows: "Close: Add a webhook retry policy" });
 				await pressControl(setup, "confirm-action", { quiet: true });
-				const frame = await frameUntil(setup, "the close to end the cycle", (f) =>
-					f.includes("[open]"),
-				);
+				const frame = await waitFor(setup, { shows: "[open]" });
 				const commands = runner.commands();
 				expect(commands).toContain("herdr worktree remove --workspace ws-1");
 				expect(herdrFocusCommands(commands)).toEqual([]);
@@ -456,13 +446,11 @@ describe("the Close cleanup moves no view", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await frameUntil(setup, "the in-flight ticket", (f) => f.includes("missing"));
+				await waitFor(setup, { shows: "missing" });
 				await guideKey(setup, "consultation-close", "Delete", { quiet: true });
-				await frameUntil(setup, "the Close confirmation", (f) =>
-					f.includes("Close: Add a webhook retry policy"),
-				);
+				await waitFor(setup, { shows: "Close: Add a webhook retry policy" });
 				await pressControl(setup, "confirm-action", { quiet: true });
-				await frameUntil(setup, "the close to run", (f) => f.includes("[open]"));
+				await waitFor(setup, { shows: "[open]" });
 				expect(state.ticketWorkCycle.ticketState(FIRST)).toBe("open");
 				// The refusal line names the failure and herdr's own reason, so
 				// the read takes the wide terminal the status row truncates to.
@@ -533,7 +521,7 @@ describe("Goto stays the one focus move", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await frameUntil(setup, "the awaiting ticket", (f) => f.includes("[awaiting]"));
+				await waitFor(setup, { shows: "[awaiting]" });
 				await guideKey(setup, "consultation-goto", "g", { quiet: true });
 				const frame = await frameUntil(setup, "the Goto confirmation", (f) =>
 					messageRowOf(f).includes("focused the agent"),
@@ -612,7 +600,7 @@ describe("the environment a handoff builds stays out of the view", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await frameUntil(setup, "the open ticket", (f) => f.includes("[open]"));
+				await waitFor(setup, { shows: "[open]" });
 				// The boot read settles on the seeded snapshot; wait for its
 				// health to stand before the handoff, so the claim's
 				// actionability gate reads the settle, not the loading it left.

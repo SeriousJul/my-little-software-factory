@@ -35,6 +35,7 @@ import {
 	settle,
 	spanColors,
 	WIDTH,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import { DEFAULT_AGENT_NAME, fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
@@ -325,7 +326,7 @@ describe("the Work queue section", () => {
 		await booted(
 			async (setup) => {
 				source.settle(fetchSuccess(twoTickets()));
-				await frameUntil(setup, "the Work header", (f) => f.includes("waiting: 2"));
+				await waitFor(setup, { shows: "waiting: 2" });
 				await clickWorkHeader(setup);
 				// The top-up's item, first in the queue: the detail says the
 				// factory asked, and names the origin it waits on.
@@ -396,7 +397,7 @@ describe("the Work queue section", () => {
 				expect(frameText(resting)).not.toContain("paused");
 				// The cursor lands on the queue row, and p stands by its keys.
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the cursor on the queue row", (f) => f.includes("┌─❯ Work queue"));
+				await waitFor(setup, { shows: "❯ Work queue" });
 				// The brake stands down: while the queue runs, the bar keeps no
 				// pause hint, and the Key guide carries the key (issue #319,
 				// ADR 0111).
@@ -538,7 +539,7 @@ describe("the Work queue section", () => {
 				source.settle(fetchSuccess(twoTickets()));
 				await frameUntil(setup, "the queued start", (f) => queueRowIndex(f, firstRowLead) >= 0);
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the cursor on the queue row", (f) => f.includes("┌─❯ Work queue"));
+				await waitFor(setup, { shows: "❯ Work queue" });
 				// An operation writes its refusal on the line, and it stands:
 				// this config ships no Consultation type, so the launch key
 				// refuses and says why. The bar packs past the unavailable hint,
@@ -577,7 +578,7 @@ describe("the Work queue section", () => {
 				await frameUntil(setup, "the queued start", (f) => queueRowIndex(f, firstRowLead) >= 0);
 				// The cursor is on the queue row, and the list stands.
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the queue cursor", (f) => f.includes("┌─❯ Work queue"));
+				await waitFor(setup, { shows: "❯ Work queue" });
 				// `x` collapses the section: the header's arrow turns, the list
 				// leaves, and the header keeps its count on the frame. The bar
 				// packs the section hint away at this width, so the key goes out
@@ -641,9 +642,7 @@ describe("the Work queue section", () => {
 		await booted(
 			async (setup) => {
 				source.settle(fetchSuccess(twoTickets()));
-				const frame = await frameUntil(setup, "the Tickets section", (f) =>
-					f.includes("▾ Tickets"),
-				);
+				const frame = await waitFor(setup, { shows: "▾ Tickets" });
 				// The Work section is always visible (ADR 0049): the empty
 				// queue keeps its header row with its count, the way the
 				// Ticket and Consultation sections do.
@@ -668,7 +667,7 @@ describe("the Work queue section", () => {
 		await booted(
 			async (setup) => {
 				source.settle(fetchSuccess(twoTickets()));
-				await frameUntil(setup, "the empty queue's header", (f) => f.includes("waiting: 0"));
+				await waitFor(setup, { shows: "waiting: 0" });
 				// The walk down: the last Ticket row, the empty Consultation
 				// list, and the empty Work queue, one step each.
 				await pressControl(setup, "move-list", { via: "j", quiet: true });
@@ -700,9 +699,9 @@ describe("the Work queue section", () => {
 		await booted(
 			async (setup) => {
 				source.settle(fetchSuccess(twoTickets()));
-				await frameUntil(setup, "the queue's wait", (f) => f.includes("waiting: 1"));
+				await waitFor(setup, { shows: "waiting: 1" });
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the cursor on the queue row", (f) => f.includes("┌─❯ Work queue"));
+				await waitFor(setup, { shows: "❯ Work queue" });
 				// Delete cancels the one waiting start: the queue empties
 				// under the cursor, and the selection comes home.
 				await pressControl(setup, "queue-remove", {
@@ -738,7 +737,7 @@ describe("the Work queue section", () => {
 		await booted(
 			async (setup) => {
 				source.settle(fetchSuccess(twoTickets()));
-				await frameUntil(setup, "the queue's wait", (f) => f.includes("waiting: 1"));
+				await waitFor(setup, { shows: "waiting: 1" });
 				// The cursor rests on the open Ticket that waits with the
 				// row: the counts read both tickets open, and the row
 				// wears the queued badge in its state badge's place.
@@ -796,7 +795,7 @@ describe("the Work queue section", () => {
 		await booted(
 			async (setup) => {
 				source.settle(fetchSuccess(twoTickets()));
-				await frameUntil(setup, "the queue's wait", (f) => f.includes("waiting: 1"));
+				await waitFor(setup, { shows: "waiting: 1" });
 				// The detail states the waiting fact too: the cursor's
 				// Ticket wears the queued badge in the detail's state
 				// slot, the same badge the list row wears.
@@ -845,7 +844,7 @@ describe("the Work queue section", () => {
 		await booted(
 			async (setup) => {
 				source.settle(fetchSuccess(twoTickets()));
-				await frameUntil(setup, "the Work header", (f) => f.includes("waiting: 2"));
+				await waitFor(setup, { shows: "waiting: 2" });
 				await clickWorkHeader(setup);
 				// The detail answers for the item under the cursor, where
 				// the key answered nothing before: the item's own facts
@@ -976,7 +975,7 @@ describe("the Work queue section", () => {
 				// The queue row keeps its task type, and the cancel gives the
 				// open badge back to the row and the detail.
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the expanded Work section", (f) => f.includes("▾ Work"));
+				await waitFor(setup, { shows: "▾ Work" });
 				expect(queueRowIndex(setup.captureCharFrame(), firstRowLead)).toBeGreaterThanOrEqual(0);
 				await pressControl(setup, "queue-remove", {
 					shows: `waiting start for "Add a webhook retry policy"`,
@@ -1072,7 +1071,7 @@ describe("the Work queue section", () => {
 					(f) => f.includes("Work") && f.includes("waiting: 2"),
 				);
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the expanded Work section", (f) => f.includes("▾ Work"));
+				await waitFor(setup, { shows: "▾ Work" });
 				// - takes the first item to the back: the workflow route
 				// leads the queue now, and the cursor follows its item.
 				await pressControl(setup, "queue-demote", { via: "-", quiet: true });
@@ -1111,7 +1110,7 @@ describe("the Work queue section", () => {
 					(f) => f.includes("Work") && f.includes("waiting: 2"),
 				);
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the expanded Work section", (f) => f.includes("▾ Work"));
+				await waitFor(setup, { shows: "▾ Work" });
 				// The cursor holds the first item; Delete cancels its
 				// start. The ticket keeps the state it wears while it
 				// waits, so the Ticket list still draws it. The line names
@@ -1202,7 +1201,7 @@ describe("the Work queue section", () => {
 				expect(frameText(waiting)).toContain("[queued]");
 				// The operator's Delete takes the route's item.
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the expanded Work section", (f) => f.includes("▾ Work"));
+				await waitFor(setup, { shows: "▾ Work" });
 				await pressControl(setup, "queue-remove", {
 					shows: `waiting start for "Close the stale deploy branch"`,
 				});
@@ -1261,9 +1260,7 @@ describe("the Work queue section", () => {
 					(f) => f.includes("Work") && f.includes("waiting: 2"),
 				);
 				await clickWorkHeader(setup);
-				const list = await frameUntil(setup, "the expanded Work section", (f) =>
-					f.includes("▾ Work"),
-				);
+				const list = await waitFor(setup, { shows: "▾ Work" });
 				const queueRows = (frame: string) =>
 					rowsOf(stripAnsi(frame)).filter((row) => /^│\s*(❯\s)?implement\s+/.test(row));
 				const before = await settle(setup);
@@ -1336,7 +1333,7 @@ describe("the Work queue section", () => {
 					(f) => f.includes("Work") && f.includes("waiting: 2"),
 				);
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the expanded Work section", (f) => f.includes("▾ Work"));
+				await waitFor(setup, { shows: "▾ Work" });
 				// The row the cursor holds, taken out from under it.
 				expect(state.workQueue.removeWorkItem(FIRST)).toBe(true);
 				const line = await pressControl(setup, "queue-remove", {
@@ -1467,7 +1464,7 @@ describe("the Work queue section", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(outcome);
-				await frameUntil(setup, "the awaiting ticket", (f) => f.includes("[awaiting]"));
+				await waitFor(setup, { shows: "[awaiting]" });
 				// Enter on the awaiting ticket opens its decision modal.
 				await pressControl(setup, "decide-completion", { opens: "Decision:" });
 				await pressControl(setup, "select-action", { via: "↓", shows: "❯ Goto" });
@@ -1517,9 +1514,7 @@ describe("the Work queue section", () => {
 					(f) => f.includes("Work") && f.includes("waiting: 1"),
 				);
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the queue's row under the cursor", (f) =>
-					f.includes("place 1 of 1"),
-				);
+				await waitFor(setup, { shows: "place 1 of 1" });
 				// The cap is full from the boot: the held seat stands on the line.
 				expect(setup.captureCharFrame()).toContain("● manual 1/1");
 				const frame = await pressControl(setup, "queue-force-dispatch", {
@@ -1564,9 +1559,7 @@ describe("the Work queue section", () => {
 					(f) => f.includes("Work") && f.includes("waiting: 1"),
 				);
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the queue's row under the cursor", (f) =>
-					f.includes("place 1 of 1"),
-				);
+				await waitFor(setup, { shows: "place 1 of 1" });
 				const frame = await pressControl(setup, "queue-force-dispatch", {
 					shows: "herdr is not running",
 				});
@@ -1597,9 +1590,7 @@ describe("the Work queue section", () => {
 					(f) => f.includes("Work") && f.includes("waiting: 1"),
 				);
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the queue's row under the cursor", (f) =>
-					f.includes("place 1 of 1"),
-				);
+				await waitFor(setup, { shows: "place 1 of 1" });
 				const frame = await pressControl(setup, "queue-force-dispatch", {
 					shows: "force-dispatch of",
 				});
@@ -1629,7 +1620,7 @@ describe("the Work queue section", () => {
 					(f) => f.includes("Work") && f.includes("waiting: 2"),
 				);
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the expanded Work section", (f) => f.includes("▾ Work"));
+				await waitFor(setup, { shows: "▾ Work" });
 				// Up from the first queue row crosses to the Consultation
 				// section, and down from there crosses back into the queue
 				// while the section stands.
@@ -1681,7 +1672,7 @@ describe("the Work queue section", () => {
 					(f) => f.includes("Work") && f.includes("waiting: 1"),
 				);
 				await clickWorkHeader(setup);
-				await frameUntil(setup, "the expanded Work section", (f) => f.includes("▾ Work"));
+				await waitFor(setup, { shows: "▾ Work" });
 				const up = await pressControl(setup, "move-list", {
 					via: "k",
 					moved: "consultations",

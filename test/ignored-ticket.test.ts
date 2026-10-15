@@ -36,6 +36,7 @@ import {
 	rowsOf,
 	settle,
 	WIDTH,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import { fetchSuccess, issueTicket, ticketOf } from "./fact-fixtures.ts";
@@ -1315,14 +1316,12 @@ describe("the ignored marker's frame", () => {
 				// gives way whole.
 				setup.resize(74, HEIGHT);
 				src.settle(fetchSuccess(twoTickets()));
-				const frame = await frameUntil(setup, "the header's ignored cell", (f) =>
-					f.includes("ignored"),
-				);
+				const frame = await waitFor(setup, { shows: "ignored" });
 				const header = rowsOf(frame).find((r) => r.includes("Tickets")) ?? "";
 				// The name leads, so a truncation never hides it.
 				expect(header.indexOf("Tickets")).toBeLessThan(header.indexOf("ignored"));
 				setup.resize(44, HEIGHT);
-				const tiny = await frameUntil(setup, "the tiny frame", (f) => f.includes("Tickets"));
+				const tiny = await waitFor(setup, { shows: "Tickets" });
 				const tinyHeader = rowsOf(tiny).find((r) => r.includes("Tickets")) ?? "";
 				expect(tinyHeader).toContain("Tickets");
 			},

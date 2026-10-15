@@ -6,7 +6,7 @@ import { testRender } from "@opentui/react/test-utils";
 
 import type { StandingFacts } from "../src/components/controls.ts";
 import { MissingModal } from "../src/components/missing-modal.ts";
-import { frameUntil, pressControl } from "./app-harness.ts";
+import { frameUntil, pressControl, waitFor } from "./app-harness.ts";
 import { DEFAULT_TICKET_TITLE } from "./fact-fixtures.ts";
 
 /** The base control facts a modal is mounted over: the list, idle. */
@@ -74,9 +74,7 @@ describe("the Missing modal", () => {
 			expect(up).toContain("❯ Abandon");
 
 			await pressControl(setup, "scroll-message", { via: "j", quiet: true });
-			const down = await frameUntil(setup, "the reason to scroll down", (frame) =>
-				frame.includes("reason line 24"),
-			);
+			const down = await waitFor(setup, { shows: "reason line 24" });
 			expect(down).toContain("❯ Abandon");
 		} finally {
 			await setup.renderer.destroy();

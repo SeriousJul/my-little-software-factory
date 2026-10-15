@@ -26,6 +26,7 @@ import {
 	pressControl,
 	settle,
 	WIDTH,
+	waitFor,
 	waitSourceHealthy,
 	waitUntil,
 	withApp,
@@ -417,13 +418,11 @@ describe("the Message line's fact to the desktop", () => {
 				source.settle(empty);
 				// The `r` control writes the refresh's Working line...
 				await pressControl(setup, "refresh", { quiet: true });
-				await frameUntil(setup, "the refresh's working line", (f) =>
-					f.includes("refreshing 1 sources"),
-				);
+				await waitFor(setup, { shows: "refreshing 1 sources" });
 				expect(notificationCalls(runner)).toHaveLength(0);
 				// ...and the clean result leaves no standing fact at all.
 				source.settle(empty);
-				await frameUntil(setup, "the working line to clear", (f) => !f.includes("refreshing"));
+				await waitFor(setup, { hides: "refreshing" });
 				expect(notificationCalls(runner)).toHaveLength(0);
 			},
 			{
@@ -508,7 +507,7 @@ describe("the Message line's fact to the desktop", () => {
 				// It is written under the working line its own refresh opens, and
 				// the settle is what lifts the working line to reveal it.
 				await pressControl(setup, "refresh", { quiet: true });
-				await frameUntil(setup, "the refresh to start", (f) => f.includes("refreshing"));
+				await waitFor(setup, { shows: "refreshing" });
 				await pressControl(setup, "refresh", { quiet: true });
 				source.settle(fetchSuccess([singleTicket]));
 				await frameUntil(setup, "the refusal to stand again", (f) =>

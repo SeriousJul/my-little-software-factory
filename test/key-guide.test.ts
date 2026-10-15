@@ -69,8 +69,9 @@ async function stepGuideUntil(
 	setup: Setup,
 	via: "j" | "k",
 	steps: number,
-	isThere: (row: string) => boolean,
+	target: string | ((row: string) => boolean),
 ): Promise<string> {
+	const isThere = typeof target === "string" ? (row: string) => row.includes(target) : target;
 	let frame = await settle(setup);
 	for (let step = 0; step < steps; step += 1) {
 		frame = await guideKey(setup, "guide-scroll", via, { quiet: true });
@@ -977,9 +978,7 @@ describe("the in-app Key guide", () => {
 
 				// The Global section sits below the first fold: step the guide
 				// down until its rows can be color-checked.
-				rows = rowsOf(
-					await stepGuideUntil(setup, "j", 20, (row) => row.includes("Emergency exit")),
-				);
+				rows = rowsOf(await stepGuideUntil(setup, "j", 20, "Emergency exit"));
 				// Emergency exit is available: the recovery note does not dim
 				// the key.
 				const exitRow = rowOf("Ctrl+C");
@@ -1011,9 +1010,7 @@ describe("the in-app Key guide", () => {
 				async (setup) => {
 					// While the first fetch runs, every source is refreshing:
 					// the current Refresh row carries the reason, dim.
-					await frameUntil(setup, "the first fetch in flight", (f) =>
-						f.includes("loading tickets..."),
-					);
+					await waitFor(setup, { shows: "loading tickets..." });
 					await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 					// The queue's removal row beside the section toggle and the
 					// mute and the move rows push Refresh below the opening window

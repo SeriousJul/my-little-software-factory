@@ -36,6 +36,7 @@ import {
 	spanColorAt,
 	spanColors,
 	typeText,
+	waitFor,
 } from "./app-harness.ts";
 
 /** A `[r, g, b]` triplet as the `#rrggbb` the contrast formula reads. */
@@ -160,9 +161,7 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("Context 272000");
 		expect(frame).toContain("Initial input");
 		fieldKey(setup, "tab");
-		const next = await frameUntil(setup, "the next example's state word", (f) =>
-			frameText(f).includes("invalid"),
-		);
+		const next = await waitFor(setup, { shows: "invalid" });
 		expect(frameText(next)).toContain("Error: Context: 0 is not a positive whole number");
 		expect(frameText(next)).toContain("(unavailable)");
 		expect(frameText(next)).toContain("(loading...)");
@@ -274,7 +273,7 @@ describe("the shared control gallery", () => {
 	// names the keys the list answers to.
 	test("the repository select example holds its search, its rows, its mark, and its note", async () => {
 		const setup = await gallery("repository-select", 120, 34);
-		const frame = await frameUntil(setup, "the list rows", (f) => f.includes("jul/notes"));
+		const frame = await waitFor(setup, { shows: "jul/notes" });
 		expect(frame).toContain("Init a repository");
 		expect(frame).toContain("acme/factory");
 		expect(frame).toContain("acme/billing");
@@ -308,17 +307,13 @@ describe("the shared control gallery", () => {
 		// 0111), so the walk opens where the longest state the walk reaches
 		// stands whole.
 		const setup = await gallery("repository-select", 96);
-		await frameUntil(setup, "the list rows", (f) => f.includes("jul/notes"));
+		await waitFor(setup, { shows: "jul/notes" });
 		// Tab is the gallery's own key: the panel sits with its dispatch
 		// inactive, so the walk passes it the way it passes every other example.
 		fieldKey(setup, "tab");
-		await frameUntil(setup, "the Delete key example's state word", (f) =>
-			f.includes(stateLine("delete-key")),
-		);
+		await waitFor(setup, { shows: stateLine("delete-key") });
 		fieldKey(setup, "tab");
-		await frameUntil(setup, "the next example's state word", (f) =>
-			f.includes(stateLine("recovery-panel-opening")),
-		);
+		await waitFor(setup, { shows: stateLine("recovery-panel-opening") });
 	});
 
 	test("the Type-ahead example shows its search and answers a query", async () => {
@@ -327,14 +322,10 @@ describe("the shared control gallery", () => {
 		// under it empty, because that is the row an operator meets first.
 		expect(frameText(setup.captureCharFrame())).toContain("Model openai/gpt-5.1 ");
 		await typeText(setup, "codex");
-		const matched = await frameUntil(setup, "the search to name its match", (f) =>
-			frameText(f).includes("Model openai/gpt-5.1-codex"),
-		);
+		const matched = await waitFor(setup, { shows: "Model openai/gpt-5.1-codex" });
 		expect(frameText(matched)).toContain("Search codex");
 		await typeText(setup, "q");
-		const failed = await frameUntil(setup, "the no-match word", (f) =>
-			frameText(f).includes("no match"),
-		);
+		const failed = await waitFor(setup, { shows: "no match" });
 		// The failed query stays on screen: an operator can see what to correct.
 		expect(frameText(failed)).toContain("codexq");
 		expect(frameText(failed)).toContain("Model openai/gpt-5.1-codex");
@@ -345,14 +336,10 @@ describe("the shared control gallery", () => {
 		// The Context field is the focused one in this example, so a paste that
 		// carries a letter reaches it and nowhere else.
 		await pasteText(setup, "1e3");
-		const refused = await frameUntil(setup, "the paste refusal", (f) =>
-			frameText(f).includes("digits only"),
-		);
+		const refused = await waitFor(setup, { shows: "digits only" });
 		expect(frameText(refused)).toContain("Context 272000");
 		await fieldKey(setup, "backspace");
-		const edited = await frameUntil(setup, "the field to take an edit", (f) =>
-			frameText(f).includes("Context 27200"),
-		);
+		const edited = await waitFor(setup, { shows: "Context 27200" });
 		expect(frameText(edited)).toContain("Context 27200");
 	});
 
@@ -375,11 +362,7 @@ describe("the shared control gallery", () => {
 		// A plain arrow collapses the selection, and the control leaves the bar:
 		// the bar never names a Copy that would find nothing to copy.
 		fieldKey(setup, "right");
-		const collapsed = await frameUntil(
-			setup,
-			"the Copy control to leave the bar",
-			(f) => !frameText(f).includes("F3 Copy selection"),
-		);
+		const collapsed = await waitFor(setup, { hides: "F3 Copy selection" });
 		expect(frameText(collapsed)).not.toContain("F3 Copy selection");
 	});
 
@@ -390,9 +373,7 @@ describe("the shared control gallery", () => {
 		await typeText(setup, "5");
 		await settle(setup);
 		fieldKey(setup, "F1");
-		const guide = await frameUntil(setup, "the Key guide", (f) =>
-			frameText(f).includes("Key guide"),
-		);
+		const guide = await waitFor(setup, { shows: "Key guide" });
 		const guideText = frameText(guide);
 		expect(guideText).toContain("Form field");
 		// The guide lists the field's own editing keys, not only the bar's.
@@ -408,11 +389,7 @@ describe("the shared control gallery", () => {
 		// F1 in the guide closes it: the close control outranks the Help that
 		// would only reopen it.
 		fieldKey(setup, "F1");
-		const back = await frameUntil(
-			setup,
-			"the example under the guide",
-			(f) => !frameText(f).includes("Key guide"),
-		);
+		const back = await waitFor(setup, { hides: "Key guide" });
 		const backText = frameText(back);
 		expect(backText).toContain("Context 2720005");
 		expect(backText).toContain(stateLine("fields"));
@@ -696,9 +673,7 @@ describe("the shared control gallery", () => {
 		expect(frameText(fallback)).toContain("Agent: reading src/auth.ts");
 		expect(frameText(fallback)).not.toContain("Session view:");
 		fieldKey(setup, "tab");
-		const captured = await frameUntil(setup, "the Captured history fallback", (f) =>
-			frameText(f).includes("Captured history:"),
-		);
+		const captured = await waitFor(setup, { shows: "Captured history:" });
 		expect(frameText(captured)).toContain("review the auth design");
 	});
 
@@ -724,11 +699,7 @@ describe("the shared control gallery", () => {
 		expect(rows.some((row) => row.includes("❯ Handoff: task-02"))).toBe(true);
 
 		fieldKey(setup, "tab");
-		frame = frameText(
-			await frameUntil(setup, "the pinned example", (f) =>
-				frameText(f).includes(stateLine("decision-region-pinned")),
-			),
-		);
+		frame = frameText(await waitFor(setup, { shows: stateLine("decision-region-pinned") }));
 		// The short log fills none of the pane's window, and the region shows
 		// every row it holds, uncapped.
 		expect(frame).toContain("Turn log");
@@ -738,11 +709,7 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("❯ Close");
 
 		fieldKey(setup, "tab");
-		frame = frameText(
-			await frameUntil(setup, "the empty log example", (f) =>
-				frameText(f).includes(stateLine("decision-log-empty")),
-			),
-		);
+		frame = frameText(await waitFor(setup, { shows: stateLine("decision-log-empty") }));
 		// The empty log states its reason inside the pane, and the pane keeps
 		// its chrome.
 		expect(frame).toContain("Turn log");
@@ -764,25 +731,19 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("Cancel");
 
 		fieldKey(setup, "tab");
-		const working = await frameUntil(setup, "the working state", (f) =>
-			frameText(f).includes(stateLine("close-dialog-working")),
-		);
+		const working = await waitFor(setup, { shows: stateLine("close-dialog-working") });
 		frame = frameText(working);
 		expect(frame).toContain("The Agent is working");
 		expect(frame).toContain("Close stops the Agent. The worktree and branch stay.");
 
 		fieldKey(setup, "tab");
-		const awaiting = await frameUntil(setup, "the awaiting-response state", (f) =>
-			frameText(f).includes(stateLine("close-dialog-awaiting-response")),
-		);
+		const awaiting = await waitFor(setup, { shows: stateLine("close-dialog-awaiting-response") });
 		frame = frameText(awaiting);
 		expect(frame).toContain("The Agent has answered and is waiting for your reply");
 		expect(frame).toContain("Close stops the Agent. The worktree and branch stay.");
 
 		fieldKey(setup, "tab");
-		const closing = await frameUntil(setup, "the closing recovery panel", (f) =>
-			frameText(f).includes(stateLine("close-panel-closing")),
-		);
+		const closing = await waitFor(setup, { shows: stateLine("close-panel-closing") });
 		frame = frameText(closing);
 		expect(frame).toContain("Close Consultation c1c1c1c1");
 		expect(frame).toContain("Cleanup is already in progress");
@@ -807,9 +768,7 @@ describe("the shared control gallery", () => {
 		expect(frame).not.toContain("Replace");
 
 		fieldKey(setup, "tab");
-		const missing = await frameUntil(setup, "the missing recovery panel", (f) =>
-			frameText(f).includes(stateLine("recovery-panel-missing")),
-		);
+		const missing = await waitFor(setup, { shows: stateLine("recovery-panel-missing") });
 		frame = frameText(missing);
 		expect(frame).toContain("The Agent is gone from its pane.");
 		expect(frame).toContain("the Agent pane is gone");
@@ -818,9 +777,7 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("close the record; nothing to stop");
 
 		fieldKey(setup, "tab");
-		const failed = await frameUntil(setup, "the failed recovery panel", (f) =>
-			frameText(f).includes(stateLine("recovery-panel-failed")),
-		);
+		const failed = await waitFor(setup, { shows: stateLine("recovery-panel-failed") });
 		frame = frameText(failed);
 		expect(frame).toContain("The launch failed before the Agent ran.");
 		expect(frame).toContain("herdr refused the launch");

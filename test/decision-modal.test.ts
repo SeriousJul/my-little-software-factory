@@ -20,6 +20,7 @@ import {
 	roleColor,
 	rowsOf,
 	sleep,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import { SAMPLE_TICKETS } from "./fact-fixtures.ts";
@@ -704,9 +705,7 @@ describe("the decision modal's region and the log's floor", () => {
 					// to the size message, and the modal's own bar keeps the way
 					// out.
 					setup.resize(FLOOR_WIDTH, 9);
-					frame = await frameUntil(setup, "the size message", (f) =>
-						f.includes("Terminal too small"),
-					);
+					frame = await waitFor(setup, { shows: "Terminal too small" });
 					expect(frame).not.toContain("Turn log");
 					expect(rowsOf(frame).slice(-1)[0]).toContain("Cancel");
 				},

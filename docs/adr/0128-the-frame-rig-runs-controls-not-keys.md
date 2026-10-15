@@ -397,3 +397,41 @@ surface from them, so they go. The module now stands on the named operations, th
 raw `press` and its waits, and the four kept bus reads named above, and the
 statement that the raw input operations go stands true of the module, not
 only of the suites.
+
+## Addendum: the wait side of the rule reaches the inline containment, and the check measures the residual
+
+The input side of the rule landed with a static check; the wait side of the
+rule - a frame test names one outcome from the rig's closed set, and the rig
+owns the wait - stood only as a convention the suites followed. The delivered
+wait-side check closes that gap: the architecture check now reads every
+`frameUntil` site of every owned surface, and it refuses the one shape the
+named outcomes name - an inline predicate that is a single containment of a
+painted string, or its negation, on the frame or its normalized text. A wait
+that shape stands goes to the rig's named outcome: the `shows` and `hides`
+fields of the rig's wait, or the string target of the named operations that
+carry a wait behind a press, `handoffEnter`, `liveEnter`, `closeSurface`, and
+`toConsultations`. Those operations take a string target or a predicate, and
+the string target reads through the rig's own `shows` and `hides` - the same
+normalized containment, not a second outcome vocabulary the wrapper defines.
+`namedStep` and `namedEnter` define no outcome of their own and take no
+string target: a wait their sites name not by containment - a focus the suite
+counts, a row the suite derives - keeps its predicate, and a wait that is one
+containment calls for no wrapper at all: the suite states the control's press
+and the rig's named outcome in the test's own lines, the way the rule reads.
+
+The check measures what it reaches not, and the residual stands measured
+rather than characterized. At the head this addendum lands on, the owned
+surfaces hold 604 frame waits: 531 of them an inline arrow the check reads
+and passes, and 73 a wait on a named predicate the suite keeps. The 531
+name facts a single containment names not - a row the test derives from the
+frame, a marker the test counts, a focus the test reads off a row - and they
+stand as predicates, the only shape left to them. The zero the check holds is
+the one that matters: no owned surface waits on a containment the `shows` and
+`hides` outcomes name, so a fact the frame paints in a string stands in the
+rig's closed vocabulary, and a review of a wait reads one line and knows the
+fact it waits on.
+
+One owned suite stands outside the check's owned list, and the check names
+why: `ticket-boot-order-frame.test.ts` drives no input of any kind. It boots
+the plane and reads the frame the order paints, and the input side of the
+rule reaches it nowhere; it joins the owned list the day it presses a key.

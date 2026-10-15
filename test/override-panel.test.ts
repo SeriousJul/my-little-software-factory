@@ -36,6 +36,7 @@ import {
 	spanColors,
 	typeText,
 	WIDTH,
+	waitFor,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 
@@ -272,9 +273,7 @@ describe("the Model row's list belongs to the agent the panel is on", () => {
 				// The row's list is the agent's own, so its search answers with a
 				// value from that list. Arrows move the caret here, not the value.
 				await typeText(setup, "model-y");
-				const shown = await frameUntil(setup, "the agent's own model to match the search", (f) =>
-					frameText(f).includes("only-for-pilot/model-y"),
-				);
+				const shown = await waitFor(setup, { shows: "only-for-pilot/model-y" });
 				expect(frameText(shown)).toContain("Model only-for-pilot/model-y");
 			},
 		);
@@ -292,15 +291,9 @@ describe("the Model row's list belongs to the agent the panel is on", () => {
 				await typeText(setup, "model-y");
 				fieldKey(setup, "home");
 				fieldKey(setup, "shift+right");
-				await frameUntil(setup, "Copy selection on the Model search", (f) =>
-					frameText(f).includes("F3 Copy selection"),
-				);
+				await waitFor(setup, { shows: "F3 Copy selection" });
 				fieldKey(setup, "right");
-				await frameUntil(
-					setup,
-					"Copy selection to leave the bar when the selection collapses",
-					(f) => !frameText(f).includes("F3 Copy selection"),
-				);
+				await waitFor(setup, { hides: "F3 Copy selection" });
 			},
 		);
 	});
@@ -326,9 +319,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
 			{ ...INITIAL, model: "not-offered/model" },
 			async (setup) => {
-				const frame = await frameUntil(setup, "the Model row holding the unfit value", (f) =>
-					frameText(f).includes("Model not-offered/model"),
-				);
+				const frame = await waitFor(setup, { shows: "Model not-offered/model" });
 				// The row keeps the value the Handoff would send, and states it as
 				// the failure the Handoff would fail with.
 				expect(frameText(frame)).toContain("Model not-offered/model");
@@ -342,9 +333,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
 			{ ...INITIAL, thinking: "high" },
 			async (setup) => {
-				const frame = await frameUntil(setup, "the Thinking row holding the unoffered level", (f) =>
-					frameText(f).includes("Thinking high"),
-				);
+				const frame = await waitFor(setup, { shows: "Thinking high" });
 				expect(frameText(frame)).toContain("Thinking high");
 				expectUnfit(setup, "Thinking", "high");
 			},
@@ -356,9 +345,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "scribe", status: { status: "available", models: ["only-for-scribe/model-y"] } },
 			{ ...INITIAL, agentType: "scribe", contextWindow: "131072" },
 			async (setup) => {
-				const frame = await frameUntil(setup, "the Context row the Agent cannot take", (f) =>
-					frameText(f).includes("Context 131072"),
-				);
+				const frame = await waitFor(setup, { shows: "Context 131072" });
 				expect(frameText(frame)).toContain("Context 131072");
 				expectUnfit(setup, "Context", "131072");
 			},
@@ -372,9 +359,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
 			{ ...INITIAL, contextWindow: "000" },
 			async (setup) => {
-				const frame = await frameUntil(setup, "the Context row holding no count", (f) =>
-					frameText(f).includes("Context 000"),
-				);
+				const frame = await waitFor(setup, { shows: "Context 000" });
 				// An all-zero count is no count at all, so the row keeps the
 				// operator's digits and wears the warning on them.
 				expect(frameText(frame)).toContain("Context 000");
@@ -388,9 +373,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "mute", status: { status: "available", models: ["only-for-mute/model-y"] } },
 			{ ...INITIAL, agentType: "mute", thinking: "low" },
 			async (setup) => {
-				const frame = await frameUntil(setup, "the Thinking row with no level to offer", (f) =>
-					frameText(f).includes("Thinking low"),
-				);
+				const frame = await waitFor(setup, { shows: "Thinking low" });
 				expect(frameText(frame)).toContain("Thinking low");
 				expectUnfit(setup, "Thinking", "low");
 				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
@@ -440,17 +423,11 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
 				await pressControl(setup, "move-list", { via: "↓", shows: "❯ Model" });
 				await typeText(setup, "x");
-				const typedModel = await frameUntil(setup, "the Model row to take the typed letter", (f) =>
-					frameText(f).includes("Model factory-modelx"),
-				);
+				const typedModel = await waitFor(setup, { shows: "Model factory-modelx" });
 				expect(frameText(typedModel)).toContain("Model factory-modelx");
 				await pressControl(setup, "move-list", { via: "↓", shows: "❯ Thinking" });
 				await typeText(setup, "z");
-				const typedThinking = await frameUntil(
-					setup,
-					"the Thinking row to take the typed letter",
-					(f) => frameText(f).includes("Thinking lowz"),
-				);
+				const typedThinking = await waitFor(setup, { shows: "Thinking lowz" });
 				expect(frameText(typedThinking)).toContain("Thinking lowz");
 			},
 		);
@@ -467,11 +444,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 				{ agentType: "bare", status },
 				{ ...INITIAL, agentType: "bare", model: "factory-model" },
 				async (setup) => {
-					const frame = await frameUntil(
-						setup,
-						"the Model row of an Agent that maps no model",
-						(f) => frameText(f).includes("factory-model"),
-					);
+					const frame = await waitFor(setup, { shows: "factory-model" });
 					expect(frameText(frame)).toContain("Model factory-model");
 					expectUnfit(setup, "Model", "factory-model");
 				},
@@ -517,9 +490,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 			{ agentType: "pilot", status: { status: "loading" } },
 			{ ...INITIAL, model: "factory-model" },
 			async (setup) => {
-				const frame = await frameUntil(setup, "the waiting row to hold its value", (f) =>
-					frameText(f).includes("Model factory-model"),
-				);
+				const frame = await waitFor(setup, { shows: "Model factory-model" });
 				expect(frameText(frame)).toContain("Model factory-model");
 				expect(spanColors(setup, "factory-model")).toEqual([tone("detail")]);
 				expect(spanColors(setup, "pilot")).toEqual([tone("focusedText")]);
@@ -593,11 +564,7 @@ describe("an unfit row states the Handoff's own sentence", () => {
 						"only-for-pilot/model-y",
 					]),
 				);
-				const frame = await frameUntil(
-					setup,
-					"the Model row to state the Handoff's sentence",
-					(f) => frameText(f).includes(expected),
-				);
+				const frame = await waitFor(setup, { shows: expected });
 				// The value the Handoff would send stays on its row, and the row under
 				// it states the sentence the Handoff would fail with.
 				expect(rowOf(frame, "Model")).toContain("not-offered/model");
@@ -618,11 +585,7 @@ describe("an unfit row states the Handoff's own sentence", () => {
 						{ ...NO_SETTINGS, thinking: "high" },
 					).thinking,
 				);
-				const frame = await frameUntil(
-					setup,
-					"the Thinking row to state the Handoff's sentence",
-					(f) => frameText(f).includes(expected),
-				);
+				const frame = await waitFor(setup, { shows: expected });
 				expect(reasonOf(frame, "Thinking")).toBe(`Error: Thinking: ${expected}`);
 			},
 			{ width: WIDE, height: HEIGHT },
@@ -640,11 +603,7 @@ describe("an unfit row states the Handoff's own sentence", () => {
 						{ ...NO_SETTINGS, contextWindow: "131072" },
 					).contextWindow,
 				);
-				const frame = await frameUntil(
-					setup,
-					"the Context row to state the Handoff's sentence",
-					(f) => frameText(f).includes(expected),
-				);
+				const frame = await waitFor(setup, { shows: expected });
 				expect(reasonOf(frame, "Context")).toBe(`Error: Context: ${expected}`);
 			},
 			{ width: WIDE, height: HEIGHT },
@@ -662,9 +621,7 @@ describe("an unfit row states the Handoff's own sentence", () => {
 						{ ...NO_SETTINGS, contextWindow: "000" },
 					).contextWindow,
 				);
-				const frame = await frameUntil(setup, "the Context row to state the count rule", (f) =>
-					frameText(f).includes(expected),
-				);
+				const frame = await waitFor(setup, { shows: expected });
 				expect(reasonOf(frame, "Context")).toBe(`Error: Context: ${expected}`);
 			},
 			{ width: WIDE, height: HEIGHT },
@@ -715,9 +672,7 @@ test("a warning row states exactly the sentence its note cells hold", async () =
 			// this check reads that width instead of mirroring the box's arithmetic.
 			const cells = panelNoteCells(WIDTH, HEIGHT);
 			expect(note.length).toBeGreaterThan(cells);
-			const frame = await frameUntil(setup, "the Thinking row to fill its note", (f) =>
-				f.includes(note.slice(0, cells)),
-			);
+			const frame = await waitFor(setup, { shows: note.slice(0, cells) });
 			expect(reasonOf(frame, "Thinking")).toBe(note.slice(0, cells).trim());
 		},
 		{ width: WIDTH, height: HEIGHT },
@@ -909,9 +864,7 @@ describe("the Context row refuses an entry it cannot take", () => {
 			async (setup) => {
 				await moveToModelRow(setup);
 				await pasteText(setup, "1e3");
-				const taken = await frameUntil(setup, "the Model field to take the paste", (f) =>
-					frameText(f).includes("Model 1e3"),
-				);
+				const taken = await waitFor(setup, { shows: "Model 1e3" });
 				expect(frameText(taken)).toContain("Model 1e3");
 				expect(refusals).toEqual([]);
 			},
@@ -931,9 +884,7 @@ describe("the plane action's task type states that no Agent runs", () => {
 				contextWindow: "1000",
 			},
 			async (setup) => {
-				const frame = await frameUntil(setup, "the Task row's fact", (f) =>
-					frameText(f).includes("the plane action holds no settings"),
-				);
+				const frame = await waitFor(setup, { shows: "the plane action holds no settings" });
 				// The Task row states the fact, and no placement note stands
 				// beside it: the plane action runs no placement write.
 				expect(frameText(frame)).toContain("the plane action holds no settings");

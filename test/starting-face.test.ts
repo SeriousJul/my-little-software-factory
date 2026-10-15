@@ -39,6 +39,7 @@ import {
 	spanColorAt,
 	startingFaceOf,
 	WIDTH,
+	waitFor,
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
@@ -764,7 +765,7 @@ describe("the no-color presentation", () => {
 				// The standing opens on the awaiting lead; the running ticket
 				// rests on its badge, and the face is one step further down.
 				await pressControl(setup, "move-list", { via: "j", quiet: true });
-				await frameUntil(setup, "the running ticket", (f) => f.includes("[running]"));
+				await waitFor(setup, { shows: "[running]" });
 				await pressControl(setup, "move-list", { via: "j", quiet: true });
 				await frameUntil(setup, "the handed-off ticket", (f) => faceCount(f) === 2);
 				const frame = await settle(setup);

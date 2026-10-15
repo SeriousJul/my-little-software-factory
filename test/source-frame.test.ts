@@ -35,6 +35,7 @@ import {
 	rowsOf,
 	settle,
 	WIDTH,
+	waitFor,
 	waitUntil,
 	withApp,
 } from "./app-harness.ts";
@@ -155,15 +156,11 @@ describe("source-driven frames", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				const loading = await frameUntil(setup, "the loading state", (f) =>
-					f.includes("loading tickets..."),
-				);
+				const loading = await waitFor(setup, { shows: "loading tickets..." });
 				expect(loading).not.toContain("Add a webhook retry policy");
 
 				source.settle(success([ticket()]));
-				const settled = await frameUntil(setup, "the fetched ticket", (f) =>
-					f.includes("Add a webhook retry policy"),
-				);
+				const settled = await waitFor(setup, { shows: "Add a webhook retry policy" });
 				expect(settled).toContain("[open]");
 				expect(settled).not.toContain("loading tickets...");
 			},
@@ -186,9 +183,7 @@ describe("source-driven frames", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(success([]));
-				const frame = await frameUntil(setup, "the empty state", (f) =>
-					f.includes("no tickets match the configured sources"),
-				);
+				const frame = await waitFor(setup, { shows: "no tickets match the configured sources" });
 				expect(frame).not.toContain("loading tickets...");
 			},
 			{
@@ -210,21 +205,19 @@ describe("source-driven frames", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(success([ticket()]));
-				await frameUntil(setup, "the ticket", (f) => f.includes("Add a webhook retry policy"));
+				await waitFor(setup, { shows: "Add a webhook retry policy" });
 
 				await pressControl(setup, "refresh", { quiet: true });
 				await callsReached(source, 2);
 				source.settle(fetchRateLimited);
-				const stale = await frameUntil(setup, "the stale health line", (f) =>
-					f.includes("issues: stale - GitHub rate limit exceeded"),
-				);
+				const stale = await waitFor(setup, { shows: "issues: stale - GitHub rate limit exceeded" });
 				// The prior snapshot stays visible.
 				expect(stale).toContain("Add a webhook retry policy");
 
 				await pressControl(setup, "handoff", { quiet: true });
-				const refused = await frameUntil(setup, "the refused handoff", (f) =>
-					f.includes("Ticket is not actionable because source data is stale"),
-				);
+				const refused = await waitFor(setup, {
+					shows: "Ticket is not actionable because source data is stale",
+				});
 				expect(messageRowOf(refused)).toContain(
 					"Ticket is not actionable because source data is stale",
 				);
@@ -267,9 +260,7 @@ describe("source-driven frames", () => {
 		});
 		await withApp(
 			async (setup) => {
-				const frame = await frameUntil(setup, "the handed-off ticket", (f) =>
-					f.includes("Add a webhook retry policy"),
-				);
+				const frame = await waitFor(setup, { shows: "Add a webhook retry policy" });
 				// The handed-off ticket stays visible for observation...
 				expect(frame).toContain("Add a webhook retry policy");
 				// ...the open ticket from the removed source is gone...
@@ -602,7 +593,7 @@ describe("source-driven frames", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(success([ticket()]));
-				await frameUntil(setup, "the ticket", (f) => f.includes("Add a webhook retry policy"));
+				await waitFor(setup, { shows: "Add a webhook retry policy" });
 				expect(source.calls).toBe(1);
 
 				// Two rapid manual refreshes start one fetch, not two.
@@ -615,7 +606,7 @@ describe("source-driven frames", () => {
 					externalUpdatedAt: "2026-08-31T11:00:00Z",
 				});
 				source.settle(success([fresh, ticket()]));
-				await frameUntil(setup, "the new ticket", (f) => f.includes("Second ticket"));
+				await waitFor(setup, { shows: "Second ticket" });
 				expect(source.calls).toBe(2);
 			},
 			{
@@ -655,9 +646,9 @@ describe("source-driven frames", () => {
 				);
 
 				await pressControl(setup, "handoff", { quiet: true });
-				const refused = await frameUntil(setup, "the refused handoff", (f) =>
-					f.includes("Handoff recovery is required before another handoff"),
-				);
+				const refused = await waitFor(setup, {
+					shows: "Handoff recovery is required before another handoff",
+				});
 				expect(messageRowOf(refused)).toContain(
 					"Handoff recovery is required before another handoff",
 				);

@@ -26,6 +26,7 @@ import {
 	tabUntilSlot,
 	typeText,
 	WIDTH,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import type { FakeRunner } from "./fake-runner.ts";
@@ -65,18 +66,16 @@ describe("shared field editing through the launcher", () => {
 			fieldKey(setup, "left");
 			fieldKey(setup, "left");
 			typeText(setup, "X");
-			const moved = await frameUntil(setup, "the character to land at the caret", (f) =>
-				frameText(f).includes("alpha beXta"),
-			);
+			const moved = await waitFor(setup, { shows: "alpha beXta" });
 			expect(frameText(moved)).toContain("alpha beXta");
 			// Home then Delete removes forward, not backward.
 			fieldKey(setup, "home");
 			fieldKey(setup, "delete");
-			await frameUntil(setup, "forward delete", (f) => frameText(f).includes("lpha beXta"));
+			await waitFor(setup, { shows: "lpha beXta" });
 			fieldKey(setup, "end");
 			fieldKey(setup, "end");
 			await typeText(setup, "!");
-			await frameUntil(setup, "the caret at the end", (f) => frameText(f).includes("lpha beXta!"));
+			await waitFor(setup, { shows: "lpha beXta!" });
 		});
 	});
 
@@ -94,9 +93,7 @@ describe("shared field editing through the launcher", () => {
 			await settle(setup);
 			// Word movement stops at the next word's first character, so the
 			// typed letter lands at that boundary rather than at a fixed count.
-			const moved = await frameUntil(setup, "the word boundary the caret reached", (f) =>
-				frameText(f).includes("alpha xbeta gamma"),
-			);
+			const moved = await waitFor(setup, { shows: "alpha xbeta gamma" });
 			expect(moved).toBeTruthy();
 			// Ctrl+Backspace takes the word back out again.
 			fieldKey(setup, "ctrl+backspace");
@@ -162,9 +159,7 @@ describe("shared field editing through the launcher", () => {
 			// The three-cell selection is the selection the operator made, so the
 			// next character replaces exactly what they had marked.
 			typeText(setup, "q");
-			await frameUntil(setup, "the typed character to replace the selection", (f) =>
-				frameText(f).includes("qdraft across a resize".slice(1)),
-			);
+			await waitFor(setup, { shows: "qdraft across a resize".slice(1) });
 		});
 	});
 

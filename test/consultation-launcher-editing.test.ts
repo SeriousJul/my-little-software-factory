@@ -18,7 +18,6 @@ import type { Setup } from "./app-harness.ts";
 import {
 	fieldKey,
 	frameText,
-	frameUntil,
 	guideKey,
 	HEIGHT,
 	pasteText,
@@ -27,6 +26,7 @@ import {
 	tabUntilSlot,
 	typeText,
 	WIDTH,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import type { FakeRunner } from "./fake-runner.ts";
@@ -106,9 +106,7 @@ describe("the Consultation launcher's editing baseline", () => {
 			await typeText(setup, "first line");
 			fieldKey(setup, "enter");
 			await typeText(setup, "second line");
-			const frame = await frameUntil(setup, "the two lines the operator typed", (f) =>
-				frameText(f).includes("first line second line"),
-			);
+			const frame = await waitFor(setup, { shows: "first line second line" });
 			// The Consultation is still not open: an ordinary editing key never
 			// started Agent work on the operator's behalf.
 			expect(frameText(frame)).toContain("Consultation launcher");
@@ -184,9 +182,7 @@ describe("the Consultation launcher's editing baseline", () => {
 			// The two-cell selection is still the selection: asking for help changed
 			// nothing about the operator's work.
 			await typeText(setup, "q");
-			await frameUntil(setup, "the typed character to replace the selection", (f) =>
-				frameText(f).includes("qaft before help"),
-			);
+			await waitFor(setup, { shows: "qaft before help" });
 		});
 	});
 
@@ -198,7 +194,7 @@ describe("the Consultation launcher's editing baseline", () => {
 			// The Key guide names Ctrl+A for Select all, and the field obeys the key
 			// the guide names: the bar offers the copy while a selection is held.
 			fieldKey(setup, "ctrl+a");
-			await frameUntil(setup, "the bar to name the copy", (f) => f.includes("F3 Copy selection"));
+			await waitFor(setup, { shows: "F3 Copy selection" });
 			const frame = await pressControl(setup, "copy-selection", {
 				shows: "Copied 14 cells of selected text",
 			});
@@ -213,9 +209,7 @@ describe("the Consultation launcher's editing baseline", () => {
 			await guideKey(setup, "launch", "c", { opens: "Consultation launcher" });
 			await focusDraft(setup);
 			await pasteText(setup, "x".repeat(64 * 1024 + 1));
-			const frame = await frameUntil(setup, "the size and the limit", (f) =>
-				frameText(f).includes("65537 UTF-8 bytes"),
-			);
+			const frame = await waitFor(setup, { shows: "65537 UTF-8 bytes" });
 			expect(frameText(frame)).toContain("the limit is 65536");
 			// The text stands: the operator shortens it rather than retyping it.
 			expect(frameText(frame)).toContain("xxxxxxxxxx");
@@ -244,9 +238,7 @@ describe("the Consultation launcher's editing baseline", () => {
 			// states why instead of failing in silence.
 			await tabUntilSlot(setup, "❯ Launch Consultation");
 			await pressControl(setup, "confirm-choice", { quiet: true });
-			const refused = await frameUntil(setup, "the refusal", (f) =>
-				frameText(f).includes("initial input cannot be empty"),
-			);
+			const refused = await waitFor(setup, { shows: "initial input cannot be empty" });
 			expect(frameText(refused)).toContain("Consultation launcher");
 			expect(setup.runner.commands().some((call) => call.startsWith("herdr"))).toBe(false);
 		});

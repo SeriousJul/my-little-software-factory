@@ -36,6 +36,7 @@ import {
 	initRepository,
 	messageRowOf,
 	pressControl,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import { agentListJson } from "./fake-runner.ts";
@@ -442,17 +443,13 @@ host = "github.com"
 				// The cursor rests on the first row, the Group header: the `i`
 				// there opens the panel over the generator's plan.
 				await initRepository(setup, { quiet: true });
-				const panel = await frameUntil(setup, "the init panel to open", (f) =>
-					f.includes("Init acme/factory"),
-				);
+				const panel = await waitFor(setup, { shows: "Init acme/factory" });
 				expect(panel).toContain("Pushes to main with a throwaway worktree.");
 
 				// The confirm runs the act end to end: the result stands on the
 				// Message line.
 				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
-				const settled = await frameUntil(setup, "the init's result", (f) =>
-					f.includes("acme/factory: pushed"),
-				);
+				const settled = await waitFor(setup, { shows: "acme/factory: pushed" });
 				// The result names the branch and the labels the act created.
 				expect(settled).toContain("to main, created");
 
@@ -527,24 +524,14 @@ host = "github.com"
 				// "registered 0 new sources" (ADR 0103).
 				const savedStat = statSync(configPath);
 				await initRepository(setup, { quiet: true });
-				await frameUntil(setup, "the re-init's panel to open", (f) =>
-					f.includes("Init acme/factory"),
-				);
+				await waitFor(setup, { shows: "Init acme/factory" });
 				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
-				await frameUntil(
-					setup,
-					"the re-init's panel to close",
-					(f) => !f.includes("Init acme/factory"),
-				);
+				await waitFor(setup, { hides: "Init acme/factory" });
 				await pressControl(setup, "message", { opens: "Message view" });
 				// The whole confirmation is read where the plane keeps it: the Message
 				// view on F2. The second skip is the re-init's own - the pull request
 				// feed the first init registered now covers that planned source.
-				const reInitLine = await frameUntil(
-					setup,
-					"the re-init's own confirmation on the Message view",
-					(f) => frameText(f).includes("covered by acme/factory-pull-requests"),
-				);
+				const reInitLine = await waitFor(setup, { shows: "covered by acme/factory-pull-requests" });
 				const reInitText = frameText(reInitLine);
 				expect(reInitText).toContain(
 					"acme/factory-pull-requests (covered by acme/factory-pull-requests)",
@@ -553,11 +540,7 @@ host = "github.com"
 				// its count stands there (ADR 0119): the no-count rule is read on the
 				// fact the re-init itself wrote.
 				await pressControl(setup, "message-close", { closes: "Message view" });
-				const closedOnReInit = await frameUntil(
-					setup,
-					"the Message view to close on the re-init",
-					(f) => !f.includes("Message view"),
-				);
+				const closedOnReInit = await waitFor(setup, { hides: "Message view" });
 				expect(messageRowOf(closedOnReInit)).not.toContain("registered 0 new source");
 				expect(messageRowOf(closedOnReInit)).not.toContain("new source in");
 				expect(readFileSync(configPath, "utf8")).toBe(saved);
@@ -780,25 +763,19 @@ pull-request-facts = []
 
 		await withApp(
 			async (setup) => {
-				const boot = await frameUntil(setup, "the base view", (f) => f.includes("Tickets"));
+				const boot = await waitFor(setup, { shows: "Tickets" });
 				expect(boot).not.toContain("an open issue");
 
 				await guideKey(setup, "repository-select-open", "o", { quiet: true });
-				const select = await frameUntil(setup, "the select list to open", (f) =>
-					f.includes("acme/beta"),
-				);
+				const select = await waitFor(setup, { shows: "acme/beta" });
 				expect(select).toContain("acme/beta");
 
 				await pressControl(setup, "select-repository", { quiet: true });
-				const panel = await frameUntil(setup, "the init panel", (f) =>
-					f.includes("Init acme/beta"),
-				);
+				const panel = await waitFor(setup, { shows: "Init acme/beta" });
 				expect(panel).toContain("Pushes to main");
 
 				await guideKey(setup, "confirm-choice", "Enter", { quiet: true });
-				const settled = await frameUntil(setup, "the init's result", (f) =>
-					f.includes("acme/beta: pushed"),
-				);
+				const settled = await waitFor(setup, { shows: "acme/beta: pushed" });
 				expect(messageRowOf(settled)).toContain("pushed");
 
 				// The config file holds both feeds the act planned.
@@ -808,11 +785,7 @@ pull-request-facts = []
 
 				// The running plane polls them now: the feed it just registered
 				// carries its ticket into the list without a restart.
-				const listed = await frameUntil(
-					setup,
-					"the registered feed's ticket to reach the list",
-					(f) => f.includes("an open issue"),
-				);
+				const listed = await waitFor(setup, { shows: "an open issue" });
 				expect(listed).toContain("an open issue");
 				expect(listed).toContain("acme/beta");
 			},

@@ -45,6 +45,7 @@ import {
 	staleKeyClaim,
 	startingFaceOf,
 	WIDTH,
+	waitFor,
 	waitUntil,
 	withApp,
 } from "./app-harness.ts";
@@ -237,9 +238,11 @@ async function seededPlane(extra: Partial<FactoryConfig> = {}): Promise<Plane> {
 async function liveEnter(
 	setup: AppSetup,
 	what: string,
-	predicate: (frame: string) => boolean,
+	target: string | ((frame: string) => boolean),
 ): Promise<string> {
 	await guideKey(setup, "handoff", "Enter", { quiet: true });
+	const predicate =
+		typeof target === "string" ? (frame: string) => frameText(frame).includes(target) : target;
 	return await frameUntil(setup, what, predicate);
 }
 
@@ -311,9 +314,9 @@ describe("the Live view on the ticket list", () => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the open ticket", (f) => markerRowOf(f) === 6);
 				await guideKey(setup, "ticket-goto", "g", { quiet: true });
-				const frame = await frameUntil(setup, "the refusal", (f) =>
-					f.includes("the Agent's pane is not alive in the last poll"),
-				);
+				const frame = await waitFor(setup, {
+					shows: "the Agent's pane is not alive in the last poll",
+				});
 				expect(frame).toContain("Warning:");
 				expect(fake.commands()).not.toContain("herdr agent focus");
 			},
@@ -342,9 +345,7 @@ describe("the Live view on the ticket list", () => {
 				await frameUntil(setup, "the starting ticket", (f) => markerRowOf(f) === 5);
 
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
-				await frameUntil(setup, "the Live view", (f) =>
-					f.includes("Live: Fix pan drift in split panes"),
-				);
+				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
 				// The pop-in settles before the geometry is measured.
 				await sleep(250);
 				// Near-fullscreen: the box's border sits one cell in from the
@@ -384,12 +385,8 @@ describe("the Live view on the ticket list", () => {
 				await frameUntil(setup, "the starting ticket", (f) => markerRowOf(f) === 5);
 
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
-				await frameUntil(setup, "the Live view", (f) =>
-					f.includes("Live: Fix pan drift in split panes"),
-				);
-				const frame = await frameUntil(setup, "the stream", (f) =>
-					f.includes("line one of the agent work"),
-				);
+				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
+				const frame = await waitFor(setup, { shows: "line one of the agent work" });
 				expect(frame).toContain("line two of the agent work");
 				// The pop-in settles before the color is measured.
 				await sleep(250);
@@ -427,13 +424,11 @@ describe("the Live view on the ticket list", () => {
 				await frameUntil(setup, "the starting ticket", (f) => markerRowOf(f) === 5);
 
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
-				await frameUntil(setup, "the Live view", (f) =>
-					f.includes("Live: Fix pan drift in split panes"),
-				);
-				await frameUntil(setup, "the first read", (f) => f.includes("first tick"));
+				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
+				await waitFor(setup, { shows: "first tick" });
 				// The next read lands on the cadence: the new line arrives
 				// without any key press.
-				await frameUntil(setup, "the refresh", (f) => f.includes("second tick"));
+				await waitFor(setup, { shows: "second tick" });
 				expect(
 					fake.commands().filter((c) => c === READ_COMMAND("pane-implement")).length,
 				).toBeGreaterThanOrEqual(2);
@@ -464,18 +459,14 @@ describe("the Live view on the ticket list", () => {
 				await frameUntil(setup, "the starting ticket", (f) => markerRowOf(f) === 5);
 
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
-				await frameUntil(setup, "the Live view", (f) =>
-					f.includes("Live: Fix pan drift in split panes"),
-				);
-				const first = await frameUntil(setup, "the first read at the bottom", (f) =>
-					f.includes("tick 30"),
-				);
+				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
+				const first = await waitFor(setup, { shows: "tick 30" });
 				// The body is shorter than the output: the bottom is in view,
 				// the top has scrolled past.
 				expect(first).not.toContain("tick 01");
 				// The next read appends: the pin follows the newest line, and
 				// what the pin pushed out stays out.
-				await frameUntil(setup, "the next read", (f) => f.includes("tick 35"));
+				await waitFor(setup, { shows: "tick 35" });
 				expect(frameText(setup.captureCharFrame())).not.toContain("tick 10");
 			},
 			(planeRecord) => ({
@@ -504,22 +495,18 @@ describe("the Live view on the ticket list", () => {
 				await frameUntil(setup, "the starting ticket", (f) => markerRowOf(f) === 5);
 
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
-				await frameUntil(setup, "the Live view", (f) =>
-					f.includes("Live: Fix pan drift in split panes"),
-				);
-				const first = await frameUntil(setup, "the first read at the bottom", (f) =>
-					f.includes("tick 30"),
-				);
+				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
+				const first = await waitFor(setup, { shows: "tick 30" });
 				expect(first).not.toContain("tick 01");
 				// Three rows up: the operator is reading, not following. The
 				// window is short of the full tail, so the last tick leaves on
 				// the first press, and tick 10 comes in on the third.
 				await guideKey(setup, "scroll-body", "k", { quiet: true });
-				await frameUntil(setup, "the first scroll row", (f) => !f.includes("tick 30"));
+				await waitFor(setup, { hides: "tick 30" });
 				await guideKey(setup, "scroll-body", "k", { quiet: true });
-				await frameUntil(setup, "the second scroll row", (f) => f.includes("tick 11"));
+				await waitFor(setup, { shows: "tick 11" });
 				await guideKey(setup, "scroll-body", "k", { quiet: true });
-				await frameUntil(setup, "the third scroll row", (f) => f.includes("tick 10"));
+				await waitFor(setup, { shows: "tick 10" });
 				// The next read arrives while the operator reads: the window
 				// holds where the operator put it.
 				await sleep(1300);
@@ -554,25 +541,21 @@ describe("the Live view on the ticket list", () => {
 				await frameUntil(setup, "the starting ticket", (f) => markerRowOf(f) === 5);
 
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
-				await frameUntil(setup, "the Live view", (f) =>
-					f.includes("Live: Fix pan drift in split panes"),
-				);
-				const first = await frameUntil(setup, "the first read at the bottom", (f) =>
-					f.includes("tick 30"),
-				);
+				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
+				const first = await waitFor(setup, { shows: "tick 30" });
 				expect(first).not.toContain("tick 01");
 				// Two rows up: the pin releases, like a read while the operator
 				// reads. The window is short of the full tail, so the last tick
 				// leaves on the first press.
 				await guideKey(setup, "scroll-body", "k", { quiet: true });
-				await frameUntil(setup, "the first scroll row", (f) => !f.includes("tick 30"));
+				await waitFor(setup, { hides: "tick 30" });
 				await guideKey(setup, "scroll-body", "k", { quiet: true });
-				await frameUntil(setup, "the second scroll row", (f) => f.includes("tick 12"));
+				await waitFor(setup, { shows: "tick 12" });
 				// End reaches the bottom: the pin comes back, and the newest
 				// line of the next read comes into view without asking.
 				await pageKey(setup, "end", { quiet: true });
-				await frameUntil(setup, "the stream at its bottom", (f) => f.includes("tick 30"));
-				await frameUntil(setup, "the re-pinned stream", (f) => f.includes("tick 35"));
+				await waitFor(setup, { shows: "tick 30" });
+				await waitFor(setup, { shows: "tick 35" });
 				expect(frameText(setup.captureCharFrame())).not.toContain("tick 01");
 			},
 			(planeRecord) => ({
@@ -604,13 +587,9 @@ describe("the Live view on the ticket list", () => {
 				await frameUntil(setup, "the starting ticket", (f) => markerRowOf(f) === 5);
 
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
-				await frameUntil(setup, "the Live view", (f) =>
-					f.includes("Live: Fix pan drift in split panes"),
-				);
-				await frameUntil(setup, "the first read", (f) => f.includes("last good lines"));
-				const frame = await frameUntil(setup, "the stale note", (f) =>
-					f.includes("Stale Agent output: the last lines stand"),
-				);
+				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
+				await waitFor(setup, { shows: "last good lines" });
+				const frame = await waitFor(setup, { shows: "Stale Agent output: the last lines stand" });
 				// The last lines stand under the note, and the note is dim.
 				expect(frame).toContain("last good lines");
 				expect(spanColors(setup, "Stale Agent output")).toContainEqual(rgb(roleColor("subtext0")));
@@ -635,10 +614,7 @@ describe("the Live view on the ticket list", () => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the starting ticket", (f) => markerRowOf(f) === 5);
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
-				await frameUntil(setup, "the Live view", (f) =>
-					f.includes("Live: Fix pan drift in split panes"),
-				);
-				const frame = await closeSurface(setup, "the view to close", (f) => !f.includes("Live:"));
+				const frame = await closeSurface(setup, "the view to close", "Live:");
 				// The ticket stays where it is, and nothing ran but the reads.
 				// Its `handed-off` state wears the Starting window's face
 				// (ADR 0030), the badge itself never drawn.
@@ -680,9 +656,7 @@ describe("the Live view on the ticket list", () => {
 		await withApp(
 			async (setup) => {
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
-				const frame = await frameUntil(setup, "the Live view", (f) =>
-					f.includes(`Live: ${DEFAULT_TICKET_TITLE}`),
-				);
+				const frame = await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
 				expect(frame).toContain("no agent pane is recorded for this ticket");
 				// The context line names the repository, the task type, and the
 				// agent: the handoff's own choice stands behind the row.
@@ -708,9 +682,7 @@ describe("the Live view on the ticket list", () => {
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(setup, "the starting ticket", (f) => markerRowOf(f) === 5);
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
-				await frameUntil(setup, "the Live view", (f) =>
-					f.includes("Live: Fix pan drift in split panes"),
-				);
+				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
 				// The guide names the mode of its own: the streaming sub-mode
 				// carries the body's scroll, the Goto confirm, and the leave,
 				// beside the plane's global keys.
@@ -752,9 +724,11 @@ const contentOf = (row: string): string =>
 async function closeSurface(
 	setup: AppSetup,
 	what: string,
-	predicate: (frame: string) => boolean,
+	target: string | ((frame: string) => boolean),
 ): Promise<string> {
 	await guideKey(setup, "cancel-action", "Esc", { quiet: true });
+	const predicate =
+		typeof target === "string" ? (frame: string) => !frameText(frame).includes(target) : target;
 	return await frameUntil(setup, what, predicate);
 }
 
@@ -807,15 +781,12 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await frameUntil(setup, "the ticket row", (f) => f.includes(DEFAULT_TICKET_TITLE));
-				await liveEnter(setup, "the Live view", (f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`));
+				await liveEnter(setup, "the Live view", `Live: ${DEFAULT_TICKET_TITLE}`);
 				// Enter confirms the Goto: the focus runs, the view closes. The
 				// confirmation is a result, not a warning, and names the
 				// workspace herdr's view must switch to: since herdr 0.9 a CLI
 				// focus no longer moves an attached client's view.
-				const frame = await liveEnter(setup, "the focus", (f) =>
-					f.includes("in workspace live-worktree"),
-				);
+				const frame = await liveEnter(setup, "the focus", "in workspace live-worktree");
 				expect(frame).toContain(`Info: focused the agent of ticket ${identity}`);
 				expect(planeRecord.fakeRunner.commands()).toContain("herdr agent focus pane-1");
 				// The focus is pure: no completion trace exists, and the
@@ -856,14 +827,12 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await frameUntil(setup, "the ticket row", (f) => f.includes(DEFAULT_TICKET_TITLE));
+				await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
 				// `g` is the base-mode Goto (ADR 0033): it focuses the agent's
 				// pane without opening a surface, and the ticket stays in flight
 				// under the face the poll wears.
 				await guideKey(setup, "ticket-goto", "g", { quiet: true });
-				const frame = await frameUntil(setup, "the focus", (f) =>
-					f.includes("in workspace live-worktree"),
-				);
+				const frame = await waitFor(setup, { shows: "in workspace live-worktree" });
 				expect(frame).toContain(`Info: focused the agent of ticket ${identity}`);
 				expect(planeRecord.fakeRunner.commands()).toContain("herdr agent focus pane-1");
 				expect(planeRecord.state.ticketWorkCycle.lastCompletion(identity)).toBeNull();
@@ -902,9 +871,8 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await frameUntil(setup, "the ticket row", (f) => f.includes(DEFAULT_TICKET_TITLE));
-				await liveEnter(setup, "the Live view", (f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`));
-				await frameUntil(setup, "the stream", (f) => f.includes("The fix is in the layout math."));
+				await liveEnter(setup, "the Live view", `Live: ${DEFAULT_TICKET_TITLE}`);
+				await waitFor(setup, { shows: "The fix is in the layout math." });
 				// The agent reports done: the observation settles the turn,
 				// and the same box turns into the decision.
 				planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
@@ -954,7 +922,7 @@ describe("the Live view against a running factory", () => {
 				expect(frame).toContain("Enter Confirm action");
 				expect(frame).not.toContain("Enter Goto");
 				// Close is selected by default; confirming it ends the cycle.
-				await liveEnter(setup, "the close", (f) => f.includes("[open]"));
+				await liveEnter(setup, "the close", "[open]");
 				expect(ticketRow(await settle(setup))).toContain("[open]");
 			},
 			{
@@ -1007,8 +975,7 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await frameUntil(setup, "the ticket row", (f) => f.includes(DEFAULT_TICKET_TITLE));
-				await liveEnter(setup, "the Live view", (f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`));
+				await liveEnter(setup, "the Live view", `Live: ${DEFAULT_TICKET_TITLE}`);
 				// The agent reports done. The turn settles, and the factory decides
 				// nothing for it: the Operator-decides flag parks the completion
 				// ahead of every outcome check, so the ticket rests awaiting.
@@ -1066,14 +1033,13 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await frameUntil(setup, "the ticket row", (f) => f.includes(DEFAULT_TICKET_TITLE));
-				await liveEnter(setup, "the Live view", (f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`));
-				await frameUntil(setup, "the stream", (f) => f.includes("the agent works"));
+				await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
+				await waitFor(setup, { shows: "the agent works" });
 				// The agent leaves herdr: the box carries the missing modal.
 				planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-				const frame = await frameUntil(setup, "the missing modal", (f) =>
-					f.includes(`Missing: ${DEFAULT_TICKET_TITLE}`),
-				);
+				const frame = await waitFor(setup, { shows: `Missing: ${DEFAULT_TICKET_TITLE}` });
 				expect(frame).toContain("Restart");
 				expect(frame).toContain("Abandon");
 				// The agent is back in the list: the stream returns in the
@@ -1102,14 +1068,15 @@ describe("the Live view against a running factory", () => {
 			// The settled agent's pane and the new agent's pane, both live, so
 			// the stream can move to the new pane the moment the handoff settles.
 			planeRecord.settleFirstFetch();
-			await frameUntil(setup, "the ticket row", (f) => f.includes(DEFAULT_TICKET_TITLE));
+			await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
 			// The base mode's key handlers, taken at rest on the list before this
 			// walk mounts anything, which is the only place a base means something:
 			// the release wait at the fallback refuses a snapshot that never saw a
 			// surface take the keys.
 			const baseHandlers = keyBase(setup);
-			await liveEnter(setup, "the Live view", (f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`));
-			await frameUntil(setup, "the stream", (f) => f.includes("the implementer is finishing"));
+			await guideKey(setup, "handoff", "Enter", { quiet: true });
+			await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
+			await waitFor(setup, { shows: "the implementer is finishing" });
 			// The agent reports done: the same box turns into the decision,
 			// the border re-titled in place.
 			planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
@@ -1120,9 +1087,9 @@ describe("the Live view against a running factory", () => {
 			);
 			// Close is the default; the workflow handoff is the last row.
 			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+			await waitFor(setup, { shows: "❯ Goto" });
 			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await frameUntil(setup, "the handoff row", (f) => frameText(f).includes("❯ Handoff: review"));
+			await waitFor(setup, { shows: "❯ Handoff: review" });
 			// The confirm ended the ticket's cycle in the same write that
 			// landed the decision (ADR 0072): the screen reads the list, the
 			// start runs in the new tab, and the row stands with the start's
@@ -1161,12 +1128,13 @@ describe("the Live view against a running factory", () => {
 		const planeRecord = await routeFallbackApp(async (setup, planeRecord) => {
 			const list = (a: string, b: string) => twoPaneAgentList(a, b);
 			planeRecord.settleFirstFetch();
-			await frameUntil(setup, "the ticket row", (f) => f.includes(DEFAULT_TICKET_TITLE));
+			await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
 			// The base mode's key handlers, taken at rest on the list before this
 			// walk mounts anything, the release wait's witness.
 			const base = keyBase(setup);
-			await liveEnter(setup, "the Live view", (f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`));
-			await frameUntil(setup, "the stream", (f) => f.includes("the implementer is finishing"));
+			await guideKey(setup, "handoff", "Enter", { quiet: true });
+			await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
+			await waitFor(setup, { shows: "the implementer is finishing" });
 			planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
 			await frameUntil(
 				setup,
@@ -1174,9 +1142,9 @@ describe("the Live view against a running factory", () => {
 				(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
 			);
 			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+			await waitFor(setup, { shows: "❯ Goto" });
 			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await frameUntil(setup, "the handoff row", (f) => frameText(f).includes("❯ Handoff: review"));
+			await waitFor(setup, { shows: "❯ Handoff: review" });
 			// The bus while the Live view owns the keys, its mount's subscribe
 			// landed in the rig's own turn. The view's own dispatch is the one
 			// subscription the base mode did not hold.
@@ -1240,8 +1208,9 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await frameUntil(setup, "the ticket row", (f) => f.includes(DEFAULT_TICKET_TITLE));
-				await liveEnter(setup, "the Live view", (f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`));
+				await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
 				// The agent reports done: the same box turns into the decision.
 				planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
 					stdout: agentListJson([
@@ -1263,11 +1232,9 @@ describe("the Live view against a running factory", () => {
 				// The workflow handoff row, then e: the override opens on the
 				// route's choice.
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
-				await frameUntil(setup, "the handoff row", (f) =>
-					frameText(f).includes("❯ Handoff: review"),
-				);
+				await waitFor(setup, { shows: "❯ Handoff: review" });
 				await guideKey(setup, "override", "e", { quiet: true });
 				// Esc drops the edit and returns to the panel it opened from:
 				// the Live view's decision sub-mode, the same box it left, not a
@@ -1301,12 +1268,13 @@ describe("the Live view against a running factory", () => {
 		const planeRecord = await routeFallbackApp(async (setup, planeRecord) => {
 			const list = (a: string, b: string) => twoPaneAgentList(a, b);
 			planeRecord.settleFirstFetch();
-			await frameUntil(setup, "the ticket row", (f) => f.includes(DEFAULT_TICKET_TITLE));
+			await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
 			// The base mode's key handlers for the same release wait, taken at the
 			// same place: at rest on the list, before this walk mounts anything.
 			const baseHandlers = keyBase(setup);
-			await liveEnter(setup, "the Live view", (f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`));
-			await frameUntil(setup, "the stream", (f) => f.includes("the implementer is finishing"));
+			await guideKey(setup, "handoff", "Enter", { quiet: true });
+			await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
+			await waitFor(setup, { shows: "the implementer is finishing" });
 			planeRecord.fakeRunner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
 			await frameUntil(
 				setup,
@@ -1314,9 +1282,9 @@ describe("the Live view against a running factory", () => {
 				(f) => f.includes(`Decision: ${DEFAULT_TICKET_TITLE}`) && f.includes("Handoff: review"),
 			);
 			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await frameUntil(setup, "the goto row", (f) => frameText(f).includes("❯ Goto"));
+			await waitFor(setup, { shows: "❯ Goto" });
 			await guideKey(setup, "select-action", "↓", { quiet: true });
-			await frameUntil(setup, "the handoff row", (f) => frameText(f).includes("❯ Handoff: review"));
+			await waitFor(setup, { shows: "❯ Handoff: review" });
 			// e opens the override on the route's choice; Enter confirms it
 			// from the panel.
 			await guideKey(setup, "override", "e", { quiet: true });
@@ -1378,9 +1346,10 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await frameUntil(setup, "the ticket row", (f) => f.includes(DEFAULT_TICKET_TITLE));
-				await liveEnter(setup, "the Live view", (f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`));
-				await frameUntil(setup, "the stream", (f) => f.includes("the implementer is finishing"));
+				await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
+				await waitFor(setup, { shows: "the implementer is finishing" });
 				// The turn settles, so the Ticket rests awaiting with the ask owed:
 				// the state the route's ask ends.
 				planeRecord.fakeRunner.set("herdr", ["agent", "list"], {
@@ -1503,9 +1472,10 @@ describe("the Live view against a running factory", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				await frameUntil(setup, "the ticket row", (f) => f.includes(DEFAULT_TICKET_TITLE));
-				await liveEnter(setup, "the Live view", (f) => f.includes(`Live: ${DEFAULT_TICKET_TITLE}`));
-				await frameUntil(setup, "the stream", (f) => f.includes("the agent is wrapping up"));
+				await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
+				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
+				await waitFor(setup, { shows: "the agent is wrapping up" });
 				// The agent reports done. The turn settles, the auto-close type
 				// decides for the factory, and the cycle ends while the operator
 				// watches: the screen closes on its own.

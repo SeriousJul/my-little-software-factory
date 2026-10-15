@@ -66,6 +66,7 @@ import {
 	startingFaceOf,
 	stillFrame,
 	WIDTH,
+	waitFor,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -120,9 +121,7 @@ describe("the control plane", () => {
 		});
 		await withApp(
 			async (setup) => {
-				const frame = await frameUntil(setup, "the no-sources state", (candidate) =>
-					candidate.includes("no ticket sources configured"),
-				);
+				const frame = await waitFor(setup, { shows: "no ticket sources configured" });
 				expect(frame).not.toContain(SAMPLE_TICKETS[0].title);
 			},
 			{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "production" } },
@@ -201,9 +200,7 @@ describe("the control plane", () => {
 					// The row wears the missing badge, not the [running] state badge:
 					// the agent the last poll listed in the pane is not the
 					// ticket's own.
-					const frame = await frameUntil(setup, "the missing failure badge", (candidate) =>
-						frameText(candidate).includes("missing"),
-					);
+					const frame = await waitFor(setup, { shows: "missing" });
 					// The selected list row wears the failure badge in the state
 					// badge's place, so the row holds no [running] badge of its own. The
 					// detail pane beside it wears the same word: one fact record answers
@@ -311,9 +308,7 @@ describe("the control plane", () => {
 			});
 			await withApp(
 				async (setup) => {
-					await frameUntil(setup, "the awaiting state badge", (candidate) =>
-						frameText(candidate).includes("[awaiting]"),
-					);
+					await waitFor(setup, { shows: "[awaiting]" });
 					// The base key refuses: the recorded pane holds a live agent
 					// that is not the ticket's own, so the focus never runs.
 					await guideKey(setup, "ticket-goto", "g", { quiet: true });
@@ -323,13 +318,9 @@ describe("the control plane", () => {
 					// The decision's own Goto row refuses the same focus: open the
 					// decision, walk down to the Goto row, and confirm it.
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
-					await frameUntil(setup, "the decision to open", (candidate) =>
-						candidate.includes("Decision:"),
-					);
+					await waitFor(setup, { shows: "Decision:" });
 					await guideKey(setup, "select-action", "↓", { quiet: true });
-					await frameUntil(setup, "the Goto row to be selected", (candidate) =>
-						candidate.includes("❯ Goto"),
-					);
+					await waitFor(setup, { shows: "❯ Goto" });
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					frame = await settle(setup);
 					expect(messageRowOf(frame)).toContain(
@@ -440,14 +431,10 @@ describe("the control plane", () => {
 			await withApp(
 				async (setup) => {
 					planeRecord.settleFirstFetch();
-					await frameUntil(setup, "the awaiting state badge", (candidate) =>
-						frameText(candidate).includes("[awaiting]"),
-					);
+					await waitFor(setup, { shows: "[awaiting]" });
 					// The Close row: the decision's first row, selected by default.
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
-					await frameUntil(setup, "the decision to open", (candidate) =>
-						candidate.includes("Decision:"),
-					);
+					await waitFor(setup, { shows: "Decision:" });
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					await settle(setup);
 					// The cycle ends decided: the draft the ticket still wears is
@@ -558,20 +545,14 @@ describe("the control plane", () => {
 			await withApp(
 				async (setup) => {
 					planeRecord.settleFirstFetch();
-					await frameUntil(setup, "the missing failure badge", (candidate) =>
-						frameText(candidate).includes("missing"),
-					);
+					await waitFor(setup, { shows: "missing" });
 					// The missing agent's recovery screen: Enter on the in-flight
 					// ticket opens the modal, down selects the Abandon, and the
 					// confirm ends the cycle.
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
-					await frameUntil(setup, "the missing modal", (candidate) =>
-						candidate.includes("Missing:"),
-					);
+					await waitFor(setup, { shows: "Missing:" });
 					await guideKey(setup, "select-action", "↓", { quiet: true });
-					await frameUntil(setup, "the Abandon row", (candidate) =>
-						candidate.includes("❯ Abandon"),
-					);
+					await waitFor(setup, { shows: "❯ Abandon" });
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					const frame = await settle(setup);
 					// The cycle ends abandoned: the draft the ticket still wears is
@@ -659,7 +640,7 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
-				const frame = await frameUntil(setup, "the parked row", (f) => f.includes("[parked]"));
+				const frame = await waitFor(setup, { shows: "[parked]" });
 				// The park is a machine fact, not a missing one: it wears no
 				// warning color, unlike `unknown`.
 				expect(detailPaneText(frame)).toContain("Suggested task type: parked");
@@ -740,9 +721,7 @@ describe("the control plane", () => {
 			// catalogue reports its unavailable reason on the Message line;
 			// it does not move the selected Ticket.
 			await guideKey(setup, "move-list", "↓", { quiet: true });
-			const after = await frameUntil(setup, "the unavailable Scroll reason", (frame) =>
-				frame.includes("the Ticket detail has nowhere to scroll"),
-			);
+			const after = await waitFor(setup, { shows: "the Ticket detail has nowhere to scroll" });
 			expect(markerRowOf(after)).toBe(3);
 
 			// h moves the focus back to the list pane; the selection is
@@ -1536,21 +1515,13 @@ describe("the control plane", () => {
 				await guideKey(setup, "detail", "l", { quiet: true });
 				const top = setup.captureCharFrame();
 				await pageKey(setup, "pagedown", { quiet: true });
-				const page = await frameUntil(
-					setup,
-					"the detail to move one viewport with context",
-					(frame) => !frame.includes("Drop the legacy auth shim"),
-				);
+				const page = await waitFor(setup, { hides: "Drop the legacy auth shim" });
 				expect(page).toContain("❯ [awaiting]");
 				await pageKey(setup, "end", { quiet: true });
-				const end = await frameUntil(setup, "the detail to reach its end", (frame) =>
-					frameText(frame).includes("feature flag."),
-				);
+				const end = await waitFor(setup, { shows: "feature flag." });
 				expect(end).toContain("❯ [awaiting]");
 				await pageKey(setup, "home", { quiet: true });
-				const home = await frameUntil(setup, "the detail to return to its start", (frame) =>
-					frame.includes("Drop the legacy auth shim"),
-				);
+				const home = await waitFor(setup, { shows: "Drop the legacy auth shim" });
 				await pageKey(setup, "home", { quiet: true });
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(home));
 				expect(stillFrame(top)).not.toBe(stillFrame(page));
@@ -1655,9 +1626,7 @@ describe("the control plane", () => {
 				expect(markerRowOf(trackJump)).toBe(3);
 				const thumbRow = rowsOf(trackJump).findIndex((row) => /[▀▄█]/.test(row.slice(58, 59)));
 				await mouseDrag(setup, [58, thumbRow], [58, paneRow(1)]);
-				await frameUntil(setup, "a scrollbar thumb drag to move toward the start", (frame) =>
-					frame.includes("Drop the legacy auth shim"),
-				);
+				await waitFor(setup, { shows: "Drop the legacy auth shim" });
 			},
 			{ width: 60, height: 27 },
 		);
@@ -1879,11 +1848,7 @@ describe("the control plane", () => {
 					expect(globalSection).toContain("Quit");
 					// Closing the guide returns to the tickets view.
 					await guideKey(setup, "guide-close", "Esc", { quiet: true });
-					await frameUntil(
-						setup,
-						"the Key guide to close",
-						(candidate) => !candidate.includes("Key guide"),
-					);
+					await waitFor(setup, { hides: "Key guide" });
 				},
 				{ width: WIDTH, height: 30, plane: planeRecord, loopPolicy: { kind: "production" } },
 			);

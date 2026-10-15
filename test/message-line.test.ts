@@ -297,7 +297,7 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(fetchSuccess([issueTicket()]));
-				await frameUntil(setup, "the ticket", (f) => f.includes("Add a webhook retry policy"));
+				await waitFor(setup, { shows: "Add a webhook retry policy" });
 				// A manual refresh shows its working, and settles back to clear.
 				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
 				const frame = await waitFor(setup, { quiet: true });
@@ -331,7 +331,7 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				errorSource.settle(fetchSuccess([issueTicket()]));
-				await frameUntil(setup, "the in-flight ticket", (f) => f.includes("missing"));
+				await waitFor(setup, { shows: "missing" });
 				await pressControl(setup, "ticket-close", { opens: "Close: Add a webhook retry policy" });
 				await pressControl(setup, "confirm-action", { hides: "Close:" });
 				const frame = await frameUntil(setup, "the error", (f) =>
@@ -390,7 +390,7 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(fetchSuccess([issueTicket()]));
-				await frameUntil(setup, "the ticket", (f) => f.includes("Add a webhook retry policy"));
+				await waitFor(setup, { shows: "Add a webhook retry policy" });
 				// A failed refresh leaves the source stale: the line warns.
 				await pressControl(setup, "refresh", { quiet: true });
 				await callsReached(source, 2);
@@ -434,7 +434,7 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				// The first refresh settles cleanly.
 				source.settle(fetchSuccess([issueTicket()]));
-				await frameUntil(setup, "the ticket", (f) => f.includes("Add a webhook retry policy"));
+				await waitFor(setup, { shows: "Add a webhook retry policy" });
 				// The next refresh absorbs one feed's failure: the source still
 				// succeeds, and its one warning line surfaces on the line.
 				await pressControl(setup, "refresh", { quiet: true });
@@ -538,7 +538,7 @@ describe("the permanent Message line", () => {
 				// The boot fetch has to land before the test asks for its own.
 				await callsReached(source, 1);
 				source.settle(fetchSuccess([issueTicket()]));
-				await frameUntil(setup, "the awaiting ticket", (f) => f.includes("[awaiting]"));
+				await waitFor(setup, { shows: "[awaiting]" });
 				await waitFor(setup, { quiet: true });
 				// A manual refresh is in flight, and its progress owns the line.
 				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
@@ -1004,7 +1004,7 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				errorSource.settle(fetchSuccess([issueTicket()]));
-				await frameUntil(setup, "the in-flight ticket", (f) => f.includes("missing"));
+				await waitFor(setup, { shows: "missing" });
 				await pressControl(setup, "ticket-close", { opens: "Close: Add a webhook retry policy" });
 				await pressControl(setup, "confirm-action", { hides: "Close:" });
 				await frameUntil(setup, "the error", (f) => messageRowOf(f).startsWith("Error: "));
@@ -1143,7 +1143,7 @@ describe("the permanent Message line", () => {
 				// The queue's Delete removes the item, and its own words
 				// stand on the line.
 				await pressControl(setup, "queue-jump", { quiet: true });
-				await frameUntil(setup, "the queue-jump to the item", (f) => f.includes("┌─❯ Work queue"));
+				await waitFor(setup, { shows: "❯ Work queue" });
 				await guideKey(setup, "queue-remove", "Delete", { shows: "was removed" });
 				const frame = await waitFor(setup, { quiet: true });
 				expect(messageRowOf(frame)).toContain(
@@ -1176,7 +1176,7 @@ describe("the permanent Message line", () => {
 			async (setup) => {
 				// The boot's own refresh settles clean.
 				source.settle(fetchSuccess([issueTicket()]));
-				await frameUntil(setup, "the ticket", (f) => f.includes("Add a webhook retry policy"));
+				await waitFor(setup, { shows: "Add a webhook retry policy" });
 				// A source that goes stale lands one warning entry and one
 				// notification, at the change.
 				await pressControl(setup, "refresh", { shows: "refreshing 1 sources" });
@@ -1246,7 +1246,7 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				// The scheduled fetch runs silent: the list loads, the line stays clear.
-				await frameUntil(setup, "the loading list", (f) => f.includes("loading tickets..."));
+				await waitFor(setup, { shows: "loading tickets..." });
 				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe("");
 				// A failed fetch warns in the source's own words.
 				source.settle(fetchRateLimited);

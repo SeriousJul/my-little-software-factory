@@ -29,6 +29,7 @@ import {
 	type Setup,
 	settle,
 	stillFrame,
+	waitFor,
 	withApp,
 	withholdEveryRenderAsk,
 	withholdRenderAsksButThePlanesOwn,
@@ -207,9 +208,7 @@ describe("native Ticket detail viewport", () => {
 				expect(end).not.toContain("Drop the legacy auth shim");
 
 				await mouseClick(setup, GUTTER_X, detailRow(1));
-				const start = await frameUntil(setup, "the start track click", (frame) =>
-					frame.includes("Drop the legacy auth shim"),
-				);
+				const start = await waitFor(setup, { shows: "Drop the legacy auth shim" });
 				expect(start).not.toContain("its feature flag.");
 
 				await mouseClick(setup, GUTTER_X, detailRow(6));
@@ -229,9 +228,7 @@ describe("native Ticket detail viewport", () => {
 				);
 				expect(thumbRows(draggedDown).at(-1)).toBeGreaterThan(detailRow(1));
 				await mouseDrag(setup, [GUTTER_X, detailRow(11)], [GUTTER_X, detailRow(1)]);
-				await frameUntil(setup, "a thumb drag toward the start", (frame) =>
-					frame.includes("Drop the legacy auth shim"),
-				);
+				await waitFor(setup, { shows: "Drop the legacy auth shim" });
 			},
 			{
 				width: SCROLL_WIDTH,
@@ -574,7 +571,7 @@ describe("native Ticket detail viewport", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(sourceSuccess([longTicket]));
-				await frameUntil(setup, "the source Ticket", (f) => f.includes("Keep detail offset"));
+				await waitFor(setup, { shows: "Keep detail offset" });
 				await pressControl(setup, "detail", { via: "l", moved: "detail" });
 				reference.push(setup.captureCharFrame());
 				for (let step = 1; step <= 10; step += 1) {
@@ -594,7 +591,7 @@ describe("native Ticket detail viewport", () => {
 				// The remounted app starts its own fetch of the same ticket;
 				// settle it so the burst scrolls the settled detail.
 				source.settle(sourceSuccess([longTicket]));
-				await frameUntil(setup, "the source Ticket", (f) => f.includes("Keep detail offset"));
+				await waitFor(setup, { shows: "Keep detail offset" });
 				const frames: string[] = [];
 				const record = () => frames.push(setup.captureCharFrame());
 				setup.renderer.on(CliRenderEvents.FRAME, record);
@@ -668,11 +665,7 @@ describe("native Ticket detail viewport", () => {
 				await pageKey(setup, "end", { shows: "its feature flag." });
 				await pressControl(setup, "tickets", { via: "h", moved: "tickets" });
 				await mouseClick(setup, 4, paneRow(3));
-				const nextTicket = await frameUntil(
-					setup,
-					"a different Ticket to start at its detail top",
-					(frame) => frame.includes("Migrate scheduler"),
-				);
+				const nextTicket = await waitFor(setup, { shows: "Migrate scheduler" });
 				expect(nextTicket).toContain("Migrate scheduler");
 			},
 			{
@@ -696,9 +689,7 @@ describe("native Ticket detail viewport", () => {
 		await withApp(
 			async (setup) => {
 				source.settle(sourceSuccess([sourceTicket(longDescription)]));
-				await frameUntil(setup, "the source Ticket", (frame) =>
-					frame.includes("Keep detail offset"),
-				);
+				await waitFor(setup, { shows: "Keep detail offset" });
 				await pressControl(setup, "detail", { via: "l", moved: "detail" });
 				for (let step = 0; step < 4; step += 1) {
 					await pressControl(setup, "scroll-detail", { via: "j", quiet: true });
@@ -711,9 +702,7 @@ describe("native Ticket detail viewport", () => {
 				// offset. Grow the terminal only to observe that refresh, then
 				// return to the original viewport to verify the native offset.
 				setup.resize(SCROLL_WIDTH, SCROLL_HEIGHT + 3);
-				await frameUntil(setup, "the same Ticket refresh", (frame) =>
-					frame.includes("External key: #11-refresh"),
-				);
+				await waitFor(setup, { shows: "External key: #11-refresh" });
 				setup.resize(SCROLL_WIDTH, SCROLL_HEIGHT);
 				await frameUntil(
 					setup,
@@ -727,11 +716,7 @@ describe("native Ticket detail viewport", () => {
 				source.settle(
 					sourceSuccess([sourceTicket("Short refreshed detail.", "closed", "#11-short")]),
 				);
-				const clamped = await frameUntil(
-					setup,
-					"the shortened same Ticket detail to clamp",
-					(frame) => frame.includes("Short refreshed detail."),
-				);
+				const clamped = await waitFor(setup, { shows: "Short refreshed detail." });
 				expect(clamped).toContain("Detail");
 			},
 			{
@@ -761,11 +746,7 @@ describe("native Ticket detail viewport", () => {
 				for (let step = 0; step < 8; step += 1) {
 					await pressControl(setup, "scroll-detail", { via: "j", quiet: true });
 				}
-				const middle = await frameUntil(
-					setup,
-					"a middle detail offset",
-					(frame) => !frame.includes("Drop the legacy auth shim"),
-				);
+				const middle = await waitFor(setup, { hides: "Drop the legacy auth shim" });
 				setup.resize(40, SCROLL_HEIGHT);
 				const narrowMiddle = await frameUntil(
 					setup,
@@ -829,9 +810,7 @@ describe("native Ticket detail viewport", () => {
 
 		// Below the minimum size the compact frame unmounts the panes.
 		setup.resize(39, 12);
-		const compact = await frameUntil(setup, "the compact frame", (f) =>
-			f.includes("Terminal too small"),
-		);
+		const compact = await waitFor(setup, { shows: "Terminal too small" });
 		expect(compact).not.toMatch(/[▀▄█]/);
 		await settle(setup);
 	}
