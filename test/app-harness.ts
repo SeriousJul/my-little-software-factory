@@ -824,7 +824,7 @@ export async function mouseDrag(
  * length: a swap, where one overlay replaces another, leaves the count
  * unchanged while a new handler appears and an old one leaves.
  */
-export function keyHandlerListeners(setup: Setup): unknown[] {
+function keyHandlerListeners(setup: Setup): unknown[] {
 	return setup.renderer.keyInput.listeners("keypress");
 }
 
@@ -856,35 +856,6 @@ async function awaitKeyBus(
 		}
 		await sleep(FRAME_POLL_MS);
 	}
-}
-
-/**
- * Wait until the key bus holds a subscription that `before` did not.
- *
- * That is the moment a mounting surface's key handler takes the keys: until
- * it is subscribed, a key for the surface is dropped by the shell below.
- */
-export async function awaitNewKeyHandler(
-	setup: Setup,
-	before: unknown[],
-	what: string,
-): Promise<void> {
-	return awaitKeyBus(setup, what, (now) => now.some((handler) => !before.includes(handler)));
-}
-
-/**
- * Wait until the key bus drops one of the subscriptions `before` held.
- *
- * That is the moment an unmounting surface's key handler releases the keys:
- * until it is unsubscribed, a key still reaches the stale handler, which can
- * act on it with the closed surface's meaning.
- */
-export async function awaitGoneKeyHandler(
-	setup: Setup,
-	before: unknown[],
-	what: string,
-): Promise<void> {
-	return awaitKeyBus(setup, what, (now) => before.some((handler) => !now.includes(handler)));
 }
 
 /**
@@ -920,7 +891,7 @@ export interface BaseKeyHandlers {
  * whether the walk ever mounted one. A snapshot taken too late - after the
  * surface mounted - is caught by the wait instead of passing silently.
  */
-export function baseKeyHandlers(setup: Setup): BaseKeyHandlers {
+function baseKeyHandlers(setup: Setup): BaseKeyHandlers {
 	const base = keyHandlerListeners(setup);
 	const bus = setup.renderer.keyInput;
 	let grew = false;
@@ -947,24 +918,22 @@ export function baseKeyHandlers(setup: Setup): BaseKeyHandlers {
 /**
  * Wait until the key bus holds no subscription outside the snapshot's base.
  *
- * `awaitGoneKeyHandler` names the handler whose release a test waits on, and a
- * test cannot name one when the surface that holds the keys was mounted and
- * unmounted between two facts the test can see: a panel a confirm returns to
- * can have its reopen elided altogether when the transition that closes it
- * lands in the same render, so no handler of that surface ever joins the bus.
- * The fact that covers both branches is the one this waits on - every handler
- * the bus holds is one of the surfaces that already held keys when the base was
- * taken, so no closed surface is left holding a key the base mode means to
- * take.
+ * A test cannot name the handler whose release it waits on when the surface
+ * that holds the keys was mounted and unmounted between two facts the test can
+ * see: a panel a confirm returns to can have its reopen elided altogether when
+ * the transition that closes it lands in the same render, so no handler of that
+ * surface ever joins the bus. The fact that covers both branches is the one
+ * this waits on - every handler the bus holds is one of the surfaces that
+ * already held keys when the base was taken, so no closed surface is left
+ * holding a key the base mode means to take.
  *
  * The wait would return at once when the bus holds only the base, and that is
  * the branch a caller could fall into by taking the snapshot too late. The
  * snapshot watches the bus for its whole life, so the wait refuses that case
  * out loud: a walk that never mounted a surface with keys to release has no
- * release to wait for, and it should name its handler with
- * `awaitGoneKeyHandler` instead.
+ * release to wait for.
  */
-export async function awaitBaseKeyHandlers(
+async function awaitBaseKeyHandlers(
 	setup: Setup,
 	snapshot: BaseKeyHandlers,
 	what: string,
@@ -980,7 +949,7 @@ export async function awaitBaseKeyHandlers(
 	}
 	if (!snapshot.grew) {
 		throw new Error(
-			`waiting for ${what} proved nothing: no key handler outside the base snapshot ever joined the bus, so this walk never mounted a surface that had a key to release. Take the snapshot before the surface opens, or wait with awaitGoneKeyHandler on the named handler`,
+			`waiting for ${what} proved nothing: no key handler outside the base snapshot ever joined the bus, so this walk never mounted a surface that had a key to release. Take the snapshot before the surface opens`,
 		);
 	}
 }
@@ -2824,8 +2793,10 @@ export interface PressUntilFields {
 /**
  * Press a control, and re-send it until the frame holds the fact the test
  * names: a key that lands mid-update is dropped by the plane, so a press that
- * left no frame the wait names goes out again, inside the rig's one deadline
- * minus the margin that keeps it ahead of the press's own settle deadline.
+ * left no frame the wait names goes out again, inside the rig's one
+ * deadline. A re-send that never settles reaches the press's own deadline
+ * first, and its error names the press; the loop's own deadline names the
+ * control and the fact it waited for.
  *
  * The test names the control and the frame fact, and the rig reads every key
  * from the catalogue, the source the Key guide paints from: a painted bar
@@ -2844,7 +2815,7 @@ export async function pressUntil(
 	fields: PressUntilFields,
 ): Promise<string> {
 	const control = catalogueControl(controlId);
-	const deadline = Date.now() + FRAME_DEADLINE_MS - 500;
+	const deadline = Date.now() + FRAME_DEADLINE_MS;
 	for (;;) {
 		const preFrame = await settle(setup);
 		const modes = surfaceModes(preFrame);

@@ -435,3 +435,75 @@ One owned suite stands outside the check's owned list, and the check names
 why: `ticket-boot-order-frame.test.ts` drives no input of any kind. It boots
 the plane and reads the frame the order paints, and the input side of the
 rule reaches it nowhere; it joins the owned list the day it presses a key.
+
+## Addendum: the bus waits leave the interface, the press wait rides the full deadline, and the escapes name their frames
+
+The addendum that kept the four bus reads named one way too many: the two
+raw bus wait operations, `awaitNewKeyHandler` and `awaitGoneKeyHandler`,
+had no caller outside the rig, and the bus's own helpers - the listener
+snapshot, the base key handler set, and its wait - stood exported beside
+them for no owned surface that read them. They leave the rig's interface,
+and the bus now reaches the suites only through the four kept reads named
+in the delivered-interface addendum, `releaseKeys`, `keyBase`,
+`leftKeyHandler`, and `staleKeyClaim`. The static architecture check takes
+the wider raw-input rule with the removal: an owned surface that touches
+the renderer's `mockInput`, its `mockMouse`, or the `keyInput` bus directly
+fails it, in the shape the check already applies to the hand-picked keys
+outside the closed escape list.
+
+The rig's `pressUntil` stood its outer loop on the deadline minus a five
+hundred millisecond margin, a margin the inner press deadline preempts: a
+re-sent press that runs to its own deadline fails before the outer loop's
+earlier cut can, so the margin changed no outcome and the failure it
+sheltered named a number no deadline in the rig stands on. The outer loop
+rides the rig's one deadline in full, and the failure names it as the
+single deadline the wait ran to. The rig's own suite pins the operation on
+both sides: a timeout on a re-sending press names the control and the fact
+the wait stood on; a `via` token the press names is taken from the bar's
+painted hint; a `via` token the hint names nowhere fails the press; a bar
+that paints no hint for the control takes the key the catalogue names for
+it; and a deterministic re-send pin re-sends the press that left no frame
+the wait names, until the frame fact stands.
+
+The correction the migration met on the runner stands beside the pins:
+Bun's test runner reads no `[test] timeout` from `bunfig.toml` on the
+standalone `bun test` form, where the timeout is command-line only and the
+runner's five second per-test budget stands. The rig's long pins therefore
+pass the per-test sixty second budget themselves, and the `bunfig.toml`
+comment that stated the config stood has been corrected to say so: the
+budget stands above the deadline through the test script's `--timeout`,
+and a standalone run of a rig suite carries the flag or the per-test
+budget. The `--parallel --isolate` script form reads the config's
+`[test] preload`, which the probe that first reported the timeout unread
+confused with the timeout itself: its own write failed for a missing
+callback, and the corrected probe stands the preload honoured.
+
+The campaign's per-site pass over the suites' remaining `guideKey` calls
+lands with this addendum: a site whose frame's bar paints the control's
+hint presses the control through `pressControl` or its `pressUntil`
+sibling and names the outcome, and a site whose frame's bar paints no hint
+the control owns keeps the named escape and names the frame in the lines
+around it. The escape classes the record keeps, each named at its sites: a
+decision modal frame, whose bar documents the modal's own row actions,
+presses its row's Enter and its panel key through the escape the plane
+routes to the modal's own controls; a Missing modal frame, the same shape
+on its own bar; a detail-focused frame, whose bar paints the `↑↓/jk` hint
+owned by the detail's scroll control, not the list's Move hint, so its
+scroll keys stay on the escape; a packed base bar below the width its hints
+fit, where the e hint packs out on the 46 and 60 column frames and the
+below-minimum frames pack the Move hint away with it; a 24 by 6 panel
+frame whose bar stands down to its Help hint; a Work queue item row, whose
+Enter the bar documents as the queue's own action after an in-flight
+handoff settles the frame onto it; a missing ticket's row, whose bar
+documents the row's own recovery Enter; and the Key guide's frames, whose
+bar documents the guide's own keys. Home and End stand a class of their
+own: the catalogue assigns them to the move-list control, but the bar's
+Move hint names only the up, down, j, and k tokens, so no frame paints a
+hint that owns them, and the ticket-grouping suite's Home and End presses
+stay on the named escape, the class the suite's header names. The in-flight
+guard's two Enters stand beside the last: the second Enter of a guard that
+stands on the in-flight row goes out through the escape, because the
+settled frame the guard waits on can park the cursor on a row whose Enter
+the bar documents as another control's action, and a re-sent named press
+would run that row's action instead of waiting for the handoff the first
+press started.

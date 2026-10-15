@@ -12,6 +12,12 @@
  * one row for each fact an axis reads: an open ticket, a Review-labeled ticket,
  * a ticket on a parking State, a ticket no State matches, and, when the test
  * asks for it, a held turn.
+ *
+ * Home and End belong to the move-list control by the catalogue, but the bar's
+ * Move hint names only the up, down, j, and k tokens, so no frame here paints
+ * a hint that owns a Home or End press. Those presses therefore stay on the
+ * rig's named escape: they name the control, and the rig takes the key from
+ * the catalogue's rows, on every frame this file stands.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

@@ -263,6 +263,10 @@ describe("the reserved bottom rows at every size", () => {
 					// stand actionable, and the walk down lands the cursor on one.
 					setup.plane.settleFirstFetch();
 					await settle(setup);
+					// The below-minimum frames of this sweep pack the bar's Move
+					// hint and the e hint away, so both keys go out as the
+					// catalogue's named escapes, the frame that stands each pass
+					// deciding what it paints.
 					await guideKey(setup, "move-list", "j", { quiet: true });
 					await guideKey(setup, "move-list", "j", { quiet: true });
 					await guideKey(setup, "move-list", "j", { quiet: true });

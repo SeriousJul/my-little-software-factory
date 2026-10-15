@@ -2288,6 +2288,62 @@ runs the queue, one confirmation per row, in list order`, missed the rig's
 tree: it is named as a load flake per the triage rule, in the shape the
 record's #317 line names, and the base comparison above stands beside it.
 
+The rework of this pull moves the suites' per-site escapes onto the rig's
+named controls wherever the frame's bar paints the control's hint, and it
+names the frame at every escape that stands: the handoff-frame, the live
+view, the auto-mode, the app, and the reserved-rows suites press the
+override, the handoff, and the move-list controls through `pressControl`
+and `pressUntil` on the frames whose bars paint their hints - the 120
+and 60 column base bars among them, the last measured through the probe
+the migration ran beside them - and their `guideKey` sites that stand
+keep their name and the frame around it: the decision modal frames and
+the Missing modal frames, whose bars document the modals' own row actions;
+the detail-focused frames, whose `↑↓/jk` hint the record's scroll pair
+names as the detail's scroll control, not the list's Move hint; the packed
+base bars, where the e hint packs out on the 46 and 60 column frames and
+the below-minimum frames pack the Move hint away with it; the 24 by 6
+panel frames, whose bars stand down to their Help hint; the Work queue
+item rows, whose Enter the bars document as the queue's own action once
+an in-flight handoff settles the frame onto them; the missing tickets'
+rows, whose bars document the rows' own recovery Enter; and the Key
+guide's frames, whose bars document the guide's own keys. Home and End
+stand the class the record's escape list names: the catalogue assigns
+them to the move-list control, but the bar's Move hint names only the up,
+down, j, and k tokens, so the ticket-grouping suite's Home and End presses
+keep the named escape, its header naming the class. The rig's own suite
+takes the pins the rework of its interface names: the press wait rides
+the rig's one deadline in full, the margin its delivered form cut away
+stands dead, and the operation's timeout, its `via` token, its catalogue
+fallback, and its re-send each stand on a pin of their own. Its interface
+loses the two raw bus wait operations no owned surface drives, and the
+bus's helpers stand private beside the four kept bus reads, the static
+check taking the wider rule that an owned surface that touches the
+renderer's input, its mouse, or the key bus directly fails it.
+The runner fact the correction names stands beside the pins: Bun's test
+runner reads no `[test] timeout` from `bunfig.toml` on the standalone
+form, and the rig's long pins pass the per-test budget themselves, which
+the corrected `bunfig.toml` comment now states.
+
+The walk at the head that lands this rework stands at no press-family
+call, no hand operation, and no handler probe on the owned surfaces, 23
+raw waits, 220 inline containment predicates, 18 reaches to the
+renderer's input, and 20 helper copies over the rig's 95 exports, against
+the base head's 79: the inline containment falls from the 500 the record
+measured at the rework head above as the suites' wait vocabulary unifies
+on the named outcomes and the press waits take their checks into the
+rig's `pressUntil`, and the export count falls from the 100 of that head
+as the two bus wait operations and the bus's helpers leave the
+interface. At that head the scoped run over the nine suites this rework
+touches - the rig's own, the architecture check, the handoff frame, the
+live view, the auto-mode, the app, the ticket grouping frame, the
+reserved rows, and the Key guide - ran its 384 tests in 348.6 seconds,
+0 fail, on this machine (32 cores, 60 GB RAM, 1 GB available): the
+first scoped run over these suites stood with another test run still
+running on the machine, and it reported one fail on the resize test
+before the rework of the one press it had moved; the run named here is
+the second, which stood the load at its start unmeasured and its load
+at 1.5 mid-run, and it is the green evidence of the record.
+
 What was not measured: every frame surface that boots the app on the plane
 has been migrated, so no press-family call, hand operation, or raw wait
 stands outside the rig's ownership on the owned surfaces, as the walk at

@@ -316,11 +316,16 @@ describe("the control plane", () => {
 					expect(messageRowOf(frame)).toContain("the Agent's pane is not alive in the last poll");
 					expect(runner.commands()).not.toContain("herdr agent focus pane-1");
 					// The decision's own Goto row refuses the same focus: open the
-					// decision, walk down to the Goto row, and confirm it.
+					// decision, walk down to the Goto row, and confirm it. The row
+					// is awaiting, whose bar documents the Decide's Enter, not the
+					// handoff's hint: the key is the catalogue's escape.
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					await waitFor(setup, { shows: "Decision:" });
 					await guideKey(setup, "select-action", "↓", { quiet: true });
 					await waitFor(setup, { shows: "❯ Goto" });
+					// The frame is the decision modal, whose bar documents the
+					// modal's own controls: the key is the catalogue's escape,
+					// routed by the plane to the row's action.
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					frame = await settle(setup);
 					expect(messageRowOf(frame)).toContain(
@@ -433,8 +438,13 @@ describe("the control plane", () => {
 					planeRecord.settleFirstFetch();
 					await waitFor(setup, { shows: "[awaiting]" });
 					// The Close row: the decision's first row, selected by default.
+					// The row is awaiting, whose bar documents the Decide's Enter,
+					// not the handoff's hint: the key is the catalogue's escape.
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					await waitFor(setup, { shows: "Decision:" });
+					// The frame is the decision modal, whose bar documents the
+					// modal's own controls: the key is the catalogue's escape,
+					// routed by the plane to the Close row's action.
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					await settle(setup);
 					// The cycle ends decided: the draft the ticket still wears is
@@ -548,11 +558,16 @@ describe("the control plane", () => {
 					await waitFor(setup, { shows: "missing" });
 					// The missing agent's recovery screen: Enter on the in-flight
 					// ticket opens the modal, down selects the Abandon, and the
-					// confirm ends the cycle.
+					// confirm ends the cycle. The row's bar documents the row's own
+					// recovery Enter, not the handoff's hint: the key is the
+					// catalogue's escape.
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					await waitFor(setup, { shows: "Missing:" });
 					await guideKey(setup, "select-action", "↓", { quiet: true });
 					await waitFor(setup, { shows: "❯ Abandon" });
+					// The frame is the Missing modal, whose bar documents the
+					// modal's own key: the catalogue's escape, routed by the plane
+					// to the Abandon row's action.
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					const frame = await settle(setup);
 					// The cycle ends abandoned: the draft the ticket still wears is
@@ -675,13 +690,13 @@ describe("the control plane", () => {
 		await withApp(async (setup) => {
 			// The attention band stands the selection on the awaiting ticket,
 			// the list's first row.
-			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await pressControl(setup, "move-list", { via: "↓", quiet: true });
 			await frameUntil(
 				setup,
 				"the selection to move to the running ticket",
 				(f) => showsTicket(f, SAMPLE_TICKETS[2]) && !showsTicket(f, SAMPLE_TICKETS[3]),
 			);
-			await guideKey(setup, "move-list", "↑", { quiet: true });
+			await pressControl(setup, "move-list", { via: "↑", quiet: true });
 			await frameUntil(
 				setup,
 				"the selection to move back to the awaiting ticket",
@@ -694,11 +709,11 @@ describe("the control plane", () => {
 		await withApp(async (setup) => {
 			// The attention band stands the selection on the awaiting ticket,
 			// the list's first row.
-			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await pressControl(setup, "move-list", { via: "↓", quiet: true });
 			await frameUntil(setup, "the selection to move to the running ticket", (f) =>
 				showsTicket(f, SAMPLE_TICKETS[2]),
 			);
-			await guideKey(setup, "move-list", "↑", { quiet: true });
+			await pressControl(setup, "move-list", { via: "↑", quiet: true });
 			await frameUntil(
 				setup,
 				"the selection to move back to the awaiting ticket",
@@ -719,7 +734,9 @@ describe("the control plane", () => {
 
 			// j with the detail focused cannot scroll at this size. The
 			// catalogue reports its unavailable reason on the Message line;
-			// it does not move the selected Ticket.
+			// it does not move the selected Ticket. The frame's bar documents
+			// the detail's scroll keys, not the list's Move hint: the key is
+			// the catalogue's escape, routed by the plane to the focused pane.
 			await guideKey(setup, "move-list", "↓", { quiet: true });
 			const after = await waitFor(setup, { shows: "the Ticket detail has nowhere to scroll" });
 			expect(markerRowOf(after)).toBe(3);
@@ -737,7 +754,7 @@ describe("the control plane", () => {
 		await withApp(async (setup) => {
 			// Move the selection to the list's second row while the list is
 			// focused.
-			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await pressControl(setup, "move-list", { via: "↓", quiet: true });
 			await frameUntil(
 				setup,
 				"the selection to move to the second row",
@@ -807,6 +824,9 @@ describe("the control plane", () => {
 
 				// j translates the native surface one terminal row. The top padding
 				// scrolls away first, and every mounted content row moves together.
+				// The frame's bar documents the detail's scroll keys, not the
+				// list's Move hint: the key is the catalogue's escape, routed by
+				// the plane to the focused pane.
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				const scrolled = await frameUntil(
 					setup,
@@ -816,7 +836,8 @@ describe("the control plane", () => {
 				// The selection did not move.
 				expect(markerRowOf(scrolled)).toBe(3);
 
-				// k scrolls back to the top. The title is back.
+				// k scrolls back to the top. The title is back. The key is the
+				// catalogue's escape, for the same reason as the down key above.
 				await guideKey(setup, "move-list", "↑", { quiet: true });
 				const back = await frameUntil(
 					setup,
@@ -834,7 +855,9 @@ describe("the control plane", () => {
 			async (setup) => {
 				await guideKey(setup, "detail", "l", { quiet: true });
 
-				// At the top edge, k cannot scroll up.
+				// At the top edge, k cannot scroll up. The detail-focused bar
+				// documents the detail's scroll keys, so the key is the
+				// catalogue's escape.
 				const before = setup.captureCharFrame();
 				await guideKey(setup, "move-list", "↑", { quiet: true });
 				const afterTop = await settle(setup);
@@ -844,6 +867,8 @@ describe("the control plane", () => {
 				// settles on its last page: the final description line is
 				// visible and the title is out of view.
 				for (let i = 0; i < 30; i += 1) {
+					// The detail-focused bar documents the detail's scroll keys,
+					// so each down key is the catalogue's escape.
 					await guideKey(setup, "move-list", "↓", { quiet: true });
 					await sleep(25);
 				}
@@ -853,7 +878,8 @@ describe("the control plane", () => {
 					(f) => frameText(f).includes("feature flag.") && !f.includes("Drop the legacy auth shim"),
 				);
 
-				// One more j at the bottom edge changes nothing.
+				// One more j at the bottom edge changes nothing. The key is the
+				// catalogue's escape, for the same reason as the loop above.
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				const afterBottom = await settle(setup);
 				expect(stillFrame(afterBottom)).toBe(stillFrame(atBottom));
@@ -894,7 +920,7 @@ describe("the control plane", () => {
 				// Moving the selection slides the window: enough slides bring
 				// the later tickets in and drop the oldest rows out.
 				for (let i = 0; i < 6; i += 1) {
-					await guideKey(setup, "move-list", "↓", { quiet: true });
+					await pressControl(setup, "move-list", { via: "↓", quiet: true });
 					frame = frameText(await settle(setup));
 				}
 				expect(frame).toContain("[open]");
@@ -915,7 +941,7 @@ describe("the control plane", () => {
 	test("resizing the terminal keeps the panes on the grid and the selection", async () => {
 		await withApp(async (setup) => {
 			// Move the selection so the resize has something to preserve.
-			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await pressControl(setup, "move-list", { via: "↓", quiet: true });
 			await frameUntil(
 				setup,
 				"the selection to move to the second row",
@@ -966,6 +992,9 @@ describe("the control plane", () => {
 			const selectedAgentRow = (frame: string) =>
 				rowsOf(frame).findIndex((row) => row.includes("Agent: pi"));
 			const agentBeforeScroll = selectedAgentRow(setup.captureCharFrame());
+			// The detail-focused bar documents the detail's scroll keys, not
+			// the list's Move hint: the key is the catalogue's escape, routed
+			// by the plane to the focused pane.
 			await guideKey(setup, "move-list", "↓", { quiet: true });
 			await frameUntil(
 				setup,
@@ -1291,7 +1320,7 @@ describe("the control plane", () => {
 				// The detail says so for the selected, blocked ticket.
 				expect(detailPaneText(frame)).toContain("Suggested task type: review");
 
-				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await frameUntil(setup, "the selection to move to the recovery ticket", (f) =>
 					detailPaneText(f).includes("Handoff: recovery required"),
 				);
@@ -1357,11 +1386,11 @@ describe("the control plane", () => {
 				// cells.
 				const faceOnMarkerRow = (f: string) =>
 					startingFaceOf(listHalfOf(rowsOf(f).find((r) => r.startsWith("│ ❯")) as string)) !== null;
-				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await frameUntil(setup, "the selection to pass the running ticket", (f) =>
 					showsTicket(f, SAMPLE_TICKETS[2]),
 				);
-				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await frameUntil(setup, "the selection to reach the Starting window", faceOnMarkerRow);
 				const frame = setup.captureCharFrame();
 				const rows = rowsOf(frame);
@@ -1476,15 +1505,15 @@ describe("the control plane", () => {
 			expect(detail).not.toContain("Suggested task type:");
 
 			// The open ticket: the suggestion, labeled as a suggestion.
-			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await pressControl(setup, "move-list", { via: "↓", quiet: true });
 			await frameUntil(setup, "the selection to pass the running ticket", (f) =>
 				showsTicket(f, SAMPLE_TICKETS[2]),
 			);
-			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await pressControl(setup, "move-list", { via: "↓", quiet: true });
 			await frameUntil(setup, "the selection to pass the Starting window", (f) =>
 				showsTicket(f, SAMPLE_TICKETS[1]),
 			);
-			await guideKey(setup, "move-list", "↓", { quiet: true });
+			await pressControl(setup, "move-list", { via: "↓", quiet: true });
 			await frameUntil(
 				setup,
 				"the selection to reach the open ticket",
@@ -1495,11 +1524,11 @@ describe("the control plane", () => {
 			expect(detail).not.toContain("Handoff task type:");
 
 			// The running ticket: the live handoff's value, labeled as a handoff.
-			await guideKey(setup, "move-list", "↑", { quiet: true });
+			await pressControl(setup, "move-list", { via: "↑", quiet: true });
 			await frameUntil(setup, "the selection back past the Starting window", (f) =>
 				showsTicket(f, SAMPLE_TICKETS[1]),
 			);
-			await guideKey(setup, "move-list", "↑", { quiet: true });
+			await pressControl(setup, "move-list", { via: "↑", quiet: true });
 			await frameUntil(setup, "the selection back to the running ticket", (f) =>
 				showsTicket(f, SAMPLE_TICKETS[2]),
 			);
@@ -1642,6 +1671,9 @@ describe("the control plane", () => {
 			async (setup) => {
 				await guideKey(setup, "detail", "l", { quiet: true });
 				const before = agentRowOf(setup.captureCharFrame());
+				// The detail-focused bar documents the detail's scroll keys, so
+				// the down key is the catalogue's escape, routed by the plane to
+				// the focused pane.
 				await guideKey(setup, "move-list", "↓", { quiet: true });
 				await frameUntil(
 					setup,
@@ -1747,18 +1779,21 @@ describe("the control plane", () => {
 				// detail's fold, so the walk reads the selected row, not the
 				// detail.
 				const selectedRow = (f: string) => rowsOf(f).find((row) => row.startsWith("│ ❯")) ?? "";
-				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await frameUntil(setup, "the selection to pass the running ticket", (f) =>
 					selectedRow(f).includes("Migrat"),
 				);
-				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await frameUntil(setup, "the selection to pass the Starting window", (f) =>
 					selectedRow(f).includes("Fix pan dri"),
 				);
-				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await frameUntil(setup, "the selection to reach the open ticket", (f) =>
 					selectedRow(f).includes("Retry polic"),
 				);
+				// At 60 columns the bar packs the e hint away, so the press is
+				// the catalogue's named escape. The open ticket owns the key and
+				// the panel opens; the mouse input below it changes nothing.
 				await guideKey(setup, "override", "e", { quiet: true });
 				const before = setup.captureCharFrame();
 				await mouseWheel(setup, { x: 45, y: paneRow(3), direction: "down" });
@@ -1827,6 +1862,10 @@ describe("the control plane", () => {
 							rowsOf(setup.captureCharFrame()).some((row) => row.includes("Control plane controls"))
 						)
 							break;
+						// The frame is the Key guide, whose bar documents the
+						// guide's own keys, not the list's Move hint: each step is
+						// the catalogue's escape, routed by the plane to the guide
+						// scroll.
 						await guideKey(setup, "move-list", "↓", { quiet: true });
 						await settle(setup);
 					}

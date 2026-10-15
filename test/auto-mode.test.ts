@@ -41,6 +41,7 @@ import {
 	markerRowOf,
 	messageRowOf,
 	pageKey,
+	pressControl,
 	rgb,
 	roleColor,
 	rowsOf,
@@ -709,7 +710,15 @@ async function settleReverify(src: FakeSource, outcome: FetchOutcome): Promise<v
 	for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
 }
 
-/** Enter through the real key path, then wait for its effect. */
+/**
+ * Enter through the real key path, then wait for its effect.
+ *
+ * The frames these presses stand on document different controls' Enter: the
+ * handoff's, the Decide's, and the decision modal's row action. One named
+ * control owns the key on none of those frames alone, so the key goes out as
+ * the catalogue's escape, and the plane routes it to the on-bar owner of the
+ * frame it lands on.
+ */
 async function handoffEnter(
 	setup: AppSetup,
 	what: string,
@@ -2260,7 +2269,9 @@ describe("the decision modal", () => {
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", "Decision:");
 				// The first row ends the cycle: it has no Handoff settings to
-				// edit, so e there opens nothing.
+				// edit, so e there opens nothing. The frame is the decision
+				// modal, whose bar documents the modal's own controls, not the
+				// panel's e: the key is the catalogue's escape.
 				await guideKey(setup, "override", "e", { quiet: true });
 				await waitFor(setup, { shows: "Decision:" });
 				expect(frameText(await settle(setup))).not.toContain("Override");
@@ -2271,6 +2282,9 @@ describe("the decision modal", () => {
 
 				// e opens the panel on the choice the edge resolved: the pinned
 				// pi agent, and the target profile's model and context window.
+				// The frame is the decision modal, whose bar documents the
+				// modal's own controls, not the panel's e: the key is the
+				// catalogue's escape.
 				await guideKey(setup, "override", "e", { quiet: true });
 				await waitFor(setup, { shows: "Override" });
 				const panel = frameText(await settle(setup));
@@ -2282,11 +2296,11 @@ describe("the decision modal", () => {
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 
 				// The operator replaces the resolved model for this one handoff.
-				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await waitFor(setup, { shows: "❯ Environment" });
-				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await waitFor(setup, { shows: "❯ Task type" });
-				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await waitFor(setup, { shows: "❯ Model" });
 				// The row's input takes focus on its own render pass: let that
 				// land, and the frame settle, before the edit keys go in.
@@ -2357,6 +2371,9 @@ describe("the decision modal", () => {
 				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
 				await waitFor(setup, { shows: "❯ Handoff: review" });
+				// The frame is the decision modal, whose bar documents the
+				// modal's own controls, not the panel's e: the key is the
+				// catalogue's escape.
 				await guideKey(setup, "override", "e", { quiet: true });
 				await waitFor(setup, { shows: "Override" });
 				const opened = frameText(await settle(setup));
@@ -2365,9 +2382,9 @@ describe("the decision modal", () => {
 				expect(opened).toContain("Agent claude");
 				expect(opened).toContain("Model review-model");
 
-				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await waitFor(setup, { shows: "❯ Environment" });
-				await guideKey(setup, "move-list", "↓", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await waitFor(setup, { shows: "❯ Task type" });
 				// Left from `review` lands on `fix`, whose profile names its own
 				// Agent and Model. Both rows are untouched, so both follow it, and
@@ -2406,6 +2423,9 @@ describe("the decision modal", () => {
 				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
 				await waitFor(setup, { shows: "❯ Handoff: review" });
+				// The frame is the decision modal, whose bar documents the
+				// modal's own controls, not the panel's e: the key is the
+				// catalogue's escape.
 				await guideKey(setup, "override", "e", { quiet: true });
 				await waitFor(setup, { shows: "Override" });
 				await settle(setup);
@@ -2430,7 +2450,7 @@ describe("the decision modal", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
-				await guideKey(setup, "override", "e", { quiet: true });
+				await pressControl(setup, "override", { quiet: true });
 				const frame = await waitFor(setup, { shows: "press Enter, then e on a Handoff row" });
 				// The bar carries the e Override hint with its reason; the panel's
 				// box title is the open signal.
@@ -2631,7 +2651,10 @@ describe("the decision modal", () => {
 				app.src.settle(success);
 				await frameUntil(setup, "the awaiting ticket", (f) => ticketRow(f).includes("[awaiting]"));
 				await handoffEnter(setup, "the decision modal", "Decision:");
-				// Goto is the second row: one down, confirm.
+				// Goto is the second row: one down, confirm. The frame is the
+				// decision modal, whose bar documents the modal's own controls:
+				// Enter runs the selected row's action, so the key is the
+				// catalogue's escape, routed by the plane to that row.
 				await guideKey(setup, "select-action", "↓", { quiet: true });
 				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
@@ -2743,7 +2766,10 @@ describe("the decision modal", () => {
 				);
 				expect(thumbRowOf(backDown)).toBe(bottomThumbRow);
 
-				// up and down move the action row.
+				// up and down move the action row. The frame is the decision
+				// modal, whose bar documents the modal's own row keys: the key
+				// is the catalogue's escape, routed by the plane to the row's
+				// move.
 				await guideKey(setup, "select-action", "↓", { quiet: true });
 				await waitFor(setup, { shows: "❯ Goto" });
 				await guideKey(setup, "move-list", "↑", { quiet: true });
@@ -3297,7 +3323,7 @@ describe("the leftover environment", () => {
 				await handoffEnter(setup, "the first Close cleanup", () => gate.busy());
 				await waitFor(setup, { hides: "Decision:" });
 
-				await guideKey(setup, "move-list", "↑", { quiet: true });
+				await pressControl(setup, "move-list", { via: "↑", quiet: true });
 				await frameUntil(setup, "the second ticket", (f) =>
 					detailPaneText(f).includes("External key: #6"),
 				);
@@ -3312,7 +3338,7 @@ describe("the leftover environment", () => {
 				// The second ticket is open again. Its handoff claims now, but the
 				// cleanup seat keeps its external work out of herdr.
 				await settleReverify(app.src, pairSuccess);
-				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await pressControl(setup, "handoff", { quiet: true });
 				await settle(setup);
 
 				gate.release();
@@ -4515,6 +4541,10 @@ describe("the Operator-decides type parks its completions for the operator (ADR 
 				expect(app.runner.commands().filter((c) => c.startsWith("herdr tab close"))).toHaveLength(
 					0,
 				);
+				// The parked ticket rests awaiting its completion decision,
+				// whose Enter the bar documents as the row's Decide, not the
+				// handoff's hint: the key is the catalogue's escape, routed by
+				// the plane to the row's own control.
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
 				await waitFor(setup, { shows: "Decision:" });
 				const panel = frameText(await settle(setup));
@@ -4829,10 +4859,20 @@ describe("the handoff queue", () => {
 					if (key === "delete") {
 						await guideKey(setup, "queue-remove", "Delete", { quiet: true });
 					} else {
-						await guideKey(setup, "move-list", key === "j" ? "↓" : "↑", { quiet: true });
+						await pressControl(setup, "move-list", { via: key === "j" ? "↓" : "↑", quiet: true });
 					}
 					await frameUntil(setup, what, predicate);
 				};
+				/**
+				 * Enter through the real key path, then wait for the named fact.
+				 *
+				 * The frames these presses stand on document different controls' Enter: the
+				 * handoff's on the open row, the row's own restart on the missing row, and
+				 * the modal's own key on the Missing modal. One named control owns the key
+				 * on none of those frames alone, so the key goes out as the catalogue's
+				 * escape, and the plane routes it to the on-bar owner of the frame it lands
+				 * on.
+				 */
 				const namedEnter = async (what: string, predicate: (f: string) => boolean) => {
 					await guideKey(setup, "handoff", "Enter", { quiet: true });
 					await frameUntil(setup, what, predicate);
@@ -4845,13 +4885,19 @@ describe("the handoff queue", () => {
 				// move down lands the marker on line four - a line it was not
 				// on, so the key is applied before the next key is pressed.
 				await namedStep("j", "select the open ticket", (f) => markerRowOf(f) === 4);
-				await guideKey(setup, "handoff", "Enter", { quiet: true });
+				await pressControl(setup, "handoff", { quiet: true });
 				await waitFor(setup, { shows: "handing off" });
 				// Back to the missing ticket: its restart queues behind the
 				// handoff in flight.
 				await namedStep("k", "select the missing ticket", (f) => markerRowOf(f) === 3);
+				// The frame stands on the missing ticket's row, whose bar
+				// documents the row's own restart Enter, not the handoff's hint:
+				// the key is the catalogue's escape, routed by the plane to the
+				// row's own control.
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
 				await waitFor(setup, { shows: "Missing:" });
+				// The frame is the Missing modal, whose bar documents the
+				// modal's own key: the catalogue's escape, routed by the plane.
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
 				await waitFor(setup, { hides: "Missing:" });
 				// And while the restart is queued, the ticket moves on:
@@ -4861,19 +4907,11 @@ describe("the handoff queue", () => {
 				await namedEnter("the jump to the queued restart", (f) =>
 					queueRowLeads(f, "Watch agent turns"),
 				);
-				console.log(
-					"JUMP",
-					rowsOf(setup.captureCharFrame()).slice(2, 12).join(" | ").slice(0, 500),
-				);
 				// The Working line outranks the removal notice, so the effect is
 				// read on the queue's own row: the handoff's item keeps the queue
 				// holding one row, and the selection clamps onto it.
 				await namedStep("delete", "the item removed", (f) =>
 					queueRowLeads(f, DEFAULT_TICKET_TITLE),
-				);
-				console.log(
-					"DELETE",
-					rowsOf(setup.captureCharFrame()).slice(2, 12).join(" | ").slice(0, 500),
 				);
 				// Back to the Ticket list: up crosses the empty Consultation
 				// section to the last Ticket, and one more step lands the
@@ -4888,6 +4926,10 @@ describe("the handoff queue", () => {
 				);
 				await namedStep("k", "the last Ticket", (f) => markerRowOf(f) === 4);
 				await namedStep("k", "the missing row", (f) => markerRowOf(f) === 3);
+				// The frame stands on the missing ticket's row, whose bar
+				// documents the row's own restart Enter, not the handoff's hint:
+				// the key is the catalogue's escape, routed by the plane to the
+				// row's own control.
 				await guideKey(setup, "handoff", "Enter", { quiet: true });
 				await waitFor(setup, { shows: "Missing:" });
 				await guideKey(setup, "select-action", "↓", { quiet: true });
@@ -4960,7 +5002,7 @@ describe("the handoff queue", () => {
 				// lands: the key goes out immediate, with no post-key settle
 				// before the wait on the face, so the plane's own tick stands
 				// on the frame the face and the cleared Working line paint.
-				await guideKey(setup, "handoff", "Enter", { immediate: true });
+				await pressControl(setup, "handoff", { immediate: true });
 				await frameUntil(
 					setup,
 					"the re-handoff to settle",

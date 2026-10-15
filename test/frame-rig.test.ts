@@ -6,7 +6,11 @@
  * boots the real app on the Seeded plane and pins, on one frame, that the rig
  * resolves every control the bar advertises, sends the key a press names with
  * `via`, waits on the closed set of outcomes, and keeps the controls the bar
- * never hints on its escape list. The closed catalogue walk proves the
+ * never hints on its escape list. It pins the re-sending press beside the
+ * single press: the bar's key when the bar paints the control's hint, the
+ * catalogue's key when it does not, and the re-send that goes out again when
+ * the first press left no frame the wait names. The closed catalogue walk
+ * proves the
  * resolution is not tuned to one bar: it reads the bar the plane paints and
  * resolves whatever it advertises. A control off the bar owns no painted
  * hint and fails the resolution instead of pressing a key the bar names for
@@ -51,11 +55,13 @@ import {
 	hintWordings,
 	keyBase,
 	leftKeyHandler,
+	markerRowOf,
 	messageRowOf,
 	namedWhat,
 	pageKey,
 	parseBarText,
 	pressControl,
+	pressUntil,
 	releaseKeys,
 	resolveControl,
 	type SurfaceFamily,
@@ -98,7 +104,7 @@ async function toOpenTicket(setup: AppSetup): Promise<void> {
 
 /** Boot a plane with the standing it names, and the source standing healthy. */
 async function withSeededPlane(
-	body: (setup: AppSetup) => Promise<void>,
+	body: (setup: AppSetup, planeRecord: Awaited<ReturnType<typeof plane>>) => Promise<void>,
 	standing: Parameters<typeof plane>[0],
 ): Promise<void> {
 	const planeRecord = await plane(standing);
@@ -106,7 +112,7 @@ async function withSeededPlane(
 		async (setup) => {
 			planeRecord.settleFirstFetch();
 			await waitSourceHealthy(planeRecord.state);
-			await body(setup);
+			await body(setup, planeRecord);
 		},
 		{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 	);
@@ -1002,6 +1008,88 @@ describe("the frame rig names its timeouts", () => {
 			await expect(
 				pressControl(setup, "help", { opens: "a surface the plane never paints" }),
 			).rejects.toThrow(/a surface the plane never paints" to open, after the control "help"/);
+		}, toOpenTicket);
+	}, 60000);
+
+	test("a timeout on a re-sending press names the control and the fact", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			// The presses land and move the marker, but the fact no press paints
+			// never shows, and the deadline fails the wait: the message names the
+			// control the re-sends went out for and the fact they waited for.
+			await expect(
+				pressUntil(setup, "move-list", {
+					via: "j",
+					what: "the cursor to move",
+					check: () => false,
+				}),
+			).rejects.toThrow(/the control "move-list" never left the cursor to move/u);
+		}, toOpenTicket);
+	}, 60000);
+});
+
+describe("the frame rig's re-sending press", () => {
+	test("takes the token a press names from the bar's hint", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			// The bar names its movement hint `↑↓/jk`: without the via token the
+			// press would send the hint's first token, and the marker would not
+			// stand one row down. The re-sending press sends the named token, and
+			// the check passes on the press's own settle.
+			const top = markerRowOf(setup.captureCharFrame());
+			const frame = await pressUntil(setup, "move-list", {
+				via: "j",
+				what: "the cursor to step down",
+				check: (f) => markerRowOf(f) === top + 1,
+			});
+			expect(markerRowOf(frame)).toBe(top + 1);
+		});
+	});
+
+	test("fails a via token the bar's hint names nowhere", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			// The bar paints the movement hint, so the press takes its key from
+			// the bar, not from the catalogue: a token the hint names nowhere is
+			// the test's error, and the failure names the hint it refused.
+			await expect(
+				pressUntil(setup, "move-list", {
+					via: "Home",
+					what: "the cursor to jump to the top",
+					check: () => false,
+				}),
+			).rejects.toThrow(/not among its tokens/u);
+		});
+	});
+
+	test("takes the key from the catalogue where the bar paints no hint", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			// The Ticket list's bar paints no hint for the Message view: the
+			// press takes the one key the catalogue names for it on the surface,
+			// and the view it opens is the fact the wait returns.
+			const frame = await pressUntil(setup, "message", {
+				what: "the Message view to open",
+				check: (f) => frameText(f).includes("Message view"),
+			});
+			expect(frameText(frame)).toContain("Message view");
+		});
+	});
+
+	test("re-sends the press that left no frame the wait names, until the fact stands", async () => {
+		await withHealthyPlane(async (setup) => {
+			await settle(setup);
+			await toOpenTicket(setup);
+			// The fact the wait names stands two rows up: the first press leaves
+			// the marker one row up, a frame the wait does not name, and the
+			// re-send goes out again until the marker stands on the named row.
+			const from = markerRowOf(setup.captureCharFrame());
+			const frame = await pressUntil(setup, "move-list", {
+				via: "k",
+				what: "the cursor to step two rows up",
+				check: (f) => markerRowOf(f) === from - 2,
+			});
+			expect(markerRowOf(frame)).toBe(from - 2);
 		}, toOpenTicket);
 	});
 });
