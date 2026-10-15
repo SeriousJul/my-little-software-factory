@@ -516,3 +516,39 @@ same walks, and they went with their helper, the #317 window test the base
 kept taking the walk's boot inline. The interface this addendum names
 therefore stands on the tree beside that fix, and its pins are the suite's
 evidence at the head that lands the rework.
+
+## Addendum: the display pin stands on the catalogue's function, and the check's scope stands on the rig's import
+
+Two statements of the delivered rule stood on a copy and a list, and this
+rework stands them on the sources they read from.
+
+The rig keeps its own copy of the catalogue's key display names beside the
+f-key and control-key rules its display applies. The copy stood pinned by
+behavior: a re-label in the catalogue surfaced as a red page-key test in a
+migrated suite, and the drift stood unnamed until the red test named it. The
+catalogue's own display function, `keyName`, now stands exported, and the
+rig's own suite pins the copy against it, key by key, over the keys the
+rig's table holds and the keys the catalogue names in any mode: a re-label
+fails the pin, and the failure names every key the two functions disagree
+on. The export is this round's one line of production code, the second such
+line after the `omitFromOtherSection` export the delivered-interface
+addendum named, and it moves no control, key, or hint.
+
+The static architecture check stood its scope on the owned list, and a new
+frame suite that imported the rig without ever joining the list could bring
+the raw shape back without failing the check. The check now discovers its
+scope from the rig's own import: every suite that imports the rig stands
+under the input and wait rules, owned or not, and the owned list stands
+beneath the discovery as the pinned floor it never shrinks: a surface that
+leaves the rig's world fails the floor and is migrated again, not removed
+from the list. The two suites that imported the rig's input side without
+owning a plane surface stand on the rule's two honest answers: the
+harness's own contract suite takes the rig's named frame check and the
+`shows` outcome in place of its raw frame waits, and the region's component
+suite stops importing the rig and stands on the renderer's own seam beside
+the component it defines - the harness's keys bound in the harness, its
+feed the renderer's raw feeder, the shape the executable-boundary tests
+keep. Its frame wait stands on the rig's wait beside it: the same poll, the
+same passive flush on every poll, and the same one deadline. The closed set
+the outcome check's error lists stands whole: `immediate`, which the check
+accepted, is named in it.

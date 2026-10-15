@@ -1,13 +1,17 @@
 /**
  * The shared frame-test harness: boot the control plane at a fixed terminal
- * size, press keys, and wait for their effects.
+ * size, send input, and wait for its effects.
  *
  * The frame suites import from here so they wait on the same frame semantics:
  * a stale frame can never pass an assertion, because the wait ends only when
- * the effect appears or the deadline dumps the last frame. The migrated
- * suites drive the plane through the rig's named controls and the closed set
- * of outcomes (ADR 0128); the rest still run the retired input surface and
- * migrate one surface at a time.
+ * the effect appears or the deadline dumps the last frame. Every suite that
+ * drives the plane drives it through the rig's named controls and the closed
+ * set of outcomes (ADR 0128). The retired input surface has left the suites:
+ * what stands in the rig's interface beside the named operations is the raw
+ * press and its waits, and the four kept bus reads the rig's own suite and
+ * the Live view's window proof drive. The architecture check discovers its
+ * scope from this module's own imports, so a suite that brings the retired
+ * shape back fails the check instead of migrating again.
  */
 
 import { afterEach, beforeEach, expect, spyOn } from "bun:test";
@@ -22,6 +26,7 @@ import {
 	controlsForMode,
 	type InteractionMode,
 	keyLabelFor,
+	keyName,
 	omitFromOtherSection,
 } from "../src/components/controls.ts";
 import { controlInk } from "../src/components/shared/presentation.ts";
@@ -1417,7 +1422,7 @@ function checkOutcomeFields(fields: ControlOutcomeFields, viaAllowed: boolean): 
 	const known = viaAllowed
 		? new Set([...OUTCOME_FIELDS, "via", "immediate"])
 		: new Set([...OUTCOME_FIELDS, "immediate"]);
-	const words = [...OUTCOME_FIELDS, ...(viaAllowed ? ["via"] : [])].join(", ");
+	const words = [...OUTCOME_FIELDS, "immediate", ...(viaAllowed ? ["via"] : [])].join(", ");
 	for (const key of Object.keys(fields)) {
 		if (!known.has(key))
 			throw new Error(`the frame rig's outcomes are a closed set: no "${key}" (the set: ${words})`);
@@ -1439,8 +1444,9 @@ const DUMMY_FACTS = {} as never;
 
 /**
  * The display form of a raw key: the rig's own copy of the catalogue's key
- * names. A re-key flows from the catalogue, and the rig's suite pins the
- * agreement on the one frame it walks.
+ * names. A re-key flows from the catalogue, and the rig's own suite pins
+ * the agreement key by key against the catalogue's display function, the
+ * drift read beside this table naming every key it disagrees on.
  */
 const KEY_DISPLAY: Record<string, string> = {
 	up: "↑",
@@ -1551,6 +1557,30 @@ function paintedKeyLabels(setup: Setup, control: ControlDefinition): Set<string>
 		labels.add(displayKey(String(exit).trim().toLowerCase()));
 	}
 	return labels;
+}
+
+/**
+ * The keys on which the rig's key display names disagree with the
+ * catalogue's display function: the rig walks its own table of display
+ * names beside every raw key the catalogue names in any mode, reading both
+ * sides through their own display functions. The rig's own suite pins the
+ * empty read (ADR 0128): a re-label in the catalogue - a display name moved,
+ * dropped, or gained - fails the pin naming every drifted key, instead of
+ * surfacing as a red page-key test in a migrated suite.
+ */
+export function keyDisplayDrift(): string[] {
+	const domain = new Set<string>(Object.keys(KEY_DISPLAY));
+	for (const control of allControls()) {
+		for (const mode of control.modes) {
+			try {
+				for (const raw of control.keys(mode, DUMMY_FACTS)) domain.add(raw);
+			} catch {
+				// A keys rule that reads facts the dummy carries none of names
+				// no key in that mode.
+			}
+		}
+	}
+	return [...domain].filter((raw) => displayKey(raw) !== keyName(raw as never)).sort();
 }
 
 /**

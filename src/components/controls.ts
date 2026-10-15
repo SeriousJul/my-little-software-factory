@@ -2783,7 +2783,13 @@ const KEY_NAMES: Record<string, string> = {
 	"ctrl+c": "Ctrl+C",
 };
 
-function keyName(key: ControlKey): string {
+/**
+ * The display name of one raw key: the catalogue's own copy of the key
+ * display, which the Action bar, the Key guide, and the compact labels all
+ * read. The frame rig pins its own copy of these names against this
+ * function, key by key (ADR 0128).
+ */
+export function keyName(key: ControlKey): string {
 	if (key.startsWith("ctrl+")) return `Ctrl+${key.slice(5).toUpperCase()}`;
 	return KEY_NAMES[key] ?? key;
 }

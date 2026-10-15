@@ -9,23 +9,35 @@
  * the operator learns the key twice, and the test drifts from the bar the plane
  * paints.
  *
- * The rule reads the source of the surfaces the rig owns and refuses the ways
- * a surface can opt out: reaching the renderer's input or mouse directly, keeping
- * a private press, open, close, or wait, and waiting a frame fact the rig's
- * named outcomes already name, spelled as an inline containment read on the
- * rig's own wait. The owned set grows one surface at a time as a migration
- * lands, and it never shrinks: a surface that drifts back to a hand-picked key
- * fails this check and is migrated again, not removed from the list.
+ * The rule reads the source of every suite that imports the rig and refuses the
+ * ways a surface can opt out: reaching the renderer's input or mouse directly,
+ * keeping a private press, open, close, or wait, and waiting a frame fact the
+ * rig's named outcomes already name, spelled as an inline containment read on
+ * the rig's own wait. The scope is discovered from the rig's own import, so no
+ * hand-kept list can lose a suite to the rule: a suite that imports the rig and
+ * brings the raw shape back fails the check, owned or not. The owned list stands
+ * beneath the discovery as the floor that never shrinks: a surface that leaves
+ * the rig's world fails the floor and is migrated again, not removed from the
+ * list. A component-seam suite that renders its own component on the renderer's
+ * own feeder imports the rig nowhere, and stands outside the rig's rules, the
+ * shape the executable-boundary tests keep.
  */
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 
+import { sourceFiles } from "./static-checks.ts";
+
 /**
- * The frame surfaces the rig owns, one per migrated suite. A surface joins this
- * list the moment its tests press through the rig instead of the renderer, and it
- * never leaves. The rig's own suite is the exemplar that stands at the head of the
- * list: it presses only through `pressControl` and the escape list.
+ * The frame surfaces the rig owns, one per migrated suite, the floor the
+ * discovery stands on. A surface joins this list the moment its tests press
+ * through the rig instead of the renderer, and it never leaves: the floor test
+ * below reads every entry back against the rig's import, so a surface that
+ * leaves the rig's world fails the floor and is migrated again, not removed
+ * from the list. The discovery reaches beyond the list: every other suite that
+ * imports the rig stands under the same rules, owned or not, and the rig's own
+ * suite stands at the head of the list, pressing only through `pressControl`
+ * and the escape list.
  */
 const OWNED_SURFACES = [
 	"test/action-bar.test.ts",
@@ -71,10 +83,37 @@ const OWNED_SURFACES = [
 	//
 	// test/ticket-boot-order-frame.test.ts stands outside this list: it drives
 	// no input at all. It boots the plane and reads the painted list on every
-	// pass of the frame stream without sending a key, and the rig owns the
-	// input face, so there is no path here for the rig to own. If the suite
-	// starts pressing, it joins this list.
+	// pass of the frame stream without sending a key, so the input face the rig
+	// owns has nothing here to own. It imports the rig, so the discovery reaches
+	// it, and it joins this list the day it starts pressing.
 ];
+
+/**
+ * The rig's import at any relative depth: a suite nested in a subdirectory of
+ * the test directory reaches the rig through `../` and deeper, and the frame
+ * suites stand at every depth the tree holds, so the match takes the relative
+ * path, not its length.
+ */
+const RIG_IMPORT = /from\s+"(?:\.\.?\/)+app-harness\.ts"/u;
+
+/**
+ * The suites the rig owns its input for: every test file that imports the
+ * rig, discovered from the import. The positive edge pins below spell the
+ * import line in split parts, so this check's own source holds no match for
+ * the discovery it applies, and the campaign's walk, which reads the import
+ * as a substring, counts no check as a suite. This check stands outside the
+ * discovery by path as well: a rule file is not a suite the rule polices,
+ * and neither does the Seeded plane check, which spells the same line beside
+ * its own pattern.
+ */
+const rigSuites = sourceFiles(
+	"test",
+	(file) =>
+		file.endsWith(".test.ts") &&
+		file !== "test/frame-rig-architecture.test.ts" &&
+		file !== "test/seeded-plane-check.test.ts" &&
+		RIG_IMPORT.test(readFileSync(file, "utf8")),
+);
 
 /**
  * The rig's retired input surface. A suite that names one keeps a private press,
@@ -348,7 +387,34 @@ describe("the frame rig owns the frame suites' input", () => {
 		}
 	});
 
-	test("an owned surface reaches no renderer input by hand", () => {
+	test("every owned suite imports the rig, and the discovery reads the import", () => {
+		// The floor: a surface on the owned list that leaves the rig's world -
+		// stops importing the rig - fails here and is migrated again, not
+		// removed from the list. The discovery reads the import at every
+		// relative depth, and a bare module name stands outside it, the way the
+		// Seeded plane check's pattern stands. The component-seam suite renders
+		// its own component on the renderer's own feeder and imports the rig
+		// nowhere, so it stands outside the rig's rules: a re-import of the rig
+		// re-enters the discovery, and the rules reach it again.
+		for (const file of OWNED_SURFACES) {
+			expect(
+				RIG_IMPORT.test(readFileSync(file, "utf8")),
+				`${file} stands on the owned list and imports the rig`,
+			).toBe(true);
+		}
+		expect(rigSuites).toContain("test/frame-rig.test.ts");
+		expect(rigSuites).toContain("test/app.test.ts");
+		expect(rigSuites).not.toContain("test/shared-region.test.ts");
+		// The positive edges are split so this check's own source holds no
+		// match for the discovery it applies: the campaign's walk reads the
+		// rig import from the source, and a whole import line spelled here
+		// would stand in its scope as a suite the check is not.
+		expect(RIG_IMPORT.test('import { settle } from "' + './app-harness.ts";')).toBe(true);
+		expect(RIG_IMPORT.test('import { settle } from "' + '../app-harness.ts";')).toBe(true);
+		expect(RIG_IMPORT.test('import { settle } from "app-harness.ts";')).toBe(false);
+	});
+
+	test("a rig-importing suite reaches no renderer input by hand", () => {
 		// `mockInput` and `mockMouse` are the renderer's raw feeders, reached as
 		// a property on the setup, and `keyInput` is the renderer's raw key bus:
 		// a surface that reaches one sends a key the rig did not resolve, moves
@@ -356,27 +422,27 @@ describe("the frame rig owns the frame suites' input", () => {
 		// reads own. The rule matches the reach, the way the retired list
 		// matches calls: a comment that spells the name does not offend.
 		const offenders: string[] = [];
-		for (const file of OWNED_SURFACES) {
+		for (const file of rigSuites) {
 			const source = readFileSync(file, "utf8");
 			if (/\.[m]ockInput\b|\.[m]ockMouse\b|\bkeyInput\s*\./u.test(source)) offenders.push(file);
 		}
 		expect(offenders).toEqual([]);
 	});
 
-	test("an owned surface keeps no private press, open, close, or wait", () => {
+	test("a rig-importing suite keeps no private press, open, close, or wait", () => {
 		// The retired surface is the rig's old input face: a raw key press, a hand
 		// open or close of a panel or guide, a hand focus move, and a hand wait on
 		// a key handler or a frame. A surface that calls one of them by name has
 		// kept a private input path the rig should own, so this names it by file.
 		const offenders: string[] = [];
-		for (const file of OWNED_SURFACES) {
+		for (const file of rigSuites) {
 			const source = readFileSync(file, "utf8");
 			if (retiredPatterns.some((pattern) => pattern.test(source))) offenders.push(file);
 		}
 		expect(offenders).toEqual([]);
 	});
 
-	test("an owned surface waits no inline containment the named outcomes name", () => {
+	test("a rig-importing suite waits no inline containment the named outcomes name", () => {
 		// The rig's wait is `frameUntil`, and the outcomes that name a frame's
 		// containment are `shows` and `hides`. A surface that waits an inline
 		// arrow whose body is exactly a containment read on the frame - negated
@@ -387,7 +453,7 @@ describe("the frame rig owns the frame suites' input", () => {
 		// stored predicate, a compound fact, and a read of the frame's rows
 		// stand outside it.
 		const offenders: string[] = [];
-		for (const file of OWNED_SURFACES) {
+		for (const file of rigSuites) {
 			for (const site of frameUntilSites(readFileSync(file, "utf8"))) {
 				const outcome = classifyContainment(site.args.at(-1) ?? "");
 				if (outcome !== null) {

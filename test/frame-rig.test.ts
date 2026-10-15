@@ -16,6 +16,10 @@
  * hint and fails the resolution instead of pressing a key the bar names for
  * another control, and the bar's dynamic label wordings agree with the
  * catalogue's `barLabel` functions on the samples that cover their branches.
+ * The key display names the rig carries beside its copy of the catalogue's
+ * key names agree with the catalogue's display function, key by key, so a
+ * re-label in the catalogue fails the pin and names the drift instead of
+ * surfacing as a red page-key test.
  *
  * The rig's keys flow from the control catalogue and the painted bar, never
  * from a literal this suite picks.
@@ -54,6 +58,7 @@ import {
 	HEIGHT,
 	hintWordings,
 	keyBase,
+	keyDisplayDrift,
 	leftKeyHandler,
 	markerRowOf,
 	messageRowOf,
@@ -549,6 +554,21 @@ describe("the frame rig's bar wordings", () => {
 				).toBe(true);
 			}
 		}
+	});
+});
+
+describe("the frame rig's key display names", () => {
+	test("agree with the catalogue's display function, key by key", () => {
+		// The rig holds its own copy of the catalogue's key display names,
+		// and this pin walks both display functions on the keys the rig's
+		// table holds and the keys the catalogue names in any mode: a
+		// re-label in the catalogue - a display name moved, dropped, or
+		// gained - fails the pin naming every drifted key, instead of
+		// surfacing as a red page-key test in a migrated suite. A key the
+		// rig's table holds that the catalogue names nowhere stays walked:
+		// the domain stands on the table beside the catalogue's keys, so
+		// the rig's copy cannot outlive a name the catalogue retires.
+		expect(keyDisplayDrift()).toEqual([]);
 	});
 });
 
