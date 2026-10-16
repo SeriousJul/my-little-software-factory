@@ -91,7 +91,7 @@ async function main(): Promise<void> {
 		client = await heroClient(bin, envs.isoEnv);
 		await heroRunPanes(bin, envs.isoEnv, { fixture, paneA, paneB });
 		await heroTicketHeader(client);
-		await heroDetailSelect(bin, envs.isoEnv, paneA);
+		await heroDetailSelect(client, bin, envs.isoEnv, paneA);
 		await heroReportAgent(bin, envs.isoEnv, paneB);
 		await heroSettle(client);
 		const grid = parseScreen(client.output(), HERO_SCREEN.cols, HERO_SCREEN.rows);
@@ -280,6 +280,7 @@ async function heroTicketHeader(
 
 /** The select of the running ticket, settled on its description. */
 async function heroDetailSelect(
+	client: NonNullable<Awaited<ReturnType<typeof openPty>>>,
 	bin: string,
 	isoEnv: Record<string, string>,
 	paneA: string,
