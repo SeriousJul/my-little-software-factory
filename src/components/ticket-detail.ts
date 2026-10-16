@@ -154,6 +154,13 @@ export function detailContent(
 	// lines in its dim, so the identity reads as one place, not two.
 	lines.push(...identityLines(ticket.title, ticket.repository, usableCols));
 	detailStateLine({ lines, fact, ticket });
+	// The link to the ticket's GitHub page wears the blue role: the one row
+	// the operator opens in a browser. It stands beside the identity the
+	// header block carries - the title, the state, and the place the ticket
+	// lives on the source - before the flat fact rows. It keeps the full text
+	// width, because the link is what the operator opens in a browser and a
+	// column break would cut it.
+	pushWrapped(`GitHub: ${ticket.url}`, paint("blue"));
 	lines.push(
 		...detailWorkColumns({
 			ticket,
@@ -167,11 +174,6 @@ export function detailContent(
 	detailCompletionLines({ lines, ticket, fact, pushWrapped, usableCols });
 	if (mergeAttempt !== null) detailMergeAttempt(pushWrapped, mergeAttempt);
 	if (ticket.handoffRecoveryRequired) pushWrapped("Handoff: recovery required", paint("yellow"));
-	// The link to the ticket's GitHub page wears the blue role: the one row
-	// the operator opens in a browser, kept out of the flat fact rows. It
-	// keeps the full text width, because the link is what the operator opens
-	// in a browser and a column break would cut it.
-	pushWrapped(`GitHub: ${ticket.url}`, paint("blue"));
 	// One blank closes the static groups above - the columns, the warnings,
 	// and the turn's log - and opens the description: the ticket's own words,
 	// set apart from everything the plane and the source know about it.
