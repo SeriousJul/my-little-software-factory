@@ -1869,6 +1869,121 @@ send's first guard, and the flag's comment now states it. The rework
 changes only this record and that comment, and no run on the reworked head
 was read as of this round.
 
+## Issue #302: the merged panel pass keeps one instance's keys (2026-10-16, the fix)
+
+The push run `38862876556` on `main` at `060eeabb` went red on the
+repository select panel's two-run queue case, `a marking of two runs the
+queue, one confirmation per row, in list order`, at 20675.98 ms: the rig's
+twenty-second deadline on the wait for the keys the `Init acme/factory`
+panel gives back after the cancel. This section is the investigation of that
+run and the fix it named. The remote was read once, for this run and the
+run list that places it; the rest of the evidence is local.
+
+### The reproduction, at the unit layer
+
+One machine, 32 cores, Bun 1.4.2, `bun run test` with its own flags, which
+bun spreads over twenty workers here. The pre-fix tree, at `060eeabb`, went
+red on the queue case in the first run of the session, at 20583.19 ms, load
+1.64 before it, and red again in baseline run 1 at 20582.64 ms, load 1.13,
+while baseline run 2, load 2.36, passed. The file alone passes on the same
+tree: 14 pass / 0 fail in 4.67 s, load 1.77. By the triage rule of
+AGENTS.md the full-suite red is a load flake, and the reproduction recipe of
+[issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302)
+- `bun run test` on a many-core box - held on this head, not only on the
+heads the issue recorded.
+
+### The mechanism, pinned by probe
+
+Three probes stood in the tree for the red runs and came out again before
+the fix landed: the key-bus wait's inter-poll gaps, the rig's owed
+normal-priority callbacks per poll, and a mount and unmount trace of the key
+bus's subscriptions in `useControlDispatch`.
+
+| Fact | Reading |
+| --- | --- |
+| The wait's inter-poll gaps over its full twenty seconds | every poll about 10 ms apart, the largest gap 22 ms in one red run and 19 ms in another: the process was scheduled throughout, so the miss is not the OS withholding the process |
+| The rig's owed callbacks, polled on every wait turn | zero on every poll of the failed wait: the `setPanel(null)` the cancel sends never stood in the normal-priority lane the rig's flush reaches |
+| The factory panel's key handler on the bus | on at the open of `Init acme/factory`, off only at the worker's teardown, 20.1 s later: the handler never left the bus while the frame showed `Init acme/billing` and the queue had moved on |
+
+The last frame of the red run shows the billing panel open: the queue did
+advance, and the app behaved. What never settled is the rig's close contract.
+`appRepoInitPanel` renders `createElement(ActionPanel, { ... })` with no
+`key`, and the factory and the billing entries are the same element type at
+the same place in the tree. The cancel sends `setPanel(null)` and the queue's
+next entry sends `setPanel(billing)`; under load the two updates render in
+one merged pass, the reconciler re-renders the factory panel directly into
+the billing panel, the instance never unmounts, and the one stable key
+handler the instance took when it mounted never leaves the key bus. The wait
+that ends on that handler leaving can end on nothing, and it stands to the
+deadline.
+
+The merged pass is the ordering the loaded runner opens: on a quiet machine
+the first update commits before the second arrives, the panel unmounts and
+remounts, and the handler leaves. The app's own comment beside the skip
+names the fact the key expresses: a panel the operator can still key into is
+a stale act waiting to run twice.
+
+### The fix: one element per entity
+
+Every per-entity panel element now carries a `key` that names the entity it
+stands for, so the reconciler cannot fold one entity's panel into another's:
+
+| Surface | Key |
+| --- | --- |
+| the override panel | `override:<ticket>:<route>` |
+| the Decision modal | `decision:<ticket>` |
+| the Live view | `live:<ticket>:<work cycle>` - the cycle is part of the panel (ADR 0110) |
+| the Missing modal | `missing:<ticket>` |
+| the repository init panel | `repository-init:<repository>` |
+| the ticket close, and the Consultation's safety, recovery, close, force, and delete panels | `<kind>:<identity>` |
+
+The kind prefix is not decoration: the first shape of the fix keyed the
+panels on the bare identity, and two consultation-frame cases went red on it,
+at the opens wait, 20316.05 ms and 20489.05 ms. React matches keyed children
+across the parent's whole child list, so the close panel of one consultation
+and the force panel of the same consultation, both keyed by the bare id, were
+matched as one element across the two renders, the instance reused, and the
+force panel's handler - already on the bus from the close panel - could never
+be seen as new. The prefix makes no two siblings of the list share a key,
+and the two cases pass beside the other 81 of the two suites, 97 pass /
+0 fail across the three files the fix touches most, in 41.98 s.
+
+The kind prefix changes one behavior the operator sees: when the open panel's
+entity changes - the open Decision modal following its ticket to another
+ticket, the queue's confirm moving to the next repository - the panel stands
+fresh: its cursor starts at the first row, and its keys are the new entity's.
+Before the fix the instance, its cursor, and its key handlers carried over
+across the entity. The fresh panel is what the close contract and the skip's
+comment both already asked for.
+
+### The verification, on this machine
+
+| Run | Tree | Result |
+| --- | --- | --- |
+| The session's first run, load 1.64 | pre-fix, `060eeabb` | red on the queue case, 20583.19 ms |
+| Baseline 1, load 1.13 | pre-fix | red on the queue case, 20582.64 ms |
+| Baseline 2, load 2.36 | pre-fix | green, 3456 pass / 0 fail |
+| Post-fix runs 1 to 3, loads 2.04, 1.28, 1.55 | fixed | green, 3456 pass / 0 fail apiece |
+| Post-fix run 4, load 1.27 | fixed | did not complete: one test worker spun at about 100% CPU past every test's deadline and was killed. Recorded as [issue #403](https://github.com/SeriousJul/my-little-software-factory/issues/403), not as a pass or a flake |
+| The base tree, load 1.23, in the same worktree with the fix checked out of the file | pre-fix | green, 3456 pass / 0 fail in 130.55 s |
+| Post-fix runs 5 and 6, loads 1.95 and 1.43 | fixed | green, 3456 pass / 0 fail apiece |
+
+The Quality audit on the fixed tree answers `audit OK`: type 0, lint 0, and
+every count at its baseline. The Quality audit's `bun run test` gate on the
+pushed tree is the measurement this record defers to, the way the #398 round
+did.
+
+### What this answers, and what stays
+
+This fixes the merged-panel-pass mechanism: the class of the 2026-10-16 CI
+red and of every red run this investigation reproduced on the unit layer, in
+`test/repository-select-panel.test.ts`. The case of issue #302 that owns the
+rig's remaining wall-clock exposure on a loaded runner - a wait that ends on
+a pass the plane does not owe - stands as the issue states it, beside the
+worker livelock of issue #403. No loaded-runner run at the fixed head is on
+file from this machine, and the runner's own co-tenant load is not measured
+here.
+
 ## What was not measured
 
 | Item | State |
@@ -1877,5 +1992,5 @@ was read as of this round.
 | The hook installed in the operator's checkout | Passed. `git config core.hooksPath scripts/git-hooks` is set in this checkout, and the push above is the proof it is live. The setup line stays a documented step on [the commands page](../development/commands.md) for every other checkout |
 | The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | First measured by the self-review round above, on `b3b5fc38`: the probe rule, the rename sweep, the determinism rule, the file-the-defect rule, and the doc-claim rule each produced a result there, and the doc-claim rule found the stale cost numbers. What stays incomplete is the round's value: every commit was written by the agent that wrote the rules, so this is self-review, and a round on a pull request from a different author is the first independent measurement |
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Answered on 2026-10-05 in [the section above](#issue-301-the-14-unread-domain-types-2026-10-05): each name took one of [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301)'s three answers and the baseline stands empty. What stays unmeasured is whether any of them is dead, which the check still cannot see, and it is recorded in that section |
-| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). The deadline miss that survived that fix is [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311), answered on 2026-10-06 by the fix in pull request [#318](https://github.com/SeriousJul/my-little-software-factory/pull/318): the harness's waits run the reconciler's flush before they read, and the pin stands in `test/repository-select-panel.test.ts` - recorded in [the #311 section above](#issue-311-frame-waits-still-miss-the-deadline-under-load-in-the-surfaces-the-302-fix-does-not-touch-2026-10-06-the-fix). The pseudo-terminal seam that stood beside the class is answered on 2026-10-06 in [the section above](#issue-321-pseudo-terminal-waits-miss-their-deadline-under-load-in-the-executable-fields-rig-2026-10-06-the-fix): the rig's input stands on the painted fact the previous key owed, and the open window between a surface's first frame and its key taking is closed in the source, in [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321). The frame-rig rework in [pull request #395](https://github.com/SeriousJul/my-little-software-factory/pull/395) moves the class onto the rig's one deadline and its named outcomes, and moves the suites' remaining deadline loops onto the rig's waits: every one of the twelve issues it lists stands at that pull's head closed, issue by issue, or merged, pull by pull, by its own fix, and the rework closes none of them anew. The item stays open on the loaded-runner evidence this record holds: the deadline miss survives the fixes under a loaded runner, and no loaded run at the rework's head is on file. The push gate's full-suite run at the pushed head is the rework round's measurement, and each file that fails it and passes alone is named as a load flake in the pull. The older records in [the shared control record](./shared-controls.md) and the pull request records stand The week ending 2026-10-15 was investigated in [the #398 section below](#issue-398-the-ci-test-flake-the-week-of-evidence-and-what-it-names-2026-10-15-the-answer), and its three fixable classes landed there |
+| The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). The deadline miss that survived that fix is [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311), answered on 2026-10-06 by the fix in pull request [#318](https://github.com/SeriousJul/my-little-software-factory/pull/318): the harness's waits run the reconciler's flush before they read, and the pin stands in `test/repository-select-panel.test.ts` - recorded in [the #311 section above](#issue-311-frame-waits-still-miss-the-deadline-under-load-in-the-surfaces-the-302-fix-does-not-touch-2026-10-06-the-fix). The pseudo-terminal seam that stood beside the class is answered on 2026-10-06 in [the section above](#issue-321-pseudo-terminal-waits-miss-their-deadline-under-load-in-the-executable-fields-rig-2026-10-06-the-fix): the rig's input stands on the painted fact the previous key owed, and the open window between a surface's first frame and its key taking is closed in the source, in [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321). The frame-rig rework in [pull request #395](https://github.com/SeriousJul/my-little-software-factory/pull/395) moves the class onto the rig's one deadline and its named outcomes, and moves the suites' remaining deadline loops onto the rig's waits: every one of the twelve issues it lists stands at that pull's head closed, issue by issue, or merged, pull by pull, by its own fix, and the rework closes none of them anew. The item stays open on the loaded-runner evidence this record holds: the deadline miss survives the fixes under a loaded runner, and no loaded run at the rework's head is on file. The push gate's full-suite run at the pushed head is the rework round's measurement, and each file that fails it and passes alone is named as a load flake in the pull. The older records in [the shared control record](./shared-controls.md) and the pull request records stand The week ending 2026-10-15 was investigated in [the #398 section above](#issue-398-the-ci-test-flake-the-week-of-evidence-and-what-it-names-2026-10-15-the-answer), and its three fixable classes landed there. The merged-panel-pass mechanism the 2026-10-16 push run named is answered on 2026-10-16 in [the section above](#issue-302-the-merged-panel-pass-keeps-one-instances-keys-2026-10-16-the-fix): the per-entity panels carry a key that names their entity, and the six completed post-fix runs of this record stand green on the unit layer |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |

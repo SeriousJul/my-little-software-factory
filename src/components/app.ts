@@ -2703,6 +2703,10 @@ function appOverridePanel(o: AppRenderModesStage): React.ReactElement | false {
 	return (
 		override !== null &&
 		createElement(OverridePanel, {
+			// One element per Handoff the override edits: the ticket and the route
+			// that opened it, so an override on another ticket or route remounts
+			// the panel instead of reusing the other one's edits and key handlers.
+			key: `override:${override.ticketIdentity}:${override.origin}`,
 			agents: config.agents,
 			environments: HANDOFF_ENVIRONMENT_KINDS,
 			taskTypes: Object.keys(config.taskTypes),
@@ -2757,6 +2761,9 @@ function appDecisionModal(o: AppRenderModesStage): React.ReactElement | false {
 		panel.kind === "decision" &&
 		decision !== undefined &&
 		createElement(DecisionModal, {
+			// One element per ticket: a decision on another ticket remounts fresh
+			// instead of inheriting the first ticket's cursor and key handlers.
+			key: `decision:${panel.identity}`,
 			title: panelTicket.title,
 			contextLine: decision.contextLine,
 			entries: decision.entries,
@@ -2839,7 +2846,12 @@ function appLiveView(o: AppRenderModesStage): React.ReactElement | false {
 		panelTicket !== undefined &&
 		liveMode !== "closed" &&
 		liveMode !== "missing"
-		? createElement(LiveView, appLiveViewProps(o, panelTicket))
+		? createElement(LiveView, {
+				...appLiveViewProps(o, panelTicket),
+				// The cycle is part of the panel (ADR 0110): the next cycle's view
+				// is a new screen, and the key says so to the reconciler.
+				key: `live:${panel.identity}:${panel.workCycle}`,
+			})
 		: false;
 }
 
@@ -2867,6 +2879,7 @@ function appMissingModal(o: AppRenderModesStage): React.ReactElement | false {
 		panelTicket !== undefined &&
 		(panel.kind === "missing" || liveMode === "missing") &&
 		createElement(MissingModal, {
+			key: `missing:${panelTicket.identity}`,
 			title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
 			bodyLines: [
 				"The agent's pane is not in herdr's agent list.",
@@ -2911,7 +2924,13 @@ function appRepoInitPanel(o: AppRenderModesStage): React.ReactElement | false {
 	return (
 		panel !== null &&
 		panel.kind === "repository-init" &&
+		// One element per repository entry: the queue's confirm is a fresh
+		// panel per entry, and the key says so to the reconciler. Without it a
+		// merged pass from one entry's panel to the next reuses the instance,
+		// and the panel's key handlers never leave the bus - the close the rig
+		// waits on never stands, and the wait runs to its deadline (issue #302).
 		createElement(ActionPanel, {
+			key: `repository-init:${panel.identity}`,
 			message: visibleMessage,
 			...repositoryInitPanel(panel.plan),
 			onAction: (key) => {
@@ -3009,6 +3028,7 @@ function appTicketClosePanel(o: AppRenderModesStage): React.ReactElement | false
 		panel.kind === "ticket-close" &&
 		panelTicket !== undefined &&
 		createElement(ActionPanel, {
+			key: `ticket-close:${panel.identity}`,
 			message: visibleMessage,
 			...ticketCloseDialog(panelTicket, factsFor(panelTicket).failure),
 			onAction: (key) => {
@@ -3052,6 +3072,7 @@ function appConsultationSafetyPanel(o: AppRenderModesStage): React.ReactElement 
 		panelConsultation !== undefined &&
 		consultationSafety?.consultationId === panelConsultation.id &&
 		createElement(ActionPanel, {
+			key: `consultation-safety:${panel.identity}`,
 			message: visibleMessage,
 			standing,
 			title: `Live checkout conflict ${panelConsultation.id.slice(0, 8)}`,
@@ -3115,6 +3136,7 @@ function appConsultationRecoveryPanel(o: AppRenderModesStage): React.ReactElemen
 		panelConsultation !== undefined &&
 		recoveryPanel !== undefined &&
 		createElement(ActionPanel, {
+			key: `consultation-recovery:${panel.identity}`,
 			message: visibleMessage,
 			standing,
 			title: recoveryPanel.title,
@@ -3165,6 +3187,7 @@ function appConsultationClosePanel(o: AppRenderModesStage): React.ReactElement |
 		panel.kind === "consultation-close" &&
 		closePanel !== undefined &&
 		createElement(ActionPanel, {
+			key: `consultation-close:${panel.identity}`,
 			message: visibleMessage,
 			standing,
 			title: closePanel.title,
@@ -3206,6 +3229,7 @@ function appConsultationForcePanel(o: AppRenderModesStage): React.ReactElement |
 		panel.kind === "consultation-force" &&
 		panelConsultation !== undefined &&
 		createElement(ActionPanel, {
+			key: `consultation-force:${panel.identity}`,
 			message: visibleMessage,
 			standing,
 			title: `Force-close Consultation ${panelConsultation.id.slice(0, 8)}?`,
@@ -3254,6 +3278,7 @@ function appConsultationDeletePanel(o: AppRenderModesStage): React.ReactElement 
 		panelConsultation !== undefined &&
 		panel.kind === "consultation-delete" &&
 		createElement(ActionPanel, {
+			key: `consultation-delete:${panel.identity}`,
 			message: visibleMessage,
 			standing,
 			...consultationDeletePanel(panelConsultation.id),
