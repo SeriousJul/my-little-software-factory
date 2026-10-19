@@ -93,6 +93,7 @@ import {
 	type StoredHandoffFacts,
 } from "../handoff-dispatch.ts";
 import type { HerdrAgent } from "../herdr.ts";
+import { herdrIdentityFromEnv } from "../herdr-identity.ts";
 import type { Logger } from "../logging.ts";
 import {
 	HerdrAgentReader,
@@ -5904,6 +5905,10 @@ function appConsultationOperations(f: AppOpsFields): void {
 		seatCount: f.currentSeatCount,
 		log: f.logger,
 		persistRepositoryMapping: (mapping) => appPersistMapping(f, mapping),
+		// The pane this plane runs in, from the herdr environment: the safety
+		// walk skips the plane's own standing `factory` row in the agent list,
+		// which is not an agent working in the checkout (ADR 0139).
+		ownPaneId: herdrIdentityFromEnv(process.env)?.paneId,
 		// The Shared checkout hold of the run (issue #315, ADR 0109): the gate a
 		// worktree Consultation start crosses at its claim, the take the claim
 		// runs, and the let-go where the opening settles. The dispatch owns the

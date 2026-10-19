@@ -13,12 +13,21 @@
  * releases the report when the run ends; outside herdr the module stands
  * inert and the plane keeps whatever face herdr always gave it (ADR 0139).
  *
+ * The in-herdr mark is the theme's own: a non-empty `HERDR_ENV`, whatever
+ * its value (ADR 0024). A partial pane environment - the mark set, the
+ * binary or the pane id absent - names no target, stands inert beside the
+ * old face, and leaves one line in the run's record, so a misconfigured
+ * herdr is visible there instead of silent.
+ *
  * The report carries `idle`, not a working state: the plane's pane waits on
  * the operator and runs no turn of its own, and the Agents the plane drives
  * report their own states in their own panes. The report is fire-and-forget:
  * herdr is the plane's face, never a gate on its work, so a refused or slow
  * report degrades to the plane's old face instead of holding the boot or the
- * shutdown.
+ * shutdown. The report and the release carry the wall clock read at each end
+ * as their sequence; the clock is not monotonic, so a backward step between
+ * the run's boot and its end can leave a release the installed herdr takes
+ * as a no-op, and the row stands (ADR 0139).
  */
 import { type CommandRunner, commandFailureText } from "./runner.ts";
 
@@ -44,13 +53,16 @@ export interface HerdrIdentityTarget {
 
 /**
  * The pane the plane reports from, from the variables herdr sets on every
- * process in a pane. Outside herdr the variables are absent and the plane
- * reports nothing: there is no herdr to misread its face.
+ * process in a pane. The in-herdr mark is a non-empty `HERDR_ENV`, whatever
+ * its value, the same fact the theme read takes (ADR 0024); the binary and
+ * the plane's pane id must stand beside it. Outside herdr the mark is absent
+ * and the plane reports nothing: there is no herdr to misread its face.
  */
 export function herdrIdentityFromEnv(
 	env: Record<string, string | undefined>,
 ): HerdrIdentityTarget | null {
-	if (env.HERDR_ENV !== "1") return null;
+	const mark = env.HERDR_ENV;
+	if (mark === undefined || mark === "") return null;
 	const binPath = env.HERDR_BIN_PATH;
 	const paneId = env.HERDR_PANE_ID;
 	if (binPath === undefined || binPath === "" || paneId === undefined || paneId === "") {
@@ -68,7 +80,11 @@ export interface HerdrIdentityReporter {
 	 * Give the pane back to herdr when the run ends. The release carries the
 	 * wall clock read at the end as its sequence, ahead of the boot report's,
 	 * so a landed release clears the report at once: on herdr 0.9.1 a release
-	 * without a higher sequence is a silent no-op. Best effort: the SIGTERM
+	 * without a higher sequence is a silent no-op. The wall clock is not
+	 * monotonic, so a backward step between the report and the release can
+	 * leave the release not ahead of the report, and the installed herdr takes
+	 * such a release as a no-op too, with the row standing (ADR 0139). Best
+	 * effort: the SIGTERM
 	 * and SIGHUP endings call it in their handler and exit before the command
 	 * is guaranteed to land, and the `kill -9` and crash endings never reach
 	 * it; those endings leave the report standing until the pane is reused,
@@ -85,7 +101,7 @@ export interface HerdrIdentityReporterOptions {
 	runner: CommandRunner;
 	/** The clock the report sequence reads. */
 	now: () => number;
-	/** One line per refused report. */
+	/** One line per refused report, and one line for a partial pane environment. */
 	log: (line: string) => void;
 	/** The report budget. Defaults to `HERDR_IDENTITY_TIMEOUT_MS`. */
 	timeoutMs?: number;
@@ -106,6 +122,24 @@ export function createHerdrIdentityReporter(
 ): HerdrIdentityReporter {
 	const target = herdrIdentityFromEnv(options.env);
 	if (target === null) {
+		const mark = options.env.HERDR_ENV;
+		if (mark !== undefined && mark !== "") {
+			// The herdr mark stands without the pane's variables: the
+			// environment is partial, the report stands inert, and the plane
+			// keeps herdr's own reading of its face. One line names the
+			// variables the environment is missing, so a misconfigured herdr
+			// shows in the run's record.
+			const missing: string[] = [];
+			if (options.env.HERDR_BIN_PATH === undefined || options.env.HERDR_BIN_PATH === "")
+				missing.push("HERDR_BIN_PATH");
+			if (options.env.HERDR_PANE_ID === undefined || options.env.HERDR_PANE_ID === "")
+				missing.push("HERDR_PANE_ID");
+			options.log(
+				`herdr identity: the pane environment is partial (absent: ${missing.join(
+					", ",
+				)}); the report stands inert and herdr keeps its own reading of the pane`,
+			);
+		}
 		return {
 			release(): void {},
 		};

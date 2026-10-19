@@ -103,6 +103,23 @@ function agentIn(paneId: string, checkoutPath: string): HerdrAgent {
 	};
 }
 
+/**
+ * The plane's own row in the agent list: its self-report stands in the
+ * list as the `factory` agent of its pane for as long as the run stands
+ * (ADR 0139).
+ */
+function planeRow(paneId: string, checkoutPath: string): HerdrAgent {
+	return {
+		paneId,
+		tabId: `tab-${paneId}`,
+		workspaceId: `workspace-${paneId}`,
+		checkoutPath,
+		agent: "factory",
+		status: "idle",
+		sessionId: "",
+	};
+}
+
 describe("the Checkout safety module's Repository catalog", () => {
 	test("keeps a visible Ticket Repository without an explicit mapping", async () => {
 		const visible = {
@@ -269,5 +286,59 @@ describe("the Checkout safety module's live checkout conflict set", () => {
 			agents: [agentIn("pane-1", other)],
 		});
 		expect(safety.conflicts).toEqual([]);
+	});
+
+	test("the plane's own standing row is not a conflict for its own checkout", async () => {
+		const checkout = makeCheckout();
+		const safety = await inspectLiveCheckout({
+			checkout,
+			runner: statusRunner(checkout, ""),
+			tickets: [],
+			consultations: [],
+			agents: [planeRow("plane-pane", checkout)],
+			ownPaneId: "plane-pane",
+		});
+		expect(safety.conflicts).toEqual([]);
+	});
+
+	test("the plane's own row is a conflict where the plane stands outside herdr", async () => {
+		// Without the pane fact the walk cannot tell the row from any other
+		// bare Agent: the row the plane stands in outside herdr counts like
+		// any other, and inside herdr the plane gives the walk its pane id
+		// (ADR 0139).
+		const checkout = makeCheckout();
+		const safety = await inspectLiveCheckout({
+			checkout,
+			runner: statusRunner(checkout, ""),
+			tickets: [],
+			consultations: [],
+			agents: [planeRow("plane-pane", checkout)],
+		});
+		expect(safety.conflicts).toEqual([
+			{
+				kind: "herdr-agent",
+				identity: "plane-pane",
+				label: "Herdr Agent factory (plane-pane)",
+			} satisfies CheckoutConflict,
+		]);
+	});
+
+	test("the plane's pane skips only its own row, not the other Agents of the checkout", async () => {
+		const checkout = makeCheckout();
+		const safety = await inspectLiveCheckout({
+			checkout,
+			runner: statusRunner(checkout, ""),
+			tickets: [],
+			consultations: [],
+			agents: [planeRow("plane-pane", checkout), agentIn("pane-2", checkout)],
+			ownPaneId: "plane-pane",
+		});
+		expect(safety.conflicts).toEqual([
+			{
+				kind: "herdr-agent",
+				identity: "pane-2",
+				label: "Herdr Agent pi (pane-2)",
+			} satisfies CheckoutConflict,
+		]);
 	});
 });

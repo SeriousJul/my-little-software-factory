@@ -51,12 +51,21 @@ describe("the pane the plane reports from", () => {
 		expect(target).toEqual({ binPath: "/usr/bin/herdr", paneId: "w1B6:p2" });
 	});
 
-	test("outside herdr the plane reports nothing", () => {
-		expect(herdrIdentityFromEnv({})).toBeNull();
-		expect(herdrIdentityFromEnv({ HERDR_ENV: "0" })).toBeNull();
+	test("a mark other than one names the target, the theme's in-herdr fact", () => {
+		const target = herdrIdentityFromEnv({
+			HERDR_ENV: "2",
+			HERDR_BIN_PATH: "/usr/bin/herdr",
+			HERDR_PANE_ID: "w1B6:p2",
+		});
+		expect(target).toEqual({ binPath: "/usr/bin/herdr", paneId: "w1B6:p2" });
 	});
 
-	test("a partial pane environment stands inert", () => {
+	test("outside herdr the plane reports nothing", () => {
+		expect(herdrIdentityFromEnv({})).toBeNull();
+		expect(herdrIdentityFromEnv({ HERDR_ENV: "" })).toBeNull();
+	});
+
+	test("a partial pane environment names no target", () => {
 		expect(herdrIdentityFromEnv({ HERDR_ENV: "1" })).toBeNull();
 		expect(herdrIdentityFromEnv({ HERDR_ENV: "1", HERDR_BIN_PATH: "/usr/bin/herdr" })).toBeNull();
 		expect(herdrIdentityFromEnv({ HERDR_ENV: "1", HERDR_PANE_ID: "w1B6:p2" })).toBeNull();
@@ -66,16 +75,68 @@ describe("the pane the plane reports from", () => {
 });
 
 describe("the reporter the plane runs in its own pane", () => {
-	test("outside herdr the reporter stands inert", () => {
+	test("outside herdr the reporter stands inert and logs nothing", () => {
 		const runner = new FakeIdentityRunner();
+		const lines: string[] = [];
 		const reporter = createHerdrIdentityReporter({
 			env: {},
 			runner,
 			now: () => 1_000,
-			log: () => {},
+			log: (line) => {
+				lines.push(line);
+			},
 		});
 		reporter.release();
 		expect(runner.commands).toEqual([]);
+		expect(lines).toEqual([]);
+	});
+
+	test("a partial pane environment is a line and stands inert", () => {
+		const runner = new FakeIdentityRunner();
+		const lines: string[] = [];
+		const reporter = createHerdrIdentityReporter({
+			env: { HERDR_ENV: "1" },
+			runner,
+			now: () => 1_000,
+			log: (line) => {
+				lines.push(line);
+			},
+		});
+		reporter.release();
+		expect(runner.commands).toEqual([]);
+		expect(lines).toEqual([
+			"herdr identity: the pane environment is partial (absent: HERDR_BIN_PATH, HERDR_PANE_ID); the report stands inert and herdr keeps its own reading of the pane",
+		]);
+	});
+
+	test("a partial pane environment names the variables it is missing", () => {
+		const runner = new FakeIdentityRunner();
+		const lines: string[] = [];
+		createHerdrIdentityReporter({
+			env: { HERDR_ENV: "1", HERDR_BIN_PATH: "/usr/bin/herdr" },
+			runner,
+			now: () => 1_000,
+			log: (line) => {
+				lines.push(line);
+			},
+		});
+		expect(runner.commands).toEqual([]);
+		expect(lines).toEqual([
+			"herdr identity: the pane environment is partial (absent: HERDR_PANE_ID); the report stands inert and herdr keeps its own reading of the pane",
+		]);
+	});
+
+	test("a mark other than one still reports, the theme's in-herdr fact", () => {
+		const runner = new FakeIdentityRunner();
+		createHerdrIdentityReporter({
+			env: { HERDR_ENV: "2", HERDR_BIN_PATH: "herdr", HERDR_PANE_ID: "p1" },
+			runner,
+			now: () => 1,
+			log: () => {},
+		});
+		expect(runner.commands).toEqual([
+			"herdr pane report-agent p1 --source factory --agent factory --state idle --seq 1",
+		]);
 	});
 
 	test("the creation is the report, before the plane's first frame", () => {

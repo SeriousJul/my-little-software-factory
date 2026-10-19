@@ -56,7 +56,8 @@ second.
 The plane gives herdr the one identity herdr cannot misread: the process's own
 report, on herdr's self-report protocol.
 
-- Inside a herdr pane - `HERDR_ENV` set to `1` with the pane's
+- Inside a herdr pane - the mark is a non-empty `HERDR_ENV`, whatever its
+  value, the same fact the theme read takes (ADR 0024), with the pane's
   `HERDR_BIN_PATH` and `HERDR_PANE_ID` - the plane reports itself before its
   first frame: `pane report-agent` for its pane, source `factory`, agent
   `factory`, state `idle`, sequence from the wall clock. The report is sent
@@ -77,7 +78,16 @@ report, on herdr's self-report protocol.
   exits. A release without a sequence higher than the report it clears is a
   silent no-op on the installed herdr 0.9.1 (measured: a seq-less release
   after a seq-carrying report leaves the report standing), so the release
-  carries the clock and a landed release clears the report at once. The exit
+  carries the clock and a landed release clears the report at once. The
+  release's sequence is the wall clock, and the wall clock is not monotonic:
+  a backward step of it between the run's boot and its end can leave the
+  release's sequence not ahead of the report's, and the installed herdr then
+  takes the release as a no-op, so the row stands until the pane is reused,
+  closed, or the herdr session restarts. A forward step costs nothing: the
+  release only needs to stand ahead of its own report. The plane takes the
+  wall clock, and takes the step's risk, because the report must also stand
+  ahead of herdr's own reading of the boot screen, which is made in that same
+  clock. The exit
   can come before the release's command is guaranteed to land, so a signal or
   kill ending, and the `kill -9` and crash endings that run no handler, can
   leave the report standing; on herdr 0.9.1 herdr clears no report of its own
@@ -101,7 +111,10 @@ report, on herdr's self-report protocol.
   it. It never holds the boot or the shutdown, and it never fails the run.
 - Outside herdr the module stands inert: there is no herdr there to misread
   the plane's face, and the plane makes no call to a herdr binary it does not
-  own.
+  own. A herdr pane with a partial environment - the mark set, the binary or
+  the pane id absent - stands inert beside the old face and leaves one line
+  in the run's record naming the variables the environment is missing, so a
+  misconfigured herdr is visible there instead of silent.
 
 ## Considered options
 
@@ -137,7 +150,13 @@ report, on herdr's self-report protocol.
 - `herdr agent list` and the waits over it see the plane as an agent beside
   the pi sessions. That is the pane's truth, not a pi session: a script that
   waits on the pi agents of a workspace waits on the plane only if it names
-  it.
+  it. The plane's own reader of the list is the live checkout safety walk,
+  whose bare-agent count would count the plane's standing row as a conflict
+  with the plane itself when the plane runs in the checkout a Consultation
+  inspects. The walk skips the pane the plane runs in, which it knows from
+  the herdr environment, and the ticket and Consultation walks key on the
+  panes they recorded, which the plane's row carries none of, so the standing
+  row asks the operator to confirm nothing.
 - A herdr without the self-report protocol refuses the report as an unknown
   command, and the plane degrades to its old face: the pane is misnamed as
   before, and nothing else of the run changes. A herdr with it keeps the pane

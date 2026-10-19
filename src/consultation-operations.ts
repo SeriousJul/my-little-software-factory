@@ -153,6 +153,14 @@ export interface ConsultationOperationsOptions {
 	persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<ConfigWriteReport | undefined>;
 	textBatchBytes?: number;
 	/**
+	 * The pane this plane runs in, from the herdr environment. The live
+	 * checkout safety walk skips the plane's own standing `factory` row in the
+	 * agent list: the plane observes the checkout, it works nothing in it
+	 * (ADR 0139). Absent when the plane stands outside herdr, where no row of
+	 * its own can stand in the list either.
+	 */
+	ownPaneId?: string;
+	/**
 	 * The Shared checkout hold of the run, the Consultation side's seam into it
 	 * (issue #315, ADR 0109): the gate a worktree Consultation start crosses at
 	 * its claim, the take the claim runs, and the let-go where the opening
@@ -250,6 +258,7 @@ export class ConsultationOperations {
 		mapping: RepositoryMapping,
 	) => Promise<ConfigWriteReport | undefined>;
 	private readonly checkoutHold?: ConsultationCheckoutHold;
+	private readonly ownPaneId?: string;
 	private readonly operationQueues = new Map<string, Promise<void>>();
 	private readonly openingOperations = new Set<string>();
 	private readonly closeOperations = new Map<string, CloseOperation>();
@@ -280,6 +289,7 @@ export class ConsultationOperations {
 		this.log = options.log;
 		this.persistRepositoryMapping = options.persistRepositoryMapping;
 		this.checkoutHold = options.checkoutHold;
+		this.ownPaneId = options.ownPaneId;
 		this.inputQueue = new ConsultationInputQueue(this.runner, options.textBatchBytes);
 	}
 
@@ -1378,6 +1388,7 @@ export class ConsultationOperations {
 			tickets: this.tickets(),
 			consultations: this.state.consultationRecord.consultations("open"),
 			agents: probe.agents,
+			ownPaneId: this.ownPaneId,
 		});
 		if (this.stopped) return null;
 		if (safety.warning !== undefined)
