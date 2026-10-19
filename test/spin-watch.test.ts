@@ -13,13 +13,25 @@
  * spins at full CPU and makes no voluntary context switches, the
  * signature of the spin the issue names. The watch takes the child down,
  * the child's death is reported by the stub, and the run the watch stood
- * beside ends red instead of open. The end-to-end checks stand the watch
- * on a fast pace and a floor a loaded runner still holds, through the
- * watch's SPIN_WATCH_ settings.
+ * beside ends red instead of open. The half also stands the watch beside
+ * a small real `bun test` run of a temporary test file: the run yields
+ * to its event loop on every wait, the watch holds the run's parent in
+ * its sight, and the run ends green with its own exit code - the
+ * watch's false-positive path, a busy but healthy run it must not take
+ * down. The end-to-end checks stand the watch on a fast pace and a floor
+ * a loaded runner still holds, through the watch's SPIN_WATCH_ settings.
+ *
+ * The end-to-end half stands only where the watch stands: on Linux, where
+ * it reads the processes' /proc entries. On any other platform the watch
+ * is inert and would take the stub's spin child down nowhere, so the
+ * half throws the check incomplete instead of timing out and leaving the
+ * stub and its spin child on the machine at full CPU.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	beatPercent,
@@ -153,12 +165,65 @@ describe("the spin watch's parsing of the process table", () => {
 		expect(statusField(status, "no such label:")).toBeNull();
 		expect(statusField(null, "PPid:")).toBeNull();
 	});
+
+	test("a status line whose value itself holds a colon stands whole after its first colon", () => {
+		// The line the dead tmux client's status file held beside the
+		// measured spin: the value after the line's first colon is the
+		// process class the report names, and the colon inside it is part
+		// of the value, not its end.
+		const status =
+			"Name:\ttmux: client\nState:\tZ (zombie)\nPPid:\t127399\nvoluntary_ctxt_switches:\t383\n";
+		expect(statusField(status, "Name:")).toBe("tmux: client");
+		expect(statusField(status, "State:")).toBe("Z (zombie)");
+		expect(statusField(status, "PPid:")).toBe("127399");
+		expect(statusField(status, "voluntary_ctxt_switches:")).toBe("383");
+	});
 });
 
 describe("the spin watch, end to end", () => {
 	const repoRoot = join(import.meta.dir, "..");
 	const WATCH = join(repoRoot, "scripts", "test-spin-watch.ts");
 	const STUB = join(repoRoot, "scripts", "spin-stub.ts");
+
+	/** The small test file the pass-through check stands beside: one test that yields to its event loop on every wait. */
+	const PASS_THROUGH_TEST = `import { expect, test } from "bun:test";
+
+test("a healthy run yields to its event loop on every wait", async () => {
+	let turns = 0;
+	for (let i = 0; i < 10; i += 1) {
+		await new Promise((resolve) => setTimeout(resolve, 250));
+		turns += 1;
+	}
+	expect(turns).toBe(10);
+});
+`;
+
+	/** Where the pass-through run's temporary test file stands. Stands once `beforeAll` has written it. */
+	let passFile: string;
+	/** Where the check's temporary directory stands. Stands once `beforeAll` has made it. */
+	let passDir: string;
+
+	beforeAll(() => {
+		// The watch stands only where it can read the processes' /proc
+		// entries (Linux). On any other platform it is inert: it takes the
+		// stub's spin child down nowhere, the half times out, and the stub
+		// and its spin child stand on as orphans at full CPU until a
+		// developer kills them by hand. The check reports itself incomplete
+		// instead, the way the tmux check reports a missing binary.
+		if (process.platform !== "linux") {
+			throw new Error(
+				"the spin watch stands only on Linux, so its end-to-end half cannot run; " +
+					"it is recorded as incomplete, not as passed",
+			);
+		}
+		passDir = mkdtempSync(join(tmpdir(), "factory-spin-watch-"));
+		passFile = join(passDir, "pass-through.test.ts");
+		writeFileSync(passFile, PASS_THROUGH_TEST);
+	});
+
+	afterAll(() => {
+		if (passDir !== undefined) rmSync(passDir, { recursive: true, force: true });
+	});
 
 	/** One setting of the watch's pace and thresholds for an end-to-end run. */
 	const fastWatch = {
@@ -208,19 +273,34 @@ describe("the spin watch, end to end", () => {
 		expect(run.stderr).toContain("a spin stood, and the watch pulled the run red");
 	}, 30_000);
 
-	test("a run that stands no spin passes through with its own exit code", async () => {
-		// The command outlives a couple of beats, so the watch samples a
-		// healthy process: one that yields to its event loop on every wait
-		// makes the voluntary switches a spin does not, and stands no
-		// signature.
+	test("a healthy bun test run passes through the watch with its own exit code", async () => {
+		// A small real `bun test` run outlives a couple of beats, so the
+		// watch samples the run's own parent: a single-file run stands no
+		// worker, and the parent is what stands in the watch's sight there.
+		// The run yields to its event loop on every wait, making the
+		// voluntary switches a spin does not, and stands no signature: the
+		// watch's false-positive path, a busy but healthy run it must not
+		// take down.
 		const run = await standWatch(
-			[process.execPath, WATCH, process.execPath, "-e", "setTimeout(() => process.exit(0), 900)"],
+			[
+				process.execPath,
+				WATCH,
+				process.execPath,
+				"test",
+				"--parallel",
+				"--isolate",
+				"--timeout=60000",
+				passFile,
+			],
 			fastWatch,
 		);
 
 		expect(run.code).toBe(0);
 		expect(run.stderr).toContain("the run ended 0 after");
-		expect(run.stderr).toContain("it held no process of the run in its sight");
+		// The end line names the set the watch held in its sight over the
+		// run: the run's parent stands in it, and a held set says so
+		// instead of standing silent.
+		expect(run.stderr).toMatch(/it held \d+ process\(es\) of the run in its sight \(pids: \d+/);
 		expect(run.stderr).toContain("no spin stood");
 	}, 30_000);
 });

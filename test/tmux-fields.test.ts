@@ -34,7 +34,11 @@
  * waits on asynchronously leaves the event loop running, so a pane that stops
  * answering stands the check's own deadline up and fails the test, and the run
  * ends. The measured spin stood in exactly this file's poll loop, on the
- * synchronous side.
+ * synchronous side. Each client call stands its own deadline too: a client that
+ * stands past five seconds without answering is taken down and read as a
+ * no-answer, so a client that never answers stands the check's own deadline and
+ * its pane report up, instead of trading the spin for a silent wait on the
+ * runner's sixty-second budget.
  *
  * The pane's command runs the gallery through a small shell wrapper that keeps
  * a copy of the pane's stderr in the check's own temporary directory. The pane
@@ -58,6 +62,14 @@ import { join } from "node:path";
 const GALLERY_BIN = join(process.cwd(), "bin", "factory-gallery.mjs");
 /** How long one wait on the pane is allowed to run. */
 const SETTLE_MS = 25_000;
+/**
+ * The longest one call to the tmux client may stand before it is taken down
+ * and read as a no-answer. A healthy client answers in well under it, and it
+ * stands short enough that the check's own deadline, not a client call, bounds
+ * the check's waits: three client calls per settle iteration stand 15 s, under
+ * SETTLE_MS's 25 s.
+ */
+const CLIENT_DEADLINE_MS = 5_000;
 
 /** One answer from the check's own tmux: the exit code and both of its streams. */
 interface TmuxResult {
@@ -89,9 +101,13 @@ let available = false;
  * The wait is asynchronous on purpose (issue #403): the child's exit arrives
  * on the event loop the check's own waits run on, so a client that stops
  * answering stands the test's deadline up instead of spinning the worker that
- * sent it. The client's environment drops the `TMUX` mark: if the suite runs
- * inside a tmux session, the mark would tell tmux the check is nested, and the
- * check's own server must answer the way the machine's tmux answers.
+ * sent it. The call carries its own deadline: a client that stands past it
+ * without answering is taken down and read as a no-answer, so a client that
+ * never answers stands the check's own deadline and its pane report up,
+ * instead of trading the spin for a silent wait on the runner's budget. The
+ * client's environment drops the `TMUX` mark: if the suite runs inside a tmux
+ * session, the mark would tell tmux the check is nested, and the check's own
+ * server must answer the way the machine's tmux answers.
  */
 function tmuxCall(args: string[]): Promise<TmuxResult> {
 	const env = { ...process.env };
@@ -103,6 +119,30 @@ function tmuxCall(args: string[]): Promise<TmuxResult> {
 		}) as ChildProcess;
 		const out: Buffer[] = [];
 		const err: Buffer[] = [];
+		let settled = false;
+		let deadline: ReturnType<typeof setTimeout> | undefined;
+		const finish = (status: number | null, note: string) => {
+			if (settled) return;
+			settled = true;
+			if (deadline !== undefined) clearTimeout(deadline);
+			const stderr = Buffer.concat(err).toString("utf8");
+			resolve({
+				status,
+				stdout: Buffer.concat(out).toString("utf8"),
+				stderr: note === "" ? stderr : `${stderr}\n${note}`,
+			});
+		};
+		deadline = setTimeout(() => {
+			try {
+				child.kill("SIGKILL");
+			} catch {
+				// the client died between the deadline and the signal
+			}
+			finish(
+				null,
+				`the tmux client stood past its ${CLIENT_DEADLINE_MS} ms deadline and was taken down`,
+			);
+		}, CLIENT_DEADLINE_MS);
 		child.stdout?.on("data", (chunk: Buffer) => {
 			out.push(chunk);
 		});
@@ -110,14 +150,12 @@ function tmuxCall(args: string[]): Promise<TmuxResult> {
 			err.push(chunk);
 		});
 		child.on("error", (error) => {
+			settled = true;
+			if (deadline !== undefined) clearTimeout(deadline);
 			reject(error);
 		});
 		child.on("close", (status) => {
-			resolve({
-				status,
-				stdout: Buffer.concat(out).toString("utf8"),
-				stderr: Buffer.concat(err).toString("utf8"),
-			});
+			finish(status, "");
 		});
 	});
 }

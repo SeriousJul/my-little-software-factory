@@ -343,7 +343,7 @@ async function main(): Promise<void> {
 			`\n[spin-watch] ${runSummary(exitCode, seen, { ticks: clockTicks, assumed }, spinStood)}\n`,
 		);
 	}
-	processExit(spinStood || exitCode !== 0 ? 1 : 0);
+	processExit(spinStood ? 1 : exitCode);
 }
 
 void main();

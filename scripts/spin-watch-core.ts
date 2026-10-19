@@ -64,12 +64,21 @@ export function isBunTestArgs(args: string[]): boolean {
 	return name === "bun" && args[1] === "test";
 }
 
-/** The value one labeled line of a /proc status file holds, or null. */
+/**
+ * The value one labeled line of a /proc status file holds, or null. The
+ * value stands after the line's first colon and holds the rest of the
+ * line whole: the `Name:` line of the dead tmux client the issue
+ * measured reads `Name:\ttmux: client`, and the value after its first
+ * colon is the process class the report names, with the colon inside it
+ * part of the value.
+ */
 export function statusField(status: string | null, label: string): string | null {
 	if (status === null) return null;
 	const line = status.split("\n").find((entry) => entry.startsWith(label));
 	if (line === undefined) return null;
-	return line.split(":")[1]?.trim() ?? null;
+	const colon = line.indexOf(":");
+	if (colon === -1) return null;
+	return line.slice(colon + 1).trim();
 }
 
 /**

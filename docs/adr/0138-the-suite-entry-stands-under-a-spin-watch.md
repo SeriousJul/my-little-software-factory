@@ -135,6 +135,17 @@ outside the entry - the inner loop's `bun test <file>`, a hand-run
 suite - stands under no watch at all. The commands page names both
 limits beside the guard.
 
+When the watch takes the run's `bun test` parent down, the parent's
+worker children stand orphaned: whether a `bun test` worker exits when
+its parent dies stands unmeasured, and the verification record names
+the limit. The measured spin stood in a worker the watch takes down
+itself, so the risk stands low.
+
+The child's exit code passes through the entry unchanged: the watch
+normalizes nothing, and the one code it writes itself is the 1 of a
+run it pulled out of a spin. A run that ends non-zero on the tree ends
+non-zero through the entry, and a green run ends 0.
+
 A machine without a C compiler gets the assumed tick value, named in the
 report: with the assumed value, a spin on a kernel that reports more
 ticks still stands over the floor, and one on a kernel that reports
