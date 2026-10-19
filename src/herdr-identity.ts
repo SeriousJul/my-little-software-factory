@@ -92,11 +92,14 @@ export interface HerdrIdentityReporterOptions {
 }
 
 /**
- * Create the reporter. Inside herdr the creation is the report: it lands
+ * Create the reporter. Inside herdr the creation is the report: it is sent
  * before the plane's first frame, so herdr's first detection of the pane
- * reads the report instead of the process. The report carries the wall clock
- * as its sequence. The run reports once, so the clock's own advance keeps the
- * report ahead of any sequence herdr has already accepted.
+ * reads the report instead of the process. That ordering is a race the
+ * detector can win on the boot screen, and the report's wall-clock sequence
+ * stands ahead of the detector's, so the report supersedes the transient
+ * detection when it lands (ADR 0139). The run reports once, so the clock's
+ * own advance keeps the report ahead of any sequence herdr has already
+ * accepted.
  */
 export function createHerdrIdentityReporter(
 	options: HerdrIdentityReporterOptions,

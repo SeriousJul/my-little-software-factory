@@ -59,9 +59,16 @@ report, on herdr's self-report protocol.
 - Inside a herdr pane - `HERDR_ENV` set to `1` with the pane's
   `HERDR_BIN_PATH` and `HERDR_PANE_ID` - the plane reports itself before its
   first frame: `pane report-agent` for its pane, source `factory`, agent
-  `factory`, state `idle`, sequence from the wall clock. The report lands
+  `factory`, state `idle`, sequence from the wall clock. The report is sent
   ahead of herdr's first detection of the pane, so the detection reads the
-  report instead of the process.
+  report instead of the process. That ordering is a timing race, not a
+  guarantee: on the installed herdr the detector read the `bun --watch` boot
+  screen as `pi` ahead of the report's landing, once per run and once per
+  watch restart, and the report's wall-clock sequence closed the transient
+  detection when the report landed. Losing the race costs at most that one
+  transient detection at boot; the sustained flip the issue reports is
+  removed either way, because the report holds the pane's agent fact for as
+  long as it stands.
 - When the run ends, the plane releases the report - `pane release-agent` -
   carrying the wall clock read at the end as its sequence, ahead of the boot
   report's, on every ending that closes its state, and the SIGTERM and SIGHUP
@@ -135,24 +142,51 @@ report, on herdr's self-report protocol.
   command, and the plane degrades to its old face: the pane is misnamed as
   before, and nothing else of the run changes. A herdr with it keeps the pane
   named `factory` across the screen changes and the watch restarts.
-- The post-fix field state, measured on this machine, herdr 0.9.1, in an
-  isolated named session (own socket and state dir; the operator's live
-  session was never touched, and the session was stopped and deleted after).
-  The report was driven the way the plane drives it - the same `report-agent`
-  and `release-agent` calls through the herdr binary, against a herdr-managed
-  shell pane standing in for the `bun --watch` process. The pane stood in
-  `herdr agent list` and `pane get` as `agent: factory, idle` in place of the
-  empty process detection, and held that face across a simulated watch
+- The field state, measured on this machine, herdr 0.9.1, in an isolated
+  named session (own socket and state dir; the operator's live session was
+  never touched, and every session was stopped and deleted after). Two
+  measurements stood in it. The first drove the report the way the plane
+  drives it - the same `report-agent` and `release-agent` calls through the
+  herdr binary - against a herdr-managed shell pane whose process detection
+  is empty, the pane standing in for the `bun --watch` process. The pane
+  stood in `herdr agent list` and `pane get` as `agent: factory, idle` in
+  place of that empty detection, and held that face across a simulated watch
   restart: the old run reported a lower sequence and died, the restarted run
   reported a higher one, and a late seq-less release or a late lower-sequence
   release from the dead old run was ignored while the restarted run's report
   stood; a release carrying a sequence higher than the run's last report
-  cleared the row at once. The state herdr's log records for the pane is that
-  stable `factory` face, not the `pi`-to-`None` flip that reflowed the
-  operator's panes. The neighbour pi tab standing still on the settle of a
-  turn is the operator's live-session observation of the reflow that flip
-  removal takes away; this session measured the protocol state the reflow
-  rests on, and the operator confirms the tab itself on their machine.
+  cleared the row at once.
+  The second ran the real dev entry, `bun --watch src/factory.ts`, in two
+  panes of one workspace: the pre-fix tree in one pane and the post-fix tree
+  in the other, both against an isolated factory world with no ticket
+  sources, so the plane drove no agent while it rendered the real screens.
+  Herdr's detector misread the process in both panes: it named the
+  `bun --watch` process `pi` on the run's boot screen and on a watch
+  restart's, and its reading of the pane flipped between `Some(Pi)` and
+  `None` as the plane's screen state changed from boot screen to steady
+  view. In the pre-fix pane no report stands, so the detector's reading is
+  the pane's agent fact: the fact flipped `pi` to `None` and back with the
+  screen states, and the row named `pi` appeared in `herdr agent list` on
+  the boot screen, stood for the read herdr made before its next, and left
+  with the flip to `None` - the row the client's agent panel gains and loses
+  on every flip, the reflow a watched neighbour pane reads as a scroll that
+  runs back and forth. In the post-fix pane the report stood over that
+  conflicting detection: the detector kept recording its raw flips of the
+  misread process in the server log, but the pane's agent fact - what `pane
+  get`, `herdr agent list`, and the client's panel read - stood `agent:
+  factory, idle` at every sample across the flips, across seven watch
+  restarts (every restarted run re-reporting with a wall-clock sequence
+  ahead of the old run's), and across the overlay, section, and refresh
+  screen states; no `agent list` sample of the fourteen-minute window
+  returned a row other than `factory` for the pane. On each restart the
+  detector read the boot screen as `pi` a fraction of a second ahead of the
+  restarted run's report landing, and the re-report closed the transient when
+  it landed. The run's SIGTERM ending called the release, it landed, and it
+  cleared the row at once on the real process. The neighbour pi tab standing
+  still on the settle of a turn is the operator's live-session observation
+  of the reflow that flip removal takes away; these sessions measured the
+  flip removal on the plane's own pane against the process herdr names `pi`,
+  and the operator confirms the tab itself on their machine.
 - The plane calls the herdr binary at its boot and at its end, both through
   the shared command runner. The clean ending calls it once at the boot and
   once in the exit hook. The SIGTERM and SIGHUP endings call it in the handler
