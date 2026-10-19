@@ -50,9 +50,9 @@ export interface HerdrIdentityTarget {
 export function herdrIdentityFromEnv(
 	env: Record<string, string | undefined>,
 ): HerdrIdentityTarget | null {
-	if (env["HERDR_ENV"] !== "1") return null;
-	const binPath = env["HERDR_BIN_PATH"];
-	const paneId = env["HERDR_PANE_ID"];
+	if (env.HERDR_ENV !== "1") return null;
+	const binPath = env.HERDR_BIN_PATH;
+	const paneId = env.HERDR_PANE_ID;
 	if (binPath === undefined || binPath === "" || paneId === undefined || paneId === "") {
 		return null;
 	}
