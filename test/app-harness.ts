@@ -45,7 +45,7 @@ export const WIDTH = 120;
 export const HEIGHT = 30;
 const FRAME_POLL_MS = 10;
 /**
- * The one deadline every rig wait runs against, local and CI alike.
+ * The one window every rig wait runs against, local and CI alike.
  *
  * The rig owns the wait, the flush, and the window in which the pressed
  * key must belong to the app (ADR 0128), and one clock covers all of them:
@@ -53,17 +53,81 @@ const FRAME_POLL_MS = 10;
  * end, and a CI split would let the same press prove different things on
  * the two machines. Twenty seconds stands above the measured waits at the
  * head that set it - the record names them - and above the load a shared
- * runner puts on them; a wait that still needs more than the deadline is a
- * slow plane, and the deadline names it instead of a tuned constant.
+ * runner puts on them; a wait that still needs more than the window is a
+ * slow plane, and the window names it instead of a tuned constant.
  *
- * The runner's own budget stays above the sum of two of the rig's deadline
- * waits: the test script's `--timeout` is sixty seconds, local and CI alike
- * (the campaign's test children take the same budget through
- * `stryker.config.mjs`'s `bun.bunArgs`), and twice the deadline is forty, so
- * a test's waits fail on the rig's deadline, which dumps the last frame,
- * before the runner's budget can end the test without one (ADR 0128).
+ * The window is a wall clock, and the work it waits on is a CPU time: a
+ * runner that deschedules the worker across a window strands the app's
+ * in-flight work and the wait that watches it on one clock, and the wall
+ * clock outruns both (the flake class issues #311 and #312 stood on). A
+ * window that stands past while the process stood off the CPU for most of
+ * it holds the wait for another window, and the wait holds on while the
+ * process keeps standing off the CPU, until the wait's outer deadline
+ * stands. A window the process ran for most of stands on the window: the
+ * hold absorbs a descheduled worker, not a hung plane.
+ *
+ * The runner's own budget stays above the rig's outer deadline: the test
+ * script's `--timeout` is sixty seconds, local and CI alike (the campaign's
+ * test children take the same budget through `stryker.config.mjs`'s
+ * `bun.bunArgs`), and the outer deadline is fifty, so a single wait that
+ * stretches to its outer cap still fails on the rig's deadline, which dumps
+ * the last frame, before the runner's budget can end the test without one
+ * (ADR 0128). Two waits that both stretch to the outer cap in one test can
+ * outlast the budget, and the runner ends that test without a frame; the
+ * holds' own lines stand the machine state in the run's record.
  */
 export const FRAME_DEADLINE_MS = 20000;
+/**
+ * The outer deadline of one rig wait, from the wait's start across every
+ * window it holds.
+ *
+ * It stands below the runner's sixty-second budget, so a wait that holds
+ * window after window still fails on the rig's deadline, which dumps the
+ * last frame, before the runner's budget ends the test without one.
+ */
+export const FRAME_OUTER_DEADLINE_MS = 50000;
+/**
+ * The window state of one rig wait's liveness-aware deadline.
+ *
+ * The window starts at the wait's start and restarts at each hold. Its
+ * off-schedule time is the wall time the window's polls stood off the CPU:
+ * a poll's sleep that returns long after its span stood off the CPU, and a
+ * sleep that lands on its span ran the window. The wait's polls are the
+ * process's own witness, in the process the witness runs in.
+ */
+export interface FrameWaitWindow {
+	/** The wall time the window started. */
+	startMs: number;
+	/** The wall time this window's polls stood off the CPU. */
+	offScheduleMs: number;
+	/** The windows the wait held past their deadline before this one. */
+	held: number;
+}
+
+/**
+ * Whether the window that stands past its deadline holds the wait for
+ * another window.
+ *
+ * The decision stands on the window's off-schedule time: a window the
+ * process stood off the CPU for more than half of holds, so the work a
+ * deschedule stranded settles on the next slice the process gets. A window
+ * the process ran for most of with no answer stands on the window's
+ * deadline. The wait's outer deadline stands over the windows whatever size
+ * the window names: a wait that only holds still fails on the rig's
+ * deadline before the runner's budget ends the test.
+ */
+export function windowHolds(
+	window: FrameWaitWindow,
+	nowMs: number,
+	waitStartMs: number,
+	deadlineMs: number,
+): boolean {
+	if (nowMs < window.startMs + deadlineMs) return false;
+	if (nowMs - waitStartMs >= FRAME_OUTER_DEADLINE_MS) return false;
+	const wallMs = nowMs - window.startMs;
+	return window.offScheduleMs > wallMs / 2;
+}
+
 /** The dispatch grace `settle` waits out before trusting stability. */
 const SETTLE_GRACE_MS = 30;
 /**
@@ -363,7 +427,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	const unexpected = errorCalls.filter((call) => !/was not wrapped in act/.test(call));
+	const unexpected = errorCalls.filter(
+		(call) =>
+			!/was not wrapped in act/.test(call) && !/^(?:\[frame-wait\]|\[key-bus\]) /.test(call),
+	);
+	// The rig's own hold report - the liveness-aware deadline's record of a
+	// window its worker stood off the CPU - stands beside the React act
+	// noise the guard lets past: it is the machine state in the run's record,
+	// not an error the app raised.
 	expect(unexpected, `unexpected console.error output:\n${unexpected.join("\n---\n")}`).toEqual([]);
 	errorSpy.mockRestore();
 });
@@ -686,6 +757,17 @@ export async function awaitFrame(
  * (issue #311): a frame wait that reads the buffer before the flush that
  * commits the paint would be the same failure class as the wall-clock
  * window this loop replaces (issue #312).
+ *
+ * The deadline the wait runs against is its window, and the window is
+ * liveness-aware: a window that stands past while the process stood off the
+ * CPU for most of it holds the wait for another window, until the wait's
+ * outer deadline stands. The wall clock the window reads and the CPU time
+ * the app's work takes are not the same clock, and a runner that
+ * deschedules the worker across a window strands both the work and the wait
+ * that watches it (the flake class issues #311 and #312 stood on). Each
+ * poll measures how long its sleep stood off its span, and the window
+ * stands on that measure: a window the process ran for most of stands on
+ * its deadline, which dumps the last frame.
  */
 export async function awaitFrameChecking(
 	setup: Setup,
@@ -698,15 +780,32 @@ export async function awaitFrameChecking(
 	},
 ): Promise<string> {
 	const { until, what, check, pollMs = FRAME_POLL_MS, deadlineMs = FRAME_DEADLINE_MS } = fields;
-	const deadline = Date.now() + deadlineMs;
+	const waitStart = Date.now();
+	const window: FrameWaitWindow = { startMs: waitStart, offScheduleMs: 0, held: 0 };
 	let frame = setup.captureCharFrame();
 	for (;;) {
 		check(frame);
 		if (until(frame)) return frame;
-		if (Date.now() >= deadline) {
-			throw new Error(`timed out waiting for ${what}\nlast frame:\n${frame}`);
+		const now = Date.now();
+		if (now >= window.startMs + deadlineMs) {
+			if (windowHolds(window, now, waitStart, deadlineMs)) {
+				window.held += 1;
+				console.error(
+					`[frame-wait] ${what}: the worker stood off the CPU for most of its window (${window.offScheduleMs} ms off of ${now - window.startMs} ms); the wait takes another window (hold ${window.held})`,
+				);
+				window.startMs = now;
+				window.offScheduleMs = 0;
+				continue;
+			}
+			throw new Error(
+				window.held > 0
+					? `timed out waiting for ${what} after ${window.held} held window(s)\nlast frame:\n${frame}`
+					: `timed out waiting for ${what}\nlast frame:\n${frame}`,
+			);
 		}
+		const pollStart = now;
 		await sleep(pollMs);
+		window.offScheduleMs += Math.max(0, Date.now() - pollStart - pollMs);
 		flushPassiveNow();
 		frame = setup.captureCharFrame();
 	}
@@ -846,7 +945,8 @@ async function awaitKeyBus(
 	what: string,
 	settled: (now: unknown[]) => boolean,
 ): Promise<void> {
-	const deadline = Date.now() + FRAME_DEADLINE_MS;
+	const waitStart = Date.now();
+	const window: FrameWaitWindow = { startMs: waitStart, offScheduleMs: 0, held: 0 };
 	for (;;) {
 		// The bus takes and drops its handlers in passive effects, and the
 		// flush a commit queues lands on the scheduler's clock, not on any
@@ -854,12 +954,26 @@ async function awaitKeyBus(
 		flushPassiveNow();
 		const now = keyHandlerListeners(setup);
 		if (settled(now)) return;
-		if (Date.now() >= deadline) {
+		const wall = Date.now();
+		if (wall >= window.startMs + FRAME_DEADLINE_MS) {
+			if (windowHolds(window, wall, waitStart, FRAME_DEADLINE_MS)) {
+				window.held += 1;
+				console.error(
+					`[key-bus] ${what}: the worker stood off the CPU for most of its window (${window.offScheduleMs} ms off of ${wall - window.startMs} ms); the wait takes another window (hold ${window.held})`,
+				);
+				window.startMs = wall;
+				window.offScheduleMs = 0;
+				continue;
+			}
 			throw new Error(
-				`timed out waiting for ${what} (key handlers: ${now.length})\nlast frame:\n${setup.captureCharFrame()}`,
+				window.held > 0
+					? `timed out waiting for ${what} after ${window.held} held window(s) (key handlers: ${now.length})\nlast frame:\n${setup.captureCharFrame()}`
+					: `timed out waiting for ${what} (key handlers: ${now.length})\nlast frame:\n${setup.captureCharFrame()}`,
 			);
 		}
+		const pollStart = wall;
 		await sleep(FRAME_POLL_MS);
+		window.offScheduleMs += Math.max(0, Date.now() - pollStart - FRAME_POLL_MS);
 	}
 }
 

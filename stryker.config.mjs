@@ -191,10 +191,12 @@ export default {
 		// second test still dies at five under a `[test] timeout = 60000`
 		// bunfig, measured on this branch), and the plugin's sanitized bunfig
 		// for its children carries no timeout. Sixty seconds stands for the
-		// suite's, the test script's `--timeout` (ADR 0128): it stays above
-		// twice the frame rig's twenty-second deadline, so a test's waits fail
-		// on the rig's deadline, which dumps the last frame, before the runner
-		// ends the test. Without it the campaign's children die on bun's five
+		// suite's, the test script's `--timeout` (ADR 0128): it stays above the
+		// frame rig's fifty-second outer deadline, so a test's wait that
+		// stretches to its outer cap fails on the rig's deadline, which dumps
+		// the last frame, before the runner ends the test. Two waits that both
+		// stretch to the outer cap in one test can outlast the flag. Without it
+		// the campaign's children die on bun's five
 		// second default: measured on this branch, the frame rig's timeout
 		// naming test, which waits out the full deadline, and the audit
 		// command's test, which runs the audit pipeline as a child, both died

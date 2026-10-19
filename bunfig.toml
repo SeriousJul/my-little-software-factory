@@ -7,10 +7,11 @@
 # that outlasts that default passes its own per-test timeout to `test` - the
 # frame rig's suite names sixty seconds on its twenty-second deadline pins
 # (ADR 0128) - so a plain run cannot hand a contributor a red the script's
-# run would not give. The flag stays above twice the frame rig's
-# twenty-second deadline, so a test's waits fail on the rig's deadline, which
-# dumps the last frame, before the runner's budget can end the test without
-# one. The mutation campaign's test children take the same budget through
+# run would not give. The flag stays above the frame rig's fifty-second outer
+# deadline, so a test's wait that stretches to its outer cap fails on the
+# rig's deadline, which dumps the last frame, before the runner's budget can
+# end the test without one. Two waits that both stretch to the outer cap in
+# one test can outlast the flag. The mutation campaign's test children take the same budget through
 # `stryker.config.mjs`'s `bun.bunArgs`, which the runner forwards onto its
 # own `bun test` command line.
 #

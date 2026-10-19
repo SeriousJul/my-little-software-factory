@@ -19,7 +19,15 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import type { Ticket } from "../src/domain/ticket.ts";
-import { frameUntil, waitFor, withApp } from "./app-harness.ts";
+import {
+	FRAME_DEADLINE_MS,
+	FRAME_OUTER_DEADLINE_MS,
+	type FrameWaitWindow,
+	frameUntil,
+	waitFor,
+	windowHolds,
+	withApp,
+} from "./app-harness.ts";
 import { plane } from "./plane.ts";
 
 /** The ticket the named plane stands on, beside the default standing's. */
@@ -159,5 +167,51 @@ describe("the shared frame harness boots the Seeded plane", () => {
 		} finally {
 			named.close();
 		}
+	});
+});
+
+describe("the rig wait's liveness-aware deadline", () => {
+	/** The window one of the wait's windows stands on, named by its off-schedule time. */
+	const windowAt = (startMs: number, offScheduleMs: number): FrameWaitWindow => ({
+		startMs,
+		offScheduleMs,
+		held: 0,
+	});
+
+	test("a window that has not stood past its deadline stands no hold", () => {
+		expect(windowHolds(windowAt(0, 10000), 10000, 0, FRAME_DEADLINE_MS)).toBe(false);
+	});
+
+	test("a window that stands past while the process ran stands on the deadline", () => {
+		// The polls landed on their spans: the off-schedule time stays under
+		// half the window, and the window names the slow plane.
+		expect(windowHolds(windowAt(0, 5000), FRAME_DEADLINE_MS + 1000, 0, FRAME_DEADLINE_MS)).toBe(
+			false,
+		);
+	});
+
+	test("a window that stands past while the process stood off the CPU holds", () => {
+		// The worker stood off the CPU for most of the window: the stranded
+		// work settles on the next slice the process gets, and the wait takes
+		// another window.
+		expect(
+			windowHolds(windowAt(0, FRAME_DEADLINE_MS), FRAME_DEADLINE_MS + 1000, 0, FRAME_DEADLINE_MS),
+		).toBe(true);
+	});
+
+	test("a window the process stood off the CPU for half of stands on the deadline", () => {
+		// The hold stands on more than half the window off the CPU; half is
+		// not more than half.
+		const now = FRAME_DEADLINE_MS + 1000;
+		expect(windowHolds(windowAt(0, Math.floor(now / 2)), now, 0, FRAME_DEADLINE_MS)).toBe(false);
+	});
+
+	test("the outer deadline stands over every hold", () => {
+		// The wait held window after window until its outer deadline stood: the
+		// window that stands past there stands on the deadline, and the wait
+		// fails on the rig's deadline before the runner's budget ends the test.
+		const now = FRAME_OUTER_DEADLINE_MS;
+		const window = windowAt(now - FRAME_DEADLINE_MS, FRAME_DEADLINE_MS);
+		expect(windowHolds(window, now, 0, FRAME_DEADLINE_MS)).toBe(false);
 	});
 });
