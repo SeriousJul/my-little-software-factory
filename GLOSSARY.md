@@ -697,6 +697,13 @@ What one herdr client shows: the workspace that client is looking at, in its own
 Each client keeps its own view, and a view persists while the workspace it shows exists. A focus request that arrives from outside a client (a CLI command, an Agent, the control plane) moves every attached client's view, never one client's alone: herdr has no command that aims a view at a single client. The control plane never moves a view on its own (ADR 0061); the one move it makes is the Goto, at the operator's key. The surviving exception is herdr's own: when the workspace a client is viewing stops existing, that client falls back to the session focus.
 _Avoid_: focus, screen, pane, window, session focus
 
+**herdr identity report**:
+The report the control plane sends to herdr naming itself the `factory` agent of the pane it runs in, while it runs inside a herdr pane (issue #405, ADR 0139).
+Herdr names each pane's foreground process from the process's shape and the screen it draws, and the plane, run by `bun --watch`, reads to herdr's pi detection as a pi agent in some screen states and as nothing in others. The flip of that pane's Agent fact re-renders the herdr client's Agent panel and workspace rollup and reflows the panes it shows, so a pi session the operator watches in a neighbour tab reads as a scroll that runs back and forth on the settle of a turn.
+The report stands before the plane's first frame and carries `idle`: the plane's pane waits on the operator and runs no turn of its own, and the agents it drives report their own states in their own panes. The plane releases the report when the run ends; a run herdr kills outright never reaches the release, and herdr clears the report of its own once the pane is back at its shell prompt. A herdr that refuses the report gives the plane its old face back, and the run stands on.
+Outside herdr the plane reports nothing: there is no herdr there to misread its face.
+_Avoid_: agent report, state report, self-report
+
 **session focus**:
 The workspace herdr's server treats as active.
 It is not any client's herdr view: a client keeps its own view while that workspace exists, and a client that is not viewing a workspace is not moved by what the session focus does. The control plane reads no fact of the session focus. Its close, its reuse, its grouping, and its naming all go by the workspace, tab, or pane id the plane recorded, or by a checkout path, so where the session focus lands after a close is harmless to the plane's work (ADR 0061).
