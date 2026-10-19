@@ -2065,31 +2065,94 @@ and the watch stand on the captured state, not on that mechanism.
    the check's waits run on, so a client that stops answering stands the
    check's own deadline up, fails the test, and the run ends. The check makes
    no synchronous child-process call in the suite's polling path.
-2. `bun run test` runs under the spin watch
-   (`scripts/test-spin-watch.ts`): the same `bun test` command and the same
-   output, with a reader beside it that samples the run's own workers every
-   five seconds. A worker that holds its full CPU share on every beat of a
-   sixty-second window and makes no voluntary context switches in it is the
-   spin the captures stand in; the watch reports its pid, the per-beat CPU
-   share, the switches the window held, and the dead children the worker had
-   left unreaped, takes the worker down so the run can end, and the run ends
-   red. The watch stands only on Linux, and only over the workers the run's
-   own parent started.
+2. `bun run test` runs under the spin watch (`scripts/test-spin-watch.ts`,
+   ADR 0138): the same `bun test` command and the same output, with a reader
+   beside it that samples the run's own processes every five seconds. It
+   reads the run's `bun test` parent - so a run that stands no worker child,
+   a single-file parallel run whose tests run in the parent, stands in its
+   sight - and the parent's test workers, matched on the `--test-worker`
+   argument of each child's argument list: the kernel joins a command line
+   with NUL bytes, and a spaced word of the byte string never matches the
+   arguments it holds. A process that holds its full CPU share on every beat
+   of a sixty-second window and makes no voluntary context switches in it is
+   the spin the captures stand in; the watch reports its pid, the per-beat
+   CPU share, the switches the window held, and the dead children the
+   process had left unreaped, takes it down so the run can end, and the run
+   ends red. The watch reads the share against the kernel's own clock ticks,
+   which it reads through a one-line helper it compiles once in the user's
+   cache, and falls back to 100, naming which value stood. When the run
+   ends, the watch prints the set of processes it held in its sight over the
+   run. The watch stands only on Linux.
 
 The measured spin wears the signature the watch reads: a full CPU share on
 every beat, zero voluntary switches over an eight-second beat, one unreaped
 child.
+
+### The rework round (2026-10-19, the review's required changes)
+
+The first head of the watch this branch stood with did not see a worker of
+any real run: it tested its child's command line for the spaced word `bun
+test --test-worker`, and the kernel joins a command line with NUL bytes, so
+the word never stood in the byte string. Measured against the first head's
+own match during a live `bun test --parallel` run that stood eight live
+`--test-worker` processes: every beat of the watch reported an empty worker
+set, its sample window never filled, and its kill path never ran. The first
+head's three full runs in the table below therefore stood under an empty
+watch: their protection stood on the check's asynchronous calls, not on the
+watch, and the round re-measured the watch's two claims instead of carrying
+the first head's "the watch stood silent" forward.
+
+The round also measured the two limits of the first head's sight: a
+single-file parallel run stands no `--test-worker` child at all - the parent
+runs the tests in its own process, and a spin there stood outside the
+watch's children-only sight - and the clock ticks per second the watch stood
+on were pinned at 100, the value this machine reports, an assumption the
+watch never stated.
+
+The rework, and the measurement that stands on it, on this machine (32
+cores, Bun 1.4.2):
+
+| Run | Tree | Result |
+| --- | --- | --- |
+| The reworked match, against the argv a live `bun test --parallel` run stands | reworked | the match stands on the `--test-worker` argument of the child's argument list; a live worker's line reads `.../bin/bun`, `test`, `--test-worker`, `--isolate`, `--timeout=60000`, `--max-concurrency=20`, NUL-joined, and matches, while a spaced read of the same byte string does not |
+| The reworked watch beside a live three-file parallel run, on a one-second beat | reworked | it held the run's parent and its two workers in its sight (pids 479943, 479955, 479958), standing on 100 clock ticks per second read from the kernel, and its end line named the set; the run ended green and the watch saw it |
+| The stub's spin child under the reworked watch | reworked | the watch took the child down with SIGKILL with the signature report - a full share on every beat, zero voluntary switches over the window, no dead children beside it - and the run it stood beside ended red instead of the stub's own exit 0. This is the suite's own end-to-end test (`test/spin-watch.test.ts`), and its parsing fixtures stand on the shapes the process table held on the machine that measured the spin |
+| The full suite through the watched entry, on the reworked tree | reworked | green, 3471 pass / 0 fail in 130 s, and the run's end line named the set the watch held: the run's `bun test` parent and its 32 workers, 33 processes in all, standing on 100 clock ticks per second read from the kernel; no spin stood. The push gate's run on the merged tree is the second full run through the reworked watch, and its result is what this record defers to, the way the #398 round did |
+
+The round's coverage stands named beside the guard on
+[the commands page](../development/commands.md): the watch reads the run's
+own parent and the parent's children only, so a run standing beside another
+run on the same machine cannot trip it; a `bun test` run outside the entry -
+the inner loop's `bun test <file>`, a hand-run suite - stands under no
+watch; and a machine that is not Linux gets the run passed through
+untouched.
 
 ### The verification, on this machine
 
 | Run | Tree | Result |
 | --- | --- | --- |
 | The check's file alone, through its own runner flags | fixed | 1 pass / 0 fail in 256 ms |
-| Three full runs through the watched entry | fixed | green, 3456 pass / 0 fail in 130 s each, and the watch stood silent on all three |
+| Three full runs through the watched entry, under the first head of the watch | first head | green, 3456 pass / 0 fail in 130 s each - and the watch's worker set stood empty on all three, which the rework round found and measured beside the live worker's argv above |
 
-The six pre-fix runs stand in the table above. The push gate's run on the
-merged tree is the measurement this record defers to, the way the #398 round
-did.
+The six pre-fix runs stand in the table above, and the rework round's runs
+stand in its table. The push gate's run on the merged tree is the
+measurement this record defers to, the way the #398 round did.
+
+### What the watch does not see
+
+- The run's grandchildren: a check's own tmux server and pane, a stub a
+  test spawns. The spin measured in the issue stood in the worker's own
+  thread, beside the child the worker had lost the exit of; a spin that
+  stood in a grandchild instead would stand outside the watch.
+- A `bun test` run outside the `bun run test` entry: the inner loop's
+  `bun test <file>` and a hand-run suite stand under no watch.
+- A machine that is not Linux: the watch passes the run through untouched.
+- A spin on a kernel that reports fewer clock ticks per second than the
+  assumed 100, on a machine the tick read cannot stand on: the share stands
+  under the floor, and the watch misses the spin without saying so. A
+  machine the read stands on gets its own value, and the report names it.
+  On a kernel that reports more ticks, the assumed value of 100 stands a
+  spin over the floor, so its direction does not hide a spin.
 
 ## What was not measured
 
@@ -2101,4 +2164,5 @@ did.
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Answered on 2026-10-05 in [the section above](#issue-301-the-14-unread-domain-types-2026-10-05): each name took one of [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301)'s three answers and the baseline stands empty. What stays unmeasured is whether any of them is dead, which the check still cannot see, and it is recorded in that section |
 | The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). The deadline miss that survived that fix is [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311), answered on 2026-10-06 by the fix in pull request [#318](https://github.com/SeriousJul/my-little-software-factory/pull/318): the harness's waits run the reconciler's flush before they read, and the pin stands in `test/repository-select-panel.test.ts` - recorded in [the #311 section above](#issue-311-frame-waits-still-miss-the-deadline-under-load-in-the-surfaces-the-302-fix-does-not-touch-2026-10-06-the-fix). The pseudo-terminal seam that stood beside the class is answered on 2026-10-06 in [the section above](#issue-321-pseudo-terminal-waits-miss-their-deadline-under-load-in-the-executable-fields-rig-2026-10-06-the-fix): the rig's input stands on the painted fact the previous key owed, and the open window between a surface's first frame and its key taking is closed in the source, in [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321). The frame-rig rework in [pull request #395](https://github.com/SeriousJul/my-little-software-factory/pull/395) moves the class onto the rig's one deadline and its named outcomes, and moves the suites' remaining deadline loops onto the rig's waits: every one of the twelve issues it lists stands at that pull's head closed, issue by issue, or merged, pull by pull, by its own fix, and the rework closes none of them anew. The item stays open on the loaded-runner evidence this record holds: the deadline miss survives the fixes under a loaded runner, and no loaded run at the rework's head is on file. The push gate's full-suite run at the pushed head is the rework round's measurement, and each file that fails it and passes alone is named as a load flake in the pull. The older records in [the shared control record](./shared-controls.md) and the pull request records stand The week ending 2026-10-15 was investigated in [the #398 section above](#issue-398-the-ci-test-flake-the-week-of-evidence-and-what-it-names-2026-10-15-the-answer), and its three fixable classes landed there. The merged-panel-pass mechanism the 2026-10-16 push run named is answered on 2026-10-16 in [the section above](#issue-302-the-merged-panel-pass-keeps-one-instances-keys-2026-10-16-the-fix): the per-entity panels carry a key that names their entity, and the six completed post-fix runs of this record stand green on the unit layer |
 | The mechanism inside the runtime that dropped the child's exit in issue #403 | Open, as [the #403 section above](#issue-403-a-test-worker-spins-at-full-cpu-during-a-full-suite-run-on-a-many-core-machine-2026-10-19-the-fix) records: no `strace` or `perf` on the machine, and no stack from a spinning thread. The fix and the watch stand on the captured state |
+| The spin watch taking down a process that spins in a real full-suite run | Not stood on this machine: no spin stood in any of the post-fix runs, first head or rework. What stands measured instead is in the rework round above: the live worker's argv that the reworked match matches on, the set of the run's own parent and workers the reworked watch held beside a live parallel run, and the stub's spin child the watch took down with SIGKILL in the suite's own end-to-end test. A real suite spin that returns will be the first measurement of the watch's kill path against the measured state itself |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |
