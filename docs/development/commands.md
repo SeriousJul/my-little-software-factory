@@ -8,7 +8,7 @@ description: The bun commands of the repository, the shared control gallery, and
 | Command               | What it does                                          |
 | --------------------- | ----------------------------------------------------- |
 | `bun run dev`         | Start the control plane in watch mode                  |
-| `bun run test`        | Run the full test suite                                |
+| `bun run test`        | Run the full test suite, watched for a spinning worker   |
 | `bun run test:changed`| Run only the test files the current changes affect     |
 | `bun run gallery`     | Run the shared control gallery, using the real modules |
 | `bun run mutate`      | Run a Stryker mutation campaign over `src`             |
@@ -30,6 +30,44 @@ process, so the reload keeps the state file: the run gives the state lease back
 when the watch signals it, and the next boot takes the lease again. Only the
 files the run imports are watched, so the state file and the worktrees never
 trigger a restart.
+
+## The spin watch
+
+`bun run test` runs the suite under a small watch
+([`scripts/test-spin-watch.ts`](../../scripts/test-spin-watch.ts)): the same
+`bun test` command, the same output, and a reader beside it that samples the
+run's own processes every five seconds (issue #403, ADR 0138).
+
+The watch reads the run's `bun test` parent - so a run that stands no
+worker child, a single-file parallel run whose tests run in the parent, stands
+in its sight - and the parent's test workers, matched on the `--test-worker`
+argument of each child's argument list: the kernel joins a process's command
+line with NUL bytes, and a spaced word of that byte string never matches the
+arguments it holds, so the match stands on the argument list, not on a word of
+the line.
+
+A process whose thread holds a full CPU share on every beat of a sixty-second
+window and makes no voluntary context switches in it is the spin the issue
+measured: a spinning thread makes no system calls, and every turn a healthy
+thread takes on a timer or a pipe is one. The watch reads the share against
+the kernel's own clock ticks, which it reads by compiling a one-line helper
+once, in the user's cache, the way `scripts/crash-guard.sh` builds its library,
+and falls back to 100 when the read stands nowhere, naming which one stood. When
+the signature stands, the watch prints the process's pid, its per-beat CPU
+share, the switches the window held, and any dead child the process had left
+unreaped; it takes the process down so the run can end, and the run exits red:
+a run pulled out of a spin is not a green run. When the run ends, the watch
+prints the set of processes it held in its sight over the run, so a green run
+names the run it watched instead of standing silent, and a green run whose set
+is empty says so. A run shorter than the watch's first beat says it ended
+before that beat, so its end line does not read like an empty watch.
+
+The watch reads only the run's own parent and the parent's children. The run's
+grandchildren - a check's own tmux server and pane, a stub a test spawns - stand
+outside it, and a run standing beside another run on the same machine cannot
+trip it. The watch stands only where it can read the processes' `/proc`
+entries (Linux); elsewhere it passes the run through untouched, with the same
+exit code. A `bun test` run outside this entry - the inner loop's `bun test <file>` and a hand-run suite - stands under no watch.
 
 ## Scoped run
 

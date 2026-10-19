@@ -1984,6 +1984,342 @@ worker livelock of issue #403. No loaded-runner run at the fixed head is on
 file from this machine, and the runner's own co-tenant load is not measured
 here.
 
+## Issue #403: a test worker spins at full CPU during a full suite run on a many-core machine (2026-10-19, the fix)
+
+The worker livelock already stood in the run table of the #302 section above
+(the post-fix run 4 row: one worker spun past every test's deadline and was
+killed). This section is the reproduction of the issue on this machine, the
+state the spin stood in, and the fix that lands in
+[pull request #404](https://github.com/SeriousJul/my-little-software-factory/pull/404).
+
+### The reproduction, and the state the spin stands in
+
+One machine: 32 cores, Bun 1.4.2. The pre-fix tree, at `a0db73cd`, is the
+head of `origin/main` (`486481d5`) with no file of its own, and `bun run
+test` stands on its own flags. Six full runs in a row:
+
+| Run | Wall | Load (one minute) | Result |
+| --- | --- | --- | --- |
+| 1 | 129.57 s | 1.28 before the run | green, 3456 pass / 0 fail |
+| 2 | stood open until the worker was killed | 2.29 at the kill | one worker spun at about 100% CPU; captured below |
+| 3 | 129 s | 0.90 | green, 3456 pass / 0 fail |
+| 4 | 131 s | 0.88 | green, 3456 pass / 0 fail |
+| 5 | 340 s after the worker was killed | 5.93 at the kill | one worker spun at about 100% CPU; captured below. Killing it ended the run red: the runner reports the worker's death, and the suite ends |
+| 6 | 130 s | 2.90 | green, 3456 pass / 0 fail |
+
+Both of the spinning runs stood in `test/tmux-fields.test.ts`, the check that
+reads the pane of its own tmux server. The state the spin stood in, from two
+process-table captures of the live spinning workers:
+
+| Fact | Capture 1: run 2, worker 127399, 4 min 23 s in | Capture 2: run 5, worker 147555, 5 min 16 s in |
+| --- | --- | --- |
+| Thread state and CPU | `R` (running), 99.4% | `R` (running), 99.3% |
+| Voluntary context switches over an eight-second beat | 383 before the beat, 383 after: the thread made no system calls while it ran | 368 over the worker's whole stand, and flat across the beat |
+| The worker's children | one dead `tmux: client` it had not reaped | one dead `tmux: client` it had not reaped |
+| The check's tmux server and its gallery child | both at 0.0% CPU: the pane stood healthy beside the spin | the server the check started stood with its gallery beside it |
+| The run's log | stood at its last line, from another worker: the override panel group of `test/handoff-frame.test.ts` | the same last line, from the same group |
+
+The check's poll makes three synchronous `tmux` client calls per poll, a poll
+every 50 ms, a window of up to 25 s per wait, because its pane keeps changing
+while the gallery runs. The state of the spin is one of those synchronous
+calls that lost its child's exit: the child stands dead beside the worker
+unreaped, and the worker's JS thread spins at full CPU with the event loop
+starved. A starved event loop is why neither the check's 25-second wait nor
+the runner's 60-second test budget can fire, and the run cannot end on its
+own.
+
+The last line of the log stands beside the original report: both of the
+stall runs the issue records stood at the override panel group of
+`test/handoff-frame.test.ts`, because that file's worker finished last and
+reported last; the worker that spun was `test/tmux-fields.test.ts`, the file
+the two captures above name on this machine, on the same tree the issue
+names. A run's log says which worker reported last, not which worker stands
+open.
+
+### What the run ruled out
+
+- It is not a synchronous loop in the app's code: the app's loops bound
+  themselves on timers, and the captured workers held no child of the app at
+  all.
+- It is not the frame rig's waits: those yield on every poll and stand on the
+  rig's twenty-second deadline, and the check's file boots no renderer.
+- The spin did not stand in a minimal pattern: twenty-four parallel files,
+  each starting the check's own tmux server and polling a changing pane with
+  the same three synchronous calls per 50 ms, ran fifteen times on this
+  machine without a spin. The reproduction stands on the two process-table
+  captures of the full suite, and this section says so instead of claiming a
+  smaller trigger than the evidence holds.
+
+### What stays unmeasured
+
+The mechanism inside the runtime that dropped the child's exit: the machine
+has no `strace` or `perf`, and the runtime hands no stack to a thread that
+spins, so the captures say what stood - the spin, the starved event loop, the
+unreaped child - and not where inside the runtime the exit was lost. The fix
+and the watch stand on the captured state, not on that mechanism.
+
+### The fix
+
+1. The check's tmux calls run as asynchronous child processes
+   (`test/tmux-fields.test.ts`): the child's exit arrives on the event loop
+   the check's waits run on, so a client that stops answering stands the
+   check's own deadline up, fails the test, and the run ends. The check makes
+   no synchronous child-process call in the suite's polling path.
+2. `bun run test` runs under the spin watch (`scripts/test-spin-watch.ts`,
+   ADR 0138): the same `bun test` command and the same output, with a reader
+   beside it that samples the run's own processes every five seconds. It
+   reads the run's `bun test` parent - so a run that stands no worker child,
+   a single-file parallel run whose tests run in the parent, stands in its
+   sight - and the parent's test workers, matched on the `--test-worker`
+   argument of each child's argument list: the kernel joins a command line
+   with NUL bytes, and a spaced word of the byte string never matches the
+   arguments it holds. A process that holds its full CPU share on every beat
+   of a sixty-second window and makes no voluntary context switches in it is
+   the spin the captures stand in; the watch reports its pid, the per-beat
+   CPU share, the switches the window held, and the dead children the
+   process had left unreaped, takes it down so the run can end, and the run
+   ends red. The watch reads the share against the kernel's own clock ticks,
+   which it reads through a one-line helper it compiles once in the user's
+   cache, and falls back to 100, naming which value stood. When the run
+   ends, the watch prints the set of processes it held in its sight over the
+   run. The watch stands only on Linux.
+
+The measured spin wears the signature the watch reads: a full CPU share on
+every beat, zero voluntary switches over an eight-second beat, one unreaped
+child.
+
+### The rework round (2026-10-19, the review's required changes)
+
+The first head of the watch this branch stood with did not see a worker of
+any real run: it tested its child's command line for the spaced word `bun
+test --test-worker`, and the kernel joins a command line with NUL bytes, so
+the word never stood in the byte string. Measured against the first head's
+own match during a live `bun test --parallel` run that stood eight live
+`--test-worker` processes: every beat of the watch reported an empty worker
+set, its sample window never filled, and its kill path never ran. The first
+head's three full runs in the table below therefore stood under an empty
+watch: their protection stood on the check's asynchronous calls, not on the
+watch, and the round re-measured the watch's two claims instead of carrying
+the first head's "the watch stood silent" forward.
+
+The round also measured the two limits of the first head's sight: a
+single-file parallel run stands no `--test-worker` child at all - the parent
+runs the tests in its own process, and a spin there stood outside the
+watch's children-only sight - and the clock ticks per second the watch stood
+on were pinned at 100, the value this machine reports, an assumption the
+watch never stated.
+
+The rework, and the measurement that stands on it, on this machine (32
+cores, Bun 1.4.2):
+
+| Run | Tree | Result |
+| --- | --- | --- |
+| The reworked match, against the argv a live `bun test --parallel` run stands | reworked | the match stands on the `--test-worker` argument of the child's argument list; a live worker's line reads `.../bin/bun`, `test`, `--test-worker`, `--isolate`, `--timeout=60000`, `--max-concurrency=20`, NUL-joined, and matches, while a spaced read of the same byte string does not |
+| The reworked watch beside a live three-file parallel run, on a one-second beat | reworked | it held the run's parent and its two workers in its sight (pids 479943, 479955, 479958), standing on 100 clock ticks per second read from the kernel, and its end line named the set; the run ended green and the watch saw it |
+| The stub's spin child under the reworked watch | reworked | the watch took the child down with SIGKILL with the signature report - a full share on every beat, zero voluntary switches over the window, no dead children beside it - and the run it stood beside ended red instead of the stub's own exit 0. This is the suite's own end-to-end test (`test/spin-watch.test.ts`), and its parsing fixtures stand on the shapes the process table held on the machine that measured the spin |
+| The full suite through the watched entry, on the reworked tree | reworked | green, 3471 pass / 0 fail in 130 s, and the run's end line named the set the watch held: the run's `bun test` parent and its 32 workers, 33 processes in all, standing on 100 clock ticks per second read from the kernel; no spin stood. The push gate's run on the merged tree is the second full run through the reworked watch, and its result is what this record defers to, the way the #398 round did |
+
+The round's coverage stands named beside the guard on
+[the commands page](../development/commands.md): the watch reads the run's
+own parent and the parent's children only, so a run standing beside another
+run on the same machine cannot trip it; a `bun test` run outside the entry -
+the inner loop's `bun test <file>`, a hand-run suite - stands under no
+watch; and a machine that is not Linux gets the run passed through
+untouched.
+
+### The rework round two (2026-10-19, the review's required changes)
+
+The review of the reworked head named four defects, and the round fixed
+each:
+
+1. The report misnamed the zombie the issue measured. `statusField`
+   took the field between the line's first and second colons, so the line
+   `Name:\ttmux: client` of the dead tmux client read back as `tmux`,
+   and the report named the spin's unreaped child `(tmux)` instead of
+   `(tmux: client)`. Detection stood unaffected - the values of `State:`,
+   `PPid:`, and `voluntary_ctxt_switches:` hold no colon - but the report
+   is the evidence the issue asks for. The value now stands after the
+   line's first colon and holds the rest of the line whole, and a fixture
+   stands the measured line beside the parsing.
+2. The end-to-end half timed out on a machine that is not Linux: the
+   watch is inert off Linux, so it took the stub's spin child down
+   nowhere, the check timed out at its 30 s, and the stub and its spin
+   child stood on as orphans at full CPU. The half now throws the check
+   incomplete on a platform the watch stands nowhere, the way the tmux
+   check reports a missing binary. The mechanism stands measured on this
+   machine: a `beforeAll` that throws fails the check's tests without
+   running them and stands no process on.
+3. The pass-through test tested a command the watch never reads: `bun
+   -e ...` is not a `bun test` run, the watch's target set stood empty on
+   every beat, and the run it stood beside stood outside its sight. The
+   false-positive path - a busy but healthy `bun test` parent the watch
+   must not take down - stood beside no automated test. The check now
+   stands the watch beside a real `bun test` run of a small temporary
+   test file that yields to its event loop on every wait, and asserts the
+   run ends 0 with the watch holding the run's parent in its sight.
+4. A tmux client that did not answer stood outside the check's own
+   deadline: `tmuxCall` waited on the child's exit with no deadline of
+   its own, so a client that never answered stood the wait on the
+   runner's 60 s budget, with the check's 25 s bound and its pane report
+   bypassed. Each client call now stands its own 5 s deadline: a client
+   that stands past it is taken down and read as a no-answer.
+
+The round also made the entry report the child's exit code unchanged
+instead of normalizing any non-zero code to 1: the watch writes one code
+of its own, the 1 of a run it pulled out of a spin, and the wording that
+the entry reports the same exit code stands beside the code now (ADR
+0138).
+
+The round's measurement, on this machine (32 cores, Bun 1.4.2, load 2.22
+before the scoped runs, no other `bun test` process running):
+
+| Run | Tree | Result |
+| --- | --- | --- |
+| The `Name:` line of a dead tmux client, beside the fixed parsing | reworked | the value after the line's first colon stands whole: `Name:\ttmux: client` reads back as `tmux: client`, the process class the report names, beside the fixture in `test/spin-watch.test.ts` |
+| The pass-through check beside a real `bun test` run of a small temporary test file, on a 300 ms beat | reworked | the run stood about 3 s, the watch held the run's parent in its sight (one process, its pid named in the end line), and the run ended 0 with no spin stood; a single-file run stands no `--test-worker` child, and the parent is what stands in the watch's sight there |
+| The end-to-end half's platform guard, beside the mechanism it stands on | reworked | a `beforeAll` that throws on a platform the watch stands nowhere fails the check's tests without running them and stands no process on, measured beside a probe of the throwing hook; the platform check itself is the one-line read the watch itself stands on, and its stand on a machine that is not Linux is named in [the table below](#what-was-not-measured) |
+| A client that never answers, beside the deadline the round gives each `tmuxCall` | reworked | the child was taken down at the 5 s deadline and the wait resolved as a no-answer 501 ms into it, and no child stood on after, measured beside a probe of the deadline shape the call stands on |
+| `bun test test/spin-watch.test.ts --isolate` | reworked | 16 pass / 0 fail in 3.8 s: the fixture half, the spin child the watch took down with its report, and the real `bun test` run the watch held in its sight and let end green |
+| `bun test test/tmux-fields.test.ts --isolate` | reworked | 1 pass / 0 fail in 285 ms: the healthy client answers in well under its 5 s deadline, and the check's own deadline and pane report stand in charge of a client that does not answer |
+
+The push gate's run on the merged tree is the full-suite measurement this
+round defers to, the way the rounds before it did.
+
+### The rework round three (2026-10-19, the review's required change)
+
+The review of the reworked head stood the branch at 88 and named one
+required change and two suggestions, and the round took all three:
+
+1. The stub's red path left an unbounded orphan chain. If the spin child
+   dips under the watch's floor on any one beat of a small, loaded
+   runner, the watch takes it down nowhere, the check times out, the
+   worker exits, and the watch, the stub, and the spin child stand on as
+   orphans, the child holding one core at full CPU until the machine or
+   the runner goes away. The child holds no state, so the round gives it
+   a wall-clock self-exit well past the check's 30 s timeout - 120 s by
+   default, standable shorter through `SPIN_STUB_SELF_EXIT_MS`, so the
+   suite stands the mechanism beside a short bound without touching the
+   default. The round's first head stood the self-exit as a break out of
+   the spin loop, and the break fell through into the stub's parent
+   branch: the child stood a successor spin child and waited on it,
+   passing the spin on without end. A live probe of the child run alone
+   beside no watch stood the defect: the child stood on at full CPU past
+   its bound. The child now exits on its own when the bound stands, and
+   the probe's re-run stands the fix beside the machine's own process
+   table.
+2. The `tmux -V` availability probe of `test/tmux-fields.test.ts` stood
+   without a deadline of its own. It is asynchronous, so it cannot stand
+   the spin, but a client that never answers there stood the runner's
+   budget instead of the check's five-second deadline. The probe now runs
+   through the check's own client call, so it stands the same deadline,
+   and the rule the fix names holds for every client call the check
+   makes, the first one included.
+3. A run shorter than one beat ended with the line "it held no process
+   of the run in its sight": true, but readable like an empty watch that
+   ran and held nothing. The end line now says the run ended before the
+   watch's first beat, and the end-to-end half stands a real `bun test`
+   run that short beside a ten-second beat to hold the line.
+
+The round's measurement, on this machine (32 cores, Bun 1.4.2, load 2.48
+on the one-minute mark at the start of the scoped runs, which held the
+tail of the self-exit probe above, no other `bun test` process running):
+
+| Run | Tree | Result |
+| --- | --- | --- |
+| The spin child's self-exit on its default 120 s bound, run alone beside no watch | reworked | the child held one core at 99.8 percent, thread R, through the bound and made zero voluntary context switches over a six-second mid-spin beat, then exited 0 on its own at 120 s of wall: a run the watch fails to pull red stands on the machine for at most the bound, and the chain it bounded - the stub beside it, the watch beside the stub - stands down with it |
+| The end-to-end red path with the self-exit armed, the watch on its fast pace | reworked | the watch took the child down by SIGKILL in 1.2 s with the signature report, long before the child's 120 s self-exit stood: the armed bound does not weaken the check's green path |
+| The stub's spin child beside no watch, on a 1.5 s bound through SPIN_STUB_SELF_EXIT_MS | reworked | the child exited 0 on its own at the bound, and the stub reported `exited 0` and ended 0 on its own, no successor child standing on after: the mechanism the default 120 s bound stands on, stood beside a short bound in the suite's own test |
+| A real `bun test` run shorter than the watch's ten-second beat, beside the watch | reworked | the run stood under a second, ended 0, and its end line read "the run ended before the watch's first beat, and it held no process of the run in its sight": the sub-beat fact, named instead of reading like an empty watch |
+| The `tmux -V` availability probe, beside the deadline the check's client calls stand | reworked | the probe runs through the check's own client call, so it stands the five-second deadline the round two table measured beside a client that never answers; `bun test test/tmux-fields.test.ts --isolate --timeout=60000` stands 1 pass / 0 fail in 244 ms |
+| `bun test test/spin-watch.test.ts test/tmux-fields.test.ts --isolate --timeout=60000` | reworked | 19 pass / 0 fail in 5.5 s: the fixture half, the spin child the watch took down with its report, the real `bun test` runs the watch held in its sight, the sub-beat end line, and the spin child that exited on its own |
+
+The push gate's run on the merged tree is the full-suite measurement this
+round defers to, the way the rounds before it did.
+
+### The rework round four (2026-10-19, the review's required changes)
+
+The review of the round-three head stood the branch at 82 and named the
+defect in the report's dead-children line, its missing fixture, and one
+comment count, and asked for one re-measurement, and the round took each:
+
+1. The report's dead-children line stood dead. `deadChildren` gated on
+   `statusField(status, "State:") !== "Z"`, but the kernel writes the state
+   as its character followed by its word, `State:\tZ (zombie)`, and the
+   round-two parsing fix hands back the whole value: the gate compared
+   `"Z (zombie)" !== "Z"`, which is always true, and every child was
+   skipped. The report always printed "no dead children stood beside it",
+   and the unreaped `tmux: client` the issue's two captures record was
+   never named, even when it stood there. Detection stood unaffected - the
+   signature stands on the CPU share and the switch count - but the report
+   is the evidence the red stands on, and ADR 0138, the commands page, and
+   this record all promise that it names the dead children. The gate now
+   stands on the state character: `Z` is the only character the kernel
+   gives a child it has not reaped, and a child gone between the list read
+   and the status read stands unnamed. The gate stands in the pure parsing
+   core beside the rest of the watch's parsing, so the test stands it
+   beside fixture status files without a live process.
+2. No test pinned the defect: the end-to-end red path asserts "no dead
+   children stood beside it", which the broken gate printed too for a
+   child that held no children at all, and no fixture stood a zombie beside
+   the spinning process. A fixture now stands a child status file holding
+   `State:\tZ (zombie)` beside the dead-children read and asserts the child
+   stands named; a sleeping child (`State:\tS (sleeping)`) stands unnamed,
+   a child gone between the list read and the status read stands unnamed,
+   and a child list that holds no child stands no dead child.
+3. The `ticksOf` comment said "utime and stime are the eleventh and
+   twelfth" of the fields after the closing paren; the code stands on the
+   twelfth and thirteenth of them, and the comment now says so.
+
+The round also re-measured the round-two claim that the report names the
+spin's unreaped child `(tmux: client)`: as written it stood on the
+round-two parsing fix alone, and the gate defect above stood between it
+and the live report. The round stood the measured state live: a probe
+whose spin child stands one real tmux client call on a server of its own
+that it never reaps, then spins in the stub's own shape, stood under the
+watch on its fast pace, the shape of the state the issue's captures stood
+in - the spinning worker beside its dead `tmux: client` child.
+
+The round's measurement, on this machine (32 cores, Bun 1.4.2, load 2.90
+on the one-minute mark at the start of the scoped runs, no other `bun
+test` process running):
+
+| Run | Table | Result |
+| --- | --- | --- |
+| The dead-children gate beside its fixture | reworked | the zombie child reading `State:\tZ (zombie)` stands named as `42 (tmux: client)`, the sleeping child `State:\tS (sleeping)` stands unnamed, a child gone between the list read and the status read stands unnamed, and a child list that holds no child stands no dead child; the fixture stands in `test/spin-watch.test.ts` beside the gate in the parsing core |
+| The spin's unreaped child, beside a live report | reworked | the probe's spin child stood a real `tmux` client call on its own server that it never reaped, then spun in the stub's shape; the watch took it down in 1 s with the signature report - `cpu share per 300ms beat: 100% 100% 100%`, `voluntary context switches over the window: 0`, `dead children it had left unreaped: 767759 (tmux: client)` - and the run it stood beside ended red; the child was taken down by SIGKILL, and nothing of the probe stood on the machine after |
+| `bun test test/spin-watch.test.ts test/tmux-fields.test.ts --isolate --timeout=60000` | reworked | 21 pass / 0 fail in 5.5 s: the fixture half, the spin child the watch took down with its report, the real `bun test` runs the watch held in its sight, the sub-beat end line, and the spin child that exited on its own |
+| `bun run audit` | reworked | exit 0: type, lint, and secrets stand at 0, test duplication stands at 168, the baseline, and the six open CodeQL alerts stand in files this pull does not touch |
+
+The push gate's run on the merged tree is the full-suite measurement this
+round defers to, the way the rounds before it did.
+
+### The verification, on this machine
+
+| Run | Tree | Result |
+| --- | --- | --- |
+| The check's file alone, through its own runner flags | fixed | 1 pass / 0 fail in 256 ms |
+| Three full runs through the watched entry, under the first head of the watch | first head | green, 3456 pass / 0 fail in 130 s each - and the watch's worker set stood empty on all three, which the rework round found and measured beside the live worker's argv above |
+
+The six pre-fix runs stand in the table above, and the rework round's runs
+stand in its table. The push gate's run on the merged tree is the
+measurement this record defers to, the way the #398 round did.
+
+### What the watch does not see
+
+- The run's grandchildren: a check's own tmux server and pane, a stub a
+  test spawns. The spin measured in the issue stood in the worker's own
+  thread, beside the child the worker had lost the exit of; a spin that
+  stood in a grandchild instead would stand outside the watch.
+- A `bun test` run outside the `bun run test` entry: the inner loop's
+  `bun test <file>` and a hand-run suite stand under no watch.
+- A machine that is not Linux: the watch passes the run through untouched.
+- A spin on a kernel that reports fewer clock ticks per second than the
+  assumed 100, on a machine the tick read cannot stand on: the share stands
+  under the floor, and the watch misses the spin without saying so. A
+  machine the read stands on gets its own value, and the report names it.
+  On a kernel that reports more ticks, the assumed value of 100 stands a
+  spin over the floor, so its direction does not hide a spin.
+
 ## What was not measured
 
 | Item | State |
@@ -1993,4 +2329,8 @@ here.
 | The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | First measured by the self-review round above, on `b3b5fc38`: the probe rule, the rename sweep, the determinism rule, the file-the-defect rule, and the doc-claim rule each produced a result there, and the doc-claim rule found the stale cost numbers. What stays incomplete is the round's value: every commit was written by the agent that wrote the rules, so this is self-review, and a round on a pull request from a different author is the first independent measurement |
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Answered on 2026-10-05 in [the section above](#issue-301-the-14-unread-domain-types-2026-10-05): each name took one of [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301)'s three answers and the baseline stands empty. What stays unmeasured is whether any of them is dead, which the check still cannot see, and it is recorded in that section |
 | The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). The deadline miss that survived that fix is [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311), answered on 2026-10-06 by the fix in pull request [#318](https://github.com/SeriousJul/my-little-software-factory/pull/318): the harness's waits run the reconciler's flush before they read, and the pin stands in `test/repository-select-panel.test.ts` - recorded in [the #311 section above](#issue-311-frame-waits-still-miss-the-deadline-under-load-in-the-surfaces-the-302-fix-does-not-touch-2026-10-06-the-fix). The pseudo-terminal seam that stood beside the class is answered on 2026-10-06 in [the section above](#issue-321-pseudo-terminal-waits-miss-their-deadline-under-load-in-the-executable-fields-rig-2026-10-06-the-fix): the rig's input stands on the painted fact the previous key owed, and the open window between a surface's first frame and its key taking is closed in the source, in [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321). The frame-rig rework in [pull request #395](https://github.com/SeriousJul/my-little-software-factory/pull/395) moves the class onto the rig's one deadline and its named outcomes, and moves the suites' remaining deadline loops onto the rig's waits: every one of the twelve issues it lists stands at that pull's head closed, issue by issue, or merged, pull by pull, by its own fix, and the rework closes none of them anew. The item stays open on the loaded-runner evidence this record holds: the deadline miss survives the fixes under a loaded runner, and no loaded run at the rework's head is on file. The push gate's full-suite run at the pushed head is the rework round's measurement, and each file that fails it and passes alone is named as a load flake in the pull. The older records in [the shared control record](./shared-controls.md) and the pull request records stand The week ending 2026-10-15 was investigated in [the #398 section above](#issue-398-the-ci-test-flake-the-week-of-evidence-and-what-it-names-2026-10-15-the-answer), and its three fixable classes landed there. The merged-panel-pass mechanism the 2026-10-16 push run named is answered on 2026-10-16 in [the section above](#issue-302-the-merged-panel-pass-keeps-one-instances-keys-2026-10-16-the-fix): the per-entity panels carry a key that names their entity, and the six completed post-fix runs of this record stand green on the unit layer |
+| The mechanism inside the runtime that dropped the child's exit in issue #403 | Open, as [the #403 section above](#issue-403-a-test-worker-spins-at-full-cpu-during-a-full-suite-run-on-a-many-core-machine-2026-10-19-the-fix) records: no `strace` or `perf` on the machine, and no stack from a spinning thread. The fix and the watch stand on the captured state |
+| The spin watch taking down a process that spins in a real full-suite run | Not stood on this machine: no spin stood in any of the post-fix runs, first head or rework. What stands measured instead is in the rework rounds above: the live worker's argv that the reworked match matches on, the set of the run's own parent and workers the reworked watch held beside a live parallel run, the stub's spin child the watch took down with SIGKILL in the suite's own end-to-end test, and the real `bun test` run the reworked watch held in its sight and let end green. A real suite spin that returns will be the first measurement of the watch's kill path against the measured state itself |
+| Whether a `bun test` worker exits when the watch takes the run's `bun test` parent down | Unmeasured: the watch's signal reaches the parent, and the parent's worker children stand orphaned whether or not they exit on their parent's death. The measured spin stood in a worker the watch takes down itself, so the risk stands low, and the limit stands named in [the #403 section above](#issue-403-a-test-worker-spins-at-full-cpu-during-a-full-suite-run-on-a-many-core-machine-2026-10-19-the-fix) and in ADR 0138 |
+| The spin watch's end-to-end half on a machine that is not Linux | Not stood on this machine, which is Linux: the guard's throwing `beforeAll` fails the check as incomplete, measured beside a probe, but the one-line platform read standing on a macOS or Windows machine is named, not measured. CI (ubuntu) stands on the watch the same way this machine does |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |

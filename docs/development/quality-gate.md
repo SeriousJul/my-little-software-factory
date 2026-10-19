@@ -115,7 +115,12 @@ tree, in this order:
 3. `bun run lint`.
 4. `bun run typecheck`.
 5. `bun run audit`, the Quality audit.
-6. `bun run test`, once.
+6. `bun run test`, once. The run stands under the spin watch
+   ([the commands page](./commands.md), ADR 0138): a process that spins at full
+   CPU with the event loop starved is taken down with its report instead of
+   holding the run open, and the run ends red (issue #403). That red is the
+   watch's, and its report names the process that spun; a red run without the
+   report stands on the tree the same way it always did.
 7. `bun run docs:build`, when the change touches `docs/`, `GLOSSARY.md`, or an
    ADR. CI runs the same build and blocks on it.
 

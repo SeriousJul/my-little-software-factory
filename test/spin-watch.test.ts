@@ -1,0 +1,406 @@
+/**
+ * The spin watch's logic and its end-to-end path (issue #403, ADR 0138).
+ *
+ * The fixture half feeds the watch's parsing the shapes the process table
+ * holds, the way the table held them on the machine that measured the
+ * spin. The worker's command line is the argument list the kernel joins
+ * with NUL bytes, and a spaced read of that byte string never matched the
+ * arguments it held - the defect the watch's first head stood with, the
+ * one that left its worker set empty on every real run.
+ *
+ * The end-to-end half stands the real watch beside a stub command
+ * (`scripts/spin-stub.ts`): the stub stands one child of its own that
+ * spins at full CPU and makes no voluntary context switches, the
+ * signature of the spin the issue names. The watch takes the child down,
+ * the child's death is reported by the stub, and the run the watch stood
+ * beside ends red instead of open. The half also stands the watch beside
+ * a small real `bun test` run of a temporary test file: the run yields
+ * to its event loop on every wait, the watch holds the run's parent in
+ * its sight, and the run ends green with its own exit code - the
+ * watch's false-positive path, a busy but healthy run it must not take
+ * down. The half also stands the stub beside no watch, so the spin
+ * child's own wall-clock self-exit stands the red-path orphan chain it
+ * bounds: a child nothing takes down exits on its own instead of passing
+ * the spin on without end. The end-to-end checks stand the watch on a fast
+ * pace and a floor a loaded runner still holds, through the watch's
+ * SPIN_WATCH_ settings; the short-run check stands it on a beat long past
+ * the run's whole stand instead, so the run ends before the watch's first
+ * beat and the end line says so rather than reading like an empty watch.
+ *
+ * The end-to-end half stands only where the watch stands: on Linux, where
+ * it reads the processes' /proc entries. On any other platform the watch
+ * is inert and would take the stub's spin child down nowhere, so the
+ * half throws the check incomplete instead of timing out and leaving the
+ * stub and its spin child on the machine at full CPU.
+ */
+
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { type ChildProcess, spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	beatPercent,
+	beatsOf,
+	deadChildrenOf,
+	isBunTestArgs,
+	isSpinSignature,
+	isTestWorkerArgs,
+	type Sample,
+	splitCmdline,
+	statusField,
+	ticksOf,
+} from "../scripts/spin-watch-core.ts";
+
+/** One sample of a watched process's counters, the way the fixtures hold them. */
+const sample = (utime: number, stime: number, volCtx: number): Sample => ({ utime, stime, volCtx });
+
+describe("the spin watch's parsing of the process table", () => {
+	// The byte string a live test worker's command line held, measured on
+	// the machine that measured the spin: the kernel joins the arguments
+	// with NUL bytes and ends the line with a trailing NUL.
+	const workerCmdline =
+		"/home/op/.local/share/mise/installs/bun/1.4.2/bin/bun\0test\0--test-worker\0--isolate\0--timeout=60000\0--max-concurrency=20\0";
+
+	test("a worker's NUL-joined command line matches on its argument list", () => {
+		// The spaced word the watch's first head searched for never stands
+		// in the byte string: the kernel joins the arguments with NUL
+		// bytes. The match that stands is the argument the list carries.
+		expect(workerCmdline.includes("bun test --test-worker")).toBe(false);
+		expect(isTestWorkerArgs(splitCmdline(workerCmdline))).toBe(true);
+	});
+
+	test("an argument list without the worker argument does not match", () => {
+		expect(
+			isTestWorkerArgs(splitCmdline("bun\0test\0--parallel\0--isolate\0--timeout=60000\0")),
+		).toBe(false);
+		expect(
+			isTestWorkerArgs(
+				splitCmdline(
+					"/usr/bin/tmux\0-L\0factory-fields-1\0-f\0/dev/null\0has-session\0-t\0factory-fields-1\0",
+				),
+			),
+		).toBe(false);
+		expect(
+			isTestWorkerArgs(splitCmdline("/bin/sh\0-c\0exec bun bin/factory-gallery.mjs fields\0")),
+		).toBe(false);
+		expect(isTestWorkerArgs(splitCmdline(""))).toBe(false);
+	});
+
+	test("the run's bun test parent matches on the bun binary and the test command", () => {
+		expect(isBunTestArgs(splitCmdline("bun\0test\0--parallel\0--isolate\0--timeout=60000\0"))).toBe(
+			true,
+		);
+		expect(
+			isBunTestArgs(
+				splitCmdline("/home/op/.local/share/mise/installs/bun/1.4.2/bin/bun\0test\0a.test.ts\0"),
+			),
+		).toBe(true);
+		expect(isBunTestArgs(splitCmdline("bun\0run\0scripts\0spin-stub.ts\0"))).toBe(false);
+		expect(isBunTestArgs(splitCmdline("bun\0scripts\0spin-stub.ts\0--test-worker\0"))).toBe(false);
+		expect(isBunTestArgs(splitCmdline("node\0test\0a.test.ts\0"))).toBe(false);
+		expect(isBunTestArgs(splitCmdline(""))).toBe(false);
+	});
+
+	test("the NUL split gives back the argument list, trailing NUL dropped", () => {
+		expect(splitCmdline("a\0b\0")).toEqual(["a", "b"]);
+		expect(splitCmdline("a\0b")).toEqual(["a", "b"]);
+		expect(splitCmdline("")).toEqual([]);
+	});
+
+	test("a beat's CPU share stands on the kernel's own clock ticks", () => {
+		// A full spin holds the kernel's own tick rate: 500 ticks over a 5 s
+		// beat on a 100-tick kernel is a full core.
+		expect(beatPercent(sample(0, 0, 0), sample(500, 0, 0), 100, 5000)).toBeCloseTo(100, 5);
+		// The same spin on a 250-tick kernel makes 1250 ticks over the beat,
+		// and read against the kernel's own rate it is still a full core.
+		expect(beatPercent(sample(0, 0, 0), sample(1250, 0, 0), 250, 5000)).toBeCloseTo(100, 5);
+		// Read against a rate below the kernel's, the same ticks stand over
+		// the floor, so the assumed value of 100 does not hide a spin on a
+		// kernel that reports more.
+		expect(beatPercent(sample(0, 0, 0), sample(1250, 0, 0), 100, 5000)).toBeCloseTo(250, 5);
+	});
+
+	test("the window's beats stand on pairs of neighboring samples", () => {
+		const window = [sample(0, 0, 0), sample(500, 0, 0), sample(750, 0, 0)];
+		expect(beatsOf(window, 100, 5000)).toEqual([100, 50]);
+	});
+
+	const thresholds = { cpuFloor: 90, switchCeiling: 50 };
+	// Twelve samples of a full spin on a 100-tick kernel over 5 s beats:
+	// 500 ticks per beat, the thread making no voluntary switches.
+	const spinWindow: Sample[] = Array.from({ length: 12 }, (_, i) => sample(i * 500, 0, 383));
+
+	test("a full share on every beat and no switches is the signature", () => {
+		expect(isSpinSignature(spinWindow, 100, 5000, thresholds)).toBe(true);
+	});
+
+	test("a beat that dips under the floor breaks the signature", () => {
+		const dip = [...spinWindow];
+		dip[6] = sample(dip[5].utime + 250, 0, 383); // a half-core beat
+		expect(isSpinSignature(dip, 100, 5000, thresholds)).toBe(false);
+	});
+
+	test("switches over the ceiling break the signature", () => {
+		const busy = [...spinWindow];
+		busy[11] = sample(spinWindow[11].utime, 0, 383 + 60);
+		expect(isSpinSignature(busy, 100, 5000, thresholds)).toBe(false);
+	});
+
+	test("switches at the ceiling keep the signature", () => {
+		const few = [...spinWindow];
+		few[11] = sample(spinWindow[11].utime, 0, 383 + 50);
+		expect(isSpinSignature(few, 100, 5000, thresholds)).toBe(true);
+	});
+
+	test("the tick read stands on the last closing paren, so a comm with spaces parses", () => {
+		const stat =
+			"475407 (bun test --test-worker) S 475403 1 1 0 -1 4194304 123 0 0 0 500 12 0 0 20 0 1 0 42 7 8000 18446744073709551615 0 0 0 0";
+		expect(ticksOf(stat)).toEqual({ utime: 500, stime: 12 });
+	});
+
+	test("a stat line without its closing paren stands no ticks", () => {
+		expect(ticksOf("123 (no closing paren S 1 2 3 4 5 6 7 8 9 10 11 12")).toBeNull();
+	});
+
+	test("one labeled line of a status file stands beside its label", () => {
+		const status =
+			"Name:\tbun\nState:\tR (running)\nPPid:\t475403\nvoluntary_ctxt_switches:\t383\n";
+		expect(statusField(status, "PPid:")).toBe("475403");
+		expect(statusField(status, "voluntary_ctxt_switches:")).toBe("383");
+		expect(statusField(status, "State:")).toBe("R (running)");
+		expect(statusField(status, "no such label:")).toBeNull();
+		expect(statusField(null, "PPid:")).toBeNull();
+	});
+
+	test("a status line whose value itself holds a colon stands whole after its first colon", () => {
+		// The line the dead tmux client's status file held beside the
+		// measured spin: the value after the line's first colon is the
+		// process class the report names, and the colon inside it is part
+		// of the value, not its end.
+		const status =
+			"Name:\ttmux: client\nState:\tZ (zombie)\nPPid:\t127399\nvoluntary_ctxt_switches:\t383\n";
+		expect(statusField(status, "Name:")).toBe("tmux: client");
+		expect(statusField(status, "State:")).toBe("Z (zombie)");
+		expect(statusField(status, "PPid:")).toBe("127399");
+		expect(statusField(status, "voluntary_ctxt_switches:")).toBe("383");
+	});
+
+	test("a dead child stands named beside the dead-children read, and a child that is not dead stands unnamed", () => {
+		// The status file the kernel writes for a child holds the state as
+		// its character followed by its word, `State:\tZ (zombie)`: the
+		// gate stands on the character, because a whole-value comparison
+		// against `Z` skipped every child the kernel ever wrote, and the
+		// report's dead-children line stood dead beside the very child the
+		// issue measured. The measured dead tmux client the spin stood
+		// beside read back as `Z (zombie)`, and `Z` is the only state
+		// character the kernel gives a child it has not reaped: a sleeper
+		// stands unnamed, and a child gone between the list read and the
+		// status read stands unnamed as well.
+		const statusOf = (child: string) => {
+			if (child === "42") return "Name:\ttmux: client\nState:\tZ (zombie)\nPPid:\t41\n";
+			if (child === "43") return "Name:\tsleeper\nState:\tS (sleeping)\nPPid:\t41\n";
+			return null;
+		};
+		expect(deadChildrenOf("42 43 44 ", statusOf)).toEqual(["42 (tmux: client)"]);
+	});
+
+	test("a child list that holds no child stands no dead child", () => {
+		// The line the red-path report ends with when the process had left
+		// no child behind: the list read stands empty, or nowhere at all
+		// when the process is gone.
+		expect(deadChildrenOf("", () => "State:\tZ (zombie)\n")).toEqual([]);
+		expect(deadChildrenOf(null, () => "State:\tZ (zombie)\n")).toEqual([]);
+	});
+});
+
+describe("the spin watch, end to end", () => {
+	const repoRoot = join(import.meta.dir, "..");
+	const WATCH = join(repoRoot, "scripts", "test-spin-watch.ts");
+	const STUB = join(repoRoot, "scripts", "spin-stub.ts");
+
+	/** The small test file the pass-through check stands beside: one test that yields to its event loop on every wait. */
+	const PASS_THROUGH_TEST = `import { expect, test } from "bun:test";
+
+test("a healthy run yields to its event loop on every wait", async () => {
+	let turns = 0;
+	for (let i = 0; i < 10; i += 1) {
+		await new Promise((resolve) => setTimeout(resolve, 250));
+		turns += 1;
+	}
+	expect(turns).toBe(10);
+});
+`;
+
+	/** The test file the short-run check stands beside: one test with no wait, so the run's whole stand fits under one beat. */
+	const SHORT_TEST = `import { test } from "bun:test";
+
+test("a run that ends before the first beat", () => {});
+`;
+
+	/** Where the pass-through run's temporary test file stands. Stands once `beforeAll` has written it. */
+	let passFile: string;
+	/** Where the short run's temporary test file stands. Stands once `beforeAll` has written it. */
+	let shortFile: string;
+	/** Where the check's temporary directory stands. Stands once `beforeAll` has made it. */
+	let passDir: string;
+
+	beforeAll(() => {
+		// The watch stands only where it can read the processes' /proc
+		// entries (Linux). On any other platform it is inert: it takes the
+		// stub's spin child down nowhere, the half times out, and the stub
+		// and its spin child stand on as orphans at full CPU until a
+		// developer kills them by hand. The check reports itself incomplete
+		// instead, the way the tmux check reports a missing binary.
+		if (process.platform !== "linux") {
+			throw new Error(
+				"the spin watch stands only on Linux, so its end-to-end half cannot run; " +
+					"it is recorded as incomplete, not as passed",
+			);
+		}
+		passDir = mkdtempSync(join(tmpdir(), "factory-spin-watch-"));
+		passFile = join(passDir, "pass-through.test.ts");
+		writeFileSync(passFile, PASS_THROUGH_TEST);
+		shortFile = join(passDir, "short.test.ts");
+		writeFileSync(shortFile, SHORT_TEST);
+	});
+
+	afterAll(() => {
+		if (passDir !== undefined) rmSync(passDir, { recursive: true, force: true });
+	});
+
+	/** One setting of the watch's pace and thresholds for an end-to-end run. */
+	const fastWatch = {
+		SPIN_WATCH_SAMPLE_MS: "300",
+		SPIN_WATCH_WINDOW: "4",
+		SPIN_WATCH_CPU_FLOOR: "50",
+	};
+
+	/** Stand the watch beside one command and wait for the run it stood beside to end. */
+	function standWatch(
+		command: string[],
+		env: Record<string, string>,
+	): Promise<{ code: number; stderr: string }> {
+		return new Promise((resolve, reject) => {
+			const child = spawn(command[0], command.slice(1), {
+				cwd: repoRoot,
+				env: { ...process.env, ...env },
+				stdio: ["ignore", "ignore", "pipe"],
+			}) as ChildProcess;
+			let stderr = "";
+			child.stderr?.on("data", (chunk) => (stderr += String(chunk)));
+			child.on("error", reject);
+			child.on("close", (code) => resolve({ code: code ?? 1, stderr }));
+		});
+	}
+
+	test("the watch takes a spinning worker down and ends the run red", async () => {
+		const run = await standWatch([process.execPath, WATCH, process.execPath, STUB], fastWatch);
+
+		// The stub's spin child was taken down by the watch's signal, not by
+		// its own exit: the stub reports how the child died.
+		expect(run.stderr).toContain("taken down by SIGKILL");
+		// The watch named the process that spun and the signature it wore.
+		expect(run.stderr).toContain("spun at full CPU");
+		expect(run.stderr).toContain("cpu share per 300ms beat:");
+		expect(run.stderr).toContain("voluntary context switches over the window:");
+		expect(run.stderr).toContain("no dead children stood beside it");
+		expect(run.stderr).toContain("taking the process down so the run can end");
+		// The run the watch stood beside ended red: a run pulled out of a
+		// spin is not a green run, even when the command it stood beside
+		// exits 0.
+		expect(run.code).toBe(1);
+		// And the watch reported the set it held in its sight: the spin
+		// child, and no process but it.
+		expect(run.stderr).toContain("the run ended 0 after");
+		expect(run.stderr).toContain("it held 1 process(es) of the run in its sight");
+		expect(run.stderr).toContain("a spin stood, and the watch pulled the run red");
+	}, 30_000);
+
+	test("a healthy bun test run passes through the watch with its own exit code", async () => {
+		// A small real `bun test` run outlives a couple of beats, so the
+		// watch samples the run's own parent: a single-file run stands no
+		// worker, and the parent is what stands in the watch's sight there.
+		// The run yields to its event loop on every wait, making the
+		// voluntary switches a spin does not, and stands no signature: the
+		// watch's false-positive path, a busy but healthy run it must not
+		// take down.
+		const run = await standWatch(
+			[
+				process.execPath,
+				WATCH,
+				process.execPath,
+				"test",
+				"--parallel",
+				"--isolate",
+				"--timeout=60000",
+				passFile,
+			],
+			fastWatch,
+		);
+
+		expect(run.code).toBe(0);
+		expect(run.stderr).toContain("the run ended 0 after");
+		// The end line names the set the watch held in its sight over the
+		// run: the run's parent stands in it, and a held set says so
+		// instead of standing silent.
+		expect(run.stderr).toMatch(/it held \d+ process\(es\) of the run in its sight \(pids: \d+/);
+		expect(run.stderr).toContain("no spin stood");
+	}, 30_000);
+
+	test("a run shorter than one beat says it ended before the watch's first beat", async () => {
+		// The beat stands long past the run's whole stand: the run ends
+		// before the watch's first beat fires, so its set of held processes
+		// stands empty for a reason the empty set of a watch that ran and
+		// held nothing does not cover. The end line names that reason
+		// instead of reading like an empty watch.
+		const run = await standWatch(
+			[
+				process.execPath,
+				WATCH,
+				process.execPath,
+				"test",
+				"--parallel",
+				"--isolate",
+				"--timeout=60000",
+				shortFile,
+			],
+			{ SPIN_WATCH_SAMPLE_MS: "10000", SPIN_WATCH_WINDOW: "4", SPIN_WATCH_CPU_FLOOR: "50" },
+		);
+
+		expect(run.code).toBe(0);
+		expect(run.stderr).toContain("the run ended 0 after");
+		expect(run.stderr).toContain("the run ended before the watch's first beat");
+		expect(run.stderr).toContain("it held no process of the run in its sight");
+		expect(run.stderr).toContain("no spin stood");
+	}, 30_000);
+
+	test("the spin child exits on its own when nothing takes it down", async () => {
+		// The stub's spin child bounds its spin on its own wall clock, so a
+		// run the watch fails to pull red cannot stand on the machine at
+		// full CPU without end. The default bound stands 120 s, well past
+		// the check's 30 s timeout, and the record stands that default
+		// beside a live probe of the child run alone; the suite stands the
+		// mechanism beside a short bound instead. The stub waits on the
+		// child, so a child that stands on would keep the stub standing too:
+		// the stub ending 0 on its own says the child ended on its own.
+		const run = await new Promise<{ code: number; stderr: string }>((resolve, reject) => {
+			const child = spawn(process.execPath, [STUB], {
+				cwd: repoRoot,
+				env: { ...process.env, SPIN_STUB_SELF_EXIT_MS: "1500" },
+				stdio: ["ignore", "ignore", "pipe"],
+			}) as ChildProcess;
+			let stderr = "";
+			child.stderr?.on("data", (chunk) => (stderr += String(chunk)));
+			child.on("error", reject);
+			child.on("close", (code) => resolve({ code: code ?? 1, stderr }));
+		});
+
+		expect(run.code).toBe(0);
+		// The child exited on its own, not taken down by a signal: the
+		// stub reports which, the way its end-to-end partner reports the
+		// watch's SIGKILL.
+		expect(run.stderr).toContain("exited 0");
+		expect(run.stderr).not.toContain("taken down by");
+	}, 15_000);
+});

@@ -25,6 +25,24 @@
  * operator's own tmux.conf at startup, and the check measures the
  * multiplexer's stock behavior, not the operator's personal one.
  *
+ * The check's tmux calls run as asynchronous child processes (issue #403): a
+ * synchronous client call the check once made for every poll of the pane can
+ * lose the child's exit under a parallel run's load, and the worker that made
+ * it then spins its JS thread at full CPU with the event loop starved - the
+ * runner's test budget never fires, the child stands dead beside it unreaped,
+ * and the run cannot end until the worker is killed by hand. A child the check
+ * waits on asynchronously leaves the event loop running, so a pane that stops
+ * answering stands the check's own deadline up and fails the test, and the run
+ * ends. The measured spin stood in exactly this file's poll loop, on the
+ * synchronous side. Each client call stands its own deadline too: a client that
+ * stands past five seconds without answering is taken down and read as a
+ * no-answer, so a client that never answers stands the check's own deadline and
+ * its pane report up, instead of trading the spin for a silent wait on the
+ * runner's sixty-second budget. The check's availability probe for the
+ * binary is one of those client calls: it runs through the same path and
+ * stands the same deadline, so the rule holds for every client call the
+ * check makes, the first one included.
+ *
  * The pane's command runs the gallery through a small shell wrapper that keeps
  * a copy of the pane's stderr in the check's own temporary directory. The pane
  * may die with the session before the first capture; the kept stderr is what
@@ -38,7 +56,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { type SpawnSyncReturns, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,6 +65,21 @@ import { join } from "node:path";
 const GALLERY_BIN = join(process.cwd(), "bin", "factory-gallery.mjs");
 /** How long one wait on the pane is allowed to run. */
 const SETTLE_MS = 25_000;
+/**
+ * The longest one call to the tmux client may stand before it is taken down
+ * and read as a no-answer. A healthy client answers in well under it, and it
+ * stands short enough that the check's own deadline, not a client call, bounds
+ * the check's waits: three client calls per settle iteration stand 15 s, under
+ * SETTLE_MS's 25 s.
+ */
+const CLIENT_DEADLINE_MS = 5_000;
+
+/** One answer from the check's own tmux: the exit code and both of its streams. */
+interface TmuxResult {
+	status: number | null;
+	stdout: string;
+	stderr: string;
+}
 
 /** Collapse a captured screen's runs of spaces, so column padding is not asserted. */
 const collapse = (screen: string): string => screen.replace(/[ \t]{2,}/g, " ");
@@ -63,24 +96,70 @@ const NAME = `factory-fields-${process.pid}`;
 let paneLog: string;
 /** Where the check's temporary directory stands. Stands once `beforeAll` has made it. */
 let dir: string;
-
-const tmux = spawnSync("tmux", ["-V"], { encoding: "utf8" });
-const available = tmux.status === 0;
+/** Whether a `tmux` binary answers on the machine's path. */
+let available = false;
 
 /**
- * One call to the check's own tmux: the check's socket, and the empty config
- * file, so a server the check starts wears stock options on every machine.
- *
- * The client's environment drops the `TMUX` mark: if the suite runs inside a
- * tmux session, the mark would tell tmux the check is nested, and the check's
- * own server must answer the way the machine's tmux answers.
+ * Run one tmux command as the check's own client and wait for it to answer.
+ * The wait is asynchronous on purpose (issue #403): the child's exit arrives
+ * on the event loop the check's own waits run on, so a client that stops
+ * answering stands the test's deadline up instead of spinning the worker that
+ * sent it. The call carries its own deadline: a client that stands past it
+ * without answering is taken down and read as a no-answer, so a client that
+ * never answers stands the check's own deadline and its pane report up,
+ * instead of trading the spin for a silent wait on the runner's budget. The
+ * client's environment drops the `TMUX` mark: if the suite runs inside a tmux
+ * session, the mark would tell tmux the check is nested, and the check's own
+ * server must answer the way the machine's tmux answers.
  */
-function tmuxCall(args: string[]): SpawnSyncReturns<string> {
+function tmuxCall(args: string[]): Promise<TmuxResult> {
 	const env = { ...process.env };
 	delete env.TMUX;
-	return spawnSync("tmux", ["-L", NAME, "-f", "/dev/null", ...args], {
-		encoding: "utf8",
-		env,
+	return new Promise<TmuxResult>((resolve, reject) => {
+		const child = spawn("tmux", ["-L", NAME, "-f", "/dev/null", ...args], {
+			env,
+			stdio: ["ignore", "pipe", "pipe"],
+		}) as ChildProcess;
+		const out: Buffer[] = [];
+		const err: Buffer[] = [];
+		let settled = false;
+		let deadline: ReturnType<typeof setTimeout> | undefined;
+		const finish = (status: number | null, note: string) => {
+			if (settled) return;
+			settled = true;
+			if (deadline !== undefined) clearTimeout(deadline);
+			const stderr = Buffer.concat(err).toString("utf8");
+			resolve({
+				status,
+				stdout: Buffer.concat(out).toString("utf8"),
+				stderr: note === "" ? stderr : `${stderr}\n${note}`,
+			});
+		};
+		deadline = setTimeout(() => {
+			try {
+				child.kill("SIGKILL");
+			} catch {
+				// the client died between the deadline and the signal
+			}
+			finish(
+				null,
+				`the tmux client stood past its ${CLIENT_DEADLINE_MS} ms deadline and was taken down`,
+			);
+		}, CLIENT_DEADLINE_MS);
+		child.stdout?.on("data", (chunk: Buffer) => {
+			out.push(chunk);
+		});
+		child.stderr?.on("data", (chunk: Buffer) => {
+			err.push(chunk);
+		});
+		child.on("error", (error) => {
+			settled = true;
+			if (deadline !== undefined) clearTimeout(deadline);
+			reject(error);
+		});
+		child.on("close", (status) => {
+			finish(status, "");
+		});
 	});
 }
 
@@ -90,19 +169,19 @@ function tmuxCall(args: string[]): SpawnSyncReturns<string> {
  *
  * The server is the check's, not the machine's: it stands on the check's own
  * socket, in the check's own environment, wearing no config file. A machine
- * server that stood long before the run - holding an operator's sessions and a
- * dev loop, and the global state such a server picks up along the way - has no
- * say in the pane the check reads. Any server a crashed run of this check left
- * on the socket goes first, so a pid that stands again starts clean.
+ * server that stood long before the run - holding an operator's sessions and
+ * a dev loop, and the global state such a server picks up along the way - has
+ * no say in the pane the check reads. Any server a crashed run of this check
+ * left on the socket goes first, so a pid that stands again starts clean.
  *
  * The pane's command runs the gallery through the check's wrapper: the gallery
  * itself, its stderr kept in the check's temporary directory. The pane and the
  * session may die with the gallery before the first capture; the kept stderr
- * is what the failure then reads out.
+ * wins that race.
  */
-function startPane(): void {
-	tmuxCall(["kill-server"]);
-	const started = tmuxCall([
+async function startPane(): Promise<void> {
+	await tmuxCall(["kill-server"]);
+	const started = await tmuxCall([
 		"new-session",
 		"-d",
 		"-s",
@@ -127,17 +206,17 @@ function startPane(): void {
 	// While the pane stands, keep it standing after the gallery exits, so a
 	// gallery that dies mid-check leaves its last screen to be read. The set
 	// can lose the race to the gallery's death; the kept stderr wins that race.
-	tmuxCall(["set-option", "-q", "-p", "-t", NAME, "remain-on-exit", "on"]);
+	await tmuxCall(["set-option", "-q", "-p", "-t", NAME, "remain-on-exit", "on"]);
 }
 
 /** The report a failure carries when the pane is gone, and what the pane left. */
-function paneGoneReport(what: string): Error {
+async function paneGoneReport(what: string): Promise<Error> {
 	const parts = [
 		`${what}: the check ran its own tmux server, so the machine's tmux state stands outside the failure`,
 	];
 	let screen = "";
-	const captured = tmuxCall(["capture-pane", "-p", "-t", NAME]);
-	if (captured.status === 0) screen = captured.stdout;
+	const captured = await tmuxCall(["capture-pane", "-p", "-t", NAME]).catch(() => null);
+	if (captured !== null) screen = captured.stdout;
 	let log = "";
 	try {
 		log = readFileSync(paneLog, "utf8");
@@ -145,7 +224,7 @@ function paneGoneReport(what: string): Error {
 		// the pane wrote no stderr: nothing was kept
 	}
 	if (screen.trim() !== "") parts.push(`the pane's last screen:\n${screen.trimEnd()}`);
-	if (log.trim() !== "") parts.push(`the pane's stderr:\n${log.trimEnd()}`);
+	if (log.trim() !== "") parts.push(`the pane's stderr:\n${log.trim()}`);
 	if (screen.trim() === "" && log.trim() === "") {
 		parts.push(
 			"the pane left neither a screen nor a word of stderr: the gallery never stood, or it died without writing",
@@ -155,11 +234,11 @@ function paneGoneReport(what: string): Error {
 }
 
 /** Whether the session the check spawned still holds its pane. */
-function paneStands(): boolean {
-	const has = tmuxCall(["has-session", "-t", NAME]);
-	if (has.status !== 0) return false;
-	const listed = tmuxCall(["list-panes", "-t", NAME, "-F", "#{pane_dead}"]);
-	if (listed.status !== 0) return false;
+async function paneStands(): Promise<boolean> {
+	const has = await tmuxCall(["has-session", "-t", NAME]).catch(() => null);
+	if (has === null || has.status !== 0) return false;
+	const listed = await tmuxCall(["list-panes", "-t", NAME, "-F", "#{pane_dead}"]).catch(() => null);
+	if (listed === null) return false;
 	return listed.stdout.trim() !== "1";
 }
 
@@ -171,13 +250,15 @@ function paneStands(): boolean {
  * read only from a pane that stands, and a pane that does not stand is
  * reported with what it left behind.
  */
-function readScreen(): string {
-	if (!paneStands()) {
-		throw paneGoneReport("the pane died before the check could read its screen");
+async function readScreen(): Promise<string> {
+	if (!(await paneStands())) {
+		throw await paneGoneReport("the pane died before the check could read its screen");
 	}
-	const captured = tmuxCall(["capture-pane", "-p", "-t", NAME]);
-	if (captured.status !== 0) {
-		throw paneGoneReport(`tmux capture-pane failed: ${captured.stderr.trim()}`);
+	const captured = await tmuxCall(["capture-pane", "-p", "-t", NAME]).catch(() => null);
+	if (captured === null || captured.status !== 0) {
+		throw await paneGoneReport(
+			`tmux capture-pane failed: ${captured?.stderr.trim() ?? "no answer from the client"}`,
+		);
 	}
 	return captured.stdout;
 }
@@ -191,9 +272,9 @@ function readScreen(): string {
  */
 async function settle(): Promise<string> {
 	const deadline = Date.now() + SETTLE_MS;
-	let last = readScreen();
+	let last = await readScreen();
 	for (;;) {
-		const screen = readScreen();
+		const screen = await readScreen();
 		if (screen === last) return screen;
 		last = screen;
 		if (Date.now() >= deadline) {
@@ -211,8 +292,8 @@ async function settle(): Promise<string> {
  * the field sees the terminal's own bracketed-paste sequence rather than a test's
  * approximation of one.
  */
-function sendKeys(text: string): void {
-	const sent = tmuxCall(["send-keys", "-t", NAME, "-l", text]);
+async function sendKeys(text: string): Promise<void> {
+	const sent = await tmuxCall(["send-keys", "-t", NAME, "-l", text]);
 	if (sent.status !== 0) throw new Error(`tmux send-keys failed: ${sent.stderr.trim()}`);
 }
 
@@ -220,7 +301,7 @@ function sendKeys(text: string): void {
 async function waitFor(predicate: (screen: string) => boolean, what: string): Promise<string> {
 	const deadline = Date.now() + SETTLE_MS;
 	for (;;) {
-		const screen = readScreen();
+		const screen = await readScreen();
 		if (predicate(screen)) return screen;
 		if (Date.now() >= deadline) {
 			throw new Error(`timed out waiting for ${what}\nlast screen:\n${screen}`);
@@ -230,12 +311,19 @@ async function waitFor(predicate: (screen: string) => boolean, what: string): Pr
 }
 
 /** End the check's own server: the check leaves no tmux on the machine. */
-function endPane(): void {
-	tmuxCall(["kill-server"]);
+async function endPane(): Promise<void> {
+	await tmuxCall(["kill-server"]).catch(() => null);
 }
 
 describe("shared fields through tmux", () => {
-	beforeAll(() => {
+	beforeAll(async () => {
+		// The availability probe runs through the check's own client call, so it
+		// stands the same deadline as the check's other calls: a binary that
+		// never answers its version probe stands that deadline up and is read
+		// as a no-answer, and the rule the check names for its client calls
+		// holds for every client call it makes.
+		const probe = await tmuxCall(["-V"]).catch(() => null);
+		available = probe?.status === 0;
 		if (!available) {
 			throw new Error(
 				"tmux is not installed, so the multiplexer acceptance check cannot run; " +
@@ -246,13 +334,13 @@ describe("shared fields through tmux", () => {
 		paneLog = join(dir, "pane-stderr.log");
 	});
 
-	afterAll(() => {
-		endPane();
+	afterAll(async () => {
+		await endPane();
 		if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
 	});
 
 	test("a real terminal path draws the fields, takes ordinary keys, and refuses a bad paste whole", async () => {
-		startPane();
+		await startPane();
 		try {
 			// The gallery is up and the shared chrome drew its controls. The wait
 			// demands every row the check reads, so a slow runner never hands back a
@@ -274,13 +362,13 @@ describe("shared fields through tmux", () => {
 			// An ordinary sequence moves the caret. A digits field that only had its
 			// caret touched keeps its text: the key belongs to the field, and the
 			// application below it sees nothing.
-			sendKeys("\x1b[D");
+			await sendKeys("\x1b[D");
 			const held = await settle();
 			expect(collapse(held)).toContain("Context 272000");
 
 			// A bracketed paste that carries a letter is refused as one operation:
 			// `1e3` never becomes `13`, and the field states why in its own row.
-			sendKeys("\x1b[200~1e3\x1b[201~");
+			await sendKeys("\x1b[200~1e3\x1b[201~");
 			const refused = await waitFor(
 				(screen) => screen.includes("takes digits only"),
 				"the refusal to be stated on the screen",
@@ -293,7 +381,7 @@ describe("shared fields through tmux", () => {
 			// above was about the letters and not about the terminal path: the value
 			// grows by exactly one digit, at the caret, and the row's length proves
 			// where it went without pinning the renderer's own padding.
-			sendKeys("7");
+			await sendKeys("7");
 			const taken = await waitFor(
 				(screen) =>
 					collapse(screen).includes("Context 2720070") && !screen.includes("Error: Context"),
@@ -304,7 +392,7 @@ describe("shared fields through tmux", () => {
 			expect(collapse(taken)).toContain("Context 2720070");
 			expect(collapse(taken)).not.toContain("Error: Context");
 		} finally {
-			endPane();
+			await endPane();
 		}
 	});
 });
