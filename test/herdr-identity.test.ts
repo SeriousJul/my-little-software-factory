@@ -128,7 +128,7 @@ describe("the reporter the plane runs in its own pane", () => {
 		reporter.release();
 		expect(runner.commands).toEqual([
 			"/usr/bin/herdr pane report-agent w1B6:p2 --source factory --agent factory --state idle --seq 3000",
-			"/usr/bin/herdr pane release-agent w1B6:p2 --source factory --agent factory",
+			"/usr/bin/herdr pane release-agent w1B6:p2 --source factory --agent factory --seq 3000",
 		]);
 	});
 
@@ -145,17 +145,23 @@ describe("the reporter the plane runs in its own pane", () => {
 		]);
 	});
 
-	test("the release carries no sequence: the oldest herdr the plane supports reads none", () => {
+	test("the release carries the sequence the clock reads at the release, ahead of the boot's", () => {
 		const runner = new FakeIdentityRunner();
+		let now = 1_000;
 		const reporter = createHerdrIdentityReporter({
 			env: { HERDR_ENV: "1", HERDR_BIN_PATH: "herdr", HERDR_PANE_ID: "p1" },
 			runner,
-			now: () => 1,
+			now: () => now,
 			log: () => {},
 		});
+		now = 2_000;
 		reporter.release();
-		expect(runner.commands[1]).not.toContain("--seq");
-		expect(runner.commands[1]).toBe("herdr pane release-agent p1 --source factory --agent factory");
+		expect(runner.commands[0]).toBe(
+			"herdr pane report-agent p1 --source factory --agent factory --state idle --seq 1000",
+		);
+		expect(runner.commands[1]).toBe(
+			"herdr pane release-agent p1 --source factory --agent factory --seq 2000",
+		);
 	});
 
 	test("a refused report is a line, not a failure of the run", async () => {

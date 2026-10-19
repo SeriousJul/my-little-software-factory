@@ -89,9 +89,11 @@ const herdrIdentity = createHerdrIdentityReporter({
 // and the shutdown installer stops the app's background loops on every
 // ending that closes the state. The holder keeps the handle where the
 // installer reads it from, because the mount runs after the install. The
-// installer's teardown gives the plane's herdr pane back when the run ends;
-// a run herdr kills outright never reaches it, and herdr clears that report
-// of its own once the pane is back at its shell prompt.
+// installer's teardown gives the plane's herdr pane back when the run ends,
+// by a release that carries its own sequence so it clears the boot report at
+// once; a run herdr kills outright never reaches it, and on the installed
+// herdr the unlanded report of such a run stands until the pane is reused,
+// closed, or the herdr session restarts.
 const appStop: { current: (() => void) | undefined } = { current: undefined };
 installStateShutdown(startup.state, process, startup.logger, () => {
 	appStop.current?.();

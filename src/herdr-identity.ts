@@ -65,11 +65,15 @@ export function herdrIdentityFromEnv(
  */
 export interface HerdrIdentityReporter {
 	/**
-	 * Give the pane back to herdr when the run ends. Best effort: the SIGTERM
+	 * Give the pane back to herdr when the run ends. The release carries the
+	 * wall clock read at the end as its sequence, ahead of the boot report's,
+	 * so a landed release clears the report at once: on herdr 0.9.1 a release
+	 * without a higher sequence is a silent no-op. Best effort: the SIGTERM
 	 * and SIGHUP endings call it in their handler and exit before the command
 	 * is guaranteed to land, and the `kill -9` and crash endings never reach
-	 * it. Herdr clears a report of its own once the pane is back at its shell
-	 * prompt, so the pane comes back either way.
+	 * it; those endings leave the report standing until the pane is reused,
+	 * closed, or the herdr session restarts (herdr 0.9.1 clears no report of
+	 * its own when the pane returns to its shell prompt, measured).
 	 */
 	release(): void;
 }
@@ -138,6 +142,8 @@ export function createHerdrIdentityReporter(
 				HERDR_IDENTITY_SOURCE,
 				"--agent",
 				HERDR_IDENTITY_AGENT,
+				"--seq",
+				String(options.now()),
 			]);
 		},
 	};

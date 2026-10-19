@@ -63,15 +63,24 @@ report, on herdr's self-report protocol.
   ahead of herdr's first detection of the pane, so the detection reads the
   report instead of the process.
 - When the run ends, the plane releases the report - `pane release-agent` -
-  on every ending that closes its state, and the SIGTERM and SIGHUP endings,
-  the watch restart and the plain kill, reach the release call too: their
-  handler runs the teardown that calls the release, and then the process
-  exits. The exit comes before the release's command is guaranteed to land,
-  so a killed run can leave the report standing; herdr clears a report of its
-  own once the pane is back at its shell prompt, and the restarted process
-  reports again at its boot, so the gap closes without the plane's help. The
-  `kill -9` and crash endings run no handler at all and rest on the same
-  herdr clearing.
+  carrying the wall clock read at the end as its sequence, ahead of the boot
+  report's, on every ending that closes its state, and the SIGTERM and SIGHUP
+  endings, the watch restart and the plain kill, reach the release call too:
+  their handler runs the teardown that calls the release, and then the process
+  exits. A release without a sequence higher than the report it clears is a
+  silent no-op on the installed herdr 0.9.1 (measured: a seq-less release
+  after a seq-carrying report leaves the report standing), so the release
+  carries the clock and a landed release clears the report at once. The exit
+  can come before the release's command is guaranteed to land, so a signal or
+  kill ending, and the `kill -9` and crash endings that run no handler, can
+  leave the report standing; on herdr 0.9.1 herdr clears no report of its own
+  once the pane is back at its shell prompt (measured: the report stood at the
+  idle prompt for two minutes, including after pane activity), so an unlanded
+  release leaves the row until the pane is reused, closed, or the herdr
+  session restarts. That auto-clear is documented only on the newer
+  `add-herdr-support` integration page, which the v0.9.1 tree does not hold
+  (the docs index is 0.9.5). The restarted process re-reports at its boot,
+  which keeps the row honest across a watch restart.
 - The reported state is `idle`, and only `idle`: the plane's pane waits on
   the operator and runs no turn of its own, and the agents the plane drives
   report their own states in their own panes. No working state is reported:
@@ -110,10 +119,14 @@ report, on herdr's self-report protocol.
 ## Consequences
 
 - The plane's pane stands in herdr's agent panel as one stable `factory`
-  entry for as long as the run stands, and leaves it when the run ends. The
-  row is the plane's own and is named what it is. An operator who wants no
-  row runs the plane outside herdr, where it stands inert, or closes the
-  panel's sort; the plane owns no setting for the row.
+  entry for as long as the run stands, and a landed release at the run's end
+  clears the row at once. The row is the plane's own and is named what it is.
+  An ending whose release does not land - a `kill -9` or crash, or a signal
+  or kill that races the exit - leaves the row standing on herdr 0.9.1 until
+  the pane is reused, closed, or the herdr session restarts, because herdr
+  0.9.1 clears no report of its own at the shell prompt (measured). An
+  operator who wants no row runs the plane outside herdr, where it stands
+  inert, or closes the panel's sort; the plane owns no setting for the row.
 - `herdr agent list` and the waits over it see the plane as an agent beside
   the pi sessions. That is the pane's truth, not a pi session: a script that
   waits on the pi agents of a workspace waits on the plane only if it names
@@ -122,6 +135,24 @@ report, on herdr's self-report protocol.
   command, and the plane degrades to its old face: the pane is misnamed as
   before, and nothing else of the run changes. A herdr with it keeps the pane
   named `factory` across the screen changes and the watch restarts.
+- The post-fix field state, measured on this machine, herdr 0.9.1, in an
+  isolated named session (own socket and state dir; the operator's live
+  session was never touched, and the session was stopped and deleted after).
+  The report was driven the way the plane drives it - the same `report-agent`
+  and `release-agent` calls through the herdr binary, against a herdr-managed
+  shell pane standing in for the `bun --watch` process. The pane stood in
+  `herdr agent list` and `pane get` as `agent: factory, idle` in place of the
+  empty process detection, and held that face across a simulated watch
+  restart: the old run reported a lower sequence and died, the restarted run
+  reported a higher one, and a late seq-less release or a late lower-sequence
+  release from the dead old run was ignored while the restarted run's report
+  stood; a release carrying a sequence higher than the run's last report
+  cleared the row at once. The state herdr's log records for the pane is that
+  stable `factory` face, not the `pi`-to-`None` flip that reflowed the
+  operator's panes. The neighbour pi tab standing still on the settle of a
+  turn is the operator's live-session observation of the reflow that flip
+  removal takes away; this session measured the protocol state the reflow
+  rests on, and the operator confirms the tab itself on their machine.
 - The plane calls the herdr binary at its boot and at its end, both through
   the shared command runner. The clean ending calls it once at the boot and
   once in the exit hook. The SIGTERM and SIGHUP endings call it in the handler
