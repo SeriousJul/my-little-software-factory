@@ -74,26 +74,24 @@ describe("the reporter the plane runs in its own pane", () => {
 			now: () => 1_000,
 			log: () => {},
 		});
-		expect(reporter.reporting).toBe(false);
 		reporter.release();
 		expect(runner.commands).toEqual([]);
 	});
 
 	test("the creation is the report, before the plane's first frame", () => {
 		const runner = new FakeIdentityRunner();
-		const reporter = createHerdrIdentityReporter({
+		createHerdrIdentityReporter({
 			env: { HERDR_ENV: "1", HERDR_BIN_PATH: "/usr/bin/herdr", HERDR_PANE_ID: "w1B6:p2" },
 			runner,
 			now: () => 2_000,
 			log: () => {},
 		});
-		expect(reporter.reporting).toBe(true);
 		expect(runner.commands).toEqual([
 			"/usr/bin/herdr pane report-agent w1B6:p2 --source factory --agent factory --state idle --seq 2000",
 		]);
 	});
 
-	test("the report carries the plane's name, not an agent herdr already supports", () => {
+	test("the report's source uses no herdr prefix and stands as one name beside the agent", () => {
 		expect(HERDR_IDENTITY_SOURCE).not.toStartWith("herdr:");
 		expect(HERDR_IDENTITY_SOURCE).toBe(HERDR_IDENTITY_AGENT);
 	});
@@ -175,7 +173,6 @@ describe("the reporter the plane runs in its own pane", () => {
 		await settle();
 		reporter.release();
 		await settle();
-		expect(reporter.reporting).toBe(true);
 		expect(lines).toEqual([
 			"herdr identity: herdr not found in PATH",
 			"herdr identity: herdr not found in PATH",

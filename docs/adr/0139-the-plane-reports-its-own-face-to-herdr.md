@@ -63,10 +63,15 @@ report, on herdr's self-report protocol.
   ahead of herdr's first detection of the pane, so the detection reads the
   report instead of the process.
 - When the run ends, the plane releases the report - `pane release-agent` -
-  on every ending that closes its state. The endings herdr itself kills, the
-  watch restart and the plain kill, never reach the release; herdr clears a
-  report of its own once the pane is back at its shell prompt, and the
-  restarted process reports again at its own boot.
+  on every ending that closes its state, and the SIGTERM and SIGHUP endings,
+  the watch restart and the plain kill, reach the release call too: their
+  handler runs the teardown that calls the release, and then the process
+  exits. The exit comes before the release's command is guaranteed to land,
+  so a killed run can leave the report standing; herdr clears a report of its
+  own once the pane is back at its shell prompt, and the restarted process
+  reports again at its boot, so the gap closes without the plane's help. The
+  `kill -9` and crash endings run no handler at all and rest on the same
+  herdr clearing.
 - The reported state is `idle`, and only `idle`: the plane's pane waits on
   the operator and runs no turn of its own, and the agents the plane drives
   report their own states in their own panes. No working state is reported:
@@ -117,6 +122,9 @@ report, on herdr's self-report protocol.
   command, and the plane degrades to its old face: the pane is misnamed as
   before, and nothing else of the run changes. A herdr with it keeps the pane
   named `factory` across the screen changes and the watch restarts.
-- The plane calls the herdr binary once at its boot and once at its end, both
-  through the shared command runner, so the suite's fake runner sees the calls
-  and a suite that renders the plane outside herdr sees none.
+- The plane calls the herdr binary at its boot and at its end, both through
+  the shared command runner. The clean ending calls it once at the boot and
+  once in the exit hook. The SIGTERM and SIGHUP endings call it in the handler
+  and again in the exit hook that follows the exit, so the end can cost two
+  calls, and the process can leave a call in the air. The suite's fake runner
+  sees the calls, and a suite that renders the plane outside herdr sees none.

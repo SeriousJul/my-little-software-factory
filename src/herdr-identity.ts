@@ -60,17 +60,16 @@ export function herdrIdentityFromEnv(
 }
 
 /**
- * The reporter the plane runs in its own pane. While `reporting` stands the
- * run gave herdr the plane's face, and `release` gives the pane back.
+ * The reporter the plane runs in its own pane. Inside herdr the run gives
+ * herdr the plane's face, and `release` gives the pane back.
  */
 export interface HerdrIdentityReporter {
-	/** True when this run reports the plane's face to herdr. */
-	readonly reporting: boolean;
 	/**
-	 * Give the pane back to herdr when the run ends. Best effort: a run herdr
-	 * kills outright, as a watch restart does, never reaches this call, and
-	 * herdr clears a report of its own once the pane is back at its shell
-	 * prompt.
+	 * Give the pane back to herdr when the run ends. Best effort: the SIGTERM
+	 * and SIGHUP endings call it in their handler and exit before the command
+	 * is guaranteed to land, and the `kill -9` and crash endings never reach
+	 * it. Herdr clears a report of its own once the pane is back at its shell
+	 * prompt, so the pane comes back either way.
 	 */
 	release(): void;
 }
@@ -91,10 +90,9 @@ export interface HerdrIdentityReporterOptions {
 /**
  * Create the reporter. Inside herdr the creation is the report: it lands
  * before the plane's first frame, so herdr's first detection of the pane
- * reads the report instead of the process. Every report carries a strictly
- * increasing sequence, from the wall clock: a sequence herdr already
- * accepted is refused, so a late duplicate cannot overwrite a newer fact,
- * and a clock that stands still or steps back cannot repeat one.
+ * reads the report instead of the process. The report carries the wall clock
+ * as its sequence. The run reports once, so the clock's own advance keeps the
+ * report ahead of any sequence herdr has already accepted.
  */
 export function createHerdrIdentityReporter(
 	options: HerdrIdentityReporterOptions,
@@ -102,16 +100,10 @@ export function createHerdrIdentityReporter(
 	const target = herdrIdentityFromEnv(options.env);
 	if (target === null) {
 		return {
-			reporting: false,
 			release(): void {},
 		};
 	}
 	const timeoutMs = options.timeoutMs ?? HERDR_IDENTITY_TIMEOUT_MS;
-	let lastSeq = 0;
-	const nextSeq = (): string => {
-		lastSeq = Math.max(options.now(), lastSeq + 1);
-		return String(lastSeq);
-	};
 	const send = (args: readonly string[]): void => {
 		// Fire-and-forget: the runner's contract is to never throw, and a
 		// refused report is a line, not a failure of the run.
@@ -133,11 +125,10 @@ export function createHerdrIdentityReporter(
 			"--state",
 			"idle",
 			"--seq",
-			nextSeq(),
+			String(options.now()),
 		]);
 	};
 	const reporter: HerdrIdentityReporter = {
-		reporting: true,
 		release: (): void => {
 			send([
 				"pane",
