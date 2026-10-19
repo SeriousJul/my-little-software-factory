@@ -12,6 +12,7 @@ import { createCliRenderer } from "@opentui/core";
 import { createElement, createRoot } from "@opentui/react";
 
 import { App } from "./components/app.ts";
+import { createHerdrIdentityReporter } from "./herdr-identity.ts";
 import { errorMessage } from "./runner.ts";
 import { isSupportedBunVersion, unsupportedBunVersionMessage } from "./runtime.ts";
 import { installStateShutdown, runStartup, startupArgs } from "./startup.ts";
@@ -67,6 +68,16 @@ const renderer = await createCliRenderer({
 	// for configurable Agent interaction exits.
 	useKittyKeyboard: {},
 });
+// Inside a herdr pane the plane gives herdr its own face before the first
+// frame, so herdr's detection of this pane reads the report instead of the
+// process it misreads as a pi agent in some screen states (issue #405,
+// ADR 0139). Outside herdr the reporter stands inert.
+const herdrIdentity = createHerdrIdentityReporter({
+	env: process.env,
+	runner: startup.runner,
+	now: () => Date.now(),
+	log: (line) => startup.logger.error(line),
+});
 // The watch restart of `bun run dev` and a plain `kill` end this run without
 // running an exit hook, so the state lease would stay held by this process and
 // the next boot would refuse to start. The decision of which endings close the
@@ -77,9 +88,17 @@ const renderer = await createCliRenderer({
 // The app's teardown handle lands on the App's onReady once the mount runs,
 // and the shutdown installer stops the app's background loops on every
 // ending that closes the state. The holder keeps the handle where the
-// installer reads it from, because the mount runs after the install.
+// installer reads it from, because the mount runs after the install. The
+// installer's teardown gives the plane's herdr pane back when the run ends,
+// by a release that carries its own sequence so it clears the boot report at
+// once; a run herdr kills outright never reaches it, and on the installed
+// herdr the unlanded report of such a run stands until the pane is reused,
+// closed, or the herdr session restarts.
 const appStop: { current: (() => void) | undefined } = { current: undefined };
-installStateShutdown(startup.state, process, startup.logger, () => appStop.current?.());
+installStateShutdown(startup.state, process, startup.logger, () => {
+	appStop.current?.();
+	herdrIdentity.release();
+});
 // The native renderer diffs each frame against its model of the screen and
 // marks a model cell as written while it emits the cell's bytes. If the host
 // terminal loses bytes of a frame, the model and the screen diverge and the

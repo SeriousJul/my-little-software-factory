@@ -147,3 +147,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0136: A claimed queue row stands until its start answers](./0136-a-claimed-queue-row-stands-until-its-start-answers.md)
 - [ADR 0137: The mutation campaign host runs the vendored typescript shim](./0137-the-mutation-campaign-host-runs-the-vendored-typescript-shim.md)
 - [ADR 0138: The suite entry stands under a spin watch](./0138-the-suite-entry-stands-under-a-spin-watch.md)
+- [ADR 0139: The plane reports its own face to herdr](./0139-the-plane-reports-its-own-face-to-herdr.md)

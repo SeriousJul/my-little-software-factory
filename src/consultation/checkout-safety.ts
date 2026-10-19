@@ -103,7 +103,10 @@ export interface CheckoutConflict {
  * or a counted running ticket handoff is reported under that Consultation's
  * or ticket's identity, never again as a bare Herdr Agent. The caller decides
  * whether the checkout's confirmed set covers the reported identities. Dirty
- * state is a warning, not a block.
+ * state is a warning, not a block. The plane's own pane, named when the plane
+ * gives the fact, is not an Agent working in the checkout: its standing
+ * `factory` row in the agent list is the plane's identity report, so the bare
+ * Agent walk skips it (ADR 0139).
  */
 export async function inspectLiveCheckout(fields: {
 	checkout: string;
@@ -111,6 +114,12 @@ export async function inspectLiveCheckout(fields: {
 	tickets: readonly Ticket[];
 	consultations: readonly Consultation[];
 	agents: readonly HerdrAgent[];
+	/**
+	 * The pane this plane runs in, from the herdr environment. Absent when
+	 * the plane stands outside herdr, where no row of its own can stand in
+	 * the agent list either.
+	 */
+	ownPaneId?: string;
 }): Promise<LiveCheckoutSafety> {
 	const { checkout, runner, tickets, consultations, agents } = fields;
 	if (!(await fileExists(checkout))) return { dirty: false, conflicts: [] };
@@ -144,6 +153,7 @@ export async function inspectLiveCheckout(fields: {
 		target,
 		consultations,
 		agents,
+		ownPaneId: fields.ownPaneId,
 		countedPanes,
 		conflicts,
 	});
@@ -201,10 +211,11 @@ async function consultationCheckoutConflicts(fields: {
 	target: string;
 	consultations: readonly Consultation[];
 	agents: readonly HerdrAgent[];
+	ownPaneId?: string;
 	countedPanes: Set<string>;
 	conflicts: CheckoutConflict[];
 }): Promise<void> {
-	const { checkout, target, consultations, agents, countedPanes, conflicts } = fields;
+	const { checkout, target, consultations, agents, ownPaneId, countedPanes, conflicts } = fields;
 	for (const consultation of consultations)
 		await consultationCheckoutConflictOf({
 			consultation,
@@ -214,7 +225,8 @@ async function consultationCheckoutConflicts(fields: {
 			countedPanes,
 			conflicts,
 		});
-	for (const agent of agents) await bareAgentConflictOf({ agent, target, countedPanes, conflicts });
+	for (const agent of agents)
+		await bareAgentConflictOf({ agent, target, ownPaneId, countedPanes, conflicts });
 }
 
 /** The one Consultation row one live checkout asks for a conflict. */
@@ -252,13 +264,19 @@ async function consultationCheckoutConflictOf(fields: {
 async function bareAgentConflictOf(fields: {
 	agent: HerdrAgent;
 	target: string;
+	ownPaneId?: string;
 	countedPanes: Set<string>;
 	conflicts: CheckoutConflict[];
 }): Promise<void> {
-	const { agent, target, countedPanes, conflicts } = fields;
+	const { agent, target, ownPaneId, countedPanes, conflicts } = fields;
 	// One panel line per underlying Agent: a pane counted above stays named
 	// by the Consultation or ticket that owns it.
 	if (countedPanes.has(agent.paneId)) return;
+	// The plane's own pane is not an Agent working in the checkout: its
+	// standing row is the plane's identity report, and a conflict with the plane
+	// itself would ask the operator to confirm the plane against itself on
+	// every start (ADR 0139).
+	if (ownPaneId !== undefined && agent.paneId === ownPaneId) return;
 	if (agent.checkoutPath === undefined || (await realPathOf(agent.checkoutPath)) !== target) return;
 	conflicts.push({
 		kind: "herdr-agent",
