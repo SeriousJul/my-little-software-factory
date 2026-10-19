@@ -59,7 +59,8 @@ unreaped; it takes the process down so the run can end, and the run exits red:
 a run pulled out of a spin is not a green run. When the run ends, the watch
 prints the set of processes it held in its sight over the run, so a green run
 names the run it watched instead of standing silent, and a green run whose set
-is empty says so.
+is empty says so. A run shorter than the watch's first beat says it ended
+before that beat, so its end line does not read like an empty watch.
 
 The watch reads only the run's own parent and the parent's children. The run's
 grandchildren - a check's own tmux server and pane, a stub a test spawns - stand

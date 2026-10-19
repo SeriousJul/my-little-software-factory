@@ -46,7 +46,12 @@
  *
  * When the run ends, the watch prints the set of processes it held in
  * its sight over the run: a green run names the run it watched instead
- * of standing silent, and a green run whose set is empty says so.
+ * of standing silent, and a green run whose set is empty says so. A run
+ * shorter than the watch's first beat says it ended before that beat,
+ * so its end line does not read like an empty watch: the line is true
+ * either way, but the empty set of a run that stood under no beat is a
+ * different fact from the empty set of a watch that ran and held
+ * nothing.
  *
  * The watch is the runner's companion, not a new test layer: it runs the
  * same command, streams the same output, and reports the same exit code
@@ -279,28 +284,43 @@ interface TickStance {
 	assumed: boolean;
 }
 
+/** The facts of the run when the watch's end line stands. */
+interface RunEnd {
+	/** The code the run ended with. */
+	exitCode: number;
+	/** The set of processes the watch held in its sight over the run. */
+	seen: Set<number>;
+	/** The clock ticks per second the run stood on, and whether assumed. */
+	stance: TickStance;
+	/** Whether a spin stood and the watch pulled the run red. */
+	spinStood: boolean;
+	/** The beats that fired over the run: zero says the run ended before the watch's first beat. */
+	beatsFired: number;
+}
+
 /**
  * The one line the watch prints when the run it stood beside ends: the
  * code the run ended with, the wall it stood under the watch, the clock
  * ticks per second it stood on, the set of processes it held in its
- * sight over the run, and whether a spin stood.
+ * sight over the run, and whether a spin stood. When no beat fired,
+ * the line says the run ended before the watch's first beat, so its
+ * empty set reads as the fact it is.
  */
-function runSummary(
-	exitCode: number,
-	seen: Set<number>,
-	stance: TickStance,
-	spinStood: boolean,
-): string {
-	const pids = [...seen];
+function runSummary(end: RunEnd): string {
+	const pids = [...end.seen];
 	const held =
 		pids.length === 0
-			? "it held no process of the run in its sight"
+			? end.beatsFired === 0
+				? "the run ended before the watch's first beat, and it held no process of the run in its sight"
+				: "it held no process of the run in its sight"
 			: `it held ${pids.length} process(es) of the run in its sight (pids: ${pids.join(", ")})`;
-	const ticks = stance.assumed
-		? `${stance.ticks} clock ticks per second, assumed: the read of the kernel's value stood nowhere`
-		: `${stance.ticks} clock ticks per second, read from the kernel`;
-	const verdict = spinStood ? "a spin stood, and the watch pulled the run red" : "no spin stood";
-	return `the run ended ${exitCode} after ${runAgeSeconds()} under the watch, standing on ${ticks}; ${held}; ${verdict}`;
+	const ticks = end.stance.assumed
+		? `${end.stance.ticks} clock ticks per second, assumed: the read of the kernel's value stood nowhere`
+		: `${end.stance.ticks} clock ticks per second, read from the kernel`;
+	const verdict = end.spinStood
+		? "a spin stood, and the watch pulled the run red"
+		: "no spin stood";
+	return `the run ended ${end.exitCode} after ${runAgeSeconds()} under the watch, standing on ${ticks}; ${held}; ${verdict}`;
 }
 
 async function main(): Promise<void> {
@@ -316,11 +336,13 @@ async function main(): Promise<void> {
 	const clockTicks = read ?? ASSUMED_CLOCK_TICKS;
 	const assumed = read === null;
 	let spinStood = false;
+	let beatsFired = 0;
 	let beat: ReturnType<typeof setInterval> | undefined;
 	const seen = new Set<number>();
 	if (watched) {
 		const windows = new Map<number, Sample[]>();
 		beat = setInterval(() => {
+			beatsFired += 1;
 			const targets = watchTargets(parentPid as number);
 			for (const pid of targets) {
 				seen.add(pid);
@@ -340,7 +362,13 @@ async function main(): Promise<void> {
 	if (beat !== undefined) clearInterval(beat);
 	if (watched) {
 		process.stderr.write(
-			`\n[spin-watch] ${runSummary(exitCode, seen, { ticks: clockTicks, assumed }, spinStood)}\n`,
+			`\n[spin-watch] ${runSummary({
+				exitCode,
+				seen,
+				stance: { ticks: clockTicks, assumed },
+				spinStood,
+				beatsFired,
+			})}\n`,
 		);
 	}
 	processExit(spinStood ? 1 : exitCode);

@@ -2185,6 +2185,57 @@ before the scoped runs, no other `bun test` process running):
 The push gate's run on the merged tree is the full-suite measurement this
 round defers to, the way the rounds before it did.
 
+### The rework round three (2026-10-19, the review's required change)
+
+The review of the reworked head stood the branch at 88 and named one
+required change and two suggestions, and the round took all three:
+
+1. The stub's red path left an unbounded orphan chain. If the spin child
+   dips under the watch's floor on any one beat of a small, loaded
+   runner, the watch takes it down nowhere, the check times out, the
+   worker exits, and the watch, the stub, and the spin child stand on as
+   orphans, the child holding one core at full CPU until the machine or
+   the runner goes away. The child holds no state, so the round gives it
+   a wall-clock self-exit well past the check's 30 s timeout - 120 s by
+   default, standable shorter through `SPIN_STUB_SELF_EXIT_MS`, so the
+   suite stands the mechanism beside a short bound without touching the
+   default. The round's first head stood the self-exit as a break out of
+   the spin loop, and the break fell through into the stub's parent
+   branch: the child stood a successor spin child and waited on it,
+   passing the spin on without end. A live probe of the child run alone
+   beside no watch stood the defect: the child stood on at full CPU past
+   its bound. The child now exits on its own when the bound stands, and
+   the probe's re-run stands the fix beside the machine's own process
+   table.
+2. The `tmux -V` availability probe of `test/tmux-fields.test.ts` stood
+   without a deadline of its own. It is asynchronous, so it cannot stand
+   the spin, but a client that never answers there stood the runner's
+   budget instead of the check's five-second deadline. The probe now runs
+   through the check's own client call, so it stands the same deadline,
+   and the rule the fix names holds for every client call the check
+   makes, the first one included.
+3. A run shorter than one beat ended with the line "it held no process
+   of the run in its sight": true, but readable like an empty watch that
+   ran and held nothing. The end line now says the run ended before the
+   watch's first beat, and the end-to-end half stands a real `bun test`
+   run that short beside a ten-second beat to hold the line.
+
+The round's measurement, on this machine (32 cores, Bun 1.4.2, load 2.48
+on the one-minute mark at the start of the scoped runs, which held the
+tail of the self-exit probe above, no other `bun test` process running):
+
+| Run | Tree | Result |
+| --- | --- | --- |
+| The spin child's self-exit on its default 120 s bound, run alone beside no watch | reworked | the child held one core at 99.8 percent, thread R, through the bound and made zero voluntary context switches over a six-second mid-spin beat, then exited 0 on its own at 120 s of wall: a run the watch fails to pull red stands on the machine for at most the bound, and the chain it bounded - the stub beside it, the watch beside the stub - stands down with it |
+| The end-to-end red path with the self-exit armed, the watch on its fast pace | reworked | the watch took the child down by SIGKILL in 1.2 s with the signature report, long before the child's 120 s self-exit stood: the armed bound does not weaken the check's green path |
+| The stub's spin child beside no watch, on a 1.5 s bound through SPIN_STUB_SELF_EXIT_MS | reworked | the child exited 0 on its own at the bound, and the stub reported `exited 0` and ended 0 on its own, no successor child standing on after: the mechanism the default 120 s bound stands on, stood beside a short bound in the suite's own test |
+| A real `bun test` run shorter than the watch's ten-second beat, beside the watch | reworked | the run stood under a second, ended 0, and its end line read "the run ended before the watch's first beat, and it held no process of the run in its sight": the sub-beat fact, named instead of reading like an empty watch |
+| The `tmux -V` availability probe, beside the deadline the check's client calls stand | reworked | the probe runs through the check's own client call, so it stands the five-second deadline the round two table measured beside a client that never answers; `bun test test/tmux-fields.test.ts --isolate --timeout=60000` stands 1 pass / 0 fail in 244 ms |
+| `bun test test/spin-watch.test.ts test/tmux-fields.test.ts --isolate --timeout=60000` | reworked | 19 pass / 0 fail in 5.5 s: the fixture half, the spin child the watch took down with its report, the real `bun test` runs the watch held in its sight, the sub-beat end line, and the spin child that exited on its own |
+
+The push gate's run on the merged tree is the full-suite measurement this
+round defers to, the way the rounds before it did.
+
 ### The verification, on this machine
 
 | Run | Tree | Result |

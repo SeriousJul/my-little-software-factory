@@ -38,7 +38,10 @@
  * stands past five seconds without answering is taken down and read as a
  * no-answer, so a client that never answers stands the check's own deadline and
  * its pane report up, instead of trading the spin for a silent wait on the
- * runner's sixty-second budget.
+ * runner's sixty-second budget. The check's availability probe for the
+ * binary is one of those client calls: it runs through the same path and
+ * stands the same deadline, so the rule holds for every client call the
+ * check makes, the first one included.
  *
  * The pane's command runs the gallery through a small shell wrapper that keeps
  * a copy of the pane's stderr in the check's own temporary directory. The pane
@@ -314,12 +317,13 @@ async function endPane(): Promise<void> {
 
 describe("shared fields through tmux", () => {
 	beforeAll(async () => {
-		const probe = await new Promise<{ status: number | null }>((resolve) => {
-			const child = spawn("tmux", ["-V"], { stdio: ["ignore", "pipe", "pipe"] }) as ChildProcess;
-			child.on("error", () => resolve({ status: null }));
-			child.on("close", (status) => resolve({ status }));
-		});
-		available = probe.status === 0;
+		// The availability probe runs through the check's own client call, so it
+		// stands the same deadline as the check's other calls: a binary that
+		// never answers its version probe stands that deadline up and is read
+		// as a no-answer, and the rule the check names for its client calls
+		// holds for every client call it makes.
+		const probe = await tmuxCall(["-V"]).catch(() => null);
+		available = probe?.status === 0;
 		if (!available) {
 			throw new Error(
 				"tmux is not installed, so the multiplexer acceptance check cannot run; " +

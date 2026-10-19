@@ -18,8 +18,14 @@
  * to its event loop on every wait, the watch holds the run's parent in
  * its sight, and the run ends green with its own exit code - the
  * watch's false-positive path, a busy but healthy run it must not take
- * down. The end-to-end checks stand the watch on a fast pace and a floor
- * a loaded runner still holds, through the watch's SPIN_WATCH_ settings.
+ * down. The half also stands the stub beside no watch, so the spin
+ * child's own wall-clock self-exit stands the red-path orphan chain it
+ * bounds: a child nothing takes down exits on its own instead of passing
+ * the spin on without end. The end-to-end checks stand the watch on a fast
+ * pace and a floor a loaded runner still holds, through the watch's
+ * SPIN_WATCH_ settings; the short-run check stands it on a beat long past
+ * the run's whole stand instead, so the run ends before the watch's first
+ * beat and the end line says so rather than reading like an empty watch.
  *
  * The end-to-end half stands only where the watch stands: on Linux, where
  * it reads the processes' /proc entries. On any other platform the watch
@@ -198,8 +204,16 @@ test("a healthy run yields to its event loop on every wait", async () => {
 });
 `;
 
+	/** The test file the short-run check stands beside: one test with no wait, so the run's whole stand fits under one beat. */
+	const SHORT_TEST = `import { test } from "bun:test";
+
+test("a run that ends before the first beat", () => {});
+`;
+
 	/** Where the pass-through run's temporary test file stands. Stands once `beforeAll` has written it. */
 	let passFile: string;
+	/** Where the short run's temporary test file stands. Stands once `beforeAll` has written it. */
+	let shortFile: string;
 	/** Where the check's temporary directory stands. Stands once `beforeAll` has made it. */
 	let passDir: string;
 
@@ -219,6 +233,8 @@ test("a healthy run yields to its event loop on every wait", async () => {
 		passDir = mkdtempSync(join(tmpdir(), "factory-spin-watch-"));
 		passFile = join(passDir, "pass-through.test.ts");
 		writeFileSync(passFile, PASS_THROUGH_TEST);
+		shortFile = join(passDir, "short.test.ts");
+		writeFileSync(shortFile, SHORT_TEST);
 	});
 
 	afterAll(() => {
@@ -303,4 +319,60 @@ test("a healthy run yields to its event loop on every wait", async () => {
 		expect(run.stderr).toMatch(/it held \d+ process\(es\) of the run in its sight \(pids: \d+/);
 		expect(run.stderr).toContain("no spin stood");
 	}, 30_000);
+
+	test("a run shorter than one beat says it ended before the watch's first beat", async () => {
+		// The beat stands long past the run's whole stand: the run ends
+		// before the watch's first beat fires, so its set of held processes
+		// stands empty for a reason the empty set of a watch that ran and
+		// held nothing does not cover. The end line names that reason
+		// instead of reading like an empty watch.
+		const run = await standWatch(
+			[
+				process.execPath,
+				WATCH,
+				process.execPath,
+				"test",
+				"--parallel",
+				"--isolate",
+				"--timeout=60000",
+				shortFile,
+			],
+			{ SPIN_WATCH_SAMPLE_MS: "10000", SPIN_WATCH_WINDOW: "4", SPIN_WATCH_CPU_FLOOR: "50" },
+		);
+
+		expect(run.code).toBe(0);
+		expect(run.stderr).toContain("the run ended 0 after");
+		expect(run.stderr).toContain("the run ended before the watch's first beat");
+		expect(run.stderr).toContain("it held no process of the run in its sight");
+		expect(run.stderr).toContain("no spin stood");
+	}, 30_000);
+
+	test("the spin child exits on its own when nothing takes it down", async () => {
+		// The stub's spin child bounds its spin on its own wall clock, so a
+		// run the watch fails to pull red cannot stand on the machine at
+		// full CPU without end. The default bound stands 120 s, well past
+		// the check's 30 s timeout, and the record stands that default
+		// beside a live probe of the child run alone; the suite stands the
+		// mechanism beside a short bound instead. The stub waits on the
+		// child, so a child that stands on would keep the stub standing too:
+		// the stub ending 0 on its own says the child ended on its own.
+		const run = await new Promise<{ code: number; stderr: string }>((resolve, reject) => {
+			const child = spawn(process.execPath, [STUB], {
+				cwd: repoRoot,
+				env: { ...process.env, SPIN_STUB_SELF_EXIT_MS: "1500" },
+				stdio: ["ignore", "ignore", "pipe"],
+			}) as ChildProcess;
+			let stderr = "";
+			child.stderr?.on("data", (chunk) => (stderr += String(chunk)));
+			child.on("error", reject);
+			child.on("close", (code) => resolve({ code: code ?? 1, stderr }));
+		});
+
+		expect(run.code).toBe(0);
+		// The child exited on its own, not taken down by a signal: the
+		// stub reports which, the way its end-to-end partner reports the
+		// watch's SIGKILL.
+		expect(run.stderr).toContain("exited 0");
+		expect(run.stderr).not.toContain("taken down by");
+	}, 15_000);
 });
