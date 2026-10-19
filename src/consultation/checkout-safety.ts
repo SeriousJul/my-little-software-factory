@@ -105,7 +105,7 @@ export interface CheckoutConflict {
  * whether the checkout's confirmed set covers the reported identities. Dirty
  * state is a warning, not a block. The plane's own pane, named when the plane
  * gives the fact, is not an Agent working in the checkout: its standing
- * `factory` row in the agent list is the plane's self-report, so the bare
+ * `factory` row in the agent list is the plane's identity report, so the bare
  * Agent walk skips it (ADR 0139).
  */
 export async function inspectLiveCheckout(fields: {
@@ -273,7 +273,7 @@ async function bareAgentConflictOf(fields: {
 	// by the Consultation or ticket that owns it.
 	if (countedPanes.has(agent.paneId)) return;
 	// The plane's own pane is not an Agent working in the checkout: its
-	// standing row is the plane's self-report, and a conflict with the plane
+	// standing row is the plane's identity report, and a conflict with the plane
 	// itself would ask the operator to confirm the plane against itself on
 	// every start (ADR 0139).
 	if (ownPaneId !== undefined && agent.paneId === ownPaneId) return;

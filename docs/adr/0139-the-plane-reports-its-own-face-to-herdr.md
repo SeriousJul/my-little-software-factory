@@ -54,7 +54,7 @@ second.
 ## Decision
 
 The plane gives herdr the one identity herdr cannot misread: the process's own
-report, on herdr's self-report protocol.
+report, on herdr's identity report protocol.
 
 - Inside a herdr pane - the mark is a non-empty `HERDR_ENV`, whatever its
   value, the same fact the theme read takes (ADR 0024), with the pane's
@@ -128,7 +128,7 @@ report, on herdr's self-report protocol.
   cannot know the next retuning of it. Shaping the run to dodge a heuristic
   trades one flip for the next; stating the truth dodges none of them, because
   there is nothing left to misread.
-- A self-report carrying a working state derived from the app's seat count.
+- An identity report carrying a working state derived from the app's seat count.
   The seat count stands inside the app shell, and its boot record admits
   neither the callback the shell would push nor any other slot: the record's
   own check refuses the growth. Re-deriving the count beside the shell makes
@@ -157,7 +157,7 @@ report, on herdr's self-report protocol.
   the herdr environment, and the ticket and Consultation walks key on the
   panes they recorded, which the plane's row carries none of, so the standing
   row asks the operator to confirm nothing.
-- A herdr without the self-report protocol refuses the report as an unknown
+- A herdr without the identity report protocol refuses the report as an unknown
   command, and the plane degrades to its old face: the pane is misnamed as
   before, and nothing else of the run changes. A herdr with it keeps the pane
   named `factory` across the screen changes and the watch restarts.

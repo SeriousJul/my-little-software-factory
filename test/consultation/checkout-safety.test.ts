@@ -104,7 +104,7 @@ function agentIn(paneId: string, checkoutPath: string): HerdrAgent {
 }
 
 /**
- * The plane's own row in the agent list: its self-report stands in the
+ * The plane's own row in the agent list: its identity report stands in the
  * list as the `factory` agent of its pane for as long as the run stands
  * (ADR 0139).
  */
