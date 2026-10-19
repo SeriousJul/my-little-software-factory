@@ -75,6 +75,7 @@ import { join } from "node:path";
 import { exit as processExit } from "node:process";
 import {
 	beatsOf,
+	deadChildrenOf,
 	isBunTestArgs,
 	isSpinSignature,
 	isTestWorkerArgs,
@@ -202,18 +203,9 @@ function sampleOf(pid: number): Sample | null {
 
 /** The dead children a process had not reaped, when the watch looked. */
 function deadChildren(pid: number): string[] {
-	const children =
-		readFileOrNull(`/proc/${pid}/task/${pid}/children`)
-			?.split(" ")
-			.filter((child) => child !== "") ?? [];
-	const dead: string[] = [];
-	for (const child of children) {
-		const status = readFileOrNull(`/proc/${child}/status`);
-		if (statusField(status, "State:") !== "Z") continue;
-		const comm = statusField(status, "Name:") ?? "";
-		dead.push(`${child} (${comm})`);
-	}
-	return dead;
+	return deadChildrenOf(readFileOrNull(`/proc/${pid}/task/${pid}/children`), (child) =>
+		readFileOrNull(`/proc/${child}/status`),
+	);
 }
 
 /** The wall age of the run when the report stands, in whole seconds. */

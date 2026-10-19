@@ -42,6 +42,7 @@ import { join } from "node:path";
 import {
 	beatPercent,
 	beatsOf,
+	deadChildrenOf,
 	isBunTestArgs,
 	isSpinSignature,
 	isTestWorkerArgs,
@@ -183,6 +184,33 @@ describe("the spin watch's parsing of the process table", () => {
 		expect(statusField(status, "State:")).toBe("Z (zombie)");
 		expect(statusField(status, "PPid:")).toBe("127399");
 		expect(statusField(status, "voluntary_ctxt_switches:")).toBe("383");
+	});
+
+	test("a dead child stands named beside the dead-children read, and a child that is not dead stands unnamed", () => {
+		// The status file the kernel writes for a child holds the state as
+		// its character followed by its word, `State:\tZ (zombie)`: the
+		// gate stands on the character, because a whole-value comparison
+		// against `Z` skipped every child the kernel ever wrote, and the
+		// report's dead-children line stood dead beside the very child the
+		// issue measured. The measured dead tmux client the spin stood
+		// beside read back as `Z (zombie)`, and `Z` is the only state
+		// character the kernel gives a child it has not reaped: a sleeper
+		// stands unnamed, and a child gone between the list read and the
+		// status read stands unnamed as well.
+		const statusOf = (child: string) => {
+			if (child === "42") return "Name:\ttmux: client\nState:\tZ (zombie)\nPPid:\t41\n";
+			if (child === "43") return "Name:\tsleeper\nState:\tS (sleeping)\nPPid:\t41\n";
+			return null;
+		};
+		expect(deadChildrenOf("42 43 44 ", statusOf)).toEqual(["42 (tmux: client)"]);
+	});
+
+	test("a child list that holds no child stands no dead child", () => {
+		// The line the red-path report ends with when the process had left
+		// no child behind: the list read stands empty, or nowhere at all
+		// when the process is gone.
+		expect(deadChildrenOf("", () => "State:\tZ (zombie)\n")).toEqual([]);
+		expect(deadChildrenOf(null, () => "State:\tZ (zombie)\n")).toEqual([]);
 	});
 });
 

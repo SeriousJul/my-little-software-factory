@@ -82,11 +82,40 @@ export function statusField(status: string | null, label: string): string | null
 }
 
 /**
+ * The dead children a process table read holds for one process: the
+ * entries of the process's child list whose status the kernel has written
+ * with the zombie state. The kernel writes the state as its character
+ * followed by its word, `State:\tZ (zombie)`, and `Z` is the only
+ * character the kernel uses for a dead child, so the gate stands on the
+ * character: a child the kernel has not reaped stands in that one state,
+ * and a child that stands on running, sleeping, or stopped stands
+ * unnamed. The read hands each child its status file, or null when the
+ * child is gone between the list read and the status read, and the gone
+ * child stands unnamed as well: its absence is not a fact the report can
+ * name.
+ */
+export function deadChildrenOf(
+	childrenLine: string | null,
+	statusOf: (child: string) => string | null,
+): string[] {
+	const children = childrenLine?.split(" ").filter((child) => child !== "") ?? [];
+	const dead: string[] = [];
+	for (const child of children) {
+		const status = statusOf(child);
+		const state = statusField(status, "State:");
+		if (state === null || !state.startsWith("Z")) continue;
+		const comm = statusField(status, "Name:") ?? "";
+		dead.push(`${child} (${comm})`);
+	}
+	return dead;
+}
+
+/**
  * The kernel clock ticks a /proc stat line holds in utime and stime, or
  * null when the line holds neither. The comm field can hold spaces, so
  * the split stands on the last closing paren, and the fields after it
- * stand on their kernel order: utime and stime are the eleventh and
- * twelfth of them.
+ * stand on their kernel order: utime and stime are the twelfth and
+ * thirteenth of them.
  */
 export function ticksOf(stat: string): { utime: number; stime: number } | null {
 	const close = stat.lastIndexOf(")");

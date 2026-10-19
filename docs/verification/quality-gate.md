@@ -2236,6 +2236,63 @@ tail of the self-exit probe above, no other `bun test` process running):
 The push gate's run on the merged tree is the full-suite measurement this
 round defers to, the way the rounds before it did.
 
+### The rework round four (2026-10-19, the review's required changes)
+
+The review of the round-three head stood the branch at 82 and named the
+defect in the report's dead-children line, its missing fixture, and one
+comment count, and asked for one re-measurement, and the round took each:
+
+1. The report's dead-children line stood dead. `deadChildren` gated on
+   `statusField(status, "State:") !== "Z"`, but the kernel writes the state
+   as its character followed by its word, `State:\tZ (zombie)`, and the
+   round-two parsing fix hands back the whole value: the gate compared
+   `"Z (zombie)" !== "Z"`, which is always true, and every child was
+   skipped. The report always printed "no dead children stood beside it",
+   and the unreaped `tmux: client` the issue's two captures record was
+   never named, even when it stood there. Detection stood unaffected - the
+   signature stands on the CPU share and the switch count - but the report
+   is the evidence the red stands on, and ADR 0138, the commands page, and
+   this record all promise that it names the dead children. The gate now
+   stands on the state character: `Z` is the only character the kernel
+   gives a child it has not reaped, and a child gone between the list read
+   and the status read stands unnamed. The gate stands in the pure parsing
+   core beside the rest of the watch's parsing, so the test stands it
+   beside fixture status files without a live process.
+2. No test pinned the defect: the end-to-end red path asserts "no dead
+   children stood beside it", which the broken gate printed too for a
+   child that held no children at all, and no fixture stood a zombie beside
+   the spinning process. A fixture now stands a child status file holding
+   `State:\tZ (zombie)` beside the dead-children read and asserts the child
+   stands named; a sleeping child (`State:\tS (sleeping)`) stands unnamed,
+   a child gone between the list read and the status read stands unnamed,
+   and a child list that holds no child stands no dead child.
+3. The `ticksOf` comment said "utime and stime are the eleventh and
+   twelfth" of the fields after the closing paren; the code stands on the
+   twelfth and thirteenth of them, and the comment now says so.
+
+The round also re-measured the round-two claim that the report names the
+spin's unreaped child `(tmux: client)`: as written it stood on the
+round-two parsing fix alone, and the gate defect above stood between it
+and the live report. The round stood the measured state live: a probe
+whose spin child stands one real tmux client call on a server of its own
+that it never reaps, then spins in the stub's own shape, stood under the
+watch on its fast pace, the shape of the state the issue's captures stood
+in - the spinning worker beside its dead `tmux: client` child.
+
+The round's measurement, on this machine (32 cores, Bun 1.4.2, load 2.90
+on the one-minute mark at the start of the scoped runs, no other `bun
+test` process running):
+
+| Run | Table | Result |
+| --- | --- | --- |
+| The dead-children gate beside its fixture | reworked | the zombie child reading `State:\tZ (zombie)` stands named as `42 (tmux: client)`, the sleeping child `State:\tS (sleeping)` stands unnamed, a child gone between the list read and the status read stands unnamed, and a child list that holds no child stands no dead child; the fixture stands in `test/spin-watch.test.ts` beside the gate in the parsing core |
+| The spin's unreaped child, beside a live report | reworked | the probe's spin child stood a real `tmux` client call on its own server that it never reaped, then spun in the stub's shape; the watch took it down in 1 s with the signature report - `cpu share per 300ms beat: 100% 100% 100%`, `voluntary context switches over the window: 0`, `dead children it had left unreaped: 767759 (tmux: client)` - and the run it stood beside ended red; the child was taken down by SIGKILL, and nothing of the probe stood on the machine after |
+| `bun test test/spin-watch.test.ts test/tmux-fields.test.ts --isolate --timeout=60000` | reworked | 21 pass / 0 fail in 5.5 s: the fixture half, the spin child the watch took down with its report, the real `bun test` runs the watch held in its sight, the sub-beat end line, and the spin child that exited on its own |
+| `bun run audit` | reworked | exit 0: type, lint, and secrets stand at 0, test duplication stands at 168, the baseline, and the six open CodeQL alerts stand in files this pull does not touch |
+
+The push gate's run on the merged tree is the full-suite measurement this
+round defers to, the way the rounds before it did.
+
 ### The verification, on this machine
 
 | Run | Tree | Result |
