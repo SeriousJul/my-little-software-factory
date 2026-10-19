@@ -8,7 +8,7 @@ description: The bun commands of the repository, the shared control gallery, and
 | Command               | What it does                                          |
 | --------------------- | ----------------------------------------------------- |
 | `bun run dev`         | Start the control plane in watch mode                  |
-| `bun run test`        | Run the full test suite                                |
+| `bun run test`        | Run the full test suite, watched for a spinning worker   |
 | `bun run test:changed`| Run only the test files the current changes affect     |
 | `bun run gallery`     | Run the shared control gallery, using the real modules |
 | `bun run mutate`      | Run a Stryker mutation campaign over `src`             |
@@ -30,6 +30,23 @@ process, so the reload keeps the state file: the run gives the state lease back
 when the watch signals it, and the next boot takes the lease again. Only the
 files the run imports are watched, so the state file and the worktrees never
 trigger a restart.
+
+## The spin watch
+
+`bun run test` runs the suite under a small watch
+([`scripts/test-spin-watch.ts`](../../scripts/test-spin-watch.ts)): the same
+`bun test` command, the same output, and a reader beside it that samples the
+run's own worker processes every five seconds (issue #403). A worker whose
+thread spins at full CPU with the event loop starved makes no voluntary context
+switches over the window, and the watch reads that signature in the worker's
+process table. When it stands, the watch prints the worker's pid, its per-beat
+CPU share, the switches the window held, and any dead child the worker had left
+unreaped; it takes the worker down so the run can end, and the run exits red.
+
+The watch stands only where it can read the workers' `/proc` entries (Linux),
+and it watches only the workers the run's own parent started, so a run standing
+beside another run on the same machine cannot trip it. Where it cannot watch, it
+passes the run through untouched, with the same exit code.
 
 ## Scoped run
 

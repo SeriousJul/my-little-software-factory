@@ -18,7 +18,7 @@
 		"gallery": "bun bin/factory-gallery.mjs",
 		"stub:seed": "bun scripts/stub-seed.ts",
 		"stub-world": "bun bin/stub-world.mjs",
-		"test": "bun test --parallel --isolate --timeout=60000",
+		"test": "bun scripts/test-spin-watch.ts bun test --parallel --isolate --timeout=60000",
 		"test:changed": "bun test --changed=${TEST_CHANGED_BASE:-origin/main} --isolate --timeout=60000",
 		"docs:dev": "vitepress dev docs",
 		"docs:build": "vitepress build docs",

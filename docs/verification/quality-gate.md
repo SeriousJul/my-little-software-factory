@@ -1984,6 +1984,113 @@ worker livelock of issue #403. No loaded-runner run at the fixed head is on
 file from this machine, and the runner's own co-tenant load is not measured
 here.
 
+## Issue #403: a test worker spins at full CPU during a full suite run on a many-core machine (2026-10-19, the fix)
+
+The worker livelock already stood in the run table of the #302 section above
+(the post-fix run 4 row: one worker spun past every test's deadline and was
+killed). This section is the reproduction of the issue on this machine, the
+state the spin stood in, and the fix that lands in
+[pull request #404](https://github.com/SeriousJul/my-little-software-factory/pull/404).
+
+### The reproduction, and the state the spin stands in
+
+One machine: 32 cores, Bun 1.4.2. The pre-fix tree, at `a0db73cd`, is the
+head of `origin/main` (`486481d5`) with no file of its own, and `bun run
+test` stands on its own flags. Six full runs in a row:
+
+| Run | Wall | Load (one minute) | Result |
+| --- | --- | --- | --- |
+| 1 | 129.57 s | 1.28 before the run | green, 3456 pass / 0 fail |
+| 2 | stood open until the worker was killed | 2.29 at the kill | one worker spun at about 100% CPU; captured below |
+| 3 | 129 s | 0.90 | green, 3456 pass / 0 fail |
+| 4 | 131 s | 0.88 | green, 3456 pass / 0 fail |
+| 5 | 340 s after the worker was killed | 5.93 at the kill | one worker spun at about 100% CPU; captured below. Killing it ended the run red: the runner reports the worker's death, and the suite ends |
+| 6 | 130 s | 2.90 | green, 3456 pass / 0 fail |
+
+Both of the spinning runs stood in `test/tmux-fields.test.ts`, the check that
+reads the pane of its own tmux server. The state the spin stood in, from two
+process-table captures of the live spinning workers:
+
+| Fact | Capture 1: run 2, worker 127399, 4 min 23 s in | Capture 2: run 5, worker 147555, 5 min 16 s in |
+| --- | --- | --- |
+| Thread state and CPU | `R` (running), 99.4% | `R` (running), 99.3% |
+| Voluntary context switches over an eight-second beat | 383 before the beat, 383 after: the thread made no system calls while it ran | 368 over the worker's whole stand, and flat across the beat |
+| The worker's children | one dead `tmux: client` it had not reaped | one dead `tmux: client` it had not reaped |
+| The check's tmux server and its gallery child | both at 0.0% CPU: the pane stood healthy beside the spin | the server the check started stood with its gallery beside it |
+| The run's log | stood at its last line, from another worker: the override panel group of `test/handoff-frame.test.ts` | the same last line, from the same group |
+
+The check's poll makes three synchronous `tmux` client calls per poll, a poll
+every 50 ms, a window of up to 25 s per wait, because its pane keeps changing
+while the gallery runs. The state of the spin is one of those synchronous
+calls that lost its child's exit: the child stands dead beside the worker
+unreaped, and the worker's JS thread spins at full CPU with the event loop
+starved. A starved event loop is why neither the check's 25-second wait nor
+the runner's 60-second test budget can fire, and the run cannot end on its
+own.
+
+The last line of the log stands beside the original report: both of the
+stall runs the issue records stood at the override panel group of
+`test/handoff-frame.test.ts`, because that file's worker finished last and
+reported last; the worker that spun was `test/tmux-fields.test.ts`, the file
+the two captures above name on this machine, on the same tree the issue
+names. A run's log says which worker reported last, not which worker stands
+open.
+
+### What the run ruled out
+
+- It is not a synchronous loop in the app's code: the app's loops bound
+  themselves on timers, and the captured workers held no child of the app at
+  all.
+- It is not the frame rig's waits: those yield on every poll and stand on the
+  rig's twenty-second deadline, and the check's file boots no renderer.
+- The spin did not stand in a minimal pattern: twenty-four parallel files,
+  each starting the check's own tmux server and polling a changing pane with
+  the same three synchronous calls per 50 ms, ran fifteen times on this
+  machine without a spin. The reproduction stands on the two process-table
+  captures of the full suite, and this section says so instead of claiming a
+  smaller trigger than the evidence holds.
+
+### What stays unmeasured
+
+The mechanism inside the runtime that dropped the child's exit: the machine
+has no `strace` or `perf`, and the runtime hands no stack to a thread that
+spins, so the captures say what stood - the spin, the starved event loop, the
+unreaped child - and not where inside the runtime the exit was lost. The fix
+and the watch stand on the captured state, not on that mechanism.
+
+### The fix
+
+1. The check's tmux calls run as asynchronous child processes
+   (`test/tmux-fields.test.ts`): the child's exit arrives on the event loop
+   the check's waits run on, so a client that stops answering stands the
+   check's own deadline up, fails the test, and the run ends. The check makes
+   no synchronous child-process call in the suite's polling path.
+2. `bun run test` runs under the spin watch
+   (`scripts/test-spin-watch.ts`): the same `bun test` command and the same
+   output, with a reader beside it that samples the run's own workers every
+   five seconds. A worker that holds its full CPU share on every beat of a
+   sixty-second window and makes no voluntary context switches in it is the
+   spin the captures stand in; the watch reports its pid, the per-beat CPU
+   share, the switches the window held, and the dead children the worker had
+   left unreaped, takes the worker down so the run can end, and the run ends
+   red. The watch stands only on Linux, and only over the workers the run's
+   own parent started.
+
+The measured spin wears the signature the watch reads: a full CPU share on
+every beat, zero voluntary switches over an eight-second beat, one unreaped
+child.
+
+### The verification, on this machine
+
+| Run | Tree | Result |
+| --- | --- | --- |
+| The check's file alone, through its own runner flags | fixed | 1 pass / 0 fail in 256 ms |
+| Three full runs through the watched entry | fixed | green, 3456 pass / 0 fail in 130 s each, and the watch stood silent on all three |
+
+The six pre-fix runs stand in the table above. The push gate's run on the
+merged tree is the measurement this record defers to, the way the #398 round
+did.
+
 ## What was not measured
 
 | Item | State |
@@ -1993,4 +2100,5 @@ here.
 | The doc-claim rule, the rename sweep, the documented-line rule, the probe rule, the determinism rule, the fake-fidelity rule, the file-the-defect rule, the failure-mode sweep, and the reporting rules | First measured by the self-review round above, on `b3b5fc38`: the probe rule, the rename sweep, the determinism rule, the file-the-defect rule, and the doc-claim rule each produced a result there, and the doc-claim rule found the stale cost numbers. What stays incomplete is the round's value: every commit was written by the agent that wrote the rules, so this is self-review, and a round on a pull request from a different author is the first independent measurement |
 | The 14 domain types in `UNREAD_TYPE_BASELINE` | Answered on 2026-10-05 in [the section above](#issue-301-the-14-unread-domain-types-2026-10-05): each name took one of [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301)'s three answers and the baseline stands empty. What stays unmeasured is whether any of them is dead, which the check still cannot see, and it is recorded in that section |
 | The CI load flake on the frame tests | Investigated on 2026-10-05 and filed as [issue #302](https://github.com/SeriousJul/my-little-software-factory/issues/302): four remote frame-deadline misses, the mechanism measured, no local reproduction, and no fix shipped on that evidence. The scroll half of it is answered on 2026-10-05 in [the section above](#issue-302-the-details-scroll-restore-waits-for-a-pass-the-plane-does-not-owe-2026-10-05-the-fix). The deadline miss that survived that fix is [issue #311](https://github.com/SeriousJul/my-little-software-factory/issues/311), answered on 2026-10-06 by the fix in pull request [#318](https://github.com/SeriousJul/my-little-software-factory/pull/318): the harness's waits run the reconciler's flush before they read, and the pin stands in `test/repository-select-panel.test.ts` - recorded in [the #311 section above](#issue-311-frame-waits-still-miss-the-deadline-under-load-in-the-surfaces-the-302-fix-does-not-touch-2026-10-06-the-fix). The pseudo-terminal seam that stood beside the class is answered on 2026-10-06 in [the section above](#issue-321-pseudo-terminal-waits-miss-their-deadline-under-load-in-the-executable-fields-rig-2026-10-06-the-fix): the rig's input stands on the painted fact the previous key owed, and the open window between a surface's first frame and its key taking is closed in the source, in [issue #321](https://github.com/SeriousJul/my-little-software-factory/issues/321). The frame-rig rework in [pull request #395](https://github.com/SeriousJul/my-little-software-factory/pull/395) moves the class onto the rig's one deadline and its named outcomes, and moves the suites' remaining deadline loops onto the rig's waits: every one of the twelve issues it lists stands at that pull's head closed, issue by issue, or merged, pull by pull, by its own fix, and the rework closes none of them anew. The item stays open on the loaded-runner evidence this record holds: the deadline miss survives the fixes under a loaded runner, and no loaded run at the rework's head is on file. The push gate's full-suite run at the pushed head is the rework round's measurement, and each file that fails it and passes alone is named as a load flake in the pull. The older records in [the shared control record](./shared-controls.md) and the pull request records stand The week ending 2026-10-15 was investigated in [the #398 section above](#issue-398-the-ci-test-flake-the-week-of-evidence-and-what-it-names-2026-10-15-the-answer), and its three fixable classes landed there. The merged-panel-pass mechanism the 2026-10-16 push run named is answered on 2026-10-16 in [the section above](#issue-302-the-merged-panel-pass-keeps-one-instances-keys-2026-10-16-the-fix): the per-entity panels carry a key that names their entity, and the six completed post-fix runs of this record stand green on the unit layer |
+| The mechanism inside the runtime that dropped the child's exit in issue #403 | Open, as [the #403 section above](#issue-403-a-test-worker-spins-at-full-cpu-during-a-full-suite-run-on-a-many-core-machine-2026-10-19-the-fix) records: no `strace` or `perf` on the machine, and no stack from a spinning thread. The fix and the watch stand on the captured state |
 | The live terminal walk, the screen-reader path, and the theme inheritance inside a real herdr | Open, as [the shared control record](./shared-controls.md) states. The gate is a claim about the automated checks and the tree they ran on, and it extends no further |
