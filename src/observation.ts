@@ -181,6 +181,14 @@ export interface AgentReader {
 	/** The pane's recent output in text format, unwrapped, capped and ANSI stripped. Null when it cannot be read. */
 	readPane(paneId: string, lines: number): Promise<string | null>;
 	/**
+	 * The pane's visible screen in text format, capped and ANSI stripped. Null
+	 * when it cannot be read. Herdr answers the visible read without scrolling
+	 * the pane, while the agent works as well as while it rests, so the plane's
+	 * periodic pane reads take it (ADR 0140). Optional: a reader without it
+	 * leaves the visible read to the recent read.
+	 */
+	readPaneVisible?(paneId: string, lines: number): Promise<string | null>;
+	/**
 	 * Wait until the agent named `target` reaches a settle state, or the
 	 * budget runs out. `matched` is true only when the wait answered with a
 	 * state match: a missing agent, a herdr failure, and a budget timeout
@@ -311,6 +319,16 @@ export class HerdrAgentReader implements AgentReader {
 
 	async readPane(paneId: string, lines: number): Promise<string | null> {
 		return this.readPaneFormat(paneId, lines, "recent-unwrapped", "text");
+	}
+
+	/**
+	 * The visible screen as text: herdr answers it without scrolling the pane,
+	 * while the agent works as well as while it rests (ADR 0140). The body the
+	 * Consultation view's tick and the Live view's stream take, so the pane the
+	 * operator watches stays still while the plane reads it.
+	 */
+	async readPaneVisible(paneId: string, lines: number): Promise<string | null> {
+		return this.readPaneFormat(paneId, lines, "visible", "text");
 	}
 
 	/**
@@ -1477,14 +1495,34 @@ export class ObservationCoordinator {
 		return changed;
 	}
 
+	/**
+	 * The settled Consultation turn's stored body. The visible screen when the
+	 * session record holds the turn: herdr answers it without scrolling the
+	 * pane, and a failed visible read stands as null, the Stale Agent output
+	 * warning the settle wears. The recent scroll capture stands when the
+	 * record holds no turn, or beside a reader without the visible read
+	 * (ADR 0140).
+	 */
+	private async settledTurnBody(
+		match: HerdrAgent,
+		recordHoldsTurn: boolean,
+	): Promise<string | null> {
+		if (recordHoldsTurn) {
+			const visible = await this.herdr.readPaneVisible?.(
+				match.paneId,
+				this.config().completionMessageLines,
+			);
+			if (visible !== undefined) return visible;
+		}
+		return await this.herdr.readPane(match.paneId, this.config().completionMessageLines);
+	}
+
 	/** The settle of a working Consultation whose Agent reports done or idle. */
 	private async settleWorkingConsultation(
 		consultation: Consultation,
 		match: HerdrAgent,
 		status: string,
 	): Promise<boolean> {
-		const output = await this.herdr.readPane(match.paneId, this.config().completionMessageLines);
-		if (this.stopped) return false;
 		// The turn's end cause comes from the agent's session record, the
 		// same reader the ticket settle uses (ADR 0015). The pending turn's
 		// accepted time feeds the staleness guard.
@@ -1501,6 +1539,11 @@ export class ObservationCoordinator {
 			kind !== undefined && match.sessionId !== ""
 				? await this.turnLogs.read(kind, match.sessionId, pendingTurn?.acceptedAt ?? null)
 				: ({ kind: "unavailable" } as SessionTurnRead);
+		// The settled turn's body beside the session record: the visible screen
+		// when the record holds the turn, the recent scroll capture when it
+		// does not, the fallback the ticket settle runs (ADR 0140, issue #405).
+		const output = await this.settledTurnBody(match, turnRead.kind === "ended");
+		if (this.stopped) return false;
 		const turnEnd = turnRead.kind === "ended" ? turnRead.turnEnd : null;
 		const endCause: TurnEndCause = turnEnd?.cause ?? "unknown";
 		const endDetail: string = turnEnd?.detail ?? "";

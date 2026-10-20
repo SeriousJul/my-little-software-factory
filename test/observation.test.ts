@@ -319,6 +319,36 @@ describe("HerdrAgentReader.readPane", () => {
 	});
 });
 
+describe("HerdrAgentReader.readPaneVisible", () => {
+	test("reads the visible screen with the pinned herdr command, text format", async () => {
+		const runner = new FakeRunner();
+		runner.set(
+			"herdr",
+			["agent", "read", "pane-1", "--lines", "10", "--source", "visible", "--format", "text"],
+			{
+				stdout: JSON.stringify({ result: { output: "first 0\nsecond 1" } }),
+			},
+		);
+		const reader = new HerdrAgentReader(runner);
+		const pane = await reader.readPaneVisible("pane-1", 10);
+		expect(pane).toBe("first 0\nsecond 1");
+		expect(runner.commands()).toEqual([
+			"herdr agent read pane-1 --lines 10 --source visible --format text",
+		]);
+	});
+
+	test("a failed visible read yields null", async () => {
+		const runner = new FakeRunner();
+		runner.set(
+			"herdr",
+			["agent", "read", "pane-1", "--lines", "1", "--source", "visible", "--format", "text"],
+			{ code: 1, stderr: "no such pane" },
+		);
+		const reader = new HerdrAgentReader(runner);
+		expect(await reader.readPaneVisible("pane-1", 1)).toBeNull();
+	});
+});
+
 describe("HerdrAgentReader.listAgents", () => {
 	/** Parse one agent item shaped with the given extra fields. */
 	async function parseItem(extra: Record<string, unknown>): Promise<HerdrAgent | undefined> {
@@ -6095,6 +6125,71 @@ describe("the agent wake wait (ADR 0084)", () => {
 		wake.fire(true);
 		await sleep(10);
 		expect(fake.state.consultationRecord.consultation("c-settle")?.state).toBe("awaiting-response");
+		fake.coordinator.stop();
+		fake.state.close();
+	});
+
+	test("a settle beside a readable session record takes the visible screen, not the recent scroll", async () => {
+		const wake = wakeFake();
+		const reads: string[] = [];
+		const fake = rig({
+			agents: [agent("pane-consult", { status: "working", sessionId: "session-c-vis" })],
+			waitAgent: wake.option,
+			turnLogs: async () => ({
+				kind: "ended",
+				turnEnd: { log: [{ kind: "text", text: "done" }], cause: "completed", detail: "" },
+			}),
+			readPane: async (paneId) => {
+				reads.push(`recent ${paneId}`);
+				return `recent ${paneId}`;
+			},
+			readPaneVisible: async (paneId) => {
+				reads.push(`visible ${paneId}`);
+				return `visible ${paneId}`;
+			},
+		});
+		workingConsultationWithTurn(fake.state, "c-vis", "pane-consult");
+		await fake.coordinator.tick();
+		expect(wake.targets).toEqual(["consultation-c-vis"]);
+		fake.setAgents([agent("pane-consult", { status: "idle", sessionId: "session-c-vis" })]);
+		wake.fire(true);
+		await sleep(10);
+		expect(fake.state.consultationRecord.consultation("c-vis")?.state).toBe("awaiting-response");
+		// The record holds the turn, so the settle shows the screen herdr
+		// already holds: the recent capture that scrolls the pane stays off
+		// the path (ADR 0140, issue #405).
+		expect(reads).toEqual(["visible pane-consult"]);
+		fake.coordinator.stop();
+		fake.state.close();
+	});
+
+	test("a settle beside an unreadable session record keeps the recent scroll capture", async () => {
+		const wake = wakeFake();
+		const reads: string[] = [];
+		const fake = rig({
+			agents: [agent("pane-consult", { status: "working", sessionId: "session-c-fall" })],
+			waitAgent: wake.option,
+			// The record holds no turn the settle can read: the terminal is
+			// the turn's only body.
+			readPane: async (paneId) => {
+				reads.push(`recent ${paneId}`);
+				return `recent ${paneId}`;
+			},
+			readPaneVisible: async (paneId) => {
+				reads.push(`visible ${paneId}`);
+				return `visible ${paneId}`;
+			},
+		});
+		workingConsultationWithTurn(fake.state, "c-fall", "pane-consult");
+		await fake.coordinator.tick();
+		expect(wake.targets).toEqual(["consultation-c-fall"]);
+		fake.setAgents([agent("pane-consult", { status: "idle", sessionId: "session-c-fall" })]);
+		wake.fire(true);
+		await sleep(10);
+		expect(fake.state.consultationRecord.consultation("c-fall")?.state).toBe("awaiting-response");
+		// The fallback the ticket settle runs: the recent capture stands, and
+		// the visible read stands out of it.
+		expect(reads).toEqual(["recent pane-consult"]);
 		fake.coordinator.stop();
 		fake.state.close();
 	});

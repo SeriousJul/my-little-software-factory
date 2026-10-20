@@ -728,7 +728,7 @@ describe("the Enter handoff", () => {
 							"--lines",
 							"200",
 							"--source",
-							"recent-unwrapped",
+							"visible",
 							"--format",
 							"text",
 						],
@@ -755,7 +755,7 @@ describe("the Enter handoff", () => {
 				await pressControl(setup, "live-view", { quiet: true });
 				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
 				expect(runner.commands()).toContain(
-					"herdr agent read pane-implement --lines 200 --source recent-unwrapped --format text",
+					"herdr agent read pane-implement --lines 200 --source visible --format text",
 				);
 				expect(runner.commands().join("\n")).not.toContain("agent focus");
 				await waitFor(setup, { shows: "the agent is editing the layout math" });

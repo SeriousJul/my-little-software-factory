@@ -246,7 +246,7 @@ const paneReadArgs = (paneId: string): readonly string[] => [
 	"--lines",
 	"200",
 	"--source",
-	"recent-unwrapped",
+	"visible",
 	"--format",
 	"text",
 ];

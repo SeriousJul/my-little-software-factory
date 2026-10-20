@@ -1934,7 +1934,10 @@ function useAppLivePanel(prev: AppPanelReleaseStage) {
 					});
 				return;
 			}
-			const output = await reader.readPane(paneId, configRef.current.completionMessageLines);
+			// The visible screen: the stream shows the pane as herdr shows it,
+			// and herdr answers the read without scrolling the pane the
+			// operator watches (ADR 0140).
+			const output = await reader.readPaneVisible(paneId, configRef.current.completionMessageLines);
 			if (!active) return;
 			if (output === null) {
 				setLiveStream((previous) => ({
@@ -5437,7 +5440,7 @@ async function consultationPaneRefresh(
 ): Promise<void> {
 	const output = f.interaction
 		? await tick.reader.readPaneAnsi(tick.paneId, f.configRef.current.completionMessageLines)
-		: await tick.reader.readPane(tick.paneId, f.configRef.current.completionMessageLines);
+		: await tick.reader.readPaneVisible(tick.paneId, f.configRef.current.completionMessageLines);
 	if (!tick.active.current) return;
 	f.consultationOperations?.recordOutputRead(tick.consultation.id, output);
 	const session = f.interaction ? null : tick.readSessionNow();
@@ -5466,7 +5469,11 @@ async function consultationPaneRefresh(
 /**
  * The selected Consultation's bodies refresh at one-second cadence. The
  * pane read stays on its own interval, and the Session view (ADR 0025)
- * reads the Agent's session record in the same tick. Lifecycle polling
+ * reads the Agent's session record in the same tick. The pane read takes
+ * the visible screen (ADR 0140): herdr answers it without scrolling the
+ * pane, while the Agent works as well as while it rests, so the tick keeps
+ * the neighbour pane the operator watches still, and the Stale Agent
+ * output warning names a pane that truly cannot be read. Lifecycle polling
  * remains owned by the shared observation coordinator. A closed
  * Consultation is a record the operator reads: its detail pane shows the
  * session record when it reads, else the captured history, and the

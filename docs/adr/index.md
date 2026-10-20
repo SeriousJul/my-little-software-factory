@@ -148,3 +148,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0137: The mutation campaign host runs the vendored typescript shim](./0137-the-mutation-campaign-host-runs-the-vendored-typescript-shim.md)
 - [ADR 0138: The suite entry stands under a spin watch](./0138-the-suite-entry-stands-under-a-spin-watch.md)
 - [ADR 0139: The plane reports its own face to herdr](./0139-the-plane-reports-its-own-face-to-herdr.md)
+- [ADR 0140: The plane's periodic pane reads take the visible screen](./0140-the-planes-periodic-pane-reads-take-the-visible-screen.md)

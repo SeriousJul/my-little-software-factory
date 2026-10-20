@@ -86,6 +86,8 @@ export interface RigOptions {
 	seatCount?: () => number;
 	/** The pane output the reader answers, ANSI stripped. */
 	readPane?: (paneId: string, lines: number) => Promise<string | null>;
+	/** The visible screen the reader answers; absent: the recent read stands in for it. */
+	readPaneVisible?: (paneId: string, lines: number) => Promise<string | null>;
 	/** The wake wait the reader answers; absent: the poll-only standing. */
 	waitAgent?: (target: string, budgetMs: number) => Promise<AgentWaitResult>;
 	/** The settled turn's log reader; absent: no session to read. */
@@ -184,6 +186,26 @@ export interface Rig {
 	close: () => void;
 }
 
+/**
+ * The fixture's reader over the options: the list probe the rig owns, the
+ * pane output the test names, and the optional seams a test opts into. A
+ * reader without the visible read leaves the settle beside a readable
+ * session record on the recent read, the reader's one standing.
+ */
+function fixtureReader(options: RigOptions, probeAgents: () => HerdrAgent[]): AgentReader {
+	return {
+		listAgents: async () => ({ kind: "ok", agents: probeAgents() }),
+		// The AgentReader contract: pane output comes back ANSI stripped.
+		readPane:
+			options.readPane ??
+			(async (paneId) => stripAnsi(`\u001b[1mDone.\u001b[0m message of ${paneId}`)),
+		// Absent by default: the loop the tests drive is the poll-only
+		// standing, and the wake tests opt in with their own wait.
+		...(options.waitAgent === undefined ? {} : { waitAgent: options.waitAgent }),
+		...(options.readPaneVisible === undefined ? {} : { readPaneVisible: options.readPaneVisible }),
+	};
+}
+
 /** Build one fixture: the real module, the real state file, the pinned clock. */
 export function rig(options: RigOptions, baseConfig: FactoryConfig): Rig {
 	const nowMs = { current: PINNED_EPOCH };
@@ -246,16 +268,7 @@ export function rig(options: RigOptions, baseConfig: FactoryConfig): Rig {
 		log: recordLogger(moduleLines),
 	});
 
-	const reader: AgentReader = {
-		listAgents: async () => ({ kind: "ok", agents: probeAgents() }),
-		// The AgentReader contract: pane output comes back ANSI stripped.
-		readPane:
-			options.readPane ??
-			(async (paneId) => stripAnsi(`\u001b[1mDone.\u001b[0m message of ${paneId}`)),
-		// Absent by default: the loop the tests drive is the poll-only standing,
-		// and the wake tests opt in with their own wait.
-		...(options.waitAgent === undefined ? {} : { waitAgent: options.waitAgent }),
-	};
+	const reader: AgentReader = fixtureReader(options, probeAgents);
 
 	const innerCoordinator = new ObservationCoordinator({
 		state,

@@ -298,6 +298,14 @@ function stubWorktreeLaunch(runner: FakeRunner, checkout: string, branch = BRANC
 function stubPaneReadText(runner: FakeRunner, paneId: string, output: string): void {
 	runner.set(
 		"herdr",
+		["agent", "read", paneId, "--lines", "200", "--source", "visible", "--format", "text"],
+		{ stdout: output },
+	);
+}
+/** Stub the recent pane read the settle capture takes beside an unreadable record. */
+function stubPaneReadRecent(runner: FakeRunner, paneId: string, output: string): void {
+	runner.set(
+		"herdr",
 		["agent", "read", paneId, "--lines", "200", "--source", "recent-unwrapped", "--format", "text"],
 		{ stdout: output },
 	);
@@ -2813,6 +2821,7 @@ describe("The full Consultation operator flow", () => {
 				stubCheckout(fake, checkout);
 				stubWorktreeLaunch(fake, checkout);
 				stubPaneReadText(fake, "pane-c1", "Agent: answer one");
+				stubPaneReadRecent(fake, "pane-c1", "Agent: answer one");
 				stubPaneReadAnsi(fake, "pane-c1", "agent: typing...");
 				stubTopology(
 					fake,

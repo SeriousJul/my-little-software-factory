@@ -63,21 +63,11 @@ import { type Plane, plane } from "./plane.ts";
 
 /** The pane read the Live view's stream runs, for a pane and its tail. */
 const READ = (pane: string) =>
-	[
-		"agent",
-		"read",
-		pane,
-		"--lines",
-		"200",
-		"--source",
-		"recent-unwrapped",
-		"--format",
-		"text",
-	] as const;
+	["agent", "read", pane, "--lines", "200", "--source", "visible", "--format", "text"] as const;
 
 /** The exact command string a pane read records in the runner. */
 const READ_COMMAND = (pane: string) =>
-	`herdr agent read ${pane} --lines 200 --source recent-unwrapped --format text`;
+	`herdr agent read ${pane} --lines 200 --source visible --format text`;
 
 const paths: string[] = [];
 afterEach(() => {
