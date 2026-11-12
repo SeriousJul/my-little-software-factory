@@ -1212,7 +1212,9 @@ describe("the in-app Key guide", () => {
 				const frame = await settle(setup);
 				expect(frame).not.toContain("❯ Agent");
 				expect(markerRowOf(frame)).toBe(markerBefore);
-				expect(messageRowOf(frame).trim()).toBe("");
+				// The guide's quiet keys wrote no fact, so the line keeps the
+				// boot statement the plane stated at boot (issue #408).
+				expect(messageRowOf(frame).trim()).toContain("agent host: herdr-core");
 				expect(actionBarRowOf(frame)).toBe(actionBarRowOf(before));
 			},
 			{

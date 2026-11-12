@@ -1868,6 +1868,106 @@ describe("logging config keys", () => {
 	});
 });
 
+describe("agent-host config keys (issue #408, ADR 0141)", () => {
+	/** The minimal config every test in this block breaks in one place. */
+	const base = () => ({
+		"default-agent": "pi",
+		"default-environment": "live-worktree",
+		"default-task-type": "implement",
+		agents: { pi: { kind: "pi" } },
+		"task-types": { implement: { template: "x" } },
+	});
+
+	test("the absent key pins nothing", () => {
+		const config = validateConfig(base());
+		expect(config.agentHost).toBeUndefined();
+		expect(config.agentHostHerdrCore).toBeUndefined();
+	});
+
+	test("a string pins the host it names", () => {
+		expect(validateConfig({ ...base(), "agent-host": "herdr" }).agentHost).toBe("herdr");
+		expect(validateConfig({ ...base(), "agent-host": "herdr-core" }).agentHost).toBe("herdr-core");
+	});
+
+	test("a value outside the two host names refuses boot", () => {
+		expectConfigError(
+			{ ...base(), "agent-host": "auto" },
+			"agent-host: must be one of: herdr, herdr-core",
+		);
+		expectConfigError({ ...base(), "agent-host": 7 }, "agent-host: must be a host name or a table");
+		expectConfigError(
+			{ ...base(), "agent-host": ["herdr"] },
+			"agent-host: must be a host name or a table",
+		);
+	});
+
+	test("an unknown key beside the table refuses boot", () => {
+		expectConfigError({ ...base(), "agent-host": { herdr: {} } }, 'agent-host: unknown key "herdr"');
+		expectConfigError(
+			{ ...base(), "agent-host": { "herdr-core": { shell: "zsh" } } },
+			'agent-host.herdr-core: unknown key "shell"',
+		);
+	});
+
+	test("a table with the host key pins herdr-core and carries its connection", () => {
+		const config = validateConfig({
+			...base(),
+			"agent-host": {
+				"herdr-core": { binary: "/opt/hc/bin/hc", session: "mine", cols: 200, rows: 50 },
+			},
+		});
+		expect(config.agentHost).toBe("herdr-core");
+		expect(config.agentHostHerdrCore).toEqual({
+			binary: "/opt/hc/bin/hc",
+			session: "mine",
+			cols: 200,
+			rows: 50,
+		});
+	});
+
+	test("an empty table pins nothing and carries no connection", () => {
+		const config = validateConfig({ ...base(), "agent-host": {} });
+		expect(config.agentHost).toBeUndefined();
+		expect(config.agentHostHerdrCore).toBeUndefined();
+	});
+
+	test("each herdr-core key validates its type and range", () => {
+		expectConfigError(
+			{ ...base(), "agent-host": { "herdr-core": { binary: 7 } } },
+			"agent-host.herdr-core.binary: must be a non-empty string",
+		);
+		expectConfigError(
+			{ ...base(), "agent-host": { "herdr-core": { session: 7 } } },
+			"agent-host.herdr-core.session: must be a non-empty string",
+		);
+		expectConfigError(
+			{ ...base(), "agent-host": { "herdr-core": { cols: 0 } } },
+			"agent-host.herdr-core.cols: must be a whole number greater than 0",
+		);
+		expectConfigError(
+			{ ...base(), "agent-host": { "herdr-core": { rows: 1.5 } } },
+			"agent-host.herdr-core.rows: must be a whole number greater than 0",
+		);
+	});
+
+	test("the string and the table round-trip through configToToml", () => {
+		const named = validateConfig({ ...base(), "agent-host": "herdr" });
+		expect(validateConfig(parseToml(configToToml(named))).agentHost).toBe("herdr");
+
+		const connected = validateConfig({
+			...base(),
+			"agent-host": { "herdr-core": { binary: "/opt/hc/bin/hc", session: "mine", cols: 200 } },
+		});
+		const reparsed = validateConfig(parseToml(configToToml(connected)));
+		expect(reparsed.agentHost).toBe("herdr-core");
+		expect(reparsed.agentHostHerdrCore).toEqual({
+			binary: "/opt/hc/bin/hc",
+			session: "mine",
+			cols: 200,
+		});
+	});
+});
+
 describe("detail scroll configuration", () => {
 	const base = () => ({
 		"default-agent": "pi",

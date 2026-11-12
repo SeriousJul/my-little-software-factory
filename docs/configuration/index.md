@@ -103,6 +103,28 @@ max-size-mib = 10
 # Rotated files kept, from factory.log.1 up to factory.log.5.
 keep = 5
 
+# --- Agent host ------------------------------------------------------------
+
+# The host the plane's starts run on. One key holds one form:
+# the top-level string `agent-host = "herdr"` or
+# `agent-host = "herdr-core"` pins a host by its name, and the
+# [agent-host.herdr-core] table pins the herdr-core host and carries its
+# connection. Omitted: the boot resolves the host from the environment marks
+# (a non-empty HERDR_ENV names herdr, a non-empty HC_TERMINAL_ID names
+# herdr-core), then the default, herdr-core, and states the host it resolved
+# and the fact that resolved it (ADR 0141).
+[agent-host.herdr-core]
+# The hc binary the plane runs. Omitted: the hc on the PATH.
+binary = "hc"
+# The herdr-core session the plane's terminals stand in. Omitted:
+# herdr-core's own default session, the one the operator's terminals and the
+# Herdr desktop share.
+session = "factory"
+# The cols of a start from a non-terminal. Omitted: herdr-core's own.
+cols = 200
+# The rows of a start from a non-terminal. Omitted: herdr-core's own.
+rows = 50
+
 # --- Agent types ---------------------------------------------------------
 
 # kind is the herdr agent kind. model, thinking, and context-window are
@@ -574,6 +596,7 @@ host = "github.com"
 | `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. Not `ctrl+c`: the emergency exit owns that key. |
 | `scroll` | no | the `[scroll]` defaults | The detail-pane scroll. |
 | `logging` | no | none | The plane's own file log. Omitted: the run writes no log, the state of a config the plane seeded before logging. |
+| `agent-host` | no | - | The Agent host the plane's starts run on. One key holds one form: the top-level string pins a host by its name, `herdr` or `herdr-core`, and the `[agent-host.herdr-core]` table pins the herdr-core host and carries its connection. Omitted: the boot resolves the host from the environment marks, then the default, and states the host it resolved and the fact that resolved it (ADR 0141). |
 | `agents` | yes | - | The agent types. At least one table. |
 | `task-types` | yes | - | The task types. At least one table. |
 | `consultation-types` | no | none | The Consultation patterns. |
@@ -597,6 +620,15 @@ host = "github.com"
 | `file` | no | `factory.log` next to the state file | The log file. A relative path resolves against the directory of this config file. |
 | `max-size-mib` | no | `10` | The size, in mebibytes, at which the current file rotates. A whole number of 1 or more. |
 | `keep` | no | `5` | The rotated files kept, from `file.1` up to the `keep`-th file. A whole number of 1 or more. |
+
+**`[agent-host.herdr-core]`** (optional table). The herdr-core host's connection, beside the `agent-host` key that pins the host. The table's presence pins the herdr-core host; a table that names no key still pins it.
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `binary` | no | the `hc` on the PATH | The hc binary the plane runs. A non-empty string. |
+| `session` | no | herdr-core's own default session | The herdr-core session the plane's terminals stand in. The default is the session the operator's terminals and the Herdr desktop share: the plane takes no private session the operator cannot see into. |
+| `cols` | no | herdr-core's own | The cols of a start from a non-terminal. A whole number of 1 or more. |
+| `rows` | no | herdr-core's own | The rows of a start from a non-terminal. A whole number of 1 or more. |
 
 The plane's start lines name the path that started the work, the item's origin,
 who put the item in the Work queue, and the seat reading that path stood on:
@@ -1090,6 +1122,44 @@ rejected at startup, so a source never degrades to a healthy-but-empty list.
 The security feed kinds are REST endpoints, not GitHub searches, so they
 take no `filter` at all: a filter there would be silently ignored, and the
 key is rejected at startup instead of misread as applied.
+
+### The Agent host
+
+The boot resolves the plane's Agent host once: the operator's `agent-host`
+key first, then the environment mark - a non-empty `HERDR_ENV` names herdr and
+a non-empty `HC_TERMINAL_ID` names herdr-core - then the default, herdr-core
+(ADR 0141). The boot states the host it resolved and the fact that resolved
+it, on the Message line and in the Plane boot record:
+
+```text
+agent host: herdr (resolved from the herdr mark; the first herdr-core read starts that session's core when none runs)
+agent host: herdr-core (resolved from the config; the first herdr-core read starts that session's core when none runs)
+```
+
+The fact is `the config` for a pinned key, `the herdr mark` for a non-empty
+`HERDR_ENV`, `the herdr-core mark` for a non-empty `HC_TERMINAL_ID` with the
+herdr mark standing empty, and `the default` for no mark at all. The
+statement is the one line the boot writes, not one line per start, and it is
+the lowest fact the Message line holds: every fact the plane states covers it,
+and the line returns to the statement whenever the plane is quiet again.
+
+The plane holds no herdr-core lifecycle: it never starts, stops, or restarts
+the core, and it runs no pre-check of one. The statement's effect clause names
+what the measurement stands on: on Unix no herdr-core read answers without
+starting the session's core when none runs, so the first read of a session
+with no core running starts that session's core. The one host command the boot
+itself runs is the version read, which answers from the binary and starts no
+core: a herdr-core host older than the plane's version floor, `0.1.20`, wears
+one Warning line at the boot:
+
+```text
+warning: the herdr-core host is 0.1.9, below the plane's version floor 0.1.20: the plane's answer shapes were read on the floor, and a shape that host refuses comes back as that host's own reason
+```
+
+A host that answers no version at all - a binary that is missing or unreadable
+- states no floor line: the refusal comes back as that host's own reason at
+the first read it makes, and the plane does not guess a floor from a read it
+did not get.
 
 ### The security feed sources
 

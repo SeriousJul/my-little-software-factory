@@ -11,11 +11,20 @@
 
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
+import { agentHostBootLine, herdrCoreFloorWarningLine } from "../src/agent-host.ts";
 import { defaultConfigPath, validateConfig } from "../src/config.ts";
 import {
 	configPathFromArgs,
@@ -569,5 +578,130 @@ describe("the whole startup", () => {
 			'WARN handoff start failed: "Add a webhook retry policy" ' +
 				"(the run that claimed this handoff ended before it settled it)",
 		);
+	});
+});
+
+describe("the Agent host the boot resolves (issue #408, ADR 0141)", () => {
+	/**
+	 * The config body with the host key standing at the top level: the key
+	 * must stand before the first table header, or the file would write it
+	 * inside the table the header opens.
+	 */
+	function pinnedBody(statePath: string, pin: string): string {
+		return configBody(statePath).replace("[agents.pi]", `agent-host = "${pin}"
+[agents.pi]`);
+	}
+
+	/**
+	 * Boot the plane on one config text with the marks the case stands, and
+	 * read back the host the boot resolved.
+	 */
+	async function resolveHost(
+		prefix: string,
+		configText: string,
+		marks: { herdrEnv?: string; hcTerminalId?: string },
+	): Promise<import("../src/agent-host.ts").AgentHostResolution> {
+		const at = inTempDir(prefix)("config.toml");
+		writeFileSync(at, configText, "utf8");
+		stubEnv("HERDR_ENV", marks.herdrEnv ?? "");
+		stubEnv("HC_TERMINAL_ID", marks.hcTerminalId ?? "");
+		const result = await runStartup(at);
+		if (!result.ok) throw new Error(result.lines.join("; "));
+		const resolution = result.agentHost;
+		result.state.close();
+		return resolution;
+	}
+
+	test("the pinned host wins over the marks", async () => {
+		const statePath = inTempDir("host-pin")("state.sqlite");
+		await expect(
+			resolveHost("host-pin", pinnedBody(statePath, "herdr"), {
+				herdrEnv: "",
+				hcTerminalId: "t1",
+			}),
+		).resolves.toEqual({ host: "herdr", fact: "config" });
+	});
+
+	test("with the herdr mark and no pin, the boot names herdr", async () => {
+		const statePath = inTempDir("host-herdr-mark")("state.sqlite");
+		await expect(
+			resolveHost("host-herdr-mark", configBody(statePath), { herdrEnv: "1" }),
+		).resolves.toEqual({ host: "herdr", fact: "herdr-mark" });
+	});
+
+	test("with the herdr-core mark and no pin, the boot names herdr-core", async () => {
+		const statePath = inTempDir("host-core-mark")("state.sqlite");
+		await expect(
+			resolveHost("host-core-mark", configBody(statePath), { hcTerminalId: "t1" }),
+		).resolves.toEqual({ host: "herdr-core", fact: "herdr-core-mark" });
+	});
+
+	test("with no pin and no mark, the boot takes the default", async () => {
+		const statePath = inTempDir("host-default")("state.sqlite");
+		await expect(
+			resolveHost("host-default", configBody(statePath), {
+				herdrEnv: "",
+				hcTerminalId: "",
+			}),
+		).resolves.toEqual({ host: "herdr-core", fact: "default" });
+	});
+
+	test("the boot statement stands in the Plane boot record", async () => {
+		const dir = inTempDir("host-record");
+		const logFile = dir("log.txt");
+		const configPath = dir("config.toml");
+		writeFileSync(
+			configPath,
+			`${configBody(dir("state.sqlite"))}\n[logging]\nlevel = "info"\nfile = "${logFile}"\n`,
+			"utf8",
+		);
+		stubEnv("HERDR_ENV", "1");
+		stubEnv("HC_TERMINAL_ID", "");
+		const result = await runStartup(configPath);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.agentHost).toEqual({ host: "herdr", fact: "herdr-mark" });
+		result.state.close();
+		// The record entry is the statement the App stands on the Message line:
+		// the host the boot resolved, the fact that resolved it, and the core-
+		// start effect the run names instead of pre-checking.
+		expect(readFileSync(logFile, "utf8")).toContain(agentHostBootLine(result.agentHost));
+	});
+
+	test("an older herdr-core host wears one Warning line at the boot", async () => {
+		const dir = inTempDir("host-floor");
+		// The operator's binary names a host older than the floor: a script
+		// that answers the version read, so the case runs on any machine.
+		const fakeHc = dir("fake-hc");
+		writeFileSync(fakeHc, "#!/bin/sh\necho \"hc 0.1.9\"\n", "utf8");
+		chmodSync(fakeHc, 0o755);
+		const configPath = dir("config.toml");
+		writeFileSync(
+			configPath,
+			`${configBody(dir("state.sqlite"))}\n[agent-host.herdr-core]\nbinary = "${fakeHc}"\n`,
+			"utf8",
+		);
+		const result = await runStartup(configPath);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.agentHost).toEqual({ host: "herdr-core", fact: "config" });
+		// One warning line, the floor's own words with the host's version.
+		const floorLines = result.notes.filter((line) =>
+			line.includes("below the plane's version floor"),
+		);
+		expect(floorLines).toEqual([`warning: ${herdrCoreFloorWarningLine("0.1.9")}`]);
+		result.state.close();
+	});
+
+	test("a herdr host runs no version read", async () => {
+		const statePath = inTempDir("host-herdr-floor")("state.sqlite");
+		const configPath = inTempDir("host-herdr-floor")("config.toml");
+		writeFileSync(configPath, pinnedBody(statePath, "herdr"), "utf8");
+		const result = await runStartup(configPath);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.agentHost).toEqual({ host: "herdr", fact: "config" });
+		expect(result.notes.filter((line) => line.includes("version floor"))).toEqual([]);
+		result.state.close();
 	});
 });

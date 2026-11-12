@@ -48,6 +48,7 @@ function exampleGroups(config: Record<string, unknown>): Map<string, Set<string>
 	for (const [key, value] of Object.entries(config)) {
 		add("top", key);
 		if (simpleTableKeys(add, key, value)) continue;
+		if (key === "agent-host" && agentHostKeys(add, value)) continue;
 		if (namedTables.has(key) && typeof value === "object" && value !== null) {
 			namedTableKeys(add, key, value);
 			continue;
@@ -66,6 +67,23 @@ function simpleTableKeys(
 	if (key !== "scroll" && key !== "priority" && key !== "logging") return false;
 	if (typeof value !== "object" || value === null) return false;
 	for (const inner of Object.keys(value as Record<string, unknown>)) add(key, inner);
+	return true;
+}
+
+/**
+ * The host's own table documents its keys under the table's full name, the
+ * way the reference names it: `agent-host` holds the pinned host and its
+ * connection, and the herdr-core connection stands under its own heading.
+ */
+function agentHostKeys(
+	add: (group: string, key: string) => void,
+	value: unknown,
+): boolean {
+	if (!isPlainTable(value)) return false;
+	for (const [host, hostTable] of Object.entries(value)) {
+		if (!isPlainTable(hostTable)) continue;
+		for (const inner of Object.keys(hostTable)) add(`agent-host.${host}`, inner);
+	}
 	return true;
 }
 

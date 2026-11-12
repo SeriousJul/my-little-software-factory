@@ -1251,7 +1251,9 @@ describe("the permanent Message line", () => {
 				// the plane is quiet (issue #408).
 				await waitFor(setup, { shows: "loading tickets..." });
 				const bootLine = `Info: ${agentHostBootLine({ host: "herdr-core", fact: "default" })}`;
-				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe(truncateToWidth(bootLine, WIDTH));
+				expect(messageRowOf(setup.captureCharFrame())).toBe(
+					padToWidth(truncateToWidth(bootLine, WIDTH), WIDTH),
+				);
 				// A failed fetch warns in the source's own words.
 				source.settle(fetchRateLimited);
 				await waitFor(setup, { refuses: "issues: stale - GitHub rate limit exceeded" });

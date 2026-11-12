@@ -16,6 +16,11 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	agentHostBootLine,
+	herdrCoreFloorWarningLine,
+	HERDR_CORE_VERSION_FLOOR,
+} from "../src/agent-host.ts";
+import {
 	checkoutHoldDropLine,
 	checkoutWaitHolderFact,
 	checkoutWaitLine,
@@ -336,5 +341,27 @@ describe("the record lines the configuration reference states", () => {
 				"the start line",
 			);
 		}
+	});
+
+	test("the Agent host boot statement states its own lines in the guide (issue #408)", () => {
+		// The lines come from the module that owns the host words, so a wording
+		// that moves in the code turns this red beside the frame test that reads
+		// the line back off the booted plane. The two examples are the two facts a
+		// reader has to tell apart: a run the mark resolved, and a run the config
+		// resolved.
+		statedInGuide(
+			agentHostBootLine({ host: "herdr", fact: "herdr-mark" }),
+			"agentHostBootLine(herdr-mark)",
+		);
+		statedInGuide(
+			agentHostBootLine({ host: "herdr-core", fact: "config" }),
+			"agentHostBootLine(config)",
+		);
+		// The version floor's warning names the host's version beside the floor, and
+		// the page states the line with the example version it shows. The floor
+		// stands on the release the shapes were read against, so the check reads it
+		// out of the module that writes the line.
+		statedInGuide(herdrCoreFloorWarningLine("0.1.9"), 'herdrCoreFloorWarningLine("0.1.9")');
+		statedInGuide(HERDR_CORE_VERSION_FLOOR, "the version floor the page names");
 	});
 });
