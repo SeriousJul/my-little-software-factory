@@ -8,13 +8,8 @@
  * without a test going red.
  */
 import { describe, expect, test } from "bun:test";
-import {
-	type AgentStatus,
-	agentInPane,
-	agentPoll,
-	normalizeAgentStatus,
-	ticketAgentName,
-} from "../src/domain/agent.ts";
+import { type AgentStatus, normalizeAgentStatus } from "../src/agent-host.ts";
+import { agentInPane, agentPoll, ticketAgentName } from "../src/domain/agent.ts";
 import { agent, handoff, OWN_NAME, STABLE_NAME, ticket } from "./fact-fixtures.ts";
 
 /** One Ticket with an Agent working in its recorded pane. */

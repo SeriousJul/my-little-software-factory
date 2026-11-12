@@ -34,6 +34,15 @@ unverified in the table at the end of the tracing section, so the claim
 stops at what was measured. A check that could not run is recorded as
 incomplete. It is not a pass, and it is not silently dropped.
 
+Since then the world answers a second dialect beside herdr and git: the
+herdr-core (`hc`) verbs the Agent host module builds (issue #407, ADR 0141),
+traced to the recorded hc 0.1.20 probes in
+[the Agent host verification](agent-host-herdr-core.md) rather than to the
+herdr 0.8.2 run below, and the world's closed-surface rule walks the host
+dialects through the module's builders. Both herdr-core kill answers stand
+measured in that file, and the herdr-core shapes the probes could not measure
+stand untraced in this file's own list.
+
 See [ADR 0132](../adr/0132-the-stub-herdr-world-answers-herdr-and-git-from-one-standing-world.md)
 for the decision, [issue #361](https://github.com/SeriousJul/my-little-software-factory/issues/361)
 for the requirement, [issue #376](https://github.com/SeriousJul/my-little-software-factory/issues/376)
@@ -64,7 +73,7 @@ the module.
 | The plane reads the refusal codes it reads | the blocks assert the codes the handoff and the observation read: `worktree_not_found`, `agent_name_taken`, `agent_pane_busy`, `tab_not_found`, `workspace_not_found`, and `worktree_remove_failed` | Passed |
 | The held `agent wait` is the one exception to the refusal rule | "the Agent side": a wait for an Agent the world holds not at a settle state holds instead of answering, a `setAgentStatus` move to a settle state releases it with code zero, a wait for an Agent already at a settle state answers at once, and a wait for a target the world does not hold is refused | Passed |
 | The recording keeps the fake runner's shape | "the recording": `commands()`, `settledCommands()`, `peakConcurrency()`, the raw `calls`, the `hold`/`release`, the `raise`, and the `set`/`setSequence` sequence all answer the way the fake command runner answers, so the gate and delay wrappers compose over the world unchanged | Passed |
-| The closed surface stays closed | "the closed surface": every herdr and git command shape the plane builds is driven against a healthy world and meets no refusal; a shape the world never answers and a command the plane starts sending both fail there | Passed |
+| The closed surface stays closed | "the closed surface": every herdr, git, and herdr-core command shape the plane builds is driven against a healthy world and meets no refusal; a shape the world never answers and a command the plane starts sending both fail there | Passed |
 | The gate and delay wrappers compose over the world | the wrappers take a `CommandRunner`, and the world satisfies it; the suites that gate and delay a handoff run over the world without change | Passed |
 | The checkout verification moves off the local builder | the Consultation operations and the auto-mode suite state the checkout as a world now, and their local `stubCheckout` builders are deleted; the seven frame suites that re-landed on the pin table in #366 (the Action bar, the Consultation frame, the Handoff frame, the Key guide, the Live view, the Message line, and the Starting face) hold their local pin builders again | Passed |
 | The Agent interaction's text and key sends are answered by the world | the Agent input queue's send tests and the Consultation frame's interaction test stand the world's own pane: the sends reach it, and the tests read them from `sentTextFor` and `sentKeysFor` instead of the recorded commands | Passed |
@@ -78,7 +87,11 @@ the module.
 The ADR requires every answer shape the world produces to be traced to a
 recorded real herdr answer, with the herdr version named, and every shape
 inferred from the plane's own reader recorded as unverified. The tracing ran
-on 2026-10-14:
+on 2026-10-14. It stands beside the herdr-core dialect the world answers from
+the same standing: those shapes trace to the recorded hc 0.1.20 probes in
+[the Agent host verification](agent-host-herdr-core.md), and the herdr-core
+shapes the probes could not measure stand untraced in the list below, beside
+the ones that section records for 0.8.2.
 
 1. The isolated herdr 0.8.2 server stood up with its own socket path and its
    own home, and its panes launched the real pi 1.2.0 through the operator's
@@ -244,6 +257,22 @@ unverified, and the claim stops at them.
 | The `agent start` answer with arguments after `--` | the run measured the start without arguments, the shape the plane's start takes when the agent's setting names no extra argument. The answer shape does not ride on the arguments, and a start with an argument the pane's pi would reject would have measured a startup failure, not the acceptance shape |
 | The `agent start` refusal for a fresh pane that stays not-an-available-shell past herdr's own readiness wait | the measured fresh-pane start answered code 0 after herdr waited for the pane's shell (4 seconds in the record). 0.8.2's own wait makes the refusal a timeout past the wait window, and the tracing did not stand a pane that stays unreadable for the whole window |
 
+### The herdr-core shapes that stand untraced beside their probes
+
+The herdr-core answers trace to the hc 0.1.20 probes in the Agent host
+verification, both kill answers among them. The world stands a simplification
+where those probes did not measure the host's answer, and each one stands
+recorded as unverified here, the way the 0.8.2 list records its own.
+
+| Shape | The host answers, the world answers |
+| --- | --- |
+| A `wait --timeout` on a live terminal | the host checks in over the window and answers at its end; the world answers `ended: false` at once, without the check-in |
+| A `read` while the program reports `working`, `blocked`, or `error` | the host's manual adds the rule: a history read returns the screen only, marked incomplete with `why` set to the state; the world answers the history, marked `complete` |
+| The `get` record | the host's record carries `cols`, `rows`, `created_ms`, `finished_ms`, `foreground`, `reported`, `screen`, and `status_ms` beside the fields the world stands, and it names the terminal's own identity; the world stands the fields the plane reads and names `identity: "stub"` |
+| The `not_found` message of a reference the world does not hold | the stub's own wording; the host's message for that standing is not recorded |
+| A `run` on a name a finished terminal holds | the world allows it: only a name a live terminal holds is refused. The host's answer on that standing is not measured |
+| The `wait` answer for a terminal the kill finished | the recorded wait line was measured on a program that ended (`reason: "exit"`); the world stands the terminal's settle facts - the kill's `reason` and `signal` - beside it |
+
 ## The migration state
 
 | Flow | Files moved | Local builders deleted | Status |
@@ -278,6 +307,7 @@ the world, the way the world leaves the GitHub side unmodelled.
 | Check | Why it could not run | Recorded as |
 | --- | --- | --- |
 | The held `agent wait` block on a working Agent, and the emission of `worktree_remove_failed` by 0.8.2 | the tracing's Agent never left `idle`, and 0.8.2 refused none of the tracing's removes with that code: the two shapes stand measured on the world, not on the binary | Incomplete: the unverified list of the tracing section names both, and the world's modeling of them stands beside the record without the trace |
+| The herdr-core shapes that stand untraced beside their probes | the hc 0.1.20 probes in the Agent host verification did not measure the host's answer on those standings | Incomplete: the herdr-core list of the tracing section names each, and the world's modeling of them stands beside the record without the trace |
 | The `agent_session` and `session_id` fields of a 0.8.2 `agent list` with an Agent integration installed | no integration was installed in the isolated run | Incomplete: the world's session shape is unverified against a 0.8.2 answer (drift 7) |
 | The seven frame suites' move onto the world | the plane-boot migration (#366) re-landed them on the pin table; their herdr and git answers stand on the fake command runner's pins again, and their move onto the world needs a per-test rework of their standings, its own step | Incomplete, recorded in the migration table above |
 | The screen-reader path of the surfaces the suites touch | not verified in this branch's scope | Incomplete |

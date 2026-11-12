@@ -8,6 +8,15 @@
  * cleanup instead of queueing another one behind it.
  */
 import { randomUUID } from "node:crypto";
+import {
+	type HostInvocation,
+	herdrAgentPrompt,
+	herdrPaneClose,
+	herdrPaneList,
+	herdrTabClose,
+	herdrTabList,
+	herdrWorkspaceClose,
+} from "./agent-host.ts";
 import type { ConsultationCheckoutHold } from "./checkout-hold.ts";
 import type { FactoryConfig } from "./config.ts";
 import type { ConfigWriteReport } from "./config-write.ts";
@@ -213,7 +222,7 @@ type LaunchOutcome = HandoffOutcome | LaunchConflict;
 /** The herdr environment one close takes down, and what survives it. */
 interface ClosePlan {
 	/** The one cleanup command, or none when no owned environment remains. */
-	command: readonly string[] | undefined;
+	command: HostInvocation | undefined;
 	/** Resources the command confirmed closed. */
 	closes: ConsultationResource[];
 	/** Resources the operator keeps: shared, or a worktree that never closes. */
@@ -769,7 +778,8 @@ export class ConsultationOperations {
 			}
 			this.progress(current.id, `sending response to Consultation ${latest.id.slice(0, 8)}...`);
 			progressStarted = true;
-			const result = await this.runner.run("herdr", ["agent", "prompt", latest.agentName, draft]);
+			const promptInv = herdrAgentPrompt(latest.agentName, draft);
+			const result = await this.runner.run(promptInv.command, promptInv.args);
 			// A stop over the send: the state is closing, so the delivery settles
 			// nothing; the pending line dies with the record.
 			if (this.stopped) return;
@@ -944,7 +954,7 @@ export class ConsultationOperations {
 		// Force-close between the loop and the command produce a partial plan.
 		if (operation.cancelled || this.stopped) return;
 		if (plan.command !== undefined) {
-			const result = await this.runner.run("herdr", plan.command);
+			const result = await this.runner.run(plan.command.command, plan.command.args);
 			if (result.code !== 0) throw new Error(commandFailureText(result));
 			// A close sends no focus command, whatever it takes down: the plane
 			// never moves herdr's view on its own (ADR 0061), and a close of a
@@ -1116,7 +1126,7 @@ export class ConsultationOperations {
 			// No workspace handle to probe the topology of: the pane is still the
 			// Consultation's own, and everything else stands as it is.
 			return {
-				command: ["pane", "close", pane.resourceId],
+				command: herdrPaneClose(pane.resourceId),
 				closes: withAgent([pane]),
 				retains: [],
 			};
@@ -1131,20 +1141,20 @@ export class ConsultationOperations {
 		// belongs to someone else even while it stands empty.
 		if (topology.workspaceExclusive && workspace !== undefined)
 			return {
-				command: ["workspace", "close", workspace.resourceId],
+				command: herdrWorkspaceClose(workspace.resourceId),
 				closes: resources.filter((item) => item.kind !== "worktree"),
 				retains: worktrees,
 			};
 		if (topology.ownedTabExclusive && tab !== undefined)
 			return {
-				command: ["tab", "close", tab.resourceId],
+				command: herdrTabClose(tab.resourceId),
 				closes: withAgent([tab, pane]),
 				retains: [...sharedWorkspace, ...worktrees],
 			};
 		// A foreign pane shares the owned tab: close the Consultation's pane
 		// alone, and leave the tab and the workspace beside it.
 		return {
-			command: ["pane", "close", pane.resourceId],
+			command: herdrPaneClose(pane.resourceId),
 			closes: withAgent([pane]),
 			retains: [
 				...sharedWorkspace,
@@ -1545,9 +1555,11 @@ async function workspaceTopology(
 	ownedPaneId: string | null,
 	ownedTabId: string | null,
 ): Promise<{ known: boolean; workspaceExclusive: boolean; ownedTabExclusive: boolean }> {
+	const tabInv = herdrTabList(workspaceId);
+	const paneInv = herdrPaneList(workspaceId);
 	const [tabs, panes] = await Promise.all([
-		runner.run("herdr", ["tab", "list", "--workspace", workspaceId]),
-		runner.run("herdr", ["pane", "list", "--workspace", workspaceId]),
+		runner.run(tabInv.command, tabInv.args),
+		runner.run(paneInv.command, paneInv.args),
 	]);
 	if (tabs.code !== 0 || panes.code !== 0)
 		return { known: false, workspaceExclusive: false, ownedTabExclusive: false };

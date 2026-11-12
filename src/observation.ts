@@ -72,11 +72,16 @@
  * restart anything.
  */
 
+import {
+	herdrAgentList,
+	herdrAgentRead,
+	herdrAgentWait,
+	normalizeAgentStatus,
+} from "./agent-host.ts";
 import type { FactoryConfig, TransitionOutcome } from "./config.ts";
-// The normalized states and the words for them are the domain's, beside the
-// Missing agent rule the observation cycle reads (issue #201). The observation
-// module re-states them for its existing readers.
-import { agentInPane, normalizeAgentStatus } from "./domain/agent.ts";
+// The Missing agent rule is the domain's, beside the host status words the
+// observation cycle reads from the Agent host module (issue #407).
+import { agentInPane } from "./domain/agent.ts";
 import {
 	type FailedStartParkFacts,
 	failedStartParkLine,
@@ -297,7 +302,8 @@ export class HerdrAgentReader implements AgentReader {
 	}
 
 	async listAgents(): Promise<HerdrProbe> {
-		const result = await this.runner.run("herdr", ["agent", "list"]);
+		const inv = herdrAgentList();
+		const result = await this.runner.run(inv.command, inv.args);
 		if (result.code !== 0) {
 			return { kind: "error", reason: commandFailureText(result) };
 		}
@@ -338,11 +344,8 @@ export class HerdrAgentReader implements AgentReader {
 	 * plane's wake standing.
 	 */
 	async waitAgent(target: string, budgetMs: number): Promise<AgentWaitResult> {
-		const result = await this.runner.run(
-			"herdr",
-			["agent", "wait", target, "--until", "idle", "--until", "done", "--until", "blocked"],
-			{ timeoutMs: budgetMs },
-		);
+		const inv = herdrAgentWait(target);
+		const result = await this.runner.run(inv.command, inv.args, { timeoutMs: budgetMs });
 		return { matched: result.code === 0 };
 	}
 
@@ -357,17 +360,8 @@ export class HerdrAgentReader implements AgentReader {
 		source: "visible" | "recent-unwrapped",
 		format: "text" | "ansi",
 	): Promise<string | null> {
-		const result = await this.runner.run("herdr", [
-			"agent",
-			"read",
-			paneId,
-			"--lines",
-			String(lines),
-			"--source",
-			source,
-			"--format",
-			format,
-		]);
+		const inv = herdrAgentRead(paneId, lines, source, format);
+		const result = await this.runner.run(inv.command, inv.args);
 		if (result.code !== 0) return null;
 		let output: string | null = null;
 		try {

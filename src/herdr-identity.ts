@@ -29,6 +29,7 @@
  * the run's boot and its end can leave a release the installed herdr takes
  * as a no-op, and the row stands (ADR 0139).
  */
+import { herdrPaneReleaseAgent, herdrPaneReportAgent } from "./agent-host.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
 
 /** The source and the face the plane reports under: one name in both places. */
@@ -155,33 +156,26 @@ export function createHerdrIdentityReporter(
 		});
 	};
 	const report = (): void => {
-		send([
-			"pane",
-			"report-agent",
-			target.paneId,
-			"--source",
-			HERDR_IDENTITY_SOURCE,
-			"--agent",
-			HERDR_IDENTITY_AGENT,
-			"--state",
-			"idle",
-			"--seq",
-			String(options.now()),
-		]);
+		send(
+			herdrPaneReportAgent({
+				paneId: target.paneId,
+				source: HERDR_IDENTITY_SOURCE,
+				agent: HERDR_IDENTITY_AGENT,
+				state: "idle",
+				seq: String(options.now()),
+			}).args,
+		);
 	};
 	const reporter: HerdrIdentityReporter = {
 		release: (): void => {
-			send([
-				"pane",
-				"release-agent",
-				target.paneId,
-				"--source",
-				HERDR_IDENTITY_SOURCE,
-				"--agent",
-				HERDR_IDENTITY_AGENT,
-				"--seq",
-				String(options.now()),
-			]);
+			send(
+				herdrPaneReleaseAgent({
+					paneId: target.paneId,
+					source: HERDR_IDENTITY_SOURCE,
+					agent: HERDR_IDENTITY_AGENT,
+					seq: String(options.now()),
+				}).args,
+			);
 		},
 	};
 	report();

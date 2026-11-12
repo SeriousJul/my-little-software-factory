@@ -11,6 +11,7 @@
  * (issue #203, ADR 0096).
  */
 
+import { type HostInvocation, herdrPaneSendKeys, herdrPaneSendText } from "../agent-host.ts";
 import type { CommandResult, CommandRunner } from "../runner.ts";
 import { utf8ByteLength } from "../text-bounds.ts";
 import { isLiteralText } from "./response-draft.ts";
@@ -122,7 +123,7 @@ export class ConsultationInputQueue {
 	enqueue(paneId: string, event: AgentInputEvent): Promise<CommandResult> {
 		if (event.kind === "key") {
 			this.flushText();
-			return this.enqueueCommand(["pane", "send-keys", paneId, event.key]);
+			return this.enqueueCommand(herdrPaneSendKeys(paneId, event.key));
 		}
 		if (event.text === "") return Promise.resolve({ code: 0, stdout: "", stderr: "" });
 		if (this.pendingPaneId !== null && this.pendingPaneId !== paneId) this.flushText();
@@ -158,7 +159,7 @@ export class ConsultationInputQueue {
 		if (paneId === null) return;
 		let last: Promise<CommandResult> | undefined;
 		for (const chunk of utf8Chunks(text, this.textBatchBytes))
-			last = this.enqueueCommand(["pane", "send-text", paneId, chunk]);
+			last = this.enqueueCommand(herdrPaneSendText(paneId, chunk));
 		if (last === undefined) return;
 		void last.then(
 			(result) => {
@@ -174,8 +175,8 @@ export class ConsultationInputQueue {
 		);
 	}
 
-	private enqueueCommand(args: string[]): Promise<CommandResult> {
-		const run = this.tail.then(() => this.runner.run("herdr", args));
+	private enqueueCommand(invocation: HostInvocation): Promise<CommandResult> {
+		const run = this.tail.then(() => this.runner.run(invocation.command, invocation.args));
 		this.tail = run.then(
 			() => undefined,
 			() => undefined,
