@@ -15,6 +15,7 @@
  * rows may name.
  */
 import type { GroupingAxis } from "../domain/grouping.ts";
+import type { AgentHostResolution } from "../agent-host.ts";
 import type { Ticket, TicketListFilter, TicketMarker } from "../domain/ticket.ts";
 import { ignoreRefusal, nextTicketListFilter, obligationOf } from "../domain/ticket.ts";
 import { inFlight } from "../domain/ticket-facts.ts";
@@ -171,6 +172,12 @@ export interface StandingFacts {
 	 * module's one read, the way the other standing facts do.
 	 */
 	queuePaused: boolean;
+	/**
+	 * The Agent host the boot resolved, and the fact that resolved it
+	 * (issue #408, ADR 0141): the launcher, the override panel, and the Key
+	 * guide read this one record and restate nothing.
+	 */
+	agentHost: AgentHostResolution;
 }
 
 /**

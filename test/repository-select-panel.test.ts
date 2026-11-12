@@ -378,6 +378,7 @@ describe("the repository select panel", () => {
 					consultationTypesConfigured: true,
 					interactionExitKey: "f12",
 					queuePaused: false,
+					agentHost: { host: "herdr-core", fact: "default" },
 				} satisfies StandingFacts,
 				message: null,
 				onEmergencyExit: () => undefined,

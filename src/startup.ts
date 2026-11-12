@@ -19,6 +19,16 @@
  */
 import { homedir } from "node:os";
 
+import {
+	HERDR_CORE_VERSION_FLOOR,
+	agentHostBootLine,
+	herdrCoreFloorWarningLine,
+	herdrCoreVersionOf,
+	herdrCoreVersionRead,
+	resolveAgentHost,
+	versionIsBelow,
+	type AgentHostResolution,
+} from "./agent-host.ts";
 import type { FactoryConfig } from "./config.ts";
 import {
 	ConfigError,
@@ -94,9 +104,15 @@ export type StartupResult =
 			home: string;
 			/** The plane's file logger; the no-op logger where the config carries no [logging]. */
 			logger: Logger;
+			/**
+			 * The Agent host the boot resolved, and the fact that resolved it
+			 * (ADR 0141): the entry hands it to the App, which states it once on the
+			 * Message line beside the record entry the boot wrote for it.
+			 */
+			agentHost: AgentHostResolution;
 			/** Non-fatal operator lines: the missing-config note and model warnings. */
 			notes: string[];
-	  };
+		};
 
 /**
  * The logger the boot resolves from the loaded config: the [logging] level
@@ -396,6 +412,35 @@ export async function runStartup(configPath: string, worldPath?: string): Promis
 		return { ok: false, lines: [...notes, stub.reason], exitCode: 1 };
 	}
 	const runner = stub.runner;
+	// The Agent host the boot resolves once (issue #408, ADR 0141): the
+	// operator's config first, then the environment mark read once, here, at
+	// the boot, then the default. The App states the answer on the Message
+	// line from this one read; the marks are no surface's to read again.
+	const agentHost = resolveAgentHost(loaded.config.agentHost, {
+		herdrEnv: process.env.HERDR_ENV,
+		hcTerminalId: process.env.HC_TERMINAL_ID,
+	});
+	// The boot statement, one entry of the Plane boot record (ADR 0129): the
+	// same line the App stands on the Message line, written once at boot, not
+	// per start.
+	logger.info(agentHostBootLine(agentHost));
+	// The herdr-core version floor (ADR 0141): one Warning line at the boot
+	// when the host it resolved stands older than the release the shapes were
+	// read against. The version read is the one host command the boot may run
+	// beside its no-lifecycle rule: it answers from the binary and starts no
+	// core. A host that answers no version states no floor line: a missing or
+	// unreadable binary is the host's own refusal at start, and the plane does
+	// not guess a floor from a read it did not get.
+	if (agentHost.host === "herdr-core") {
+		const read = herdrCoreVersionRead(loaded.config.agentHostHerdrCore?.binary);
+		const answered = await runner.run(read.command, read.args);
+		const version = herdrCoreVersionOf(answered);
+		if (version !== null && versionIsBelow(version, HERDR_CORE_VERSION_FLOOR)) {
+			const warning = herdrCoreFloorWarningLine(version);
+			notes.push(`warning: ${warning}`);
+			logger.warn(warning);
+		}
+	}
 	// The config's model values, checked against what the agent runtimes
 	// actually offer. An unavailable list only warns: one agent kind that
 	// cannot answer must not block the control plane.
@@ -437,6 +482,7 @@ export async function runStartup(configPath: string, worldPath?: string): Promis
 		sources,
 		home,
 		logger,
+		agentHost,
 		notes,
 	};
 }

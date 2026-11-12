@@ -144,12 +144,20 @@ export function useMessageFacts(
 	 * health's own Fault.
 	 */
 	attention: AttentionService,
+	/**
+	 * The Agent host boot statement (issue #408), written into the line once
+	 * at boot and never cleared: it is the lowest fact on the line, so the
+	 * quiet plane states its host and the record the log keeps beside it.
+	 */
+	agentHostLine?: string,
 ) {
-	const [facts, setFacts] = useState<MessageFacts>(() =>
-		initialNotice === undefined
-			? {}
-			: { notice: { severity: initialNotice.severity, text: initialNotice.text } },
-	);
+	const [facts, setFacts] = useState<MessageFacts>(() => {
+		const notice =
+			initialNotice === undefined
+				? {}
+				: { notice: { severity: initialNotice.severity, text: initialNotice.text } };
+		return agentHostLine === undefined ? notice : { ...notice, agentHost: agentHostLine };
+	});
 	// The run's history of the facts the line was asked to state, oldest first.
 	// It is session view state like the Starting window and the notification's
 	// standing-fact memory, not a machine fact the state file reads back: a

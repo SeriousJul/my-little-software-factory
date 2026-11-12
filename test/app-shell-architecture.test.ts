@@ -42,7 +42,7 @@ const APP_SHELL = "src/components/app.ts";
 const sources = sourceFiles("src");
 const shell = readFileSync(APP_SHELL, "utf8");
 
-/** The nine fields the boot record names, in the order the interface holds them. */
+/** The ten fields the boot record names, in the order the interface holds them. */
 const EXPECTED_FIELDS = [
 	"config",
 	"runner",
@@ -51,6 +51,7 @@ const EXPECTED_FIELDS = [
 	"state",
 	"sources",
 	"logger",
+	"agentHostResolution",
 	"loopPolicy",
 	"onReady",
 ];
@@ -92,12 +93,12 @@ describe("the App shell's boot record is total", () => {
 		expect(sources, `${APP_SHELL} must be in the scanned set`).toContain(APP_SHELL);
 	});
 
-	test("the record holds exactly the nine required fields", () => {
+	test("the record holds exactly the ten required fields", () => {
 		const fields = fieldsOf(interfaceBody(shell, "AppProps"));
 		// The field count is a number the check reads (user story 27): the
 		// interface cannot grow an optional slot, or any slot, without the
 		// decision standing here.
-		expect(fields, "the boot record's field count").toHaveLength(9);
+		expect(fields, "the boot record's field count").toHaveLength(10);
 		expect(
 			fields.map((field) => field.name),
 			"the boot record's field names, in the interface's order",

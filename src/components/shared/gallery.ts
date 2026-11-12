@@ -1378,6 +1378,7 @@ const GALLERY_STANDING: StandingFacts = {
 	refreshingSourceCount: 0,
 	interactionExitKey: "f12",
 	queuePaused: false,
+	agentHost: { host: "herdr", fact: "herdr-mark" },
 };
 /** A list the grouping axis leaves flat, so no Group header stands under the cursor. */
 const NO_GROUP: GroupCursorFacts = {

@@ -115,6 +115,7 @@ const BASE_STANDING: StandingFacts = {
 	consultationTypesConfigured: false,
 	interactionExitKey: "f12",
 	queuePaused: false,
+	agentHost: { host: "herdr-core", fact: "default" },
 };
 
 /** The choice the panel opens on: the pilot agent, no setting chosen. */

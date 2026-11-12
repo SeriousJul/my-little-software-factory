@@ -36,6 +36,7 @@ const BASE_STANDING: StandingFacts = {
 	consultationTypesConfigured: true,
 	interactionExitKey: "f12",
 	queuePaused: false,
+	agentHost: { host: "herdr-core", fact: "default" },
 };
 
 async function launcher(
