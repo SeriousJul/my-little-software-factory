@@ -63,6 +63,30 @@ export interface WorldAgentDescription {
 	sessionId?: string;
 }
 
+/** One herdr-core terminal the world holds, beside the Agent names it may hold. */
+export interface WorldTerminalDescription {
+	/** The name the terminal holds; a name a live terminal holds is a `run` refusal. */
+	name: string;
+	/** The directory the terminal runs in. */
+	cwd: string;
+	/** The agent the record reports for the terminal, when it names one. */
+	agent?: string;
+	/** The labels the plane reads back from the terminal's record. */
+	labels?: Record<string, string>;
+	/** The terminal's state: live by default, finished when it stands settled. */
+	state?: "live" | "finished";
+	/** The program status the terminal reports, when it reports one. */
+	status?: string | null;
+	/** The settle reason of a finished terminal. */
+	reason?: string;
+	/** The signal that ended a finished terminal. */
+	signal?: number;
+	/** The exit code of a finished terminal. */
+	exitCode?: number | null;
+	/** The output history an `hc read` of the terminal returns. */
+	content?: string;
+}
+
 /** One pane the world holds. */
 export interface WorldPaneDescription {
 	id: string;
@@ -168,6 +192,8 @@ export interface HerdrWorldDescription {
 	panes?: WorldPaneDescription[];
 	/** The Agents already standing. */
 	agents?: WorldAgentDescription[];
+	/** The herdr-core terminals already standing. */
+	terminals?: WorldTerminalDescription[];
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +207,22 @@ interface WorldAgent {
 	status: string;
 	paneId: string;
 	sessionId?: string;
+}
+
+/** One herdr-core terminal the world holds. */
+interface WorldTerminal {
+	address: string;
+	name: string;
+	cwd: string;
+	agent: string;
+	labels: Record<string, string>;
+	state: "live" | "finished";
+	status: string | null;
+	turn: number;
+	reason?: string;
+	signal?: number;
+	exitCode: number | null;
+	content: string;
 }
 
 interface WorldPane {
@@ -312,6 +354,23 @@ export interface StubHerdrWorld extends CommandRunner {
 	 */
 	setAgentStatus(name: string, status: string, sessionId?: string): void;
 	/**
+	 * Move one terminal the world holds: the state, status, and settle fields
+	 * the next `hc get` reports. A move to finished releases every `hc wait`
+	 * the world holds on it, the way the real block ends on the terminal
+	 * finishing. A reference the world does not hold is a refusal, not a
+	 * quiet add.
+	 */
+	setTerminalState(
+		reference: string,
+		fields: {
+			state: "live" | "finished";
+			status?: string | null;
+			reason?: string;
+			signal?: number;
+			exitCode?: number | null;
+		},
+	): void;
+	/**
 	 * Stop holding one Agent the world holds: the next `agent list` no longer
 	 * reports it, the way the real list stops when the Agent's process dies.
 	 * The pane it stood in remains. A name the world does not hold is a
@@ -397,8 +456,42 @@ function nextFreeNumber(prefix: string, held: Iterable<string>): number {
 	return highest + 1;
 }
 
-/** Build one Stub herdr world on the standing the description names. */
-export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWorld {
+/** The world's standing maps, built from the description a test names. */
+interface WorldStanding {
+	checkouts: Map<string, WorldCheckout>;
+	workspaces: Map<string, WorldWorkspace>;
+	tabs: Map<string, WorldTab>;
+	panes: Map<string, WorldPane>;
+	agents: Map<string, WorldAgent>;
+	terminals: Map<string, WorldTerminal>;
+}
+
+/** Build the terminals a test names, each standing at its own address. */
+function buildTerminals(description: HerdrWorldDescription): Map<string, WorldTerminal> {
+	const terminals = new Map<string, WorldTerminal>();
+	let terminalNumber = 1;
+	for (const item of description.terminals ?? []) {
+		const terminal: WorldTerminal = {
+			address: `t${terminalNumber++}`,
+			name: item.name,
+			cwd: item.cwd,
+			agent: item.agent ?? "shell",
+			labels: { ...(item.labels ?? {}) },
+			state: item.state ?? "live",
+			status: item.status ?? null,
+			turn: 0,
+			reason: item.reason,
+			signal: item.signal,
+			exitCode: item.exitCode ?? null,
+			content: item.content ?? "",
+		};
+		terminals.set(terminal.address, terminal);
+	}
+	return terminals;
+}
+
+/** Build the world's standing maps from the description, each side beside the other. */
+function initWorldState(description: HerdrWorldDescription): WorldStanding {
 	const checkouts = new Map<string, WorldCheckout>();
 	for (const item of description.checkouts) {
 		checkouts.set(item.path, buildCheckout(item));
@@ -439,6 +532,15 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 	}
 	bindWorktreeWorkspaces(checkouts, workspaces);
 
+	const terminals = buildTerminals(description);
+	return { checkouts, workspaces, tabs, panes, agents, terminals };
+}
+
+/** Build one Stub herdr world on the standing the description names. */
+export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWorld {
+	const { checkouts, workspaces, tabs, panes, agents, terminals } = initWorldState(description);
+	let terminalNumber = terminals.size + 1;
+
 	let nextWs = nextFreeNumber("ws", workspaces.keys());
 	let nextTab = nextFreeNumber("tab", tabs.keys());
 	let nextPane = nextFreeNumber("pane", panes.keys());
@@ -468,6 +570,13 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 	 * the way the real block ends on its state match.
 	 */
 	const heldWaits = new Map<string, Array<() => void>>();
+
+	/**
+	 * The held `hc wait`s on a live terminal, by address: each resolver
+	 * settles its caller the moment the terminal finishes, the way the real
+	 * block ends on the terminal's finish.
+	 */
+	const heldCoreWaits = new Map<string, Array<() => void>>();
 
 	/** Release every held `agent wait` on one target, with its code-zero answer. */
 	const releaseHeldWaits = (name: string): void => {
@@ -1442,6 +1551,351 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 	};
 
 	/** A command no side of the world models: the refusal that fails the test. */
+	// -----------------------------------------------------------------------
+	// The herdr-core side: the second dialect the world answers from the
+	// same standing, the way it answers herdr and git. A terminal is the
+	// herdr-core unit herdr calls a pane Agent; the shapes below trace to
+	// recorded `hc` answers, so the dialect stands for a plane step to send
+	// through it even though the plane sends none of it yet.
+	// -----------------------------------------------------------------------
+
+	const basename = (path: string): string => {
+		const parts = path.split("/");
+		return parts[parts.length - 1] ?? path;
+	};
+
+	/** The herdr-core failure line: one JSON line on stderr with an `error.kind`. */
+	const hcError = (kind: string, message: string, hint?: string): CommandResult => {
+		const error: Record<string, unknown> = { kind, message };
+		if (hint !== undefined) error.hint = hint;
+		return { code: 1, stdout: "", stderr: `${JSON.stringify({ error })}\n` };
+	};
+
+	/** The full record a `hc get` of one terminal answers, on stdout. */
+	const coreRecordOf = (terminal: WorldTerminal): Record<string, unknown> => ({
+		address: terminal.address,
+		agv: [terminal.agent],
+		cwd: terminal.cwd,
+		die_with_parent: false,
+		exit_code: terminal.exitCode,
+		identity: "stub",
+		keep: false,
+		labels: terminal.labels,
+		name: terminal.name,
+		notify: false,
+		parent: null,
+		pid: null,
+		reason: terminal.reason ?? null,
+		rm: false,
+		signal: terminal.signal ?? null,
+		state: terminal.state,
+		status: terminal.status,
+		template: null,
+		title: "",
+		turn: terminal.turn,
+	});
+
+	/**
+	 * Resolve one terminal reference: an address first, then a name. A name
+	 * a live terminal holds resolves to it; a name a finished terminal held
+	 * resolves to the newest such terminal, the way the real record resolves
+	 * a stale name.
+	 */
+	const resolveTerminal = (reference: string): WorldTerminal | undefined => {
+		const byAddress = terminals.get(reference);
+		if (byAddress !== undefined) return byAddress;
+		let match: WorldTerminal | undefined;
+		for (const terminal of terminals.values()) {
+			if (terminal.name === reference) match = terminal;
+		}
+		return match;
+	};
+
+	const parseHcRun = (
+		args: readonly string[],
+	): {
+		name?: string;
+		cwd?: string;
+		labels: string[];
+		argv: string[];
+	} => {
+		// The runtime's own arguments ride after `--`: the flags stand before it,
+		// the argv after, so the flag walk never reads a runtime flag.
+		const separator = args.indexOf("--");
+		const flags = args.slice(1, separator === -1 ? args.length : separator);
+		const argv = separator === -1 ? [] : args.slice(separator + 1);
+		const labels: string[] = [];
+		for (let i = 0; i < flags.length; i += 1) {
+			if (flags[i] === "--label") labels.push(flags[i + 1] ?? "");
+		}
+		return {
+			name: flagValue(flags, "--name"),
+			cwd: flagValue(flags, "--cwd"),
+			labels,
+			argv,
+		};
+	};
+
+	const answerHcRun = (args: readonly string[]): CommandResult => {
+		const parsed = parseHcRun(args);
+		if (parsed.name === undefined || parsed.cwd === undefined) return unmodelled("hc run");
+		for (const live of terminals.values()) {
+			if (live.state === "live" && live.name === parsed.name) {
+				return hcError(
+					"name_taken",
+					`a live terminal is already named "${parsed.name}"`,
+					"pick another name, or kill the one holding it",
+				);
+			}
+		}
+		const agent = parsed.argv.length > 0 ? basename(parsed.argv[0] ?? "shell") : "shell";
+		const terminal: WorldTerminal = {
+			address: `t${terminalNumber++}`,
+			name: parsed.name,
+			cwd: parsed.cwd,
+			agent,
+			labels: Object.fromEntries(
+				parsed.labels.map((label) => {
+					const [key, ...rest] = label.split("=");
+					return [key ?? "", rest.join("=")];
+				}),
+			),
+			state: "live",
+			status: null,
+			turn: 0,
+			exitCode: null,
+			content: "",
+		};
+		terminals.set(terminal.address, terminal);
+		return {
+			code: 0,
+			stdout: JSON.stringify({
+				address: terminal.address,
+				agent,
+				cwd: terminal.cwd,
+				name: terminal.name,
+				state: "live",
+				turn: 0,
+			}),
+			stderr: "",
+		};
+	};
+
+	const answerHcSend = (args: readonly string[]): CommandResult => {
+		let guard: string | undefined;
+		for (let i = 1; i < args.length; i += 1) {
+			if (args[i] === "--if") {
+				guard = args[i + 1];
+				i += 1;
+			}
+		}
+		const reference = args[args.length - 2] ?? "";
+		const terminal = resolveTerminal(reference);
+		if (terminal === undefined)
+			return hcError("not_found", `no terminal "${reference}"`, "see `hc ls --all`");
+		if (terminal.state === "finished")
+			return hcError("finished", `${terminal.address} has finished`, `hc read ${terminal.address}`);
+		if (guard !== undefined && terminal.status !== guard)
+			return hcError(
+				"status_mismatch",
+				`${terminal.address} is ${terminal.status ?? "silent"}, not ${guard}`,
+				`hc read ${terminal.address}`,
+			);
+		return {
+			code: 0,
+			stdout: JSON.stringify({ started: null, status: null, turn: terminal.turn }),
+			stderr: "",
+		};
+	};
+
+	const answerHcLs = (args: readonly string[]): CommandResult => {
+		const all = args.includes("--all");
+		const rows = [...terminals.values()].filter((terminal) => all || terminal.state === "live");
+		const hidden = all
+			? 0
+			: [...terminals.values()].filter((terminal) => terminal.state === "finished").length;
+		const list = rows.map((terminal) => {
+			const row: Record<string, unknown> = {
+				address: terminal.address,
+				agent: terminal.agent,
+				cwd: terminal.cwd,
+				name: terminal.name,
+				state: terminal.state,
+				turn: terminal.turn,
+			};
+			if (terminal.state === "finished") {
+				if (terminal.reason !== undefined) row.reason = terminal.reason;
+				if (terminal.signal !== undefined) row.signal = terminal.signal;
+			}
+			return row;
+		});
+		return {
+			code: 0,
+			stdout: JSON.stringify({ hidden_finished: hidden, terminals: list }),
+			stderr: "",
+		};
+	};
+
+	const answerHcGet = (args: readonly string[]): CommandResult => {
+		const reference = args[args.length - 1] ?? "";
+		const terminal = resolveTerminal(reference);
+		if (terminal === undefined)
+			return hcError("not_found", `no terminal "${reference}"`, "see `hc ls --all`");
+		return { code: 0, stdout: JSON.stringify(coreRecordOf(terminal)), stderr: "" };
+	};
+
+	const answerHcWait = (args: readonly string[]): CommandResult | Promise<CommandResult> => {
+		const reference = args[args.length - 1] ?? "";
+		let timeout: number | undefined;
+		for (let i = 1; i < args.length; i += 1) {
+			if (args[i] === "--timeout") {
+				timeout = Number(args[i + 1]);
+				i += 1;
+			}
+		}
+		const terminal = resolveTerminal(reference);
+		if (terminal === undefined)
+			return hcError("not_found", `no terminal "${reference}"`, "see `hc ls --all`");
+		if (terminal.state === "finished")
+			return {
+				code: 0,
+				stdout: JSON.stringify({
+					children: [],
+					ended: true,
+					exit_code: terminal.exitCode,
+					reason: "exit",
+					signal: terminal.signal ?? null,
+					status: terminal.status,
+					terminal: terminal.address,
+					turn: terminal.turn,
+				}),
+				stderr: "",
+			};
+		if (timeout !== undefined)
+			return {
+				code: 0,
+				stdout: JSON.stringify({
+					children: [],
+					ended: false,
+					exit_code: null,
+					reason: "timeout",
+					signal: null,
+					status: terminal.status,
+					terminal: terminal.address,
+					turn: terminal.turn,
+				}),
+				stderr: "",
+			};
+		// A live terminal with no timeout: the wait blocks until the terminal
+		// finishes, the way the real command blocks, until `setTerminalState`
+		// or a `hc kill` moves it to finished.
+		return new Promise<CommandResult>((resolve) => {
+			const waiters = heldCoreWaits.get(terminal.address) ?? [];
+			waiters.push(() =>
+				resolve({
+					code: 0,
+					stdout: JSON.stringify({
+						children: [],
+						ended: true,
+						exit_code: terminal.exitCode,
+						reason: "exit",
+						signal: terminal.signal ?? null,
+						status: terminal.status,
+						terminal: terminal.address,
+						turn: terminal.turn,
+					}),
+					stderr: "",
+				}),
+			);
+			heldCoreWaits.set(terminal.address, waiters);
+		});
+	};
+
+	const answerHcRead = (args: readonly string[]): CommandResult => {
+		let lines = 50;
+		for (let i = 1; i < args.length; i += 1) {
+			if (args[i] === "--lines") {
+				lines = Number(args[i + 1]);
+				i += 1;
+			}
+		}
+		const reference = args[args.length - 1] ?? "";
+		const terminal = resolveTerminal(reference);
+		if (terminal === undefined)
+			return hcError("not_found", `no terminal "${reference}"`, "see `hc ls --all`");
+		const text = terminal.content
+			.split("\n")
+			.slice(lines > 0 ? -lines : undefined)
+			.join("\n");
+		return {
+			code: 0,
+			stdout: JSON.stringify({ complete: true, how: "history", text }),
+			stderr: "",
+		};
+	};
+
+	const releaseHeldCoreWaits = (address: string): void => {
+		const resolvers = heldCoreWaits.get(address);
+		if (resolvers === undefined) return;
+		heldCoreWaits.delete(address);
+		for (const resolve of resolvers) resolve();
+	};
+
+	const answerHcKill = (args: readonly string[]): CommandResult => {
+		const reference = args[args.length - 1] ?? "";
+		const terminal = resolveTerminal(reference);
+		if (terminal === undefined)
+			return hcError("not_found", `no terminal "${reference}"`, "see `hc ls --all`");
+		if (terminal.state === "live") {
+			terminal.state = "finished";
+			terminal.reason = "killed";
+			terminal.signal = 1;
+			terminal.exitCode = null;
+			terminal.status = null;
+			releaseHeldCoreWaits(terminal.address);
+		}
+		return { code: 0, stdout: JSON.stringify(coreRecordOf(terminal)), stderr: "" };
+	};
+
+	const answerHcRm = (args: readonly string[]): CommandResult => {
+		const reference = args[args.length - 1] ?? "";
+		const terminal = resolveTerminal(reference);
+		if (terminal === undefined)
+			return hcError("not_found", `no terminal "${reference}"`, "see `hc ls --all`");
+		if (terminal.state === "live")
+			return hcError(
+				"live",
+				`${terminal.address} is still running`,
+				`kill it first: hc kill ${terminal.address}`,
+			);
+		terminals.delete(terminal.address);
+		return { code: 0, stdout: JSON.stringify({ removed: terminal.address }), stderr: "" };
+	};
+
+	const answerHc = (args: readonly string[]): CommandResult | Promise<CommandResult> => {
+		const verb = args[0];
+		switch (verb) {
+			case "run":
+				return answerHcRun(args);
+			case "send":
+				return answerHcSend(args);
+			case "ls":
+				return answerHcLs(args);
+			case "get":
+				return answerHcGet(args);
+			case "wait":
+				return answerHcWait(args);
+			case "read":
+				return answerHcRead(args);
+			case "kill":
+				return answerHcKill(args);
+			case "rm":
+				return answerHcRm(args);
+			default:
+				return unmodelled(`hc ${args.join(" ")}`);
+		}
+	};
+
 	const unmodelled = (name: string): CommandResult => ({
 		code: 1,
 		stdout: "",
@@ -1458,6 +1912,7 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 	): CommandResult | Promise<CommandResult> => {
 		if (command === "herdr") return answerHerdr(args);
 		if (command === "git") return answerGit(args);
+		if (command === "hc") return answerHc(args);
 		return unmodelled(`${command} ${args.join(" ")}`);
 	};
 
@@ -1579,6 +2034,25 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 		removeAgent(name: string): void {
 			if (!agents.has(name)) throw new Error(`the world holds no agent named ${name}`);
 			agents.delete(name);
+		},
+		setTerminalState(
+			reference: string,
+			fields: {
+				state: "live" | "finished";
+				status?: string | null;
+				reason?: string;
+				signal?: number;
+				exitCode?: number | null;
+			},
+		): void {
+			const terminal = resolveTerminal(reference);
+			if (terminal === undefined) throw new Error(`the world holds no terminal named ${reference}`);
+			terminal.state = fields.state;
+			if (fields.status !== undefined) terminal.status = fields.status;
+			if (fields.reason !== undefined) terminal.reason = fields.reason;
+			if (fields.signal !== undefined) terminal.signal = fields.signal;
+			if (fields.exitCode !== undefined) terminal.exitCode = fields.exitCode;
+			if (fields.state === "finished") releaseHeldCoreWaits(terminal.address);
 		},
 		sentTextFor(paneId: string): string[] {
 			return [...(sentText.get(paneId) ?? [])];

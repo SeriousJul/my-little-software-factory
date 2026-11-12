@@ -187,8 +187,7 @@ description: The module map of the source tree, for agents working in this repos
 	had their own copy of the rule until issue #295 review; a suite refuses a fifth.
 	The types these modules answer reach their readers through the value that
 	carries them, and issue #301 names the call site of each so a reader can find
-	who holds the shape: `normalizeAgentStatus` answers `AgentStatus` to the
-	observation loop and the App; `decisionFacts` answers `DecisionFacts` and the
+	who holds the shape: `decisionFacts` answers `DecisionFacts` and the
 	`DecisionOffer` row it carries to the App's Decision region; `sectionFacts`
 	answers `SectionFacts` to the App and the gallery; `automaticStartBlocked` reads
 	`TicketIgnoreFacts` off a projected row in the observation loop, and
@@ -296,6 +295,22 @@ description: The module map of the source tree, for agents working in this repos
 	App and the observation loop cross the same interface.
 - `src/repo.ts`: the repository resolution and the sibling clone.
 - `src/naming.ts`: the branch names and the herdr agent names.
+- `src/agent-host.ts`: the Agent host seam (ADR 0141). The one module that
+	owns the plane's two Agent-host command dialects - `herdr` and
+	`herdr-core` (`hc`) - building each command the plane sends as one argv,
+	reading each host's answer into the plane's own facts (the status word,
+	the refusal code, the handle), and resolving which host a start runs on:
+	the config's explicit host, then the environment mark, then the default.
+	The host is a per-start fact, not a per-run setting (ADR 0142): the
+	resolution answers once per start, and the surface hands the start the
+	command shapes this module builds for that host. `AgentStatus` and
+	`normalizeAgentStatus` stand here beside the word map that turns a host
+	status word or a host refusal code into the plane's fact, so a host rename
+	is a table change and not a source walk (ADR 0141, ADR 0143). It builds
+	the argv and reads the answer; it is not a command egress - the commands
+	still leave through the runner in `src/runner.ts`, the one egress.
+	A step stands the `herdr-core` dialect in the module and in the Stub
+	herdr world without the plane sending any of it (issue #407).
 - `src/runner.ts`: the single egress for commands.
 	Every external command goes through one `CommandRunner`, and the tests
 	inject a fake that records the calls. The runner also answers the Model list

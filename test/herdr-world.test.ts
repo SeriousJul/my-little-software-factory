@@ -27,7 +27,7 @@ const WORKTREES_ROOT = "/home/jul/worktrees/factory";
 const CLONE_URL = "https://github.com/acme/factory.git";
 const HEAD_SHA = "a11ce8f0d2b4c6e8a01234567890123456789012";
 
-/** The healthy standing: one verified checkout, one live workspace, one Agent. */
+/** The healthy standing: one verified checkout, one live workspace, one Agent, and the two herdr-core terminals the dialect's closed surface walks. */
 function healthyWorld(): StubHerdrWorld {
 	return stubHerdrWorld({
 		checkouts: [
@@ -62,6 +62,16 @@ function healthyWorld(): StubHerdrWorld {
 				status: "idle",
 				paneId: "pane-2",
 				sessionId: "/tmp/session-1.jsonl",
+			},
+		],
+		terminals: [
+			{ name: "core-live", cwd: CHECKOUT, labels: { "factory:ticket": "407" } },
+			{
+				name: "core-done",
+				cwd: CHECKOUT,
+				state: "finished",
+				reason: "exit",
+				exitCode: 0,
 			},
 		],
 	} satisfies HerdrWorldDescription);
@@ -134,6 +144,31 @@ function herdrCode(result: { code: number; stderr: string }): string | null {
 		return null;
 	}
 }
+
+/** One terminal row in an `hc ls` answer. */
+interface CoreRow {
+	address?: string;
+	name?: string;
+	state?: string;
+	turn?: number;
+	cwd?: string;
+	agent?: string;
+	reason?: string;
+	signal?: number;
+}
+
+/** The error kind a herdr-core refusal carries, the way the host module reads it. */
+function coreKind(result: { code: number; stderr: string }): string | null {
+	if (result.code === 0) return null;
+	try {
+		return (JSON.parse(result.stderr) as { error?: { kind?: string } }).error?.kind ?? null;
+	} catch {
+		return null;
+	}
+}
+
+/** One herdr-core answer body: the record or row list the plane reads. */
+const coreOf = <T>(stdout: string): T => JSON.parse(stdout) as T;
 
 describe("the checkout side", () => {
 	test("a held checkout verifies with its remote, the way the plane reads it", async () => {
@@ -1277,6 +1312,111 @@ describe("the recording", () => {
 	});
 });
 
+describe("the herdr-core side", () => {
+	test("a run stands the terminal the plane reads, and a second run on its name is refused", async () => {
+		const world = healthyWorld();
+		const created = await world.run("hc", [
+			"run",
+			"--bg",
+			"--outlive-parent",
+			"--no-notify",
+			"--name",
+			"core-new",
+			"--cwd",
+			CHECKOUT,
+			"--",
+			"sleep",
+			"5",
+		]);
+		expect(created.code).toBe(0);
+		expect(coreOf<{ name: string; state: string }>(created.stdout).name).toBe("core-new");
+		const listed = await world.run("hc", ["ls", "--json"]);
+		const rows = coreOf<{ terminals: CoreRow[] }>(listed.stdout).terminals;
+		expect(rows.some((row) => row.name === "core-new" && row.state === "live")).toBe(true);
+		const duplicate = await world.run("hc", [
+			"run",
+			"--bg",
+			"--name",
+			"core-new",
+			"--cwd",
+			CHECKOUT,
+			"--",
+			"sleep",
+			"5",
+		]);
+		expect(duplicate.code).toBe(1);
+		expect(coreKind(duplicate)).toBe("name_taken");
+	});
+
+	test("a send to a finished terminal is refused with the plane's kind", async () => {
+		const world = healthyWorld();
+		const sent = await world.run("hc", ["send", "--json", "core-done", "hello"]);
+		expect(sent.code).toBe(1);
+		expect(coreKind(sent)).toBe("finished");
+	});
+
+	test("a get of a terminal the world does not hold is refused", async () => {
+		const world = healthyWorld();
+		const got = await world.run("hc", ["get", "--json", "core-gone"]);
+		expect(got.code).toBe(1);
+		expect(coreKind(got)).toBe("not_found");
+	});
+
+	test("a remove of a live terminal is refused until it finishes, and the kill finishes it", async () => {
+		const world = healthyWorld();
+		const refused = await world.run("hc", ["rm", "--json", "core-live"]);
+		expect(refused.code).toBe(1);
+		expect(coreKind(refused)).toBe("live");
+		const killed = await world.run("hc", ["kill", "--json", "core-live"]);
+		expect(killed.code).toBe(0);
+		expect(coreOf<{ state: string }>(killed.stdout).state).toBe("finished");
+		const removed = await world.run("hc", ["rm", "--json", "core-live"]);
+		expect(removed.code).toBe(0);
+	});
+
+	test("a wait on a live terminal holds until the terminal finishes", async () => {
+		const world = healthyWorld();
+		const wait = world.run("hc", ["wait", "--json", "core-live"]);
+		await Promise.resolve();
+		expect(world.commands()).toContain("hc wait --json core-live");
+		expect(world.settledCommands()).not.toContain("hc wait --json core-live");
+		world.setTerminalState("core-live", { state: "finished" });
+		const settled = await wait;
+		expect(settled.code).toBe(0);
+		expect(coreOf<{ ended: boolean }>(settled.stdout).ended).toBe(true);
+	});
+
+	test("the terminal record the plane reads stands its state, status, and labels", async () => {
+		const world = healthyWorld();
+		const got = await world.run("hc", ["get", "--json", "core-live"]);
+		expect(got.code).toBe(0);
+		const record = coreOf<{
+			name: string;
+			state: string;
+			status: string | null;
+			cwd: string;
+			labels: Record<string, string>;
+		}>(got.stdout);
+		expect(record.name).toBe("core-live");
+		expect(record.state).toBe("live");
+		expect(record.status).toBeNull();
+		expect(record.cwd).toBe(CHECKOUT);
+		expect(record.labels).toEqual({ "factory:ticket": "407" });
+	});
+
+	test("a finished terminal stands in the list only with the finished side asked for", async () => {
+		const world = healthyWorld();
+		const live = coreOf<{ terminals: CoreRow[] }>(
+			(await world.run("hc", ["ls", "--json"])).stdout,
+		).terminals;
+		expect(live.some((row) => row.name === "core-done")).toBe(false);
+		const all = coreOf<{ terminals: CoreRow[] }>(
+			(await world.run("hc", ["ls", "--json", "--all"])).stdout,
+		).terminals;
+		expect(all.some((row) => row.name === "core-done" && row.state === "finished")).toBe(true);
+	});
+});
+
 describe("the closed surface", () => {
 	test("the real command shapes the plane issues meet no refusal", async () => {
 		const world = healthyWorld();
@@ -1491,6 +1631,33 @@ describe("the closed surface", () => {
 		await settled("git", ["-C", CHECKOUT, "show", "origin/main:docs/agents/issue-tracker.md"]);
 		await settled("git", ["clone", CLONE_URL, "/home/jul/src/factory_2"]);
 
+		// The herdr-core shapes, in the surface the module builds for that
+		// host: the dialect stands in the world from the same standing, the
+		// way it answers herdr and git, even though the plane sends none of
+		// it yet. The kill finishes the live terminal, and the remove takes
+		// the finished one from the standing.
+		await settled("hc", ["ls", "--json", "--all"]);
+		await settled("hc", ["get", "--json", "core-live"]);
+		await settled("hc", ["get", "--json", "core-done"]);
+		await settled("hc", [
+			"run",
+			"--bg",
+			"--outlive-parent",
+			"--no-notify",
+			"--name",
+			"core-new",
+			"--cwd",
+			CHECKOUT,
+			"--",
+			"sleep",
+			"5",
+		]);
+		await settled("hc", ["send", "--json", "core-live", "hello"]);
+		await settled("hc", ["wait", "--json", "core-done"]);
+		await settled("hc", ["wait", "--json", "--timeout", "1", "core-live"]);
+		await settled("hc", ["kill", "--json", "core-live"]);
+		await settled("hc", ["rm", "--json", "core-done"]);
+
 		// The held wait of the herdr walk still holds: its target left the
 		// world without a settle move, the way a vanished Agent holds its
 		// real block.
@@ -1516,5 +1683,8 @@ describe("the closed surface", () => {
 		const unknownGit = await world.run("git", ["-C", CHECKOUT, "log", "--oneline"]);
 		expect(unknownGit.code).toBe(1);
 		expect(unknownGit.stderr).toContain("the Stub herdr world answers no git log");
+		const unknownCore = await world.run("hc", ["server", "status"]);
+		expect(unknownCore.code).toBe(1);
+		expect(unknownCore.stderr).toContain("the Stub herdr world answers no hc server");
 	});
 });

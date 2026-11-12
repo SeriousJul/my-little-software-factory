@@ -22,8 +22,10 @@
  * agent module and every reader of the fact calls it. The Startup grace is read
  * beside it the same way.
  */
+
+import { normalizeAgentStatus } from "../agent-host.ts";
 import type { WorkQueueItem } from "../state/work-queue.ts";
-import { type AgentPoll, agentInPane, normalizeAgentStatus, ticketAgentName } from "./agent.ts";
+import { type AgentPoll, agentInPane, ticketAgentName } from "./agent.ts";
 import { failedStartParkStands } from "./failed-start-park.ts";
 import { nameCollisionStands } from "./name-collision.ts";
 import {

@@ -84,6 +84,28 @@
  * there: it starts under its cycle name, and the leftover environment stays
  * a fact on the ticket for the operator to clear in herdr (ADR 0012, ADR 0032).
  */
+
+import {
+	type AgentHolder,
+	type HostInvocation,
+	herdrAgentPrompt,
+	herdrAgentStart,
+	herdrFailureText,
+	herdrHandles,
+	herdrNameHolders,
+	herdrRefusalFact,
+	herdrTabClose,
+	herdrTabCreate,
+	herdrWorkspaceClose,
+	herdrWorkspaceCreate,
+	herdrWorkspaceList,
+	herdrWorktreeCreate,
+	herdrWorktreeList,
+	herdrWorktreeOpen,
+	herdrWorktreeRemove,
+	jsonResultField,
+	worktreeAlreadyOpen,
+} from "./agent-host.ts";
 import type { FactoryConfig, TicketSourceConfig, TransitionPin } from "./config.ts";
 import type { ConfigWriteReport } from "./config-write.ts";
 import { nameHolderText } from "./domain/name-collision.ts";
@@ -91,7 +113,6 @@ import type { EnvironmentKind, RepositoryRef, Ticket } from "./domain/ticket.ts"
 import { headBranchOf } from "./domain/ticket.ts";
 import { fileExists, movePath, readDirectoryNames } from "./fs.ts";
 import { BYPASS_CONTRIBUTOR_PUSH_HOOK } from "./git-push.ts";
-import { failureLine } from "./lines.ts";
 import {
 	branchNameFor,
 	consultationAgentName,
@@ -234,17 +255,6 @@ interface AgentHandles {
 	tabId: string;
 	workspaceId: string;
 	previousTabId?: string | null;
-}
-
-/**
- * One herdr agent that holds a name: the handles herdr names in its
- * `agent_name_taken` reason.
- */
-export interface AgentHolder {
-	terminalId: string | null;
-	paneId: string | null;
-	workspaceId: string | null;
-	tabId: string | null;
 }
 
 /**
@@ -1361,7 +1371,7 @@ async function readStartWorkspaces(
 	request: HandoffStartRequest,
 	ctx: HandoffContext,
 ): Promise<StartWorkspaceList> {
-	const listed = await ctx.runner.run("herdr", ["workspace", "list"]);
+	const listed = await runInvocation(ctx.runner, herdrWorkspaceList());
 	if (listed.code !== 0) return { ok: false, outcome: failedCommand(listed, ctx) };
 	const list = readWorkspaceList(listed);
 	if (list.status === "unreadable") return { ok: false, outcome: failed(list.reason, ctx) };
@@ -1396,13 +1406,7 @@ async function buildLiveEnvironment(
 	// the checkout lookup below, which finds a workspace or creates one.
 	const atCheckout = await workspaceAtCheckout(listed.workspaces, ctx.checkout);
 	if (atCheckout !== null) return openFreshTab(atCheckout, ctx.checkout, ctx, residue);
-	const created = await ctx.runner.run("herdr", [
-		"workspace",
-		"create",
-		"--cwd",
-		ctx.checkout,
-		"--no-focus",
-	]);
+	const created = await runInvocation(ctx.runner, herdrWorkspaceCreate(ctx.checkout));
 	if (created.code !== 0) return { outcome: failedCommand(created, ctx) };
 	const handles = herdrHandles(created);
 	if (handles.workspaceId === null)
@@ -1448,10 +1452,7 @@ async function openFreshTab(
 	ctx: HandoffContext,
 	residue: Residue,
 ): Promise<EnvironmentAnswer> {
-	const tabArgs = ["tab", "create", "--workspace", workspaceId];
-	if (cwd !== null) tabArgs.push("--cwd", cwd);
-	tabArgs.push("--no-focus");
-	const tab = await ctx.runner.run("herdr", tabArgs);
+	const tab = await runInvocation(ctx.runner, herdrTabCreate(workspaceId, cwd));
 	if (tab.code !== 0) return { outcome: failedCommand(tab, ctx) };
 	const handles = herdrHandles(tab);
 	if (handles.tabId !== null)
@@ -1683,17 +1684,12 @@ async function buildWorktreeEnvironment(
 	const base = await freshWorktreeBase(checkout, ctx.runner);
 	if ("fail" in base) return { outcome: failed(base.fail, ctx) };
 	if (base.note !== undefined) ctx.notes = { ...ctx.notes, worktreeBase: base.note };
-	const created = await createWorktree(ctx, checkout, branch, [
-		"worktree",
-		"create",
-		"--cwd",
+	const created = await createWorktree(
+		ctx,
 		checkout,
-		"--branch",
 		branch,
-		"--base",
-		base.reference,
-		"--no-focus",
-	]);
+		herdrWorktreeCreate(checkout, branch, base.reference),
+	);
 	return createdWorktreeAnswer({ created, ctx, branch, createdBranch: true, residue });
 }
 
@@ -1734,45 +1730,29 @@ async function reuseBranch(
 	residue: Residue,
 ): Promise<EnvironmentAnswer> {
 	const checkout = ctx.checkout;
-	const opened = await ctx.runner.run("herdr", [
-		"worktree",
-		"open",
-		"--cwd",
-		checkout,
-		"--branch",
-		branch,
-		"--no-focus",
-	]);
+	const opened = await runInvocation(ctx.runner, herdrWorktreeOpen(checkout, { branch }));
 	if (opened.code === 0) return startInOpenedWorktree(opened, ctx, residue);
-	if (herdrErrorCode(opened) !== "worktree_not_found")
+	if (herdrRefusalFact(opened) !== "worktree_not_found")
 		return { outcome: failedCommand(opened, ctx) };
 	// No herdr workspace holds the branch. A linked worktree git records is
 	// reopened by path: herdr's own `worktree open` refuses a path it does not
 	// know, and a branch alone does not name the directory.
 	const worktreePath = await findTicketWorktreePath(checkout, branch, ctx);
 	if (worktreePath !== null) {
-		const reopened = await ctx.runner.run("herdr", [
-			"worktree",
-			"open",
-			"--cwd",
-			checkout,
-			"--path",
-			worktreePath,
-			"--no-focus",
-		]);
+		const reopened = await runInvocation(
+			ctx.runner,
+			herdrWorktreeOpen(checkout, { path: worktreePath }),
+		);
 		if (reopened.code === 0) return startInOpenedWorktree(reopened, ctx, residue);
-		if (herdrErrorCode(reopened) !== "worktree_not_found")
+		if (herdrRefusalFact(reopened) !== "worktree_not_found")
 			return { outcome: failedCommand(reopened, ctx) };
 	}
-	const created = await createWorktree(ctx, checkout, branch, [
-		"worktree",
-		"create",
-		"--cwd",
+	const created = await createWorktree(
+		ctx,
 		checkout,
-		"--branch",
 		branch,
-		"--no-focus",
-	]);
+		herdrWorktreeCreate(checkout, branch),
+	);
 	return createdWorktreeAnswer({ created, ctx, branch, createdBranch: false, residue });
 }
 
@@ -1882,9 +1862,9 @@ async function createWorktree(
 	ctx: HandoffContext,
 	checkout: string,
 	branch: string,
-	argv: readonly string[],
+	invocation: HostInvocation,
 ): Promise<CommandResult> {
-	const created = await ctx.runner.run("herdr", argv);
+	const created = await runInvocation(ctx.runner, invocation);
 	if (created.code === 0) {
 		return created;
 	}
@@ -1893,7 +1873,7 @@ async function createWorktree(
 		return created;
 	}
 	ctx.notes = { ...ctx.notes, leftoverWorktree: moved.note };
-	return await ctx.runner.run("herdr", argv);
+	return await runInvocation(ctx.runner, invocation);
 }
 
 /**
@@ -1981,7 +1961,7 @@ async function readTicketWorktreePaths(
 	ctx: HandoffContext,
 ): Promise<TicketWorktreePaths> {
 	const empty: TicketWorktreePaths = { candidate: null, standingPath: null, recorded: false };
-	const listed = await ctx.runner.run("herdr", ["worktree", "list", "--cwd", checkout]);
+	const listed = await runInvocation(ctx.runner, herdrWorktreeList(checkout));
 	if (listed.code !== 0) {
 		return empty;
 	}
@@ -2393,8 +2373,16 @@ async function promptBeforeAgent(
  * stands, and so does a command that raised. The start's own failure is the
  * reason the operator sees, so a cleanup adds no second failure beside it.
  */
-async function cleanupCommand(ctx: HandoffContext, args: readonly string[]): Promise<boolean> {
-	const result = await runQuietly(ctx, args);
+/** Run one host command the module built. The runner is the seam; the argv is the module's. */
+async function runInvocation(
+	runner: CommandRunner,
+	invocation: HostInvocation,
+): Promise<CommandResult> {
+	return runner.run(invocation.command, invocation.args);
+}
+
+async function cleanupCommand(ctx: HandoffContext, invocation: HostInvocation): Promise<boolean> {
+	const result = await runQuietly(ctx, invocation);
 	return result !== null && result.code === 0;
 }
 
@@ -2406,10 +2394,10 @@ async function cleanupCommand(ctx: HandoffContext, args: readonly string[]): Pro
  */
 async function runQuietly(
 	ctx: HandoffContext,
-	args: readonly string[],
+	invocation: HostInvocation,
 ): Promise<CommandResult | null> {
 	try {
-		return await ctx.runner.run("herdr", args);
+		return await runInvocation(ctx.runner, invocation);
 	} catch {
 		return null;
 	}
@@ -2417,17 +2405,17 @@ async function runQuietly(
 
 /** Remove a herdr worktree checkout, best effort. The branch stays. */
 async function removeWorktreeCheckout(workspaceId: string, ctx: HandoffContext): Promise<boolean> {
-	return await cleanupCommand(ctx, ["worktree", "remove", "--workspace", workspaceId]);
+	return await cleanupCommand(ctx, herdrWorktreeRemove(workspaceId));
 }
 
 /** Close a herdr workspace, best effort. Its worktree and branch stay. */
 async function closeWorkspace(workspaceId: string, ctx: HandoffContext): Promise<boolean> {
-	return await cleanupCommand(ctx, ["workspace", "close", workspaceId]);
+	return await cleanupCommand(ctx, herdrWorkspaceClose(workspaceId));
 }
 
 /** Close a herdr tab, best effort. */
 async function closeTab(tabId: string, ctx: HandoffContext): Promise<boolean> {
-	return await cleanupCommand(ctx, ["tab", "close", tabId]);
+	return await cleanupCommand(ctx, herdrTabClose(tabId));
 }
 
 /**
@@ -2507,7 +2495,7 @@ async function sendAgentPrompt(
 	ctx: HandoffContext,
 ): Promise<{ result: CommandResult } | { raised: string }> {
 	try {
-		return { result: await ctx.runner.run("herdr", ["agent", "prompt", name, prompt]) };
+		return { result: await runInvocation(ctx.runner, herdrAgentPrompt(name, prompt)) };
 	} catch (error) {
 		return { raised: errorMessage(error) };
 	}
@@ -2542,9 +2530,10 @@ async function startAgentUnderAvailableName(
 	let nameHeld = false;
 	for (let index = 0; index < candidates.length; index += 1) {
 		const name = candidates[index];
-		const startArgs = ["agent", "start", name, "--kind", agent.kind, "--pane", paneId];
-		if (args.length > 0) startArgs.push("--", ...args);
-		result = await startAgentWhenPaneIsReady(startArgs, ctx.runner);
+		result = await startAgentWhenPaneIsReady(
+			herdrAgentStart(name, agent.kind, paneId, args),
+			ctx.runner,
+		);
 		if (result.code === 0) {
 			return {
 				name,
@@ -2554,7 +2543,7 @@ async function startAgentUnderAvailableName(
 				...collisionFields(collision, ownCollision, name),
 			};
 		}
-		nameHeld = herdrErrorCode(result) === "agent_name_taken";
+		nameHeld = herdrRefusalFact(result) === "agent_name_taken";
 		if (!nameHeld) break;
 		collision = nameCollisionOf(ctx.names, candidates[0], name, result);
 		if (collision.own && ownCollision === undefined) ownCollision = collision;
@@ -2656,31 +2645,6 @@ function ownHolder(names: NamePlan, holders: readonly AgentHolder[]): AgentHolde
 	return holders.find((holder) => holderIsOwn(names, holder)) ?? null;
 }
 
-/**
- * The agents herdr names as the holders of a taken agent name.
- *
- * herdr 0.8.2 writes each candidate into the error message as
- * `terminal_id=.. pane_id=.. workspace_id=.. tab_id=.. cwd=.. status=..`.
- * The identifiers carry no spaces, so the read stops there: a working
- * directory that does is not this reader's problem. A message that names no
- * candidate comes back empty, and the collision is reported without one.
- */
-function herdrNameHolders(result: CommandResult): AgentHolder[] {
-	const text = `${result.stderr}\n${result.stdout}`;
-	const holders: AgentHolder[] = [];
-	for (const match of text.matchAll(
-		/terminal_id=(\S+)\s+pane_id=(\S+)\s+workspace_id=(\S+)\s+tab_id=(\S+)/g,
-	)) {
-		holders.push({
-			terminalId: match[1],
-			paneId: match[2],
-			workspaceId: match[3],
-			tabId: match[4],
-		});
-	}
-	return holders;
-}
-
 /** The outcome of asking herdr for one of a handoff's candidate names. */
 interface AgentStart {
 	/** The name herdr accepted, or null when none of the candidates did. */
@@ -2725,13 +2689,13 @@ function collisionFields(
  * cleanup path.
  */
 async function startAgentWhenPaneIsReady(
-	args: readonly string[],
+	invocation: HostInvocation,
 	runner: CommandRunner,
 ): Promise<CommandResult> {
 	const deadline = Date.now() + AGENT_PANE_BUSY_RETRY_WINDOW_MS;
 	while (true) {
-		const result = await runner.run("herdr", args);
-		if (result.code === 0 || herdrErrorCode(result) !== "agent_pane_busy") return result;
+		const result = await runner.run(invocation.command, invocation.args);
+		if (result.code === 0 || herdrRefusalFact(result) !== "agent_pane_busy") return result;
 		const remaining = deadline - Date.now();
 		if (remaining <= 0) return result;
 		await new Promise<void>((resolve) =>
@@ -2750,8 +2714,8 @@ async function closePreviousTab(
 		return false;
 	// The Agent is already running, so this close answers false on a refusal and
 	// on a raise alike: it never fails the handoff.
-	const closed = await runQuietly(ctx, ["tab", "close", previousTabId]);
-	return closed !== null && (closed.code === 0 || herdrErrorCode(closed) === "tab_not_found");
+	const closed = await runQuietly(ctx, herdrTabClose(previousTabId));
+	return closed !== null && (closed.code === 0 || herdrRefusalFact(closed) === "tab_not_found");
 }
 
 /** The predecessor close resolves only a collision whose holder was in that tab. */
@@ -2857,21 +2821,19 @@ async function closeWorkspaceEnvironment(
 	// The checkout on disk and the herdr workspace behind it: herdr
 	// worktree remove closes the workspace with the checkout and never
 	// deletes the branch, so pushed work and pull requests survive.
-	const removeArgs = ["worktree", "remove", "--workspace", workspaceId];
-	if (force) removeArgs.push("--force");
-	const removed = await runner.run("herdr", removeArgs);
+	const removed = await runInvocation(runner, herdrWorktreeRemove(workspaceId, force));
 	if (removed.code === 0) {
 		// The workspace closed with the checkout: the environment is gone.
 		// A close of a workspace the operator is not viewing leaves herdr's
 		// view alone, so no focus command follows it (ADR 0061).
 		return undefined;
 	}
-	const code = herdrErrorCode(removed);
-	if (code === "workspace_not_found") {
+	const fact = herdrRefusalFact(removed);
+	if (fact === "workspace_not_found") {
 		// The workspace is already gone: there is nothing to clean up.
 		return undefined;
 	}
-	if (code !== "worktree_remove_failed") {
+	if (fact !== "worktree_remove_failed") {
 		// The checkout is still there (for example dirty): leave the
 		// workspace open for the operator and report why the removal failed.
 		return herdrFailureText(removed);
@@ -2886,8 +2848,8 @@ async function closeWorkspaceFallback(
 	runner: CommandRunner,
 	workspaceId: string,
 ): Promise<string | undefined> {
-	const closed = await runner.run("herdr", ["workspace", "close", workspaceId]);
-	if (closed.code === 0 || herdrErrorCode(closed) === "workspace_not_found") return undefined;
+	const closed = await runInvocation(runner, herdrWorkspaceClose(workspaceId));
+	if (closed.code === 0 || herdrRefusalFact(closed) === "workspace_not_found") return undefined;
 	return herdrFailureText(closed);
 }
 
@@ -2899,12 +2861,12 @@ async function closeTabEnvironment(
 	// The tab close keeps the workspace and the tabs beside it, so herdr
 	// leaves the operator's view where it stood: the cleanup sends no
 	// focus command here either, and none follows a workspace close (ADR 0061).
-	const result = await runner.run("herdr", ["tab", "close", tabId]);
+	const result = await runInvocation(runner, herdrTabClose(tabId));
 	if (result.code === 0) {
 		// The tab closed: the environment is gone.
 		return undefined;
 	}
-	if (herdrErrorCode(result) === "tab_not_found") {
+	if (herdrRefusalFact(result) === "tab_not_found") {
 		// The tab is already gone (closed outside herdr): there is
 		// nothing left to clean up.
 		return undefined;
@@ -2940,15 +2902,15 @@ export async function closeStoredEnvironment(
 	runner: CommandRunner,
 ): Promise<string | undefined> {
 	if (handoff.environment === "worktree" && handoff.workspaceId !== null) {
-		const closed = await runner.run("herdr", ["workspace", "close", handoff.workspaceId]);
-		if (closed.code === 0 || herdrErrorCode(closed) === "workspace_not_found") {
+		const closed = await runInvocation(runner, herdrWorkspaceClose(handoff.workspaceId));
+		if (closed.code === 0 || herdrRefusalFact(closed) === "workspace_not_found") {
 			return undefined;
 		}
 		return herdrFailureText(closed);
 	}
 	if (handoff.environment === "live-worktree" && handoff.tabId !== null) {
-		const closed = await runner.run("herdr", ["tab", "close", handoff.tabId]);
-		if (closed.code === 0 || herdrErrorCode(closed) === "tab_not_found") return undefined;
+		const closed = await runInvocation(runner, herdrTabClose(handoff.tabId));
+		if (closed.code === 0 || herdrRefusalFact(closed) === "tab_not_found") return undefined;
 		return herdrFailureText(closed);
 	}
 	return undefined;
@@ -2957,44 +2919,6 @@ export async function closeStoredEnvironment(
 /** A failed herdr call: the ticket stays where the claim left it. */
 function failedCommand(result: CommandResult, ctx: HandoffContext): HandoffOutcome {
 	return failed(herdrFailureText(result), ctx);
-}
-
-/**
- * A failed herdr command as one readable line.
- *
- * herdr writes its CLI errors as one JSON object, and its own message says
- * what the operator can act on. Herdr's error code rides along: it is the
- * stable part of the answer, and a message can change with the herdr
- * version. A failure herdr did not write as JSON keeps its raw line.
- *
- * The message carries another tool's whole answer when herdr only ran it: a
- * refused `worktree create` holds Git's progress line and its refusal. The
- * plane states the line that names the failure, the way it reads a raw
- * failure; the Message line is one row, so the rest never reaches the operator.
- */
-export function herdrFailureText(result: CommandResult): string {
-	const code = herdrErrorCode(result);
-	if (code === null) {
-		return commandFailureText(result);
-	}
-	const message = herdrErrorMessage(result);
-	if (message === "") {
-		return code;
-	}
-	const line = failureLine(message) ?? message.trim();
-	return `${line} (${code})`;
-}
-
-/** The `error.message` of a herdr JSON error, or "" when it carries none. */
-function herdrErrorMessage(result: CommandResult): string {
-	let data: unknown;
-	try {
-		data = JSON.parse(result.stderr);
-	} catch {
-		return "";
-	}
-	const message = (data as { error?: { message?: unknown } }).error?.message;
-	return typeof message === "string" ? message : "";
 }
 
 /** A failed step: the ticket stays where the claim left it. */
@@ -3223,67 +3147,4 @@ async function workspaceAtCheckout(
 			return workspace.workspaceId;
 	}
 	return null;
-}
-
-/**
- * The stable error code a failed herdr call carries, if any. herdr emits
- * its CLI errors as one JSON object on stderr.
- */
-function herdrErrorCode(result: CommandResult): string | null {
-	if (result.code === 0) {
-		return null;
-	}
-	let data: unknown;
-	try {
-		data = JSON.parse(result.stderr);
-	} catch {
-		return null;
-	}
-	const code = (data as { error?: { code?: unknown } }).error?.code;
-	return typeof code === "string" && code !== "" ? code : null;
-}
-
-/** True when a `worktree open` result says a workspace was already open. */
-function worktreeAlreadyOpen(result: CommandResult): boolean {
-	let data: unknown;
-	try {
-		data = JSON.parse(result.stdout);
-	} catch {
-		return false;
-	}
-	return (data as { result?: { already_open?: unknown } }).result?.already_open === true;
-}
-
-/** Read result.<field>.<key> out of a herdr JSON response. */
-function jsonResultField(result: CommandResult, field: string, key: string): string | null {
-	if (result.code !== 0) {
-		return null;
-	}
-	let data: unknown;
-	try {
-		data = JSON.parse(result.stdout);
-	} catch {
-		return null;
-	}
-	const value = (data as { result?: Record<string, Record<string, unknown>> }).result?.[field]?.[
-		key
-	];
-	return typeof value === "string" && value !== "" ? value : null;
-}
-
-/**
- * The handles one herdr create answer names (issue #204): the workspace it made
- * or opened, the root pane of that workspace, and the tab that holds it. One
- * reader serves every start site, so a start cannot read one answer three ways.
- */
-function herdrHandles(result: CommandResult): {
-	workspaceId: string | null;
-	paneId: string | null;
-	tabId: string | null;
-} {
-	return {
-		workspaceId: jsonResultField(result, "workspace", "workspace_id"),
-		paneId: jsonResultField(result, "root_pane", "pane_id"),
-		tabId: jsonResultField(result, "tab", "tab_id"),
-	};
 }

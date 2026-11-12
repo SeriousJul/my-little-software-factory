@@ -34,6 +34,12 @@ import {
 	useRef,
 	useState,
 } from "react";
+import {
+	type AgentStatus,
+	herdrAgentFocus,
+	herdrWorkspaceGet,
+	normalizeAgentStatus,
+} from "../agent-host.ts";
 import { AttentionService } from "../attention.ts";
 import type { FactoryConfig, GitHubAuthentication, TransitionOutcome } from "../config.ts";
 import {
@@ -55,13 +61,7 @@ import {
 	type ConsultationOperations,
 	createConsultationOperations,
 } from "../consultation-operations.ts";
-import {
-	type AgentPoll,
-	type AgentStatus,
-	agentPoll,
-	normalizeAgentStatus,
-	ticketAgentIdentity,
-} from "../domain/agent.ts";
+import { type AgentPoll, agentPoll, ticketAgentIdentity } from "../domain/agent.ts";
 import { type DecisionFacts, decisionFacts } from "../domain/decision-facts.ts";
 import type { GroupingAxis, SplitGroupingAxis } from "../domain/grouping.ts";
 import { nextGroupingAxis } from "../domain/grouping.ts";
@@ -1224,7 +1224,8 @@ type AppQueueOpsStage = ReturnType<typeof useAppQueueOps>;
 function useAppWorkspaceGuides(prev: AppQueueOpsStage) {
 	const { commandRunner, currentBaseMode, messageHistory, setUtility } = prev;
 	const workspaceLabelOf = async (workspaceId: string): Promise<string | null> => {
-		const result = await commandRunner.run("herdr", ["workspace", "get", workspaceId]);
+		const workspaceGetInv = herdrWorkspaceGet(workspaceId);
+		const result = await commandRunner.run(workspaceGetInv.command, workspaceGetInv.args);
 		if (result.code !== 0) return null;
 		try {
 			const data = JSON.parse(result.stdout) as {
@@ -5265,23 +5266,22 @@ function appKeyConsultationStartHandlers(f: AppKeyHandlerFields): Record<string,
 			// as a result, never as a warning. The Goto moves herdr's view
 			// to the Agent's pane (ADR 0061), and the line names the
 			// workspace it landed in.
-			void f.commandRunner
-				.run("herdr", ["agent", "focus", selected.paneId])
-				.then(async (result) => {
-					if (result.code !== 0) {
-						f.setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
-						return;
-					}
-					const workspaceId = selected.workspaceId;
-					const label = workspaceId === null ? null : await f.workspaceLabelOf(workspaceId);
-					f.reportMessage({
-						severity: "info",
-						text:
-							label === null
-								? `focused the Agent pane for Consultation ${selected.id.slice(0, 8)}`
-								: `focused the Agent pane for Consultation ${selected.id.slice(0, 8)} in workspace ${label}`,
-					});
+			const focusInv = herdrAgentFocus(selected.paneId);
+			void f.commandRunner.run(focusInv.command, focusInv.args).then(async (result) => {
+				if (result.code !== 0) {
+					f.setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
+					return;
+				}
+				const workspaceId = selected.workspaceId;
+				const label = workspaceId === null ? null : await f.workspaceLabelOf(workspaceId);
+				f.reportMessage({
+					severity: "info",
+					text:
+						label === null
+							? `focused the Agent pane for Consultation ${selected.id.slice(0, 8)}`
+							: `focused the Agent pane for Consultation ${selected.id.slice(0, 8)} in workspace ${label}`,
 				});
+			});
 		},
 	};
 }
@@ -6332,7 +6332,8 @@ async function appWorkspaceLabelOf(
 	f: AppTicketOpsFields,
 	workspaceId: string,
 ): Promise<string | null> {
-	const result = await f.commandRunner.run("herdr", ["workspace", "get", workspaceId]);
+	const workspaceGetInv = herdrWorkspaceGet(workspaceId);
+	const result = await f.commandRunner.run(workspaceGetInv.command, workspaceGetInv.args);
 	if (result.code !== 0) return null;
 	try {
 		const data = JSON.parse(result.stdout) as {
@@ -6365,7 +6366,8 @@ function appRunGoto(f: AppTicketOpsFields, ticket: Ticket): void {
 		f.setWarningMessage("the pane the handoff recorded is no longer the agent's pane");
 		return;
 	}
-	void f.commandRunner.run("herdr", ["agent", "focus", paneId]).then(async (result) => {
+	const focusInv = herdrAgentFocus(paneId);
+	void f.commandRunner.run(focusInv.command, focusInv.args).then(async (result) => {
 		if (result.code !== 0) {
 			f.setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
 			return;

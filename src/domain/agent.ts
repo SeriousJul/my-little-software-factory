@@ -37,9 +37,6 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
 	return typeof value === "string" && LEVELS.includes(value);
 }
 
-/** What one poll says about an agent's state. */
-export type AgentStatus = "working" | "done" | "idle" | "blocked" | "unknown";
-
 /** One poll's agent list, read by pane: the fact the plane holds. */
 export type AgentPoll = ReadonlyMap<string, HerdrAgent>;
 
@@ -51,16 +48,6 @@ export function agentPoll(agents: readonly HerdrAgent[] | null): AgentPoll | nul
 	const byPane = new Map<string, HerdrAgent>();
 	for (const agent of agents) byPane.set(agent.paneId, agent);
 	return byPane;
-}
-
-/** The status a poll reports, in the plane's own words. */
-export function normalizeAgentStatus(raw: string): AgentStatus {
-	const value = raw.trim().toLowerCase();
-	if (value === "working") return "working";
-	if (value === "done") return "done";
-	if (value === "idle") return "idle";
-	if (value === "blocked") return "blocked";
-	return "unknown";
 }
 
 /**

@@ -81,9 +81,16 @@ describe("the plane sends herdr no workspace focus", () => {
 		// operator's key in the Ticket and Consultation sections, the Decision
 		// screen, and the Live view, and all three cross the one seam in
 		// `src/components/app.ts`. A second file that asks for an Agent focus
-		// aims herdr's view without an operator's key behind it.
+		// aims herdr's view without an operator's key behind it. The Agent host
+		// module in `src/agent-host.ts` (issue #407) builds the argv for that
+		// command and every other it owns, but it sends none of them: it is the
+		// dialect owner, not a surface, so the focus argv it builds is allowed
+		// beside the seam that sends it.
 		const offenders = sources.filter(
-			(file) => AGENT_FOCUS.test(readFileSync(file, "utf8")) && file !== "src/components/app.ts",
+			(file) =>
+				AGENT_FOCUS.test(readFileSync(file, "utf8")) &&
+				file !== "src/components/app.ts" &&
+				file !== "src/agent-host.ts",
 		);
 		expect(offenders).toEqual([]);
 	});
