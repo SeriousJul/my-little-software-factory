@@ -170,7 +170,6 @@ const HERDR_CORE_REFUSALS: Array<[word: string, fact: RefusalFact]> = [
 	["blocked", "terminal_blocked"],
 	["status_mismatch", "other"],
 	["spawn_failed", "other"],
-	["usage", "other"],
 ];
 
 /** One failed herdr answer carrying a refusal code on its JSON stderr. */

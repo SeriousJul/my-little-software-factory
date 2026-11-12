@@ -133,7 +133,6 @@ export const HOST_WORD_TABLE: readonly HostWordRow[] = [
 	{ host: "herdr-core", word: "blocked", fact: "terminal_blocked" },
 	{ host: "herdr-core", word: "status_mismatch", fact: "other" },
 	{ host: "herdr-core", word: "spawn_failed", fact: "other" },
-	{ host: "herdr-core", word: "usage", fact: "other" },
 ];
 
 /**

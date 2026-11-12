@@ -6,11 +6,42 @@
  * reader: the JSON it parses, the code it reads, and the refusal envelope the
  * handoff's `herdrErrorCode` takes. The closed-surface block walks the real
  * command shapes the plane builds against a healthy world and refuses any
- * refusal, the way the Stub world suite pins its own surface, so a shape the
+ * refusal, the way the Stub world suite pins its own surface: the host
+ * dialects leave through the Agent host module's builders, so a shape the
  * plane starts sending and a shape the world never answered both show up here
  * rather than in a fallback.
  */
 import { describe, expect, test } from "bun:test";
+import {
+	type HostInvocation,
+	herdrAgentFocus,
+	herdrAgentList,
+	herdrAgentPrompt,
+	herdrAgentRead,
+	herdrAgentStart,
+	herdrAgentWait,
+	herdrCoreGet,
+	herdrCoreKill,
+	herdrCoreList,
+	herdrCoreRemove,
+	herdrCoreRun,
+	herdrCoreSend,
+	herdrCoreWait,
+	herdrPaneList,
+	herdrPaneSendKeys,
+	herdrPaneSendText,
+	herdrTabClose,
+	herdrTabCreate,
+	herdrTabList,
+	herdrWorkspaceClose,
+	herdrWorkspaceCreate,
+	herdrWorkspaceGet,
+	herdrWorkspaceList,
+	herdrWorktreeCreate,
+	herdrWorktreeList,
+	herdrWorktreeOpen,
+	herdrWorktreeRemove,
+} from "../src/agent-host.ts";
 import { BYPASS_CONTRIBUTOR_PUSH_HOOK } from "../src/git-push.ts";
 import { FakeRunner } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
@@ -1369,7 +1400,19 @@ describe("the herdr-core side", () => {
 		expect(coreKind(refused)).toBe("live");
 		const killed = await world.run("hc", ["kill", "--json", "core-live"]);
 		expect(killed.code).toBe(0);
-		expect(coreOf<{ state: string }>(killed.stdout).state).toBe("finished");
+		// The measured kill of a live program (the Agent host verification):
+		// the record stands the host's kill line, not the finished program's
+		// own settle facts.
+		const record = coreOf<{
+			state: string;
+			reason: string;
+			signal: number;
+			exit_code: number | null;
+		}>(killed.stdout);
+		expect(record.state).toBe("finished");
+		expect(record.reason).toBe("killed");
+		expect(record.signal).toBe(1);
+		expect(record.exit_code).toBeNull();
 		const removed = await world.run("hc", ["rm", "--json", "core-live"]);
 		expect(removed.code).toBe(0);
 	});
@@ -1384,6 +1427,29 @@ describe("the herdr-core side", () => {
 		const settled = await wait;
 		expect(settled.code).toBe(0);
 		expect(coreOf<{ ended: boolean }>(settled.stdout).ended).toBe(true);
+	});
+
+	test("a kill of the wait's terminal releases the held wait with the terminal's settle facts", async () => {
+		const world = healthyWorld();
+		const wait = world.run("hc", ["wait", "--json", "core-live"]);
+		await Promise.resolve();
+		expect(world.settledCommands()).not.toContain("hc wait --json core-live");
+		const killed = await world.run("hc", ["kill", "--json", "core-live"]);
+		expect(killed.code).toBe(0);
+		const settled = await wait;
+		const answer = coreOf<{
+			ended: boolean;
+			reason: string;
+			signal: number;
+			exit_code: number | null;
+		}>(settled.stdout);
+		expect(settled.code).toBe(0);
+		expect(answer.ended).toBe(true);
+		// The wait stands the same settle facts the kill's record stood, the
+		// way the terminal's one standing answers every read of it.
+		expect(answer.reason).toBe("killed");
+		expect(answer.signal).toBe(1);
+		expect(answer.exit_code).toBeNull();
 	});
 
 	test("the terminal record the plane reads stands its state, status, and labels", async () => {
@@ -1471,163 +1537,90 @@ describe("the herdr-core side", () => {
 describe("the closed surface", () => {
 	test("the real command shapes the plane issues meet no refusal", async () => {
 		const world = healthyWorld();
-		const settled = async (command: string, args: readonly string[]): Promise<void> => {
-			const result = await world.run(command, args);
-			expect(result.code, `${command} ${args.join(" ")}`).toBe(0);
-		};
 		const BRANCH = "factory/9-fresh";
+		// The host dialects leave through the module's builders, so the walk
+		// covers the commands the plane really builds, and a builder-and-parser
+		// mismatch the pin tables do not cover turns this walk red.
+		const settledHost = async (invocation: HostInvocation): Promise<void> => {
+			const result = await world.run(invocation.command, invocation.args);
+			expect(result.code, `${invocation.command} ${invocation.args.join(" ")}`).toBe(0);
+		};
+		const settledGit = async (args: readonly string[]): Promise<void> => {
+			const result = await world.run("git", args);
+			expect(result.code, `git ${args.join(" ")}`).toBe(0);
+		};
 
-		// The herdr shapes, in the surface the plane builds.
-		await settled("herdr", ["agent", "list"]);
-		await settled("herdr", [
-			"agent",
-			"wait",
-			"settler-1",
-			"--until",
-			"idle",
-			"--until",
-			"done",
-			"--until",
-			"blocked",
-		]);
-		await settled("herdr", [
-			"agent",
-			"read",
-			"pane-1",
-			"--lines",
-			"50",
-			"--source",
-			"visible",
-			"--format",
-			"ansi",
-		]);
-		await settled("herdr", ["agent", "focus", "pane-1"]);
-		await settled("herdr", ["agent", "prompt", "worker-1", "go"]);
-		await settled("herdr", [
-			"agent",
-			"start",
-			"closed-surface",
-			"--kind",
-			"pi",
-			"--pane",
-			"pane-1",
-		]);
-		await settled("herdr", ["pane", "send-keys", "pane-1", "enter"]);
-		await settled("herdr", ["pane", "send-text", "pane-1", "hello"]);
-		await settled("herdr", ["pane", "list", "--workspace", "ws-1"]);
-		await settled("herdr", [
-			"tab",
-			"create",
-			"--workspace",
-			"ws-1",
-			"--cwd",
-			CHECKOUT,
-			"--no-focus",
-		]);
-		await settled("herdr", ["tab", "list", "--workspace", "ws-1"]);
-		await settled("herdr", ["workspace", "list"]);
-		await settled("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"]);
-		await settled("herdr", ["workspace", "get", "ws-1"]);
-		await settled("herdr", ["worktree", "list", "--cwd", CHECKOUT]);
-		await settled("herdr", [
-			"worktree",
-			"open",
-			"--cwd",
-			CHECKOUT,
-			"--branch",
-			"factory/7-standing",
-			"--no-focus",
-		]);
-		await settled("herdr", [
-			"worktree",
-			"open",
-			"--cwd",
-			CHECKOUT,
-			"--path",
-			`${WORKTREES_ROOT}/factory-7-standing`,
-			"--no-focus",
-		]);
-		await settled("herdr", [
-			"worktree",
-			"create",
-			"--cwd",
-			CHECKOUT,
-			"--branch",
-			BRANCH,
-			"--base",
-			"origin/main",
-			"--no-focus",
-		]);
+		// The herdr shapes: the module's builders, in the surface the plane builds.
+		await settledHost(herdrAgentList());
+		await settledHost(herdrAgentWait("settler-1"));
+		await settledHost(herdrAgentRead("pane-1", 50, "visible", "ansi"));
+		await settledHost(herdrAgentFocus("pane-1"));
+		await settledHost(herdrAgentPrompt("worker-1", "go"));
+		await settledHost(herdrAgentStart("closed-surface", "pi", "pane-1"));
+		await settledHost(herdrPaneSendKeys("pane-1", "enter"));
+		await settledHost(herdrPaneSendText("pane-1", "hello"));
+		await settledHost(herdrPaneList("ws-1"));
+		await settledHost(herdrTabCreate("ws-1", CHECKOUT));
+		await settledHost(herdrTabList("ws-1"));
+		await settledHost(herdrWorkspaceList());
+		await settledHost(herdrWorkspaceCreate(CHECKOUT));
+		await settledHost(herdrWorkspaceGet("ws-1"));
+		await settledHost(herdrWorktreeList(CHECKOUT));
+		await settledHost(herdrWorktreeOpen(CHECKOUT, { branch: "factory/7-standing" }));
+		await settledHost(
+			herdrWorktreeOpen(CHECKOUT, { path: `${WORKTREES_ROOT}/factory-7-standing` }),
+		);
+		await settledHost(herdrWorktreeCreate(CHECKOUT, BRANCH, "origin/main"));
 
 		// The created worktree's workspace answers the remove and the close.
 		const created = resultOf<{ worktrees: WorktreeRow[] }>(
-			(await world.run("herdr", ["worktree", "list", "--cwd", CHECKOUT])).stdout,
+			(await world.run("herdr", herdrWorktreeList(CHECKOUT).args)).stdout,
 		);
 		const fresh = created.worktrees.find(
 			(worktree) => worktree.path === `${WORKTREES_ROOT}/factory-9-fresh`,
 		);
 		expect(fresh).toBeDefined();
 		const workspaceId = fresh?.open_workspace_id as string;
-		await settled("herdr", ["worktree", "remove", "--workspace", workspaceId]);
+		await settledHost(herdrWorktreeRemove(workspaceId));
 
 		// The held `agent wait` is not a refusal: it is recorded, and it does
 		// not settle while the target has not settled, the way the real
 		// command blocks. It walks before the closes, because a close of the
 		// target's pane removes the Agent and the wait holds on.
-		const heldWait = world.run("herdr", [
-			"agent",
-			"wait",
-			"worker-1",
-			"--until",
-			"idle",
-			"--until",
-			"done",
-			"--until",
-			"blocked",
-		]);
+		const heldWaitLine = `herdr ${herdrAgentWait("worker-1").args.join(" ")}`;
+		const heldWait = world.run("herdr", herdrAgentWait("worker-1").args);
 		await Promise.resolve();
-		expect(world.commands()).toContain(
-			"herdr agent wait worker-1 --until idle --until done --until blocked",
-		);
-		expect(world.settledCommands()).not.toContain(
-			"herdr agent wait worker-1 --until idle --until done --until blocked",
-		);
+		expect(world.commands()).toContain(heldWaitLine);
+		expect(world.settledCommands()).not.toContain(heldWaitLine);
 
-		await settled("herdr", ["tab", "close", "tab-1"]);
-		await settled("herdr", ["workspace", "close", "ws-1"]);
+		await settledHost(herdrTabClose("tab-1"));
+		await settledHost(herdrWorkspaceClose("ws-1"));
 
 		// The git shapes, in the surface the plane builds.
-		await settled("git", ["-C", CHECKOUT, "rev-parse", "--git-dir"]);
-		await settled("git", ["-C", CHECKOUT, "remote", "get-url", "origin"]);
-		await settled("git", ["-C", CHECKOUT, "symbolic-ref", "refs/remotes/origin/HEAD"]);
-		await settled("git", [
-			"-C",
-			CHECKOUT,
-			"rev-parse",
-			"--verify",
-			"--quiet",
-			"origin/main^{commit}",
-		]);
-		await settled("git", ["-C", CHECKOUT, "fetch", "origin", "main"]);
-		await settled("git", [
+		await settledGit(["-C", CHECKOUT, "rev-parse", "--git-dir"]);
+		await settledGit(["-C", CHECKOUT, "remote", "get-url", "origin"]);
+		await settledGit(["-C", CHECKOUT, "symbolic-ref", "refs/remotes/origin/HEAD"]);
+		await settledGit(["-C", CHECKOUT, "rev-parse", "--verify", "--quiet", "origin/main^{commit}"]);
+		await settledGit(["-C", CHECKOUT, "fetch", "origin", "main"]);
+		await settledGit([
 			"-C",
 			CHECKOUT,
 			"fetch",
 			"origin",
 			"factory/7-standing:refs/heads/factory/7-standing",
 		]);
-		await settled("git", ["-C", CHECKOUT, "fetch", "origin", "head-branch", "base-branch"]);
-		await settled("git", ["-C", CHECKOUT, "branch", "--list", "main"]);
-		await settled("git", ["-C", CHECKOUT, "rev-parse", "HEAD"]);
-		await settled("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-standing"]);
-		await settled("git", [
+		await settledGit(["-C", CHECKOUT, "fetch", "origin", "head-branch", "base-branch"]);
+		await settledGit(["-C", CHECKOUT, "branch", "--list", "main"]);
+		await settledGit(["-C", CHECKOUT, "rev-parse", "HEAD"]);
+		await settledGit(["-C", CHECKOUT, "branch", "--list", "factory/7-standing"]);
+		await settledGit([
 			"-C",
 			CHECKOUT,
 			"rev-parse",
 			"factory/7-standing",
 			"factory/7-standing^{tree}",
 		]);
-		await settled("git", [
+		await settledGit([
 			"-C",
 			CHECKOUT,
 			"commit-tree",
@@ -1637,8 +1630,8 @@ describe("the closed surface", () => {
 			"-m",
 			"factory: hold the branch for the pull request",
 		]);
-		await settled("git", ["-C", CHECKOUT, "update-ref", "refs/heads/factory/7-standing", HEAD_SHA]);
-		await settled("git", [
+		await settledGit(["-C", CHECKOUT, "update-ref", "refs/heads/factory/7-standing", HEAD_SHA]);
+		await settledGit([
 			"-C",
 			CHECKOUT,
 			"push",
@@ -1646,7 +1639,7 @@ describe("the closed surface", () => {
 			"origin",
 			"factory/7-standing",
 		]);
-		await settled("git", ["-C", CHECKOUT, "ls-remote", "--heads", "origin", "factory/7-standing"]);
+		await settledGit(["-C", CHECKOUT, "ls-remote", "--heads", "origin", "factory/7-standing"]);
 		// The quiet diff is not a refusal: 0 alike and 1 apart both stand.
 		const diffed = await world.run("git", [
 			"-C",
@@ -1657,7 +1650,7 @@ describe("the closed surface", () => {
 			"origin/factory/7-standing",
 		]);
 		expect([0, 1]).toContain(diffed.code);
-		await settled("git", [
+		await settledGit([
 			"-C",
 			CHECKOUT,
 			"worktree",
@@ -1666,11 +1659,11 @@ describe("the closed surface", () => {
 			"/tmp/init-worktree",
 			"origin/main",
 		]);
-		await settled("git", ["-C", "/tmp/init-worktree", "add", "-A"]);
-		await settled("git", ["-C", "/tmp/init-worktree", "status", "--porcelain"]);
-		await settled("git", ["-C", "/tmp/init-worktree", "commit", "-m", "Initialize factory"]);
-		await settled("git", ["-C", "/tmp/init-worktree", "rev-parse", "HEAD"]);
-		await settled("git", [
+		await settledGit(["-C", "/tmp/init-worktree", "add", "-A"]);
+		await settledGit(["-C", "/tmp/init-worktree", "status", "--porcelain"]);
+		await settledGit(["-C", "/tmp/init-worktree", "commit", "-m", "Initialize factory"]);
+		await settledGit(["-C", "/tmp/init-worktree", "rev-parse", "HEAD"]);
+		await settledGit([
 			"-C",
 			"/tmp/init-worktree",
 			"push",
@@ -1678,44 +1671,30 @@ describe("the closed surface", () => {
 			"origin",
 			"HEAD:main",
 		]);
-		await settled("git", ["-C", CHECKOUT, "worktree", "remove", "--force", "/tmp/init-worktree"]);
-		await settled("git", ["-C", CHECKOUT, "show", "origin/main:docs/agents/issue-tracker.md"]);
-		await settled("git", ["clone", CLONE_URL, "/home/jul/src/factory_2"]);
+		await settledGit(["-C", CHECKOUT, "worktree", "remove", "--force", "/tmp/init-worktree"]);
+		await settledGit(["-C", CHECKOUT, "show", "origin/main:docs/agents/issue-tracker.md"]);
+		await settledGit(["clone", CLONE_URL, "/home/jul/src/factory_2"]);
 
-		// The herdr-core shapes, in the surface the module builds for that
-		// host: the dialect stands in the world from the same standing, the
-		// way it answers herdr and git, even though the plane sends none of
-		// it yet. The kill finishes the live terminal, and the remove takes
-		// the finished one from the standing.
-		await settled("hc", ["ls", "--json", "--all"]);
-		await settled("hc", ["ls", "--json", "--label", "factory:ticket=407"]);
-		await settled("hc", ["get", "--json", "core-live"]);
-		await settled("hc", ["get", "--json", "core-done"]);
-		await settled("hc", [
-			"run",
-			"--bg",
-			"--outlive-parent",
-			"--no-notify",
-			"--name",
-			"core-new",
-			"--cwd",
-			CHECKOUT,
-			"--",
-			"sleep",
-			"5",
-		]);
-		await settled("hc", ["send", "--json", "core-live", "hello"]);
-		await settled("hc", ["wait", "--json", "core-done"]);
-		await settled("hc", ["wait", "--json", "--timeout", "1", "core-live"]);
-		await settled("hc", ["kill", "--json", "core-live"]);
-		await settled("hc", ["rm", "--json", "core-done"]);
+		// The herdr-core shapes: the module's builders for that host. The
+		// dialect stands in the world from the same standing, the way it
+		// answers herdr and git, even though the plane sends none of it yet.
+		// The kill finishes the live terminal, and the remove takes the
+		// finished one from the standing.
+		await settledHost(herdrCoreList({ all: true }));
+		await settledHost(herdrCoreList({ labels: ["factory:ticket=407"] }));
+		await settledHost(herdrCoreGet("core-live"));
+		await settledHost(herdrCoreGet("core-done"));
+		await settledHost(herdrCoreRun({ name: "core-new", cwd: CHECKOUT, argv: ["sleep", "5"] }));
+		await settledHost(herdrCoreSend("core-live", "hello"));
+		await settledHost(herdrCoreWait("core-done"));
+		await settledHost(herdrCoreWait("core-live", 1));
+		await settledHost(herdrCoreKill("core-live"));
+		await settledHost(herdrCoreRemove("core-done"));
 
 		// The held wait of the herdr walk still holds: its target left the
 		// world without a settle move, the way a vanished Agent holds its
 		// real block.
-		expect(world.settledCommands()).not.toContain(
-			"herdr agent wait worker-1 --until idle --until done --until blocked",
-		);
+		expect(world.settledCommands()).not.toContain(heldWaitLine);
 		void heldWait;
 	});
 

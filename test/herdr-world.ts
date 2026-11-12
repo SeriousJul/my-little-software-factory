@@ -1775,7 +1775,10 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 					children: [],
 					ended: true,
 					exit_code: terminal.exitCode,
-					reason: "exit",
+					// The terminal's own settle facts: a program that ended stands
+					// the recorded `reason: "exit"` line, and a program the plane
+					// killed stands the kill's `reason` and `signal`.
+					reason: terminal.reason ?? "exit",
 					signal: terminal.signal ?? null,
 					status: terminal.status,
 					terminal: terminal.address,
@@ -1810,7 +1813,7 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 						children: [],
 						ended: true,
 						exit_code: terminal.exitCode,
-						reason: "exit",
+						reason: terminal.reason ?? "exit",
 						signal: terminal.signal ?? null,
 						status: terminal.status,
 						terminal: terminal.address,
@@ -1860,13 +1863,14 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 			return hcError("not_found", `no terminal "${reference}"`, "see `hc ls --all`");
 		if (terminal.state === "live") {
 			terminal.state = "finished";
-			// The recorded kill line (the Agent host verification) stands
-			// `reason: "exited"` with `exit_code: 0`: the probe's program had
-			// finished before its kill ran, so the answer of a kill of a live
-			// program was not measured, and the world stands the recorded line
-			// for it.
-			terminal.reason = "exited";
-			terminal.exitCode = 0;
+			// The measured kill of a live program (the Agent host verification,
+			// the scratch session against hc 0.1.20): the record stands
+			// `reason: "killed"` with `signal: 1` and `exit_code: null`, beside
+			// the recorded kill line, which stands the finished program's own
+			// `reason: "exited"` and `exit_code: 0`.
+			terminal.reason = "killed";
+			terminal.signal = 1;
+			terminal.exitCode = null;
 			terminal.status = null;
 			releaseHeldCoreWaits(terminal.address);
 		}
