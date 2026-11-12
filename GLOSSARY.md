@@ -692,6 +692,18 @@ It blocks a fresh worktree for that Branch, and it is no tool's to remove: the c
 It is not a Leftover environment, which is a workspace, tab, or Agent Herdr still holds.
 _Avoid_: stale checkout, orphaned worktree, ghost directory
 
+**Agent host**:
+The program that runs an Agent's terminal and holds that Agent's facts while it runs. The plane knows two: herdr, whose Agent stands in a pane inside a tab and a workspace, and herdr-core, whose Agent stands in a named, labelled terminal. An Agent's host is a fact of the Handoff that started it, never of the run (ADR 0141, ADR 0142).
+_Avoid_: backend, runtime, driver, provider, server
+
+**Host resolution**:
+The rule that answers which Agent host one start runs on: the operator's config first, then the environment mark (a non-empty `HERDR_ENV` names herdr, a non-empty `HC_TERMINAL_ID` names herdr-core), then the default. One start resolves once, and the run states the host it resolved beside the fact that resolved it.
+_Avoid_: auto-detect, host detection, fallback host
+
+**Adoption label**:
+The Herdr space and tab labels the plane copies onto a herdr-core terminal it starts, taken from the plane's own terminal when that terminal carries them, so the Herdr desktop shows the Agent exactly as it shows a terminal it started itself. A terminal without them stays out of the desktop's screens, and the plane writes them only when its own terminal has them (ADR 0141).
+_Avoid_: herdr integration, takeover, adoption mode
+
 **herdr view**:
 What one herdr client shows: the workspace that client is looking at, in its own window.
 Each client keeps its own view, and a view persists while the workspace it shows exists. A focus request that arrives from outside a client (a CLI command, an Agent, the control plane) moves every attached client's view, never one client's alone: herdr has no command that aims a view at a single client. The control plane never moves a view on its own (ADR 0061); the one move it makes is the Goto, at the operator's key. The surviving exception is herdr's own: when the workspace a client is viewing stops existing, that client falls back to the session focus.

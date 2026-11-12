@@ -149,3 +149,7 @@ body states the context, the decision, and the consequences.
 - [ADR 0138: The suite entry stands under a spin watch](./0138-the-suite-entry-stands-under-a-spin-watch.md)
 - [ADR 0139: The plane reports its own face to herdr](./0139-the-plane-reports-its-own-face-to-herdr.md)
 - [ADR 0140: The plane's periodic pane reads take the visible screen](./0140-the-planes-periodic-pane-reads-take-the-visible-screen.md)
+- [ADR 0141: The plane resolves its Agent host: herdr, or herdr-core](./0141-the-plane-resolves-its-agent-host-herdr-or-herdr-core.md)
+- [ADR 0142: One run holds Agents on both hosts, and the host stands on the Handoff](./0142-one-run-holds-agents-on-both-hosts-and-the-host-stands-on-the-handoff.md)
+- [ADR 0143: On the herdr-core host the plane owns the worktree lifecycle](./0143-on-the-herdr-core-host-the-plane-owns-the-worktree-lifecycle.md)
+- [ADR 0144: On the herdr-core host the plane derives the Agent session record path](./0144-on-the-herdr-core-host-the-plane-derives-the-agent-session-record-path.md)
