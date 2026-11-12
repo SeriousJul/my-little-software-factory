@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs
 import os from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
-
+import type { AgentHost } from "./agent-host.ts";
 import {
 	ConfigMigrationError,
 	hasOldWorkflowMachineKeys,
@@ -12,7 +12,6 @@ import {
 } from "./config-migration.ts";
 import { isThinkingLevel, type ThinkingLevel, thinkingLevelList } from "./domain/agent.ts";
 import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
-import type { AgentHost } from "./agent-host.ts";
 import { fileExists } from "./fs.ts";
 import { firstNonEmptyLine } from "./lines.ts";
 import type { LogLevel } from "./logging.ts";

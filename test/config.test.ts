@@ -1902,7 +1902,10 @@ describe("agent-host config keys (issue #408, ADR 0141)", () => {
 	});
 
 	test("an unknown key beside the table refuses boot", () => {
-		expectConfigError({ ...base(), "agent-host": { herdr: {} } }, 'agent-host: unknown key "herdr"');
+		expectConfigError(
+			{ ...base(), "agent-host": { herdr: {} } },
+			'agent-host: unknown key "herdr"',
+		);
 		expectConfigError(
 			{ ...base(), "agent-host": { "herdr-core": { shell: "zsh" } } },
 			'agent-host.herdr-core: unknown key "shell"',

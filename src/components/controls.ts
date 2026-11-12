@@ -14,8 +14,9 @@
  * only aliases that mode dispatches, and they are what its hints and guide
  * rows may name.
  */
-import type { GroupingAxis } from "../domain/grouping.ts";
+
 import type { AgentHostResolution } from "../agent-host.ts";
+import type { GroupingAxis } from "../domain/grouping.ts";
 import type { Ticket, TicketListFilter, TicketMarker } from "../domain/ticket.ts";
 import { ignoreRefusal, nextTicketListFilter, obligationOf } from "../domain/ticket.ts";
 import { inFlight } from "../domain/ticket-facts.ts";

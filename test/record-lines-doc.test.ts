@@ -17,8 +17,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	agentHostBootLine,
-	herdrCoreFloorWarningLine,
 	HERDR_CORE_VERSION_FLOOR,
+	herdrCoreFloorWarningLine,
 } from "../src/agent-host.ts";
 import {
 	checkoutHoldDropLine,

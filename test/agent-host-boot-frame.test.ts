@@ -17,7 +17,7 @@ import { describe, expect, test } from "bun:test";
 
 import { agentHostBootLine } from "../src/agent-host.ts";
 import { messageRowOf, pressControl, settle, waitSourceHealthy, withApp } from "./app-harness.ts";
-import { FakeSource } from "./fake-source.ts";
+import type { FakeSource } from "./fake-source.ts";
 import { callsReached, plane } from "./plane.ts";
 
 const WIDTH = 140;

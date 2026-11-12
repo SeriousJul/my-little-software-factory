@@ -588,8 +588,11 @@ describe("the Agent host the boot resolves (issue #408, ADR 0141)", () => {
 	 * inside the table the header opens.
 	 */
 	function pinnedBody(statePath: string, pin: string): string {
-		return configBody(statePath).replace("[agents.pi]", `agent-host = "${pin}"
-[agents.pi]`);
+		return configBody(statePath).replace(
+			"[agents.pi]",
+			`agent-host = "${pin}"
+[agents.pi]`,
+		);
 	}
 
 	/**
@@ -673,7 +676,7 @@ describe("the Agent host the boot resolves (issue #408, ADR 0141)", () => {
 		// The operator's binary names a host older than the floor: a script
 		// that answers the version read, so the case runs on any machine.
 		const fakeHc = dir("fake-hc");
-		writeFileSync(fakeHc, "#!/bin/sh\necho \"hc 0.1.9\"\n", "utf8");
+		writeFileSync(fakeHc, '#!/bin/sh\necho "hc 0.1.9"\n', "utf8");
 		chmodSync(fakeHc, 0o755);
 		const configPath = dir("config.toml");
 		writeFileSync(

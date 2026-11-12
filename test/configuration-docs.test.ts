@@ -75,10 +75,7 @@ function simpleTableKeys(
  * way the reference names it: `agent-host` holds the pinned host and its
  * connection, and the herdr-core connection stands under its own heading.
  */
-function agentHostKeys(
-	add: (group: string, key: string) => void,
-	value: unknown,
-): boolean {
+function agentHostKeys(add: (group: string, key: string) => void, value: unknown): boolean {
 	if (!isPlainTable(value)) return false;
 	for (const [host, hostTable] of Object.entries(value)) {
 		if (!isPlainTable(hostTable)) continue;

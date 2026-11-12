@@ -35,12 +35,12 @@ import {
 	useState,
 } from "react";
 import {
+	type AgentHostResolution,
+	type AgentStatus,
 	agentHostBootLine,
 	herdrAgentFocus,
 	herdrWorkspaceGet,
 	normalizeAgentStatus,
-	type AgentStatus,
-	type AgentHostResolution,
 } from "../agent-host.ts";
 import { AttentionService } from "../attention.ts";
 import type { FactoryConfig, GitHubAuthentication, TransitionOutcome } from "../config.ts";

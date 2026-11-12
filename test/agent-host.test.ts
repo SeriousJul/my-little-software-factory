@@ -185,11 +185,13 @@ describe("the herdr-core version floor (ADR 0141)", () => {
 		expect(herdrCoreVersionOf({ code: 0, stdout: "hc 0.1.20\n", stderr: "" })).toBe("0.1.20");
 		// A tool manager's preamble stands above the answer's line: the read
 		// takes the first line that carries a version, not the first line.
-		expect(
-			herdrCoreVersionOf({ code: 0, stdout: "some manager\nhc 0.1.20\n", stderr: "" }),
-		).toBe("0.1.20");
+		expect(herdrCoreVersionOf({ code: 0, stdout: "some manager\nhc 0.1.20\n", stderr: "" })).toBe(
+			"0.1.20",
+		);
 		// A failed command and an answer that names no version carry none.
-		expect(herdrCoreVersionOf({ code: 127, stdout: "hc 0.1.20\n", stderr: "not found" })).toBeNull();
+		expect(
+			herdrCoreVersionOf({ code: 127, stdout: "hc 0.1.20\n", stderr: "not found" }),
+		).toBeNull();
 		expect(herdrCoreVersionOf({ code: 0, stdout: "", stderr: "" })).toBeNull();
 		expect(herdrCoreVersionOf({ code: 0, stdout: "no number here\n", stderr: "" })).toBeNull();
 	});
@@ -209,7 +211,7 @@ describe("the herdr-core version floor (ADR 0141)", () => {
 		expect(herdrCoreFloorWarningLine("0.1.9")).toBe(
 			`the herdr-core host is 0.1.9, below the plane's version floor ${HERDR_CORE_VERSION_FLOOR}: ` +
 				"the plane's answer shapes were read on the floor, and a shape that host refuses comes back as that host's own reason",
-			);
+		);
 	});
 });
 

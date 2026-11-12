@@ -46,9 +46,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-import type { AppProps } from "../src/components/app.ts";
 import { resolveAgentHost } from "../src/agent-host.ts";
+import type { AppProps } from "../src/components/app.ts";
 import {
 	configToToml,
 	type FactoryConfig,
@@ -1177,13 +1176,13 @@ export async function plane(standing: PlaneStanding = {}): Promise<Plane> {
 			runner,
 			home,
 			configPath,
-		sources,
-		logger: NOOP_LOGGER,
-		agentHostResolution: resolveAgentHost(config.agentHost, {
-			herdrEnv: standing.agentHostEnv?.herdrEnv,
-			hcTerminalId: standing.agentHostEnv?.hcTerminalId,
-		}),
-		loopPolicy:
+			sources,
+			logger: NOOP_LOGGER,
+			agentHostResolution: resolveAgentHost(config.agentHost, {
+				herdrEnv: standing.agentHostEnv?.herdrEnv,
+				hcTerminalId: standing.agentHostEnv?.hcTerminalId,
+			}),
+			loopPolicy:
 				standing.pollIntervalMs === undefined
 					? { kind: "held" }
 					: { kind: "polled", intervalMs: standing.pollIntervalMs },
