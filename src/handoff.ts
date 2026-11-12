@@ -87,9 +87,19 @@
 
 import {
 	type AgentHolder,
+	type AgentHost,
+	type AgentHostResolution,
+	agentHostReachable,
+	agentHostUnreachableLine,
 	type HostInvocation,
 	herdrAgentPrompt,
 	herdrAgentStart,
+	herdrCoreFailureText,
+	herdrCoreKill,
+	herdrCoreRefusalFact,
+	herdrCoreRemove,
+	herdrCoreRun,
+	herdrCoreSend,
 	herdrFailureText,
 	herdrHandles,
 	herdrNameHolders,
@@ -163,6 +173,13 @@ export interface HandoffChoice {
 	agentType: string;
 	environment: EnvironmentKind;
 	taskType: string;
+	/**
+	 * The Agent host the start runs on (issue #409, ADR 0142): every start
+	 * runs on one of the plane's two hosts, and the choice carries the host
+	 * so a Restart repeats the recorded host instead of the host the config
+	 * names now.
+	 */
+	host: AgentHost;
 	/** The model, in the `provider/model` form the agent takes; empty leaves the setting to the agent. */
 	model: string;
 	/** The Thinking level of the standard set; empty leaves the level to the agent.
@@ -186,19 +203,32 @@ export interface HandoffChoice {
  * passes the previous handoff's model, thinking, and context window through,
  * unchanged.
  */
+/**
+ * The one host and settings record a start's choice stands on: the host the
+ * start runs, and the settings the Agent takes when the profile leaves them
+ * set.
+ */
+export interface ChoiceFacts {
+	host: AgentHost;
+	model?: string;
+	thinking?: string;
+	contextWindow?: string;
+}
+
 export function baseChoice(
 	agentType: string,
 	environment: EnvironmentKind,
 	taskType: string,
-	settings?: { model?: string; thinking?: string; contextWindow?: string },
+	facts: ChoiceFacts,
 ): HandoffChoice {
 	return {
 		agentType,
 		environment,
 		taskType,
-		model: settings?.model ?? "",
-		thinking: settings?.thinking ?? "",
-		contextWindow: settings?.contextWindow ?? "",
+		host: facts.host,
+		model: facts.model ?? "",
+		thinking: facts.thinking ?? "",
+		contextWindow: facts.contextWindow ?? "",
 	};
 }
 
@@ -209,6 +239,11 @@ export function baseChoice(
  * independently. An operator override changes this returned choice later,
  * before the handoff starts.
  *
+ * The host is never resolved here: a start's host is either the host the run
+ * resolved at boot (every automatic route) or the host one start recorded
+ * (a Restart, whatever the config names now), and the caller states which
+ * (issue #409, ADR 0142).
+ *
  * A resolved value never disappears here. When the resolved agent cannot map a
  * Model, Thinking level, or context window, the one pre-flight (`checkStart`)
  * fails the handoff with that reason instead of starting without it (ADR 0009).
@@ -216,17 +251,18 @@ export function baseChoice(
 export function resolveHandoffChoice(
 	config: FactoryConfig,
 	taskType: string,
+	host: AgentHost,
 	pin?: TransitionPin,
 ): HandoffChoice {
 	// The setting chains live in one module (ADR 0009); this wrapper only
 	// shapes their result as the handoff's complete choice.
 	const settings = resolveSettings({ config, taskType, edgeAgent: pin?.agent });
-	return baseChoice(
-		settings.agentType,
-		resolveEnvironment(config, pin?.environment),
-		taskType,
-		settings,
-	);
+	return baseChoice(settings.agentType, resolveEnvironment(config, pin?.environment), taskType, {
+		host,
+		model: settings.model,
+		thinking: settings.thinking,
+		contextWindow: settings.contextWindow,
+	});
 }
 
 /**
@@ -458,6 +494,11 @@ export function handoffReportLines(facts: {
  */
 export interface TicketHandoffOptions {
 	config: FactoryConfig;
+	/**
+	 * The host the run resolved at boot (issue #409): the start's pre-flight
+	 * refuses a host the run cannot reach before any external step.
+	 */
+	agentHost: AgentHostResolution;
 	runner: CommandRunner;
 	home: string;
 	/** Records durable progress after the claim and before external work. */
@@ -497,6 +538,15 @@ interface HandoffContext {
 	runner: CommandRunner;
 	/** The checkout the start resolved to: every git step and cleanup runs in it. */
 	checkout: string;
+	/**
+	 * The Agent host this start runs on (issue #409): the host's dialect is the
+	 * start's own, whatever the run resolved. A herdr-core start works in the
+	 * checkout through the terminal the host names, and a herdr start through
+	 * the panes and workspaces herdr holds.
+	 */
+	host: AgentHost;
+	/** The home directory the start's ~/src convention and worktree path rule read. */
+	home: string;
 	onStage?: (stage: string) => void;
 	/** The caller's resource table, or null on a start that records nothing. */
 	resources: StartResources | null;
@@ -544,6 +594,8 @@ export interface StartFacts {
 	environment: EnvironmentKind;
 	/** The Task type a Ticket start runs. A Consultation start names none. */
 	taskType?: string;
+	/** The Agent host the start runs on (issue #409). */
+	host: AgentHost;
 	model: string;
 	thinking: string;
 	contextWindow: string;
@@ -586,7 +638,14 @@ export async function checkStart(
 	facts: StartFacts,
 	config: FactoryConfig,
 	runner: CommandRunner,
+	runHost: AgentHostResolution,
 ): Promise<StartCheck> {
+	// The host the start names stands beside the run's host: a host the run
+	// cannot reach refuses before any other check, so a start that cannot run
+	// answers with the host's own line and the plane never spends a command on
+	// a dialect it cannot run (issue #409, ADR 0141).
+	if (!agentHostReachable(runHost, facts.host))
+		return { ok: false, reason: agentHostUnreachableLine(facts.host) };
 	const agent = config.agents[facts.agentType];
 	if (agent === undefined) return { ok: false, reason: `unknown agent type: ${facts.agentType}` };
 	if (facts.environment === "container")
@@ -634,7 +693,17 @@ async function settingFitFailure(
 export async function handOffTicket(
 	ticket: Ticket,
 	choice: HandoffChoice,
-	{ config, runner, home, onStage, names, claim, previous, previousMessage }: TicketHandoffOptions,
+	{
+		config,
+		agentHost,
+		runner,
+		home,
+		onStage,
+		names,
+		claim,
+		previous,
+		previousMessage,
+	}: TicketHandoffOptions,
 ): Promise<HandoffOutcome> {
 	if (claim === "open" && ticket.state !== "open") {
 		return {
@@ -642,7 +711,7 @@ export async function handOffTicket(
 			reason: `only open tickets can be handed off (this one is ${ticket.state})`,
 		};
 	}
-	const check = await checkStart(choiceFacts(choice), config, runner);
+	const check = await checkStart(choiceFacts(choice), config, runner, agentHost);
 	if (!check.ok) return { status: "failed", reason: check.reason };
 	// A Ticket start always names a Task type, so a choice that names none has no
 	// prompt to render. The refusal for a Task type record that holds no template
@@ -703,6 +772,7 @@ function choiceFacts(choice: HandoffChoice): StartFacts {
 		agentType: choice.agentType,
 		environment: choice.environment,
 		taskType: choice.taskType === "" ? undefined : choice.taskType,
+		host: choice.host,
 		model: choice.model,
 		thinking: choice.thinking,
 		contextWindow: choice.contextWindow,
@@ -720,6 +790,7 @@ export function consultationStartFacts(consultation: Consultation): StartFacts {
 	return {
 		agentType: consultation.agentType,
 		environment: consultation.environment,
+		host: consultation.host,
 		model: consultation.model,
 		thinking: consultation.thinking,
 		contextWindow: consultation.contextWindow,
@@ -815,6 +886,11 @@ async function ticketPrompt(fields: {
  */
 export interface ConsultationHandoffOptions {
 	config: FactoryConfig;
+	/**
+	 * The host the run resolved at boot (issue #409): the start's pre-flight
+	 * refuses a host the run cannot reach before any external step.
+	 */
+	agentHost: AgentHostResolution;
 	runner: CommandRunner;
 	home: string;
 	consultation: Consultation;
@@ -859,6 +935,7 @@ export function renderConsultationPrompt(template: string, input: string): strin
 export async function handOffConsultation({
 	consultation,
 	config,
+	agentHost,
 	runner,
 	home,
 	onStage,
@@ -870,11 +947,16 @@ export async function handOffConsultation({
 	startCheck,
 }: ConsultationHandoffOptions): Promise<HandoffOutcome> {
 	const check =
-		startCheck ?? (await checkStart(consultationStartFacts(consultation), config, runner));
+		startCheck ??
+		(await checkStart(consultationStartFacts(consultation), config, runner, agentHost));
 	if (!check.ok) return { status: "failed", reason: check.reason };
 	const name = consultation.agentName || consultationAgentName(consultation.id);
 	return runHandoffStart({
+		// The host the record carries is the host the start runs on (issue #409):
+		// the launch route took the host the operator picked, and the record kept
+		// it beside the handles it stands on.
 		choice: baseChoice(consultation.agentType, consultation.environment, "", {
+			host: consultation.host,
 			model: consultation.model,
 			thinking: consultation.thinking,
 			contextWindow: consultation.contextWindow,
@@ -977,8 +1059,10 @@ interface StartResourceLabels {
 	worktreeWorkspace: string;
 	/** The worktree checkout this start created, beside the branch it stands on. */
 	worktreeCheckout: string;
-	/** The tab holding the worktree workspace this start created. */
+	/** The worktree tab this start created. */
 	worktreeTab: string;
+	/** The herdr-core terminal this start created for its Agent (issue #409). */
+	terminal: string;
 }
 
 /**
@@ -1005,6 +1089,7 @@ const CONSULTATION_RESOURCE_LABELS: StartResourceLabels = {
 	worktreeWorkspace: "Consultation worktree workspace",
 	worktreeCheckout: "Consultation worktree checkout",
 	worktreeTab: "Consultation worktree tab",
+	terminal: "Consultation terminal",
 };
 
 /** What one handoff start is asked to do. */
@@ -1062,7 +1147,7 @@ interface HandoffStartRequest {
  * kinds and leave the recorded row standing in silence (pull request #213
  * review).
  */
-export type ResourceKind = "tab" | "workspace" | "worktree";
+export type ResourceKind = "tab" | "workspace" | "worktree" | "terminal";
 
 /**
  * One handle this start created: the kind its caller's resource table records it
@@ -1127,7 +1212,9 @@ const NO_RESIDUE: Residue = {
  * it stands in the start's own residue record, so a build that ends in the
  * middle still leaves what it made on the record.
  */
-type EnvironmentAnswer = { handles: AgentHandles } | { outcome: HandoffOutcome };
+type EnvironmentAnswer =
+	| { handles: AgentHandles; cwd?: string; workspaceId?: string }
+	| { outcome: HandoffOutcome };
 
 /**
  * The one handoff start (issue #204, ADR 0097).
@@ -1172,6 +1259,8 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 	const ctx: HandoffContext = {
 		runner: request.runner,
 		checkout,
+		host: request.choice.host,
+		home: request.home,
 		onStage: request.onStage,
 		resources: request.resources ?? null,
 		onAgentStarted: request.onAgentStarted,
@@ -1291,6 +1380,10 @@ async function runStartSteps(fields: {
 		prompt: pre.text,
 		ctx,
 		handles: { ...environment.handles, previousTabId: request.previousTabId },
+		// The directory the herdr-core terminal stands in (issue #409): absent
+		// on a herdr start, where the pane the Agent starts in names its place.
+		cwd: environment.cwd,
+		workspaceId: environment.workspaceId,
 		progress,
 	});
 }
@@ -1339,17 +1432,253 @@ function raisedDuringStart(
 }
 
 /**
- * The Environment the choice names, built through herdr. What it creates is
- * written into the start's residue record as it is created.
+ * The Environment the choice names, built on the host the start runs on
+ * (issue #409): on the herdr host through herdr's workspaces, tabs, and
+ * worktrees; on the herdr-core host the checkout is the environment - the
+ * terminal stands in it - and the worktree the plane creates with git in
+ * herdr's own directory (ADR 0143). What it creates is written into the
+ * start's residue record as it is created.
  */
 async function buildEnvironment(
 	request: HandoffStartRequest,
 	ctx: HandoffContext,
 	residue: Residue,
 ): Promise<EnvironmentAnswer> {
+	if (ctx.host === "herdr-core") {
+		return request.choice.environment === "worktree"
+			? buildCoreWorktreeEnvironment(request, ctx, residue)
+			: buildCoreLiveEnvironment(ctx);
+	}
 	if (request.choice.environment === "worktree")
 		return buildWorktreeEnvironment(request, ctx, residue);
 	return buildLiveEnvironment(request, ctx, residue);
+}
+
+/**
+ * The live worktree on the herdr-core host (issue #409, ADR 0143): the
+ * terminal stands in the checkout, so the environment the start needs is the
+ * checkout itself, and no host command is asked for it. The Agent starts in
+ * the terminal the start names, at the checkout's path, and the terminal's
+ * name is the handle the handoff records beside its host.
+ */
+async function buildCoreLiveEnvironment(ctx: HandoffContext): Promise<EnvironmentAnswer> {
+	ctx.onStage?.("creating-environment");
+	return {
+		handles: { paneId: "", tabId: "", workspaceId: "" },
+		cwd: ctx.checkout,
+	};
+}
+
+/**
+ * The worktree Environment on the herdr-core host (issue #409, ADR 0143):
+ * the plane runs git itself for the worktree and the branch it stands on.
+ *
+ * The checkout stands in herdr's own worktrees directory, named by herdr's
+ * rule - the branch with each slash for a hyphen, beside the repository's
+ * other worktrees - so a Ticket whose first Handoff ran on herdr and whose
+ * next runs on herdr-core reopens the same checkout on the same branch. Git
+ * is the record: a checkout git still records is reopened where it stands,
+ * a stale record is pruned and the checkout rebuilt, and a directory the
+ * record no longer holds is moved aside by the plane's leftover rule, the
+ * way it is on the herdr host.
+ *
+ * The branch sequence reads the same as the herdr host's: a branch that
+ * stands in the checkout is opened on its worktree under its policy, a
+ * standing remote copy is fetched and opened, and only a branch neither copy
+ * carries is created from the worktree base.
+ */
+async function buildCoreWorktreeEnvironment(
+	request: HandoffStartRequest,
+	ctx: HandoffContext,
+	residue: Residue,
+): Promise<EnvironmentAnswer> {
+	const branch = request.branch.name;
+	const checkout = ctx.checkout;
+	ctx.onStage?.("creating-environment");
+	const known = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", branch]);
+	if (known.code !== 0)
+		return {
+			outcome: failed(`cannot check branch in ${checkout}: ${commandFailureText(known)}`, ctx),
+		};
+	if (known.stdout.trim() !== "") {
+		if (request.branch.policy === "refuse")
+			return { outcome: failed(`Consultation branch already exists: ${branch}`, ctx) };
+		return openCoreWorktreeOnBranch(ctx, branch, residue, false);
+	}
+	// The remote copy may stand, the way it does on the herdr host (issue
+	// #296): a failed start leaves the branch on the remote under its draft,
+	// and a fresh clone carries no local copy. The standing remote copy is
+	// fetched and opened, so the branch is never built twice.
+	if (request.branch.policy === "reuse" && (await remoteBranchStands(checkout, branch, ctx))) {
+		const fetched = await ctx.runner.run(
+			"git",
+			["-C", checkout, "fetch", "origin", `${branch}:refs/heads/${branch}`],
+			{ env: { GIT_TERMINAL_PROMPT: "0" } },
+		);
+		if (fetched.code !== 0)
+			return {
+				outcome: failed(
+					`the standing remote branch ${branch} could not be fetched: ${commandFailureText(fetched)}`,
+					ctx,
+				),
+			};
+		return openCoreWorktreeOnBranch(ctx, branch, residue, false);
+	}
+	const base = await freshWorktreeBase(checkout, ctx.runner);
+	if ("fail" in base) return { outcome: failed(base.fail, ctx) };
+	if (base.note !== undefined) ctx.notes = { ...ctx.notes, worktreeBase: base.note };
+	const created = await createCoreWorktree(ctx, checkout, branch, base.reference);
+	return createdCoreWorktreeAnswer({ created, ctx, branch, createdBranch: true, residue });
+}
+
+/**
+ * Open the worktree the branch stands on, on the host that runs git itself.
+ *
+ * A checkout git still records at the path the naming rule gives the branch
+ * stands: the start works in it, and the branch it holds pre-dates the start,
+ * so the cleanup never removes the branch. No checkout stands - or git holds
+ * only a stale record of one - and the plane creates the checkout, pruning
+ * the stale record first when git holds one.
+ */
+async function openCoreWorktreeOnBranch(
+	ctx: HandoffContext,
+	branch: string,
+	residue: Residue,
+	createdBranch: boolean,
+): Promise<EnvironmentAnswer> {
+	const checkout = ctx.checkout;
+	const paths = await readCoreWorktreePaths(checkout, branch, ctx);
+	if (paths.standingPath !== null) {
+		return {
+			handles: { paneId: "", tabId: "", workspaceId: paths.standingPath },
+			cwd: paths.standingPath,
+			workspaceId: paths.standingPath,
+		};
+	}
+	if (paths.recorded) {
+		// The record holds a path git no longer sees on disk: the record is
+		// stale, and git's own prune clears it before the create runs.
+		await runQuietly(ctx, { command: "git", args: ["-C", checkout, "worktree", "prune"] });
+	}
+	const created = await createCoreWorktree(ctx, checkout, branch, undefined);
+	return createdCoreWorktreeAnswer({ created, ctx, branch, createdBranch, residue });
+}
+
+/**
+ * The path herdr's rule gives one branch's worktree (ADR 0143): under
+ * `<home>/.herdr/worktrees/`, in the directory named for the repository, the
+ * branch with each slash for a hyphen. The plane states the rule on the host
+ * that runs git itself, and the rule is the contract that keeps one Ticket on
+ * one checkout across a host switch.
+ */
+function coreWorktreePath(ctx: HandoffContext, branch: string): string {
+	const parts = ctx.checkout.split("/");
+	const repoName = parts[parts.length - 1] ?? ctx.checkout;
+	return `${ctx.home}/.herdr/worktrees/${repoName}/${branch.replaceAll("/", "-")}`;
+}
+
+/**
+ * One `git worktree add`, and the recoveries a blocked checkout allows.
+ *
+ * `base` is the reference a fresh branch starts from, and its absence names
+ * a branch that already stands. A refusal the naming rule can name - the
+ * leftover directory at the branch's own path - is answered by the plane's
+ * move-aside, the way the herdr host answers it, and the create is asked
+ * again. Every other refusal is the host's own line for the start to report.
+ */
+async function createCoreWorktree(
+	ctx: HandoffContext,
+	checkout: string,
+	branch: string,
+	base: string | undefined,
+): Promise<CommandResult> {
+	const path = coreWorktreePath(ctx, branch);
+	const args =
+		base === undefined
+			? ["-C", checkout, "worktree", "add", path, branch]
+			: ["-C", checkout, "worktree", "add", path, "-b", branch, base];
+	const created = await runInvocation(ctx.runner, { command: "git", args });
+	if (created.code === 0) return created;
+	const moved = await moveLeftoverWorktreeDirectory(checkout, branch, ctx, readCoreWorktreePaths);
+	if (moved === null) return created;
+	ctx.notes = { ...ctx.notes, leftoverWorktree: moved.note };
+	return await runInvocation(ctx.runner, { command: "git", args });
+}
+
+/**
+ * The answer a `git worktree add` gives: the checkout's path, and the branch
+ * this start created, when it created one.
+ */
+function createdCoreWorktreeAnswer(fields: {
+	created: CommandResult;
+	ctx: HandoffContext;
+	branch: string;
+	createdBranch: boolean;
+	residue: Residue;
+}): EnvironmentAnswer {
+	const { created, ctx, branch, createdBranch, residue } = fields;
+	if (created.code !== 0)
+		return {
+			outcome: failed(
+				`git worktree create failed: ${commandFailureText(created)}; check for a leftover ${createdBranch ? `branch ${branch}` : `worktree on branch ${branch}`}`,
+				ctx,
+			),
+		};
+	const path = coreWorktreePath(ctx, branch);
+	residue.worktree = recordResource(
+		ctx,
+		"worktree",
+		path,
+		(labels) => `${labels.worktreeCheckout} for ${branch}`,
+	);
+	// Only a branch this start made enters the record: a branch the repository
+	// already carried pre-dates the attempt and never goes.
+	residue.branch = createdBranch ? branch : null;
+	return {
+		handles: { paneId: "", tabId: "", workspaceId: path },
+		cwd: path,
+		workspaceId: path,
+	};
+}
+
+/**
+ * What git's own record answers about one branch's worktree path (issue #409,
+ * ADR 0143). The naming rule gives one path, and git's record answers the
+ * three facts the rule needs: the path itself, whether a worktree git does
+ * not prune stands there, and whether git holds any record of it at all.
+ *
+ * The record is the source of truth on this host, because git holds the
+ * worktrees of both hosts: a checkout herdr made and one the plane made are
+ * entries in the same list. A list that does not read answers nothing: every
+ * fact stays empty, and the caller neither reopens a path it cannot name nor
+ * moves a directory it cannot place.
+ */
+async function readCoreWorktreePaths(
+	checkout: string,
+	branch: string,
+	ctx: HandoffContext,
+): Promise<TicketWorktreePaths> {
+	const candidate = coreWorktreePath(ctx, branch);
+	const empty: TicketWorktreePaths = { candidate, standingPath: null, recorded: false };
+	const listed = await runQuietly(ctx, {
+		command: "git",
+		args: ["-C", checkout, "worktree", "list", "--porcelain"],
+	});
+	if (listed === null || listed.code !== 0) return empty;
+	// The porcelain list holds one block per worktree, separated by blank
+	// lines: the `worktree:` path, the branch, and the flags `prunable` and
+	// `locked`. The candidate's block answers the three facts at once.
+	const blocks = listed.stdout.split("\n\n");
+	for (const block of blocks) {
+		if (!block.startsWith(`worktree:${candidate}\n`)) continue;
+		const prunable = block.includes("\nprunable\n") || block.endsWith("\nprunable");
+		return {
+			candidate,
+			standingPath: prunable ? null : candidate,
+			recorded: true,
+		};
+	}
+	return empty;
 }
 
 /**
@@ -1498,8 +1827,36 @@ function recordResource(
  * the operator's Close has to be able to reach it.
  */
 async function removeResidue(ctx: HandoffContext, residue: Residue): Promise<void> {
+	if (ctx.host === "herdr-core") {
+		await removeCoreResidue(ctx, residue);
+		return;
+	}
 	await removeResidueTab(ctx, residue);
 	await removeResidueCheckout(ctx, residue);
+	await removeResidueBranch(ctx, residue);
+}
+
+/**
+ * The residue of a herdr-core start, removed the way the host holds it
+ * (issue #409, ADR 0143): the checkout the start created goes down with git,
+ * and the branch the start created with it goes down beside it.
+ *
+ * The start's terminal is not in the record: it stands behind the Agent the
+ * start runs, and a started Agent is never rolled back, so the only residue
+ * the record can hold for it is a checkout with no Agent in it. A checkout
+ * git refuses - a dirty worktree, the way herdr's remove refuses one - leaves
+ * its row unconfirmed, and the operator's Close reaches it.
+ */
+async function removeCoreResidue(ctx: HandoffContext, residue: Residue): Promise<void> {
+	if (residue.worktree !== null) {
+		const removed = await runQuietly(ctx, {
+			command: "git",
+			args: ["-C", ctx.checkout, "worktree", "remove", residue.worktree.resourceId],
+		});
+		if (removed !== null && removed.code === 0) {
+			confirmRemoved(ctx, residue.worktree);
+		}
+	}
 	await removeResidueBranch(ctx, residue);
 }
 
@@ -1842,8 +2199,16 @@ async function findTicketWorktreePath(
 	return paths.standingPath;
 }
 
+/** One read of the worktree path facts, on whichever host records them. */
+type WorktreePathsReader = (
+	checkout: string,
+	branch: string,
+	ctx: HandoffContext,
+) => Promise<TicketWorktreePaths>;
+
 /**
- * One `herdr worktree create`, and the one recovery a blocked path allows.
+ * One `herdr worktree create` (or, on the host that runs git itself, one `git
+ * worktree add`), and the one recovery a blocked path allows.
  *
  * git refuses to check a branch out over a directory that holds anything, and
  * that is how a ticket can stop for good: the checkout herdr made for the
@@ -1868,7 +2233,7 @@ async function createWorktree(
 	if (created.code === 0) {
 		return created;
 	}
-	const moved = await moveLeftoverWorktreeDirectory(checkout, branch, ctx);
+	const moved = await moveLeftoverWorktreeDirectory(checkout, branch, ctx, readTicketWorktreePaths);
 	if (moved === null) {
 		return created;
 	}
@@ -1906,8 +2271,9 @@ async function moveLeftoverWorktreeDirectory(
 	checkout: string,
 	branch: string,
 	ctx: HandoffContext,
+	readPaths: WorktreePathsReader,
 ): Promise<{ readonly from: string; readonly to: string; readonly note: string } | null> {
-	const paths = await readTicketWorktreePaths(checkout, branch, ctx);
+	const paths = await readPaths(checkout, branch, ctx);
 	const from = paths.candidate;
 	if (from === null || paths.recorded) {
 		return null;
@@ -2436,9 +2802,16 @@ async function startAgentAndPrompt(fields: {
 	prompt: string;
 	ctx: HandoffContext;
 	handles: AgentHandles;
+	/** The directory the herdr-core terminal stands in, on a herdr-core start. */
+	cwd?: string;
+	/** The handle the started Agent records as its workspace, when the start names one. */
+	workspaceId?: string;
 	progress: StartProgress;
 }): Promise<HandoffOutcome> {
 	const { agent, args, prompt, ctx, handles, progress } = fields;
+	if (ctx.host === "herdr-core") {
+		return startCoreAgentAndPrompt(fields);
+	}
 	const attempt = await startAgentUnderAvailableName(agent, args, handles.paneId, ctx);
 	if (attempt.name === null) {
 		return failedNameUnusable(attempt, ctx);
@@ -2480,6 +2853,197 @@ async function startAgentAndPrompt(fields: {
 		notes: ctx.notes,
 		...collisions,
 	};
+}
+
+/**
+ * The herdr-core half of the Agent start and prompt (issue #409): the start
+ * names the terminal the Agent stands in, the host runs the Agent's program
+ * at the checkout's path, and the prompt goes to the terminal by name.
+ *
+ * The terminal is the handle: every record the handoff keeps of the Agent's
+ * place reads the terminal name, the way the herdr record reads the pane and
+ * tab it holds (ADR 0141). The host reports no session record, so none is
+ * recorded (ADR 0144): the terminal name is the identity the run keeps for
+ * the Agent it started.
+ */
+async function startCoreAgentAndPrompt(fields: {
+	agent: FactoryConfig["agents"][string];
+	args: string[];
+	prompt: string;
+	ctx: HandoffContext;
+	handles: AgentHandles;
+	/** The directory the terminal stands in, from the environment the start built. */
+	cwd?: string;
+	/** The handle the started Agent records as its workspace, when the start names one. */
+	workspaceId?: string;
+	progress: StartProgress;
+}): Promise<HandoffOutcome> {
+	const { agent, args, prompt, ctx, handles, progress } = fields;
+	const cwd = fields.cwd ?? ctx.checkout;
+	const attempt = await startCoreAgentUnderAvailableName(agent, args, cwd, ctx);
+	if (attempt.name === null) {
+		return failedNameUnusable(attempt, ctx);
+	}
+	const name = attempt.name;
+	// The terminal is running: record its handles before the next external
+	// command, the way the herdr half records the Agent's pane and tab. From
+	// here the ticket is handed-off even if the prompt fails, and the terminal
+	// goes on the progress so a command that raises from here on answers as the
+	// failed prompt it is instead of rolling the world out from under a live
+	// Agent.
+	const startedAgent: StartedAgent = {
+		name,
+		paneId: name,
+		tabId: name,
+		workspaceId: fields.workspaceId ?? name,
+	};
+	progress.agent = startedAgent;
+	ctx.onAgentStarted?.(startedAgent);
+	// The terminal this start created enters the record beside the Agent it
+	// stands in, so a failure behind it - and the handoff's Close - reach the
+	// handle the start made.
+	if (ctx.resources !== null) {
+		ctx.resources.record("terminal", name, true, ctx.resources.labels.terminal);
+	}
+	ctx.onStage?.("sending-prompt");
+	const sent = await sendCoreAgentPrompt(name, prompt, ctx);
+	const previousClosed = await closePreviousCoreTerminal(handles.previousTabId, name, ctx);
+	const collisions = collisionsAfterPreviousTabClose(
+		attempt,
+		handles.previousTabId,
+		previousClosed,
+	);
+	if ("result" in sent && sent.result.code === 0)
+		return { status: "ok", agent: startedAgent, notes: ctx.notes, ...collisions };
+	return {
+		status: "prompt-failed",
+		reason: `agent ${name} started, but the prompt failed: ${
+			"result" in sent ? herdrCoreFailureText(sent.result) : sent.raised
+		}`,
+		agent: startedAgent,
+		notes: ctx.notes,
+		...collisions,
+	};
+}
+
+/**
+ * Start an Agent terminal on the herdr-core host, one candidate name at a
+ * time (issue #409).
+ *
+ * The stable name is the ticket's own, and a live terminal a closed cycle
+ * left behind still holds it: the host answers the start with its own
+ * `name_taken` refusal. When the holder is a terminal this ticket's own
+ * handoffs recorded, the handoff takes its next candidate name rather than
+ * failing: the leftover terminal is the ticket's, so starting beside it is
+ * what the operator asked for (ADR 0012). A name another ticket's terminal
+ * holds is not this handoff's to take, and the collision comes back as the
+ * failure it is.
+ *
+ * Unlike herdr's Agent start, a core terminal is ready when its start
+ * answers: the host holds the terminal at its prompt, and there is no busy
+ * pane window to retry. A refusal that is not a held name is the host's own
+ * answer, and the start stops there.
+ */
+async function startCoreAgentUnderAvailableName(
+	agent: FactoryConfig["agents"][string],
+	args: string[],
+	cwd: string,
+	ctx: HandoffContext,
+): Promise<AgentStart> {
+	const candidates = ctx.names.candidates;
+	ctx.onStage?.("starting-agent");
+	let collision: NameCollision | undefined;
+	let ownCollision: NameCollision | undefined;
+	let result: CommandResult = { code: 0, stdout: "", stderr: "" };
+	let nameHeld = false;
+	for (let index = 0; index < candidates.length; index += 1) {
+		const name = candidates[index];
+		result = await runInvocation(
+			ctx.runner,
+			herdrCoreRun({ name, cwd, argv: [agent.kind, ...args] }),
+		);
+		if (result.code === 0) {
+			return {
+				name,
+				result,
+				nameHeld: false,
+				...collisionFields(collision, ownCollision, name),
+			};
+		}
+		nameHeld = herdrCoreRefusalFact(result) === "agent_name_taken";
+		if (!nameHeld) break;
+		collision = coreNameCollisionOf(ctx.names, candidates[0], name, result);
+		if (collision.own && ownCollision === undefined) ownCollision = collision;
+		if (!collision.own || index + 1 === candidates.length) break;
+	}
+	return { name: null, result, nameHeld, ...collisionFields(collision, ownCollision) };
+}
+
+/**
+ * The collision one refused terminal name stands (issue #409): on this host
+ * the holder of a live name is a terminal, and the terminal's name is the
+ * handle the operator acts on to clear it. A handle this ticket's own
+ * handoffs recorded settles the own fact, the way the herdr host's holders do.
+ */
+function coreNameCollisionOf(
+	names: NamePlan,
+	stableName: string,
+	name: string,
+	result: CommandResult,
+): NameCollision {
+	const holder: AgentHolder = { terminalId: name, paneId: name, tabId: name, workspaceId: name };
+	const own = nameIsOwnLeftover(names, [holder]);
+	return {
+		stableName,
+		// The refusal is about the name just asked for, and that is the name the
+		// holder holds - not necessarily the stable name the search started on.
+		heldName: name,
+		startedAs: null,
+		holder,
+		own,
+		reason: herdrCoreFailureText(result),
+	};
+}
+
+/**
+ * Send the prompt to the terminal, and answer with the host's reply or the
+ * raise's message. A raise is read as the failed prompt it is: the terminal
+ * already runs, and a started Agent is never rolled back.
+ */
+async function sendCoreAgentPrompt(
+	name: string,
+	prompt: string,
+	ctx: HandoffContext,
+): Promise<{ result: CommandResult } | { raised: string }> {
+	try {
+		return { result: await runInvocation(ctx.runner, herdrCoreSend(name, prompt)) };
+	} catch (error) {
+		return { raised: errorMessage(error) };
+	}
+}
+
+/**
+ * Take the previous handoff's terminal down, on the host that holds terminals
+ * (issue #409): its program goes first, then the record the terminal stands
+ * on. Best effort, the way the herdr host's close of the predecessor tab is:
+ * the Agent is already running, so a terminal the host no longer holds answers
+ * the close, and a refusal stands beside the handoff it does not fail.
+ */
+async function closePreviousCoreTerminal(
+	previousTerminal: string | null | undefined,
+	newName: string,
+	ctx: HandoffContext,
+): Promise<boolean> {
+	if (previousTerminal === null || previousTerminal === undefined || previousTerminal === newName)
+		return false;
+	const killed = await runQuietly(ctx, herdrCoreKill(previousTerminal));
+	const killGone =
+		killed === null || killed.code === 0 || herdrCoreRefusalFact(killed) === "terminal_not_found";
+	if (!killGone) return false;
+	const removed = await runQuietly(ctx, herdrCoreRemove(previousTerminal));
+	return (
+		removed === null || removed.code === 0 || herdrCoreRefusalFact(removed) === "terminal_not_found"
+	);
 }
 
 /**
@@ -2582,11 +3146,16 @@ function nameCollisionOf(
 
 /**
  * The reason a handoff cannot start: the name that blocked it when a name
- * did, and otherwise herdr's own answer to the last attempt.
+ * did, and otherwise the host's own answer to the last attempt.
+ *
+ * The host's word names the object the name stands on: a herdr name beside
+ * the pane that holds it, a terminal name beside the terminal that holds it
+ * (issue #409).
  *
  * A collision with the ticket's own leftover names the ticket's own action:
- * ending it in herdr. A collision with a stranger names the stranger:
- * herdr's handles, so the operator can find the pane.
+ * ending it on the host it stands on. A collision with a stranger names the
+ * stranger: the host's handles, so the operator can find the pane or the
+ * terminal.
  *
  * When a later candidate failed for another reason (a pane that stayed busy
  * past the retry window, for example), that failure is the fact the operator
@@ -2599,15 +3168,20 @@ function failedNameUnusable(attempt: AgentStart, ctx: HandoffContext): HandoffOu
 	if (collision === undefined || !attempt.nameHeld) {
 		return {
 			status: "failed",
-			reason: herdrFailureText(attempt.result),
+			reason:
+				ctx.host === "herdr-core"
+					? herdrCoreFailureText(attempt.result)
+					: herdrFailureText(attempt.result),
 			notes: ctx.notes,
 			...collisionFields(collision, attempt.ownCollision),
 		};
 	}
+	const nameWord = ctx.host === "herdr-core" ? "terminal name" : "herdr name";
+	const hostWord = ctx.host === "herdr-core" ? "herdr-core host" : "herdr";
 	const holder = nameHolderText(collision.holder);
 	const reason = collision.own
-		? `this ticket's own leftover agent still holds the herdr name ${collision.heldName} (${holder}); end its leftover environment in herdr, then hand off again: ${collision.reason}`
-		: `the herdr name ${collision.heldName} is held by ${holder}, which is no agent of ${ctx.names.owner}: ${collision.reason}`;
+		? `this ticket's own leftover agent still holds the ${nameWord} ${collision.heldName} (${holder}); end its leftover environment in ${hostWord}, then hand off again: ${collision.reason}`
+		: `the ${nameWord} ${collision.heldName} is held by ${holder}, which is no agent of ${ctx.names.owner}: ${collision.reason}`;
 	return {
 		status: "failed",
 		reason,
@@ -2780,13 +3354,33 @@ export interface CloseCleanupOptions {
 export type CleanupReach =
 	| { scope: "workspace"; workspaceId: string }
 	| { scope: "tab"; tabId: string }
+	| {
+			scope: "terminal";
+			terminalId: string;
+			workspaceId: string | null;
+			environment: EnvironmentKind;
+	  }
 	| { scope: "none" };
 
 export function closeCleanupReach(handoff: {
 	environment: EnvironmentKind;
 	tabId: string | null;
 	workspaceId: string | null;
+	host?: AgentHost;
 }): CleanupReach {
+	if (handoff.host === "herdr-core") {
+		// The terminal the handoff recorded is the environment (issue #409):
+		// its name is the tab handle, and a worktree handoff's workspace handle
+		// is the checkout path the terminal stood in.
+		if (handoff.tabId !== null)
+			return {
+				scope: "terminal",
+				terminalId: handoff.tabId,
+				workspaceId: handoff.workspaceId,
+				environment: handoff.environment,
+			};
+		return { scope: "none" };
+	}
 	if (handoff.environment === "worktree" && handoff.workspaceId !== null) {
 		return { scope: "workspace", workspaceId: handoff.workspaceId };
 	}
@@ -2797,7 +3391,12 @@ export function closeCleanupReach(handoff: {
 }
 
 export async function closeHandoffEnvironment(
-	handoff: { environment: EnvironmentKind; tabId: string | null; workspaceId: string | null },
+	handoff: {
+		environment: EnvironmentKind;
+		tabId: string | null;
+		workspaceId: string | null;
+		host?: AgentHost;
+	},
 	runner: CommandRunner,
 	options: CloseCleanupOptions = {},
 ): Promise<string | undefined> {
@@ -2809,6 +3408,13 @@ export async function closeHandoffEnvironment(
 	if (reach.scope === "workspace")
 		return closeWorkspaceEnvironment(runner, reach.workspaceId, force);
 	if (reach.scope === "tab") return closeTabEnvironment(runner, reach.tabId);
+	if (reach.scope === "terminal")
+		return closeCoreTerminalEnvironment(runner, {
+			terminalId: reach.terminalId,
+			workspaceId: reach.workspaceId,
+			environment: reach.environment,
+			force,
+		});
 	return undefined;
 }
 
@@ -2875,6 +3481,53 @@ async function closeTabEnvironment(
 }
 
 /**
+ * The close of a handoff on the herdr-core host (issue #409, ADR 0143): the
+ * terminal goes down - its program, then its record - and a worktree
+ * handoff's checkout goes down beside it with git, which the plane runs on
+ * this host. The branch is never touched: pushed work and pull requests
+ * survive, the way herdr's close of the workspace behind its checkout keeps
+ * them.
+ *
+ * A terminal the host no longer holds answers the close, and a checkout git
+ * refuses - a dirty worktree - stands beside its refusal: the row stays in the
+ * record, and the operator reaches the checkout the close could not take down.
+ */
+async function closeCoreTerminalEnvironment(
+	runner: CommandRunner,
+	fields: {
+		terminalId: string;
+		workspaceId: string | null;
+		environment: EnvironmentKind;
+		force: boolean;
+	},
+): Promise<string | undefined> {
+	const killed = await runInvocation(runner, herdrCoreKill(fields.terminalId));
+	const killGone = killed.code === 0 || herdrCoreRefusalFact(killed) === "terminal_not_found";
+	if (!killGone) return herdrCoreFailureText(killed);
+	const removed = await runInvocation(runner, herdrCoreRemove(fields.terminalId));
+	if (removed.code !== 0 && herdrCoreRefusalFact(removed) !== "terminal_not_found") {
+		return herdrCoreFailureText(removed);
+	}
+	// The live environment's checkout is the operator's own: the terminal was
+	// all that stood behind the handoff, and it is gone.
+	if (fields.environment !== "worktree" || fields.workspaceId === null) return undefined;
+	// The worktree checkout goes down with its terminal. The checkout is the
+	// terminal's own directory, so git runs in it, and the branch it holds
+	// never goes.
+	const args = ["-C", fields.workspaceId, "worktree", "remove", fields.workspaceId];
+	if (fields.force) args.push("--force");
+	const checkoutGone = await runInvocation(runner, { command: "git", args });
+	if (checkoutGone.code === 0) return undefined;
+	// A checkout git no longer records stands the way herdr's workspace stands
+	// beside a gone checkout: the terminal already went, and nothing more is
+	// to take down.
+	if ((checkoutGone.stdout + checkoutGone.stderr).includes("not a working tree")) {
+		return undefined;
+	}
+	return commandFailureText(checkoutGone);
+}
+
+/**
  * The close the decision screen's route asks for: the previous handoff's
  * environment goes, and the handoff that follows builds its own beside it.
  *
@@ -2898,9 +3551,29 @@ async function closeTabEnvironment(
  * is not viewing leaves that client's view alone.
  */
 export async function closeStoredEnvironment(
-	handoff: { environment: EnvironmentKind; tabId: string | null; workspaceId: string | null },
+	handoff: {
+		environment: EnvironmentKind;
+		tabId: string | null;
+		workspaceId: string | null;
+		host?: AgentHost;
+	},
 	runner: CommandRunner,
 ): Promise<string | undefined> {
+	if (handoff.host === "herdr-core") {
+		// The previous handoff's terminal goes, and nothing else: a worktree
+		// handoff's checkout stands on disk beside its branch, the way the
+		// herdr rule keeps the checkout and branch behind the workspace it
+		// loses, and the handoff that follows reopens the checkout in its own
+		// terminal.
+		if (handoff.tabId !== null)
+			return closeCoreTerminalEnvironment(runner, {
+				terminalId: handoff.tabId,
+				workspaceId: null,
+				environment: handoff.environment,
+				force: false,
+			});
+		return undefined;
+	}
 	if (handoff.environment === "worktree" && handoff.workspaceId !== null) {
 		const closed = await runInvocation(runner, herdrWorkspaceClose(handoff.workspaceId));
 		if (closed.code === 0 || herdrRefusalFact(closed) === "workspace_not_found") {

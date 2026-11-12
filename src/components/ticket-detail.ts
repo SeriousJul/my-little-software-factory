@@ -71,7 +71,7 @@ export interface DetailContent {
  */
 type DetailChoice = Pick<
 	HandoffChoice,
-	"agentType" | "environment" | "model" | "thinking" | "contextWindow"
+	"agentType" | "host" | "environment" | "model" | "thinking" | "contextWindow"
 >;
 
 /**
@@ -296,6 +296,12 @@ function detailLeftFacts(fields: {
 	};
 	addLeft(`Agent: ${choice?.agentType ?? "unassigned"}`, paint("text"));
 	if (choice !== undefined) {
+		// The host the handoff runs on stands beside the Agent (issue #409),
+		// the way the override panel orders its rows: who runs it, on which
+		// host, where it runs, then what it runs with. The panel's host row
+		// edits this same fact, so the detail states the value a confirmed
+		// start records.
+		addLeft(`Agent host: ${choice.host}`, paint("text"));
 		// The Environment rides beside the Agent, the way the override panel
 		// orders its rows: where a Handoff runs, then what it runs with. The
 		// same choice carries it, so an open Ticket shows the Environment Enter

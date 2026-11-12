@@ -197,17 +197,18 @@ describe("task profile configuration", () => {
 
 describe("resolveHandoffChoice", () => {
 	test("resolves each setting from its own chain", () => {
-		expect(resolveHandoffChoice(config, "implement")).toEqual({
+		expect(resolveHandoffChoice(config, "implement", "herdr")).toEqual({
 			agentType: "codex",
 			environment: "live-worktree",
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "task-model",
 			thinking: "high",
 			contextWindow: "",
 		});
 
 		expect(
-			resolveHandoffChoice(config, "implement", {
+			resolveHandoffChoice(config, "implement", "herdr", {
 				agent: "claude",
 				environment: "worktree",
 			}),
@@ -215,24 +216,27 @@ describe("resolveHandoffChoice", () => {
 			agentType: "claude",
 			environment: "worktree",
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "task-model",
 			thinking: "high",
 			contextWindow: "",
 		});
 
-		expect(resolveHandoffChoice(config, "review")).toEqual({
+		expect(resolveHandoffChoice(config, "review", "herdr")).toEqual({
 			agentType: "claude",
 			environment: "live-worktree",
 			taskType: "review",
+			host: "herdr" as const,
 			model: "factory-default",
 			thinking: "",
 			contextWindow: "",
 		});
 
-		expect(resolveHandoffChoice(config, "fix")).toEqual({
+		expect(resolveHandoffChoice(config, "fix", "herdr")).toEqual({
 			agentType: "pi",
 			environment: "live-worktree",
 			taskType: "fix",
+			host: "herdr" as const,
 			model: "factory-default",
 			thinking: "",
 			contextWindow: "",
@@ -254,14 +258,14 @@ describe("resolveHandoffChoice", () => {
 				implement: { ...config.taskTypes.implement, contextWindow: "272000" },
 			},
 		};
-		expect(resolveHandoffChoice(profiled, "implement").contextWindow).toBe("272000");
+		expect(resolveHandoffChoice(profiled, "implement", "herdr").contextWindow).toBe("272000");
 		// A transition pin reroutes the handoff onto another agent; it pins no
 		// context window, so the profile's value still resolves and reaches
 		// that agent, or fails the handoff there.
-		expect(resolveHandoffChoice(profiled, "implement", { agent: "pi" }).contextWindow).toBe(
-			"272000",
-		);
-		expect(resolveHandoffChoice(profiled, "review").contextWindow).toBe("");
-		expect(resolveHandoffChoice(config, "implement").contextWindow).toBe("");
+		expect(
+			resolveHandoffChoice(profiled, "implement", "herdr", { agent: "pi" }).contextWindow,
+		).toBe("272000");
+		expect(resolveHandoffChoice(profiled, "review", "herdr").contextWindow).toBe("");
+		expect(resolveHandoffChoice(config, "implement", "herdr").contextWindow).toBe("");
 	});
 });

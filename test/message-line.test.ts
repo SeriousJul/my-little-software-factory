@@ -132,6 +132,7 @@ async function faultPlane(
 		commands: options.commands ?? failingHandoffCommands,
 		...(options.runner === undefined ? {} : { runner: options.runner }),
 		...(options.config === undefined ? {} : { config: options.config }),
+		agentHostEnv: { herdrEnv: "1" },
 	});
 }
 
@@ -143,6 +144,7 @@ function inFlightRow(fetched: FetchedTicket, environment: EnvironmentKind): Tick
 			agentType: "pi",
 			environment,
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -215,7 +217,12 @@ const issueSource = issuesSourceConfig;
 describe("the permanent Message line", () => {
 	test("never shifts the layout for or against it", async () => {
 		const fake = new FakeRunner();
-		const planeRecord = await plane({ runner: () => fake, sources: [], groupingAxis: "none" });
+		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
+			runner: () => fake,
+			sources: [],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				const before = await waitFor(setup, { quiet: true });
@@ -248,7 +255,12 @@ describe("the permanent Message line", () => {
 	test("wears the severity prefix, and only the line wears the color", async () => {
 		// Warning.
 		const fake = new FakeRunner();
-		const planeRecord = await plane({ runner: () => fake, sources: [], groupingAxis: "none" });
+		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
+			runner: () => fake,
+			sources: [],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				const frame = await pressControl(setup, "refresh", { refuses: true });
@@ -269,6 +281,7 @@ describe("the permanent Message line", () => {
 		const refusedPlane = await plane({
 			existing: wrappedState(),
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {
@@ -293,6 +306,7 @@ describe("the permanent Message line", () => {
 		const workingPlane = await plane({
 			existing: wrappedState(),
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = workingPlane.sources[0] as FakeSource;
 		await withApp(
@@ -327,6 +341,7 @@ describe("the permanent Message line", () => {
 			now: () => Date.now() - 60_000,
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake) => closeCleanupCommands(fake, "error: the daemon is down\n"),
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const errorSource = errorPlane.sources[0] as FakeSource;
 		await withApp(
@@ -386,6 +401,7 @@ describe("the permanent Message line", () => {
 		const planeRecord = await plane({
 			existing: wrappedState(),
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -429,6 +445,7 @@ describe("the permanent Message line", () => {
 					tickets: [ticketOf(issueTicket())],
 				},
 			],
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -532,6 +549,7 @@ describe("the permanent Message line", () => {
 			existing: state,
 			runner: () => runner,
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -596,7 +614,12 @@ describe("the permanent Message line", () => {
 		// A fact that fits on the line still earns the view: the record is the
 		// point, not the cut.
 		const fitFake = new FakeRunner();
-		const fitPlane = await plane({ runner: () => fitFake, sources: [], groupingAxis: "none" });
+		const fitPlane = await plane({
+			agentHostEnv: { herdrEnv: "1" },
+			runner: () => fitFake,
+			sources: [],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				await pressControl(setup, "refresh", { quiet: true });
@@ -616,7 +639,12 @@ describe("the permanent Message line", () => {
 		// No fact at all: the control refuses on the line, and the record stays
 		// what the record is.
 		const emptyFake = new FakeRunner();
-		const emptyPlane = await plane({ runner: () => emptyFake, sources: [], groupingAxis: "none" });
+		const emptyPlane = await plane({
+			agentHostEnv: { herdrEnv: "1" },
+			runner: () => emptyFake,
+			sources: [],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				await guideKey(setup, "message", "m", {
@@ -702,6 +730,7 @@ describe("the permanent Message line", () => {
 				});
 			},
 			runner: (fake) => new DelayedRunner(fake, 500, Number.POSITIVE_INFINITY),
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {
@@ -758,6 +787,7 @@ describe("the permanent Message line", () => {
 		const planeRecord = await plane({
 			existing: state,
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -1000,6 +1030,7 @@ describe("the permanent Message line", () => {
 			now: () => Date.now() - 60_000,
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: (fake) => closeCleanupCommands(fake, `${LONG_LINE}\n`),
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const errorSource = errorPlane.sources[0] as FakeSource;
 		await withApp(
@@ -1027,7 +1058,12 @@ describe("the permanent Message line", () => {
 		// Warning: no important line - warnings are not important below the
 		// minimum, the permanent row carries them.
 		const warnFake = new FakeRunner();
-		const warnPlane = await plane({ runner: () => warnFake, sources: [], groupingAxis: "none" });
+		const warnPlane = await plane({
+			agentHostEnv: { herdrEnv: "1" },
+			runner: () => warnFake,
+			sources: [],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				await pressControl(setup, "refresh", { quiet: true });
@@ -1051,7 +1087,12 @@ describe("the permanent Message line", () => {
 	test("survives a resize across the minimum", async () => {
 		// Warning round trip.
 		const fake = new FakeRunner();
-		const planeRecord = await plane({ runner: () => fake, sources: [], groupingAxis: "none" });
+		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
+			runner: () => fake,
+			sources: [],
+			groupingAxis: "none",
+		});
 		await withApp(
 			async (setup) => {
 				await pressControl(setup, "refresh", { quiet: true });
@@ -1114,6 +1155,7 @@ describe("the permanent Message line", () => {
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
 			repos: { "github.com/acme/factory": "src/factory" },
 			config: { maxParallelAgents: 1 },
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		// The fake herdr answers every command with no body; the workspace
@@ -1171,6 +1213,7 @@ describe("the permanent Message line", () => {
 			existing: wrappedState(),
 			runner: () => runner,
 			sources: [{ config: issueSource, tickets: [ticketOf(issueTicket())] }],
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -1274,7 +1317,12 @@ describe("the permanent Message line", () => {
 		process.env.NO_COLOR = "1";
 		try {
 			const fake = new FakeRunner();
-			const planeRecord = await plane({ runner: () => fake, sources: [], groupingAxis: "none" });
+			const planeRecord = await plane({
+				agentHostEnv: { herdrEnv: "1" },
+				runner: () => fake,
+				sources: [],
+				groupingAxis: "none",
+			});
 			await withApp(
 				async (setup) => {
 					// A refused refresh records its warning, and the view shows it.

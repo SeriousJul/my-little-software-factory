@@ -100,6 +100,7 @@ const parkChoice = {
 	agentType: "pi",
 	environment: "live-worktree" as const,
 	taskType: "implement",
+	host: "herdr" as const,
 	model: "",
 	thinking: "",
 	contextWindow: "",
@@ -407,6 +408,7 @@ describe("the Message line's fact to the desktop", () => {
 					tickets: [],
 				},
 			],
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		const runner = planeRecord.fakeRunner;
@@ -443,6 +445,7 @@ describe("the Message line's fact to the desktop", () => {
 			sources: [{ config: singleTicketConfig, tickets: [ticketOf(singleTicket)] }],
 			repos: { "github.com/acme/billing": "src/billing" },
 			commands: failingHandoffCommands,
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		const runner = planeRecord.fakeRunner;
@@ -481,6 +484,7 @@ describe("the Message line's fact to the desktop", () => {
 			sources: [{ config: singleTicketConfig, tickets: [ticketOf(singleTicket)] }],
 			repos: { "github.com/acme/billing": "src/billing" },
 			commands: failingHandoffCommands,
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		const runner = planeRecord.fakeRunner;
@@ -538,6 +542,7 @@ describe("the Message line's fact to the desktop", () => {
 				});
 				fake.set("herdr", ["workspace", "list"], { code: 1, stderr: `${line}\n` });
 			},
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		const runner = planeRecord.fakeRunner;
@@ -575,6 +580,7 @@ describe("the Message line's fact to the desktop", () => {
 			groupingAxis: "none",
 			config: { desktopNotification: false },
 			sources: [],
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const runner = planeRecord.fakeRunner;
 		await withApp(
@@ -605,6 +611,7 @@ describe("the Message line's fact to the desktop", () => {
 			config: { defaultAgent: "nope" },
 			sources: [{ config: singleTicketConfig, tickets: [ticketOf(singleTicket)] }],
 			repos: { "github.com/acme/billing": "src/billing" },
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		const runner = planeRecord.fakeRunner;
@@ -661,6 +668,7 @@ describe("the Message line's fact to the desktop", () => {
 				},
 			],
 			config: { maxHandoffsPerTicket: 4, agentPollIntervalSeconds: 60 },
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		// Two starts that reached no Agent at a Handoff limit of 4: the park's count,
 		// and still one start short of the cap that ends the work cycle.

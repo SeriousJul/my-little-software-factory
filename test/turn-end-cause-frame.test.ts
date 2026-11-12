@@ -69,6 +69,7 @@ describe("the held turn through the real app flow", () => {
 					agentType: "pi",
 					environment: "live-worktree",
 					taskType: "implement",
+					host: "herdr" as const,
 					model: "",
 					thinking: "",
 					contextWindow: "",
@@ -86,6 +87,7 @@ describe("the held turn through the real app flow", () => {
 			ticketOf(fetched(8, "Fourth open ticket")),
 		];
 		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			groupingAxis: "none",
 			sources: [
 				{

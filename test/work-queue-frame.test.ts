@@ -102,6 +102,7 @@ async function forcedFixture() {
 	// The held seat: a settled handoff whose live agent stands working in the
 	// list, so the cap is full from the boot.
 	const planeRecord = await plane({
+		agentHostEnv: { herdrEnv: "1" },
 		groupingAxis: "none",
 		sources: [
 			{
@@ -113,6 +114,7 @@ async function forcedFixture() {
 							agentType: "pi",
 							environment: "live-worktree",
 							taskType: "implement",
+							host: "herdr" as const,
 							model: "",
 							thinking: "",
 							contextWindow: "",
@@ -178,7 +180,7 @@ function forceDispatchApp(fixture: Awaited<ReturnType<typeof forcedFixture>>) {
 		const result = state.workQueue.enqueueWork({
 			ticketIdentity,
 			origin,
-			choice: baseChoice("pi", "live-worktree", "implement"),
+			choice: baseChoice("pi", "live-worktree", "implement", { host: "herdr" as const }),
 			previousMessage: "",
 			automatic,
 		});
@@ -205,6 +207,7 @@ function forceDispatchApp(fixture: Awaited<ReturnType<typeof forcedFixture>>) {
  */
 async function queuedFixture(holdSeat = true) {
 	const planeRecord = await plane({
+		agentHostEnv: { herdrEnv: "1" },
 		groupingAxis: "none",
 		sources: [{ config: issuesSourceConfig, tickets: twoTicketRows() }],
 		config: oneSeat,
@@ -212,7 +215,7 @@ async function queuedFixture(holdSeat = true) {
 	if (holdSeat) {
 		const held = planeRecord.state.handoff.claimHandoff(
 			SECOND,
-			baseChoice("pi", "live-worktree", "implement"),
+			baseChoice("pi", "live-worktree", "implement", { host: "herdr" as const }),
 			"open",
 		);
 		if (!held.ok) throw new Error(held.reason);
@@ -225,7 +228,7 @@ async function queuedFixture(holdSeat = true) {
 		const result = planeRecord.state.workQueue.enqueueWork({
 			ticketIdentity,
 			origin,
-			choice: baseChoice("pi", "live-worktree", "implement"),
+			choice: baseChoice("pi", "live-worktree", "implement", { host: "herdr" as const }),
 			previousMessage: "",
 			automatic,
 		});
@@ -940,7 +943,7 @@ describe("the Work queue section", () => {
 		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
 		const held = state.handoff.claimHandoff(
 			SECOND,
-			baseChoice("pi", "live-worktree", "implement"),
+			baseChoice("pi", "live-worktree", "implement", { host: "herdr" as const }),
 			"open",
 		);
 		if (!held.ok) throw new Error(held.reason);
@@ -1023,7 +1026,7 @@ describe("the Work queue section", () => {
 		).toBe(true);
 		const held = state.handoff.claimHandoff(
 			SECOND,
-			baseChoice("pi", "live-worktree", "implement"),
+			baseChoice("pi", "live-worktree", "implement", { host: "herdr" as const }),
 			"open",
 		);
 		if (!held.ok) throw new Error(held.reason);
@@ -1031,7 +1034,7 @@ describe("the Work queue section", () => {
 			ticketIdentity: SECOND,
 			routeFromIdentity: FIRST,
 			origin: "workflow",
-			choice: baseChoice("pi", "live-worktree", "implement"),
+			choice: baseChoice("pi", "live-worktree", "implement", { host: "herdr" as const }),
 			previousMessage: "the turn is done",
 		});
 		if (!enqueued.ok) throw new Error(enqueued.reason);
@@ -1176,7 +1179,7 @@ describe("the Work queue section", () => {
 		).toBe(true);
 		const held = state.handoff.claimHandoff(
 			SECOND,
-			baseChoice("pi", "live-worktree", "implement"),
+			baseChoice("pi", "live-worktree", "implement", { host: "herdr" as const }),
 			"open",
 		);
 		if (!held.ok) throw new Error(held.reason);
@@ -1184,7 +1187,7 @@ describe("the Work queue section", () => {
 			ticketIdentity: SECOND,
 			routeFromIdentity: FIRST,
 			origin: "workflow",
-			choice: baseChoice("pi", "live-worktree", "implement"),
+			choice: baseChoice("pi", "live-worktree", "implement", { host: "herdr" as const }),
 			previousMessage: "the turn is done",
 		});
 		if (!enqueued.ok) throw new Error(enqueued.reason);
@@ -1367,6 +1370,7 @@ describe("the Work queue section", () => {
 		const tickets = twoTickets();
 		const outcome = fetchSuccess(tickets);
 		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			groupingAxis: "none",
 			sources: [
 				{
@@ -1381,6 +1385,7 @@ describe("the Work queue section", () => {
 								agentType: "pi",
 								environment: "live-worktree",
 								taskType: "implement",
+								host: "herdr" as const,
 								model: "",
 								thinking: "",
 								contextWindow: "",
@@ -1428,6 +1433,7 @@ describe("the Work queue section", () => {
 								agentType: "pi",
 								environment: "live-worktree",
 								taskType: "implement",
+								host: "herdr" as const,
 								model: "",
 								thinking: "",
 								contextWindow: "",

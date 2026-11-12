@@ -148,6 +148,7 @@ const REPO_BILLING = {
 const REVIEW_RECORD: ConsultationSeed = {
 	typeName: "review",
 	agentType: "pi",
+	host: "herdr" as const,
 	environment: "live-worktree",
 	template: "plan",
 	initialInput: "Check the billing service for the auth shim removal.",
@@ -175,6 +176,7 @@ const HANDOFF_ROW: WorkQueueSeed = {
 		agentType: "pi",
 		environment: "live-worktree",
 		taskType: "review",
+		host: "herdr" as const,
 		model: "",
 		thinking: "",
 		contextWindow: "",

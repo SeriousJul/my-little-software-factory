@@ -129,6 +129,7 @@ function rowOf(shape: "open" | "in-flight" | "awaiting", detail: SeedDetail = {}
 			agentType: "pi",
 			environment: "live-worktree",
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -192,6 +193,7 @@ async function seededFace(
 			gate = gatedRunner(fake, hold);
 			return gate.runner;
 		},
+		agentHostEnv: { herdrEnv: "1" },
 	});
 	if (gate === undefined) throw new Error("the gate did not stand");
 	return { plane: planeRecord, gate };

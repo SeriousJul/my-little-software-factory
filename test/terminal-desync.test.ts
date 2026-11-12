@@ -220,6 +220,7 @@ function seedAwaitingTicket(statePath: string): string {
 			agentType: "pi",
 			environment: "live-worktree",
 			taskType: "rework",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",

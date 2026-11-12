@@ -123,6 +123,7 @@ const INITIAL: HandoffChoice = {
 	agentType: "pilot",
 	environment: "worktree",
 	taskType: "implement",
+	host: "herdr" as const,
 	model: "",
 	thinking: "",
 	contextWindow: "",
@@ -188,6 +189,7 @@ async function withPanel(
 
 /** Move the selection from the Agent row down to the Model row. */
 async function moveToModelRow(setup: Awaited<ReturnType<typeof testRender>>): Promise<string> {
+	await pressControl(setup, "move-list", { via: "j", shows: "❯ Agent host" });
 	await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
 	await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
 	return pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
@@ -377,6 +379,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 				const frame = await waitFor(setup, { shows: "Thinking low" });
 				expect(frameText(frame)).toContain("Thinking low");
 				expectUnfit(setup, "Thinking", "low");
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Agent host" });
 				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
 				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
 				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
@@ -420,6 +423,7 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 				expectUnfit(setup, "Context", "131072");
 				// A warning row is an editing row, not a cycle: the selection reaches
 				// it and a typed letter lands in the value the Handoff would send.
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Agent host" });
 				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
 				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
 				await pressControl(setup, "move-list", { via: "↓", shows: "❯ Model" });
@@ -880,6 +884,7 @@ describe("the plane action's task type states that no Agent runs", () => {
 			{
 				...INITIAL,
 				taskType: "merge",
+				host: "herdr" as const,
 				model: "pilot/model",
 				thinking: "low",
 				contextWindow: "1000",
@@ -893,6 +898,7 @@ describe("the plane action's task type states that no Agent runs", () => {
 				// wears the same refusal the decision screen's edit key states:
 				// the tone on the unselected list row, the written note under
 				// every row.
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Agent host" });
 				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
 				expect(spanColors(setup, "worktree")).toEqual([tone("warning")]);
 				for (const label of ["Agent", "Environment", "Model", "Thinking", "Context"]) {

@@ -15,7 +15,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-
 import {
 	CHECKOUT_ROW_OVER_BUDGET_FACT,
 	type CheckoutGate,
@@ -43,6 +42,7 @@ import type { FactoryState } from "../src/state.ts";
 import { utf8ByteLength } from "../src/text-bounds.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
+import { RUN_AGENT_HOST } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -147,6 +147,7 @@ function seed(state: FactoryState, fixture: Fixture, id: string, over: Seed = {}
 		id,
 		typeName,
 		agentType: type.agent,
+		host: "herdr",
 		environment,
 		model: type.model ?? "",
 		template: "/grill {input}",
@@ -317,6 +318,7 @@ function makeHarness(
 			runner,
 			config: () => fixture.config,
 			home: options.home ?? fixture.home,
+			agentHost: RUN_AGENT_HOST,
 			tickets: options.tickets ?? (() => []),
 			seatCount: options.seatCount ?? (() => 0),
 			log: options.log,
@@ -346,6 +348,28 @@ function makeHarness(
 		progress,
 	};
 	return harness;
+}
+
+/**
+ * The launch these gate tests run: a grill Consultation on the fixture's
+ * repository, queued the way the launcher's submit queues it, or unqueued
+ * where the record's opening stands unstarted beside its create.
+ */
+function grillCreate(
+	harness: Harness,
+	repository: ConsultationRepositoryOption,
+	queued: boolean,
+): Consultation {
+	const consultation = harness.operations.create({
+		typeName: "grill",
+		repository,
+		host: "herdr" as const,
+		initialInput: "review auth",
+		...(queued ? { queued: true } : {}),
+	});
+	if (consultation === undefined)
+		throw new Error(queued ? "the queued submit created no record" : "the create made no record");
+	return consultation;
 }
 
 /** The checkout the fixture maps, stated as a world. */
@@ -513,6 +537,7 @@ describe("Consultation operations: launch", () => {
 			harness.operations.create({
 				typeName: "unknown",
 				repository: fixture.repository,
+				host: "herdr" as const,
 				initialInput: "review auth",
 			}),
 		).toBeUndefined();
@@ -533,7 +558,7 @@ describe("Consultation operations: launch", () => {
 			const runner = new LifecycleRunner();
 			const harness = makeHarness(fixture, runner);
 
-			expect(await harness.operations.checkEnqueue("unknown")).toBe(
+			expect(await harness.operations.checkEnqueue("unknown", "herdr")).toBe(
 				"unknown Consultation type unknown",
 			);
 			// No row and no record: the ask never entered the channel.
@@ -548,7 +573,7 @@ describe("Consultation operations: launch", () => {
 			runner.inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const harness = makeHarness(fixture, runner);
 
-			const refusal = await harness.operations.checkEnqueue("grill");
+			const refusal = await harness.operations.checkEnqueue("grill", "herdr");
 
 			expect(refusal).toContain('has no model "gpt-4o"');
 			// The check is the runtime read itself: one Model list, nothing else.
@@ -562,7 +587,7 @@ describe("Consultation operations: launch", () => {
 			runner.inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const harness = makeHarness(fixture, runner);
 
-			expect(await harness.operations.checkEnqueue("grill")).toBeUndefined();
+			expect(await harness.operations.checkEnqueue("grill", "herdr")).toBeUndefined();
 			expect(runner.commands()).toEqual([]);
 		});
 	});
@@ -576,6 +601,7 @@ describe("Consultation operations: launch", () => {
 				harness.operations.create({
 					typeName: "grill",
 					repository: fixture.repository,
+					host: "herdr" as const,
 					initialInput,
 				}),
 			).toBeUndefined();
@@ -1000,6 +1026,7 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "implement",
+				host: "herdr",
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -2218,6 +2245,7 @@ describe("Consultation operations: replacement and deletion", () => {
 		const replacement = makeHarness(fixture, runner).operations.replace(replaced, {
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 		});
 
 		expect(replacement).toBeDefined();
@@ -2247,6 +2275,7 @@ describe("Consultation operations: replacement and deletion", () => {
 		const replacement = harness.operations.replace(replaced, {
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "continue the review",
 		});
 		if (replacement === undefined) throw new Error("the Replacement was refused");
@@ -2273,6 +2302,7 @@ describe("Consultation operations: replacement and deletion", () => {
 		const replacement = harness.operations.replace(consultation, {
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "continue",
 		});
 
@@ -2625,6 +2655,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		const consultation = harness.operations.create({
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 			queued: true,
 		});
@@ -2650,6 +2681,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		const consultation = harness.operations.create({
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 			queued: true,
 		});
@@ -2701,6 +2733,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		const consultation = harness.operations.create({
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 			queued: true,
 		});
@@ -2739,6 +2772,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		const consultation = harness.operations.create({
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 			queued: true,
 		});
@@ -2786,6 +2820,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		const consultation = harness.operations.create({
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 			queued: true,
 		});
@@ -2819,6 +2854,7 @@ describe("Consultation operations: the Work queue pickup (ADR 0034, issue #90)",
 		const replacement = harness.operations.replace(failed, {
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			queued: true,
 		});
 		expect(replacement).toEqual(
@@ -2854,6 +2890,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		const consultation = harness.operations.create({
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 			queued: true,
 		});
@@ -2888,13 +2925,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 			// The cap is full at the key: the reading the operator's start now ran over.
 			seatCount: () => fixture.config.maxParallelAgents,
 		});
-		const consultation = harness.operations.create({
-			typeName: "grill",
-			repository: fixture.repository,
-			initialInput: "review auth",
-			queued: true,
-		});
-		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const consultation = grillCreate(harness, fixture.repository, true);
 		const id = consultation.id;
 
 		expect(await harness.operations.pickup(id, "force-dispatch")).toEqual({ kind: "started" });
@@ -2923,13 +2954,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 			// Nothing holds a seat at the key.
 			seatCount: () => consultationSeats(fixture.state),
 		});
-		const consultation = harness.operations.create({
-			typeName: "grill",
-			repository: fixture.repository,
-			initialInput: "review auth",
-			queued: true,
-		});
-		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const consultation = grillCreate(harness, fixture.repository, true);
 		const id = consultation.id;
 
 		expect(await harness.operations.pickup(id, "force-dispatch")).toEqual({ kind: "started" });
@@ -2958,6 +2983,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		const consultation = harness.operations.create({
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 			queued: true,
 		});
@@ -2991,6 +3017,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		const consultation = harness.operations.create({
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 			queued: true,
 		});
@@ -3021,6 +3048,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 			config: () => fixture.config,
 			seatCount: () => consultationSeats(fixture.state),
 			home: fixture.home,
+			agentHost: RUN_AGENT_HOST,
 			pickupConsultation: (consultationId, mode) => harness.operations.pickup(consultationId, mode),
 			working: () => {},
 			warning: () => {},
@@ -3036,12 +3064,14 @@ describe("Consultation operations: the start line (issue #220)", () => {
 		const first = harness.operations.create({
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 			queued: true,
 		});
 		const second = harness.operations.create({
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review the fix",
 			queued: true,
 		});
@@ -3119,13 +3149,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 			fact: "the shared checkout is at work",
 		}));
 		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
-		const consultation = harness.operations.create({
-			typeName: "grill",
-			repository: fixture.repository,
-			initialInput: "review auth",
-			queued: true,
-		});
-		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const consultation = grillCreate(harness, fixture.repository, true);
 		const outcome = await harness.operations.pickup(consultation.id, "pickup");
 		expect(outcome).toEqual({ kind: "waiting", fact: "the shared checkout is at work" });
 		// The wait keeps its row: the record keeps its `queued` state, the row
@@ -3147,13 +3171,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 			start: { side: "consultation", channel: "consultation" },
 		}));
 		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
-		const consultation = harness.operations.create({
-			typeName: "grill",
-			repository: fixture.repository,
-			initialInput: "review auth",
-			queued: true,
-		});
-		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const consultation = grillCreate(harness, fixture.repository, true);
 		const outcome = await harness.operations.pickup(consultation.id, "pickup");
 		expect(outcome).toEqual({ kind: "refused", fact: CHECKOUT_ROW_OVER_BUDGET_FACT });
 		// The pickup refuses nothing itself: the record still waits and the row
@@ -3190,6 +3208,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 		const consultation = harness.operations.create({
 			typeName: "grill",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 			queued: true,
 		});
@@ -3220,13 +3239,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const hold = holdStub(() => ({ ok: true, checkoutKey: "github.com/acme/factory" }));
 		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
-		const consultation = harness.operations.create({
-			typeName: "grill",
-			repository: fixture.repository,
-			initialInput: "review auth",
-			queued: true,
-		});
-		if (consultation === undefined) throw new Error("the queued submit created no record");
+		const consultation = grillCreate(harness, fixture.repository, true);
 		stubPaneRead(runner.inner, WORKTREE_LAUNCH.paneId, "Agent: opened");
 		const outcome = await harness.operations.pickup(consultation.id, "pickup");
 		expect(outcome).toEqual({ kind: "started" });
@@ -3261,6 +3274,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 		const consultation = harness.operations.create({
 			typeName: "grill-live",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 			queued: true,
 		});
@@ -3287,12 +3301,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 			fact: "the shared checkout is at work",
 		}));
 		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
-		const consultation = harness.operations.create({
-			typeName: "grill",
-			repository: fixture.repository,
-			initialInput: "review auth",
-		});
-		if (consultation === undefined) throw new Error("the create made no record");
+		const consultation = grillCreate(harness, fixture.repository, false);
 		// The record stands `opening` with no pane and no session: the start that
 		// crashed before its Agent stood, the record the operator's recovery
 		// re-runs from the Consultation surface.
@@ -3324,12 +3333,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 		const runner = new LifecycleRunner(stubHerdrWorld(worktreeLaunchStanding(fixture.repository)));
 		const hold = holdStub(() => ({ ok: true, checkoutKey: "github.com/acme/factory" }));
 		const harness = makeHarness(fixture, runner, { checkoutHold: hold.stub });
-		const consultation = harness.operations.create({
-			typeName: "grill",
-			repository: fixture.repository,
-			initialInput: "review auth",
-		});
-		if (consultation === undefined) throw new Error("the create made no record");
+		const consultation = grillCreate(harness, fixture.repository, false);
 		expect(current(fixture.state, consultation.id)).toMatchObject({
 			state: "opening",
 			paneId: null,
@@ -3369,6 +3373,7 @@ describe("Consultation operations: the Shared checkout gate (issue #315, ADR 010
 		const consultation = harness.operations.create({
 			typeName: "grill-live",
 			repository: fixture.repository,
+			host: "herdr" as const,
 			initialInput: "review auth",
 		});
 		if (consultation === undefined) throw new Error("the create made no record");

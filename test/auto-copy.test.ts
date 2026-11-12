@@ -25,6 +25,7 @@ import {
 	waitFor,
 	withApp,
 } from "./app-harness.ts";
+import { plane } from "./plane.ts";
 
 /** The one write the Auto copy path makes on a selection that ended with text. */
 const COPY_REFUSED_TEXT = "The terminal refused the copied text";
@@ -107,38 +108,48 @@ describe("Auto copy", () => {
 	});
 
 	test("a copy the terminal refused warns on the Message line; a copy that takes is silent", async () => {
-		await withApp(async (setup) => {
-			const clipboard = recordClipboard(setup, false);
-			try {
-				await dragOverDetail(setup);
-				expect(clipboard.writes).toHaveLength(1);
-				// The refusal is the shared warning the field Copy control says,
-				// carried on the Message line with its warning prefix.
-				const warned = await waitFor(setup, { shows: COPY_REFUSED_TEXT });
-				expect(messageRowOf(warned)).toContain(`Warning: ${COPY_REFUSED_TEXT}`);
-			} finally {
-				clipboard.restore();
-			}
-
-			// A write the terminal takes leaves the Message line alone.
-			await withApp(async (inner) => {
-				const taken = recordClipboard(inner, true);
+		// The taken copy must not touch the boot statement, which names the
+		// host: the plane stands on herdr-core without the mark (issue #409),
+		// so the line reads herdr-core on both sides of the scenario.
+		const planeRecord = await plane({});
+		await withApp(
+			async (setup) => {
+				const clipboard = recordClipboard(setup, false);
 				try {
-					await dragOverDetail(inner);
-					expect(taken.writes).toHaveLength(1);
-					const silent = await settle(inner);
-					expect(frameText(silent)).not.toContain(COPY_REFUSED_TEXT);
-					// A taken copy writes no fact of its own: no "copied"
-					// indicator stands, and the line keeps the boot statement
-					// the plane stated at boot (issue #408).
-					const line = messageRowOf(silent).trim();
-					expect(line).toContain("agent host: herdr-core");
-					expect(line).not.toContain("copied");
+					await dragOverDetail(setup);
+					expect(clipboard.writes).toHaveLength(1);
+					// The refusal is the shared warning the field Copy control says,
+					// carried on the Message line with its warning prefix.
+					const warned = await waitFor(setup, { shows: COPY_REFUSED_TEXT });
+					expect(messageRowOf(warned)).toContain(`Warning: ${COPY_REFUSED_TEXT}`);
 				} finally {
-					taken.restore();
+					clipboard.restore();
 				}
-			});
-		});
+
+				// A write the terminal takes leaves the Message line alone.
+				await withApp(
+					async (inner) => {
+						const taken = recordClipboard(inner, true);
+						try {
+							await dragOverDetail(inner);
+							expect(taken.writes).toHaveLength(1);
+							const silent = await settle(inner);
+							expect(frameText(silent)).not.toContain(COPY_REFUSED_TEXT);
+							// A taken copy writes no fact of its own: no "copied"
+							// indicator stands, and the line keeps the boot statement
+							// the plane stated at boot (issue #408).
+							const line = messageRowOf(silent).trim();
+							expect(line).toContain("agent host: herdr-core");
+							expect(line).not.toContain("copied");
+						} finally {
+							taken.restore();
+						}
+					},
+					{ plane: planeRecord },
+				);
+			},
+			{ plane: planeRecord },
+		);
 	});
 
 	test("a drag over a list row leaves the row selection as the press set it", async () => {

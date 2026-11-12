@@ -118,6 +118,7 @@ const HANDOFF_CHOICE = {
 	agentType: "pi",
 	environment: "worktree" as const,
 	taskType: "implement",
+	host: "herdr" as const,
 	model: "",
 	thinking: "",
 	contextWindow: "",

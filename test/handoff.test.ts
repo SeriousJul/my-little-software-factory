@@ -45,6 +45,7 @@ import {
 	DEFAULT_TICKET_DESCRIPTION,
 	DEFAULT_TICKET_TITLE,
 	ticket as defaultTicket,
+	RUN_AGENT_HOST,
 } from "./fact-fixtures.ts";
 import {
 	FakeRunner,
@@ -91,6 +92,15 @@ function reasonOf(outcome: HandoffOutcome): string {
 	return outcome.reason;
 }
 
+/** The start's resource rows, recorded and confirmed under the kinds the start wrote. */
+function resourceCallbacks(recorded: string[], confirmed: string[]) {
+	return {
+		onResource: (kind: string, resourceId: string) => recorded.push(`${kind} ${resourceId}`),
+		onResourceRemoved: (kind: string, resourceId: string) =>
+			confirmed.push(`${kind} ${resourceId}`),
+	};
+}
+
 /** The ticket branch the handoff takes, in the words git and herdr hear. */
 const BRANCH = "factory/9-persist-source-facts";
 
@@ -100,6 +110,7 @@ const defaultChoice = {
 	agentType: "pi",
 	environment: "live-worktree" as const,
 	taskType: "implement",
+	host: "herdr" as const,
 	model: "",
 	thinking: "",
 	contextWindow: "",
@@ -134,6 +145,7 @@ async function handoffRun(
 		config: over.config ?? BASE_CONFIG,
 		runner,
 		home,
+		agentHost: RUN_AGENT_HOST,
 		onStage: over.onStage,
 		names: over.names,
 		claim: over.claim ?? "open",
@@ -304,6 +316,7 @@ function consultationRecord(checkout: string, over: Partial<Consultation> = {}):
 		id: "consultation-1",
 		typeName: "grill-with-docs",
 		agentType: "pi",
+		host: "herdr" as const,
 		environment: "live-worktree",
 		model: "",
 		thinking: "",
@@ -1905,6 +1918,7 @@ describe("handOffTicket: the guard rails", () => {
 				config: BASE_CONFIG,
 				runner,
 				home: p.home,
+				agentHost: RUN_AGENT_HOST,
 			});
 
 			expect(outcome.status).toBe("failed");
@@ -1926,6 +1940,7 @@ describe("handOffTicket: the guard rails", () => {
 				config: BASE_CONFIG,
 				runner,
 				home: p.home,
+				agentHost: RUN_AGENT_HOST,
 			});
 
 			expect(outcome.status).toBe("failed");
@@ -1971,6 +1986,7 @@ describe("handOffTicket: the guard rails", () => {
 					config: item.config,
 					runner,
 					home: p.home,
+					agentHost: RUN_AGENT_HOST,
 				});
 				expect(outcome.status, item.label).toBe("failed");
 				expect(reasonOf(outcome)).toContain(item.text);
@@ -1994,6 +2010,7 @@ describe("handOffTicket: the guard rails", () => {
 				config,
 				runner,
 				home: p.home,
+				agentHost: RUN_AGENT_HOST,
 			});
 			expect(outcome.status).toBe("failed");
 			expect(reasonOf(outcome)).toContain(
@@ -2015,6 +2032,7 @@ describe("handOffTicket: the guard rails", () => {
 				config: BASE_CONFIG,
 				runner,
 				home: p.home,
+				agentHost: RUN_AGENT_HOST,
 			});
 
 			expect(outcome.status).toBe("ok");
@@ -2044,7 +2062,10 @@ describe("handOffTicket: the guard rails", () => {
 			const consultation = consultationRecord(repoPath(p.home), {
 				model: "anthropic/claude-sonnet-4-5",
 			});
-			const startCheck = await checkStart(consultation, BASE_CONFIG, runner);
+			const startCheck = await checkStart(consultation, BASE_CONFIG, runner, {
+				host: "herdr" as const,
+				fact: "default",
+			});
 			expect(startCheck.ok).toBe(true);
 
 			const outcome = await handOffConsultation({
@@ -2052,6 +2073,7 @@ describe("handOffTicket: the guard rails", () => {
 				config: BASE_CONFIG,
 				runner,
 				home: p.home,
+				agentHost: RUN_AGENT_HOST,
 				startCheck,
 			});
 
@@ -2087,9 +2109,14 @@ describe("handOffTicket: the guard rails", () => {
 			},
 		};
 
-		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "implement"), {
-			config: config,
-		});
+		const outcome = await handoffRun(
+			runner,
+			p.home,
+			resolveHandoffChoice(config, "implement", "herdr"),
+			{
+				config: config,
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toBe(
@@ -2113,9 +2140,14 @@ describe("handOffTicket: the guard rails", () => {
 			},
 		};
 
-		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "implement"), {
-			config: config,
-		});
+		const outcome = await handoffRun(
+			runner,
+			p.home,
+			resolveHandoffChoice(config, "implement", "herdr"),
+			{
+				config: config,
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toBe(
@@ -2528,7 +2560,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		const outcome = await handoffRun(
 			runner,
 			p.home,
-			resolveHandoffChoice(profileConfig, "implement"),
+			resolveHandoffChoice(profileConfig, "implement", "herdr"),
 			{
 				config: profileConfig,
 			},
@@ -2574,9 +2606,14 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 			},
 		};
 
-		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "implement"), {
-			config: config,
-		});
+		const outcome = await handoffRun(
+			runner,
+			p.home,
+			resolveHandoffChoice(config, "implement", "herdr"),
+			{
+				config: config,
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toBe(
@@ -2632,13 +2669,18 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		};
 		const edge = { from: "implement", to: ["review"], agent: "cursor" };
 
-		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "review", edge), {
-			ticket: { ...ticket, state: "awaiting" },
-			config: config,
-			previousMessage: "settled earlier",
-			claim: "continuation",
-			previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
-		});
+		const outcome = await handoffRun(
+			runner,
+			p.home,
+			resolveHandoffChoice(config, "review", "herdr", edge),
+			{
+				ticket: { ...ticket, state: "awaiting" },
+				config: config,
+				previousMessage: "settled earlier",
+				claim: "continuation",
+				previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain('agent type "cursor" defines no model setting');
@@ -2664,13 +2706,18 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		};
 		const edge = { from: "implement", to: ["review"], agent: "zed" };
 
-		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "review", edge), {
-			ticket: { ...ticket, state: "awaiting" },
-			config: config,
-			previousMessage: "settled earlier",
-			claim: "continuation",
-			previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
-		});
+		const outcome = await handoffRun(
+			runner,
+			p.home,
+			resolveHandoffChoice(config, "review", "herdr", edge),
+			{
+				ticket: { ...ticket, state: "awaiting" },
+				config: config,
+				previousMessage: "settled earlier",
+				claim: "continuation",
+				previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain('agent type "zed" offers no thinking level "medium"');
@@ -3387,6 +3434,7 @@ describe("the review verdict of the rework handoff prompt", () => {
 			config,
 			runner,
 			home,
+			agentHost: RUN_AGENT_HOST,
 		});
 	}
 
@@ -4777,6 +4825,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 		expect(reasonOf(onTicket)).toBe("unknown agent type: nope");
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4794,6 +4843,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 		expect(reasonOf(onTicket)).toBe("the container environment is reserved and not yet built");
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4820,6 +4870,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 		const outcome = await handoffRun(runner, p.home, {
 			...defaultChoice,
 			taskType: "refactor",
+			host: "herdr" as const,
 			model: "gpt-4o",
 		});
 		expect(reasonOf(outcome)).toBe("unknown task type: refactor");
@@ -4836,6 +4887,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 		expect(reasonOf(onTicket)).toContain('has no model "gpt-4o"');
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4938,6 +4990,7 @@ describe("the one start: one stage order on both paths", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 			onStage: stageRecorder(stages),
 		});
 
@@ -5064,6 +5117,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5310,8 +5364,8 @@ describe("the one start: a command that raises", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
-			onResource: (kind, resourceId) => recorded.push(`${kind} ${resourceId}`),
-			onResourceRemoved: (kind, resourceId) => confirmed.push(`${kind} ${resourceId}`),
+			agentHost: RUN_AGENT_HOST,
+			...resourceCallbacks(recorded, confirmed),
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5346,8 +5400,8 @@ describe("the one start: a command that raises", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
-			onResource: (kind, resourceId) => recorded.push(`${kind} ${resourceId}`),
-			onResourceRemoved: (kind, resourceId) => confirmed.push(`${kind} ${resourceId}`),
+			agentHost: RUN_AGENT_HOST,
+			...resourceCallbacks(recorded, confirmed),
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5397,6 +5451,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 			onResource: recorder(resources),
 		});
 
@@ -5431,6 +5486,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 			onResource: recorder(resources),
 		});
 
@@ -5472,6 +5528,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 			onResource: recorder(resources),
 		});
 
@@ -5505,6 +5562,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5542,6 +5600,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 
 		expect(outcome.status).toBe("failed");

@@ -31,6 +31,7 @@ function ticket(state: TicketState, environment: (typeof ENVIRONMENT_KINDS)[numb
 						agentType: "pi",
 						environment,
 						taskType: "implement",
+						host: "herdr" as const,
 						model: "",
 						thinking: "",
 						contextWindow: "",

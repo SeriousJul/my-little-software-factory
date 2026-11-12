@@ -1739,6 +1739,7 @@ function settledTurn(
 			agentType: "pi",
 			environment: "worktree",
 			taskType,
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",

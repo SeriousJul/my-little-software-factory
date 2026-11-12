@@ -455,6 +455,7 @@ export function queuedConsultation(state: FactoryState, id: string, createdAt?: 
 		id,
 		typeName: "grill",
 		agentType: "pi",
+		host: "herdr" as const,
 		environment: "worktree",
 		template: "/grill {input}",
 		initialInput: "review auth",

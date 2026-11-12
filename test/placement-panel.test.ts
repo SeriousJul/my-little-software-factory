@@ -20,6 +20,7 @@ import {
 	frameText,
 	pressControl,
 	rgb,
+	type Setup,
 	spanColors,
 	WIDTH,
 	waitSourceHealthy,
@@ -78,6 +79,7 @@ async function seeded(machine: WorkflowState[] | null): Promise<Seeded> {
 	// The frames assert the unsplit list: a fresh file opens grouped by
 	// repository (ADR 0066), so the fixture holds the flat axis.
 	const planeRecord = await plane({
+		agentHostEnv: { herdrEnv: "1" },
 		groupingAxis: "none",
 		sources: [
 			{
@@ -91,6 +93,21 @@ async function seeded(machine: WorkflowState[] | null): Promise<Seeded> {
 		},
 	});
 	return { plane: planeRecord, src: planeRecord.sources[0] as FakeSource };
+}
+
+/**
+ * The settle that marks the source healthy, so the ticket is actionable,
+ * the panel opened on the Agent row, and the walk across the rows named: the
+ * host, Environment, and Task type rows stand between the Agent row and the
+ * row the test reaches (issue #409).
+ */
+async function panelAt(setup: Setup, app: Seeded, rows: readonly string[]): Promise<void> {
+	app.src.settle(success);
+	await waitSourceHealthy(app.plane.state);
+	await pressControl(setup, "override", { shows: "Override" });
+	for (const row of rows) {
+		await pressControl(setup, "move-list", { via: "j", shows: `❯ ${row}` });
+	}
 }
 
 /** The color one ink role paints in the ink the panel paints in. */
@@ -107,18 +124,10 @@ describe("the Task row's placement note", () => {
 		const app = await seeded(issueMachine);
 		await withApp(
 			async (setup) => {
-				// The source fetch the app opened on its mount is held by the fake
-				// until the test settles it; the settle is what marks the source
-				// healthy, and a healthy membership is what makes the ticket
-				// actionable.
-				app.src.settle(success);
-				await waitSourceHealthy(app.plane.state);
-				await pressControl(setup, "override", { shows: "Override" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
 				// The row opens on the ticket's suggestion, implement, and
 				// cycles the full list: the operator reaches review in two
 				// steps, and the note follows the selection.
+				await panelAt(setup, app, ["Agent host", "Environment", "Task type"]);
 				await pressControl(setup, "change-override", { via: "→", shows: "Task type fix" });
 				const review = await pressControl(setup, "change-override", {
 					via: "→",
@@ -150,18 +159,10 @@ describe("the Task row's placement note", () => {
 			"task type review is not offered by any state that matches a github-issue ticket";
 		await withApp(
 			async (setup) => {
-				// The source fetch the app opened on its mount is held by the fake
-				// until the test settles it; the settle is what marks the source
-				// healthy, and a healthy membership is what makes the ticket
-				// actionable.
-				app.src.settle(success);
-				await waitSourceHealthy(app.plane.state);
-				await pressControl(setup, "override", { shows: "Override" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
 				// The row opens on implement, the ticket's suggestion, and
 				// cycles the full list: fix refuses on the first step, and the
 				// wait stands on the review sentence itself.
+				await panelAt(setup, app, ["Agent host", "Environment", "Task type"]);
 				await pressControl(setup, "change-override", {
 					via: "→",
 					shows: "task type fix is not offered",
@@ -187,14 +188,7 @@ describe("the Task row's placement note", () => {
 		const app = await seeded(issueMachine);
 		await withApp(
 			async (setup) => {
-				// The source fetch the app opened on its mount is held by the fake
-				// until the test settles it; the settle is what marks the source
-				// healthy, and a healthy membership is what makes the ticket
-				// actionable.
-				app.src.settle(success);
-				await waitSourceHealthy(app.plane.state);
-				await pressControl(setup, "override", { shows: "Override" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
+				await panelAt(setup, app, ["Agent host", "Environment"]);
 				const implement = await pressControl(setup, "move-list", {
 					via: "j",
 					shows: "❯ Task type",

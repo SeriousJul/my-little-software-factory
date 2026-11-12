@@ -131,6 +131,7 @@ function planeActionDetailLines(
 function handoffDetailLines(item: WorkQueueHandoffItem): WorkQueueDetailLine[] {
 	const lines: WorkQueueDetailLine[] = [
 		{ text: `Agent: ${item.choice.agentType}`, fg: paint("text") },
+		{ text: `Agent host: ${item.choice.host}`, fg: paint("text") },
 		{ text: `Environment: ${item.choice.environment}`, fg: paint("text") },
 		{ text: `Task type: ${item.choice.taskType}`, fg: paint("text") },
 		{

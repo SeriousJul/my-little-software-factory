@@ -38,6 +38,7 @@ function createConsultation(state: FactoryState, id = "consultation-1") {
 		id,
 		typeName: "grill-with-docs",
 		agentType: "pi",
+		host: "herdr" as const,
 		environment: "worktree",
 		model: "",
 		thinking: "",
@@ -69,6 +70,7 @@ describe("the consultationRecord aggregate", () => {
 			id: uid("o"),
 			typeName: "grill",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			template: "/grill {input}",
 			initialInput: "review auth",
@@ -97,6 +99,7 @@ describe("the consultationRecord aggregate", () => {
 		expect(updated).toEqual(
 			expect.objectContaining({
 				agentType: "codex",
+				host: "herdr" as const,
 				environment: "live-worktree",
 				model: "review-model",
 				thinking: "low",
@@ -641,6 +644,7 @@ describe("durable Consultation privacy", () => {
 			id,
 			typeName: "grill-with-docs",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			model: "",
 			thinking: "",

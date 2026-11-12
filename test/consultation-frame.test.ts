@@ -205,6 +205,7 @@ function seed(
 		id,
 		typeName: "grill",
 		agentType: "pi",
+		host: "herdr" as const,
 		environment,
 		model: "",
 		thinking: "",
@@ -520,6 +521,7 @@ async function consultationBoot(
 		repos: { "github.com/acme/factory": "src/factory" },
 		commands,
 		runner,
+		agentHostEnv: { herdrEnv: "1" },
 	});
 	return { state, planeRecord };
 }
@@ -573,6 +575,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 				stubPaneReadText(fake, "pane-c1", "Agent: auth review");
 			},
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
 		try {
@@ -694,6 +697,7 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 			agentType: "pi",
 			environment: "live-worktree",
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -734,6 +738,7 @@ test("the mode cell counts the ticket seat and the Consultation seat against one
 					{ pane: paneId, status: "working" },
 				]),
 			)),
+		agentHostEnv: { herdrEnv: "1" },
 	});
 	const checkout = join(planeRecord.home, "src", "factory");
 	seed(state, WORKING_ID, checkout);
@@ -2037,6 +2042,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 				stubPaneReadText(fake, "pane-c1", "Agent: live answer");
 			},
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		try {
 			await withApp(
@@ -2127,6 +2133,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					agentType: "pi",
 					environment: "live-worktree",
 					taskType: "implement",
+					host: "herdr" as const,
 					model: "",
 					thinking: "",
 					contextWindow: "",
@@ -2167,6 +2174,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 			repos: { "github.com/acme/factory": "src/factory" },
 			commands: stubLiveExistingCheckout,
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
 		const conflictList = JSON.stringify({
@@ -2271,6 +2279,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					agentType: "pi",
 					environment: "worktree",
 					taskType: "implement",
+					host: "herdr" as const,
 					model: "",
 					thinking: "",
 					contextWindow: "",
@@ -2330,6 +2339,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 				stubLiveCheckout(fake, checkout, false);
 			},
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		try {
 			await withApp(
@@ -2471,6 +2481,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 				fake.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			},
 			runner: (fake) => (runner = new ConsultationRunner(fake, agentListJson([]))),
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		// The reads that resolve one Repository: the launcher makes them to
 		// verify its option.
@@ -2780,6 +2791,7 @@ for (const exitCase of interactionExitCases) {
 					fake,
 					agentListJson([{ pane: paneId, status: "working" }]),
 				)),
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const checkout = join(planeRecord.home, "src", "factory");
 		seed(state, INTERACTION_ID, checkout);
@@ -3015,6 +3027,7 @@ describe("The full Consultation operator flow", () => {
 					(command, args) =>
 						command === "herdr" && args.includes("worktree") && args.includes("create"),
 				),
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		try {

@@ -452,10 +452,18 @@ const rowWith = (frame: string, label: string): string =>
 	rowsOf(frame).find((r) => r.includes(label)) ?? "";
 
 /** Press one arrow, and wait for the named panel row to hold the marker. */
+/**
+ * Walk the panel selection until it reaches the named row.
+ *
+ * One key move lands one row down, and the Agent host row (issue #409)
+ * stands beside the rows it walks past, so the walk re-sends its move
+ * inside its one deadline until the named row holds the selection.
+ */
 async function selectRow(setup: Setup, direction: "up" | "down", label: string): Promise<string> {
-	return pressControl(setup, "move-list", {
+	return pressUntil(setup, "move-list", {
 		via: direction === "up" ? "↑" : "↓",
-		shows: `❯ ${label}`,
+		what: `the ${label} row`,
+		check: (f) => frameText(f).includes(`❯ ${label}`),
 	});
 }
 
@@ -524,6 +532,16 @@ async function panelOn(setup: Setup, planeRecord: Plane): Promise<void> {
 		what: "the panel to open",
 		check: (f) => frameText(f).includes("❯ Agent"),
 	});
+}
+
+/**
+ * The panel's row walk: from the Agent row the selection steps through
+ * the named rows in order, the Agent host row included (issue #409).
+ */
+async function panelWalk(setup: Setup, rows: readonly string[]): Promise<void> {
+	for (const row of rows) {
+		await pressControl(setup, "move-list", { via: "j", shows: `❯ ${row}` });
+	}
 }
 
 /**
@@ -980,7 +998,7 @@ describe("the override panel", () => {
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				await waitFor(setup, { shows: "codex" });
 				// Environment: live-worktree -> worktree.
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
+				await panelWalk(setup, ["Agent host", "Environment"]);
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				await waitFor(setup, { hides: "live-worktree" });
 				// Confirm.
@@ -1024,8 +1042,7 @@ describe("the override panel", () => {
 				);
 				// Override the task type to fix.
 				await pressControl(setup, "override", { quiet: true });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type"]);
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				await waitFor(setup, { shows: "Task type fix" });
 				// Confirm. The handoff is in flight, but the agent has not
@@ -1076,8 +1093,7 @@ describe("the override panel", () => {
 				await walkToFirstOpen(setup);
 				// Override the task type to fix, then hand off.
 				await pressControl(setup, "override", { quiet: true });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type"]);
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				await waitFor(setup, { shows: "Task type fix" });
 				const frame = await pressEnterToHandoff(setup);
@@ -1105,9 +1121,7 @@ describe("the override panel", () => {
 
 				await panelOn(setup, planeRecord);
 				// Move to the Thinking row (Agent, Environment, Task type, Model, Thinking).
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type", "Model"]);
 				// The Model row is free text: j would type into it, so the arrow
 				// moves the selection past it.
 				const frame = await pressControl(setup, "move-list", {
@@ -1226,6 +1240,7 @@ describe("the override panel", () => {
 				agentType: "codex",
 				environment: "worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "old-cycle-model",
 				thinking: "high",
 				contextWindow: "65536",
@@ -1348,9 +1363,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
 				await panelOn(setup, planeRecord);
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type", "Model"]);
 				fieldKey(setup, "home");
 				for (const _ of "task-model") fieldKey(setup, "delete");
 				// The list query the panel opens with has no stub: the empty
@@ -1380,9 +1393,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
 				await panelOn(setup, planeRecord);
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type", "Model"]);
 				await pressControl(setup, "move-list", { via: "↓", shows: "❯ Thinking" });
 				fieldKey(setup, "delete");
 				const cleared = await waitFor(setup, { shows: "Thinking (unset)" });
@@ -1462,9 +1473,7 @@ describe("the override panel", () => {
 					'Error: Model: agent type "cursor" defines no model setting',
 				);
 				expect(spanColors(setup, "factory-model")).toEqual(unfitTones());
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type", "Model"]);
 				// The row's input takes focus on its own render pass: let it land
 				// before the edit keys go in.
 				await settle(setup);
@@ -1560,8 +1569,7 @@ describe("the override panel", () => {
 				// cycle away from merge. The untouched thinking row re-derives
 				// from the new task type, so the row keeps showing what the
 				// handoff will run on.
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type"]);
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				const toImplement = await waitFor(setup, { shows: "Task type implement" });
 				// implement sets no default: the row is left to the agent.
@@ -1599,9 +1607,7 @@ describe("the override panel", () => {
 				expect(frameText(opened)).toContain("Thinking low");
 				// Move to the Thinking row: j walks the list rows, and the arrow
 				// passes the free-text Model row.
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type", "Model"]);
 				await pressControl(setup, "move-list", { via: "↓", shows: "❯ Thinking" });
 				// Touch the row: cycle the level past its default.
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
@@ -1666,8 +1672,7 @@ describe("the override panel", () => {
 				const _runner = planeRecord.fakeRunner;
 
 				await panelOn(setup, planeRecord);
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type"]);
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				await waitFor(setup, { shows: "Task type fix" });
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
@@ -1693,7 +1698,7 @@ describe("the override panel", () => {
 
 				await panelOn(setup, planeRecord);
 				// Move to the Environment row and cycle through every offered value.
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
+				await panelWalk(setup, ["Agent host", "Environment"]);
 				// "worktree" alone is a substring of "live-worktree", so the
 				// predicates read the row, not the whole frame.
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
@@ -2003,6 +2008,7 @@ describe("the override panel", () => {
 				await selectRow(setup, "up", "Model");
 				await selectRow(setup, "up", "Task type");
 				await selectRow(setup, "up", "Environment");
+				await selectRow(setup, "up", "Agent host");
 				await selectRow(setup, "up", "Agent");
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				await frameUntil(setup, "the agent to map the count", (f) =>
@@ -2179,9 +2185,7 @@ describe("the override panel", () => {
 				const runner = planeRecord.fakeRunner;
 				await panelOn(setup, planeRecord);
 				// Move to the Model row (Agent, Environment, Task type, then Model).
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type", "Model"]);
 				await typeText(setup, "gpt-5.6");
 				await pressEnterToHandoff(setup);
 				expect(startArgsOf(runner)).toEqual(modelStartArgs("gpt-5.6"));
@@ -2199,8 +2203,7 @@ describe("the override panel", () => {
 				const _runner = planeRecord.fakeRunner;
 
 				await panelOn(setup, planeRecord);
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type"]);
 				const frame = await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
 				expect(frameText(frame)).toContain("Model (empty - query failed)");
 				await typeText(setup, "gpt");
@@ -2226,9 +2229,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
 				await panelOn(setup, planeRecord);
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type", "Model"]);
 				// "é" is outside the ASCII range: it must not be dropped.
 				await typeText(setup, "gpt-é");
 				const frame = await waitFor(setup, { shows: "Model gpt-é" });
@@ -2254,11 +2255,12 @@ describe("the override panel", () => {
 				// point at the Agent row.
 				typeText(setup, "j");
 				fieldKey(setup, "right");
-				const frame = await waitFor(setup, { shows: "Environment worktree" });
-				// The cycle acted on the Environment row, not the Agent row.
-				expect(frameText(frame)).toContain("Environment worktree");
+				const frame = await waitFor(setup, { shows: "Agent host herdr-core" });
+				// The cycle acted on the Agent host row the move landed on
+				// (issue #409), not the Agent row it came from.
+				expect(frameText(frame)).toContain("Agent host herdr-core");
 				expect(frameText(frame)).not.toContain("Agent codex");
-				expect(frame).toContain("❯ Environment");
+				expect(frame).toContain("❯ Agent host");
 			},
 			(planeRecord) => ({ width: WIDTH, height: HEIGHT, plane: planeRecord }),
 		);
@@ -2273,15 +2275,18 @@ describe("the override panel", () => {
 				const _runner = planeRecord.fakeRunner;
 
 				await panelOn(setup, planeRecord);
-				// Both directions work on a list row.
+				// Both directions work on a list row, the Agent host row
+				// (issue #409) included.
+				fieldKey(setup, "tab");
+				await waitFor(setup, { shows: "❯ Agent host" });
 				fieldKey(setup, "tab");
 				await waitFor(setup, { shows: "❯ Environment" });
 				fieldKey(setup, "shift+tab");
+				await waitFor(setup, { shows: "❯ Agent host" });
+				fieldKey(setup, "shift+tab");
 				await waitFor(setup, { shows: "❯ Agent" });
 				// Both directions also work when the selected row is a text input.
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type", "Model"]);
 				fieldKey(setup, "shift+tab");
 				await waitFor(setup, { shows: "❯ Task type" });
 				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
@@ -2472,9 +2477,7 @@ describe("the override panel", () => {
 			async (setup, planeRecord) => {
 				const runner = planeRecord.fakeRunner;
 				await panelOn(setup, planeRecord);
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type", "Model"]);
 				// "claude" carries an l: the movement keys type, they do not
 				// move the selection off the row.
 				await typeText(setup, "claude");
@@ -2632,8 +2635,7 @@ describe("the override panel", () => {
 				// stays the standard free-text field (ADR 0010).
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				await waitFor(setup, { shows: "Agent codex" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type"]);
 				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				const model = await waitFor(setup, { shows: "❯ Model" });
 				expect(frameText(model)).toContain("Model (empty - no model list)");
@@ -2829,6 +2831,7 @@ describe("the override panel", () => {
 				// cannot clear, and the handoff would fail on it out of sight.
 				await pressControl(setup, "move-list", { via: "↑", shows: "❯ Task type" });
 				await pressControl(setup, "move-list", { via: "↑", shows: "❯ Environment" });
+				await pressControl(setup, "move-list", { via: "↑", shows: "❯ Agent host" });
 				await pressControl(setup, "move-list", { via: "↑", shows: "❯ Agent" });
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				await waitFor(setup, { shows: "Agent codex" });
@@ -2841,8 +2844,7 @@ describe("the override panel", () => {
 
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });
 				await waitFor(setup, { shows: "Agent pi" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type"]);
 				await pressControl(setup, "move-list", { via: "j", shows: "Model draft" });
 				setup.resize(24, 8);
 				await waitFor(setup, { shows: "Model" });
@@ -2911,8 +2913,7 @@ describe("the override panel", () => {
 				expect(frameText(frame)).toContain(
 					"↑↓/jk Move ←→/hl Change ⌫ Clear Enter Hand off Esc Cancel F1 Help",
 				);
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+				await panelWalk(setup, ["Agent host", "Environment", "Task type"]);
 				const modelFrame = await pressControl(setup, "move-list", { via: "j", shows: "❯ Model" });
 				// The Model list row's bar names its controls. The row takes
 				// typed letters, so j and k are not on its Move hint, and it
@@ -2996,9 +2997,10 @@ describe("the override panel", () => {
 				}
 				// The height cannot hold every row once the surface owns its
 				// Message line and Action bar: the box gives up its padding first,
-				// then its rows from the bottom, so the last two rows drop. The
-				// rows above them keep their columns.
-				expect(frameText(frame)).toContain("Task type");
+				// then its rows from the bottom, so the rows past Environment
+				// drop. The rows above them keep their columns.
+				expect(frameText(frame)).toContain("Environment");
+				expect(frameText(frame)).not.toContain("Task type");
 				expect(frameText(frame)).not.toContain("Model");
 				expect(frameText(frame)).not.toContain("Thinking");
 			},
@@ -3410,8 +3412,7 @@ describe("the override panel", () => {
 					await guideKey(setup, "override", "e", { quiet: true });
 					const opened = await settle(setup);
 					expect(frameText(opened)).toContain("Model openai/gpt-5.1");
-					await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-					await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+					await panelWalk(setup, ["Agent host", "Environment", "Task type"]);
 					// implement names no model: the untouched row re-derives to unset.
 					await guideKey(setup, "cycle-choice", "→", { quiet: true });
 					const toImplement = await waitFor(setup, { shows: "Task type implement" });
@@ -3635,8 +3636,7 @@ describe("the override panel", () => {
 					expect(frameText(opened)).toContain("Agent claude");
 					// claude reports no list, so no query ran for the agent the row opened on.
 					expect(runner.modelListCalls).toEqual([]);
-					await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-					await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+					await panelWalk(setup, ["Agent host", "Environment", "Task type"]);
 					// implement names no agent, so the untouched row follows its profile
 					// through the default agent instead of holding claude.
 					await guideKey(setup, "cycle-choice", "→", { quiet: true });
@@ -3644,11 +3644,11 @@ describe("the override panel", () => {
 					expect(frameText(toImplement)).toContain("Agent pi");
 					// The operator touches the agent row, and a later switch leaves it be.
 					await pressControl(setup, "move-list", { via: "k", shows: "❯ Environment" });
+					await pressControl(setup, "move-list", { via: "k", shows: "❯ Agent host" });
 					await pressControl(setup, "move-list", { via: "k", shows: "❯ Agent" });
 					await guideKey(setup, "cycle-choice", "→", { quiet: true });
 					await waitFor(setup, { shows: "Agent codex" });
-					await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
-					await pressControl(setup, "move-list", { via: "j", shows: "❯ Task type" });
+					await panelWalk(setup, ["Agent host", "Environment", "Task type"]);
 					await guideKey(setup, "cycle-choice", "→", { quiet: true });
 					const back = await waitFor(setup, { shows: "Task type fix" });
 					expect(frameText(back)).toContain("Agent codex");
@@ -3725,7 +3725,7 @@ describe("the override panel", () => {
 				const checkout = join(planeRecord.home, "src", "billing");
 
 				await panelOn(setup, planeRecord);
-				await pressControl(setup, "move-list", { via: "j", shows: "❯ Environment" });
+				await panelWalk(setup, ["Agent host", "Environment"]);
 				// The value column shows the new kind; "live-worktree" still
 				// carries "worktree", so the full row is the predicate.
 				await guideKey(setup, "cycle-choice", "→", { quiet: true });

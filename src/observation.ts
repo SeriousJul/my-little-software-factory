@@ -72,6 +72,7 @@
  * restart anything.
  */
 
+import type { AgentHostResolution } from "./agent-host.ts";
 import {
 	herdrAgentList,
 	herdrAgentRead,
@@ -480,6 +481,12 @@ interface ObservationOptions {
 	/** The config, read at each cycle: a runtime write-back stays visible. */
 	config: () => FactoryConfig;
 	/**
+	 * The host the run resolved at boot (issue #409): every automatic start the
+	 * cycle asks for - a top-up continuation, a route, a plane action - runs on
+	 * the run's host, never on a host a previous handoff of the ticket recorded.
+	 */
+	agentHost: AgentHostResolution;
+	/**
 	 * The Handoff dispatch module the cycle runs: the claim and its hard start
 	 * checks, the Work queue's pickup, the plane action's ask, the Plane
 	 * action's run mark, and the Close cleanup, through the narrow port the
@@ -578,6 +585,7 @@ export class ObservationCoordinator {
 	private readonly state: ObservationAggregates;
 	private readonly herdr: AgentReader;
 	private readonly config: () => FactoryConfig;
+	private readonly agentHost: AgentHostResolution;
 	private readonly dispatch: ObservationDispatch;
 	private readonly onCycleEnd: (ticketIdentity: string) => void;
 	private readonly clock: RefreshClock;
@@ -698,6 +706,7 @@ export class ObservationCoordinator {
 		this.state = options.state;
 		this.herdr = options.herdr;
 		this.config = options.config;
+		this.agentHost = options.agentHost;
 		this.dispatch = options.dispatch;
 		this.onCycleEnd = options.onCycleEnd;
 		this.clock = options.clock;
@@ -730,6 +739,9 @@ export class ObservationCoordinator {
 				environment: handoff.environment,
 				tabId: handoff.tabId,
 				workspaceId: handoff.workspaceId,
+				// The close reaches the environment on the host the handoff ran on
+				// (issue #409).
+				host: handoff.host,
 			},
 			end,
 		);
@@ -2020,7 +2032,7 @@ export class ObservationCoordinator {
 			// agent still holds falls to the cycle name instead of failing
 			// as a stranger (ADR 0027).
 			routeFromIdentity: ticket.identity,
-			choice: resolveHandoffChoice(config, step.taskType, {
+			choice: resolveHandoffChoice(config, step.taskType, this.agentHost.host, {
 				...(outcome === null || outcome.agent === undefined ? {} : { agent: outcome.agent }),
 				...(outcome === null || outcome.environment === undefined
 					? {}
@@ -2070,7 +2082,7 @@ export class ObservationCoordinator {
 				automatic: true,
 				ticketIdentity: position.identity,
 				routeFromIdentity: ticket.identity,
-				choice: resolveHandoffChoice(config, step.taskType, {
+				choice: resolveHandoffChoice(config, step.taskType, this.agentHost.host, {
 					...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
 					...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
 				}),
@@ -2405,8 +2417,15 @@ export class ObservationCoordinator {
 			},
 			// The same choices the previous handoff ran with: the
 			// operator's restart keeps the model, thinking level, and
-			// context window, and the auto one matches it.
+			// context window, and the auto one matches it. The host is the host
+			// the previous handoff recorded, whatever the run resolved (issue #409,
+			// ADR 0142): a restart on herdr-core re-runs the core dialect, and a
+			// restart on herdr re-runs herdr's, beside the ticket whose state the
+			// run now resolves for.
 			choice: baseChoice(ticket.agentType, ticket.environment, ticket.taskType, {
+				// A Restart repeats the host the handoff recorded (issue #409):
+				// the start runs the record's host, whatever the config names now.
+				host: ticket.host,
 				model: ticket.model,
 				thinking: ticket.thinking,
 				contextWindow: ticket.contextWindow,
@@ -2509,7 +2528,7 @@ export class ObservationCoordinator {
 		// The configured settings of the ticket's task profile (ADR 0009): an
 		// unattended handoff starts with the same resolution chain a manual
 		// one sees in the panel, and the fit check guards what it starts with.
-		const choice = resolveHandoffChoice(config, taskType);
+		const choice = resolveHandoffChoice(config, taskType, this.agentHost.host);
 		const added = await this.topUpAsk(
 			{
 				origin: "open",

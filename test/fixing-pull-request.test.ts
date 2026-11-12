@@ -234,6 +234,7 @@ describe("the list rule", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",

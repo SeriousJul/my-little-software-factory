@@ -37,6 +37,12 @@ import { commandFailureText } from "./runner.ts";
 /** The Agent host the plane can resolve to. */
 export type AgentHost = "herdr" | "herdr-core";
 
+/**
+ * The two Agent hosts a start can take (issue #409), in the order the
+ * Consultation launcher and the override panel offer them on their host rows.
+ */
+export const AGENT_HOSTS: readonly AgentHost[] = ["herdr", "herdr-core"];
+
 /** The command word of the herdr host. */
 export const HERDR_COMMAND = "herdr";
 
@@ -910,6 +916,62 @@ export function agentHostBootLine(resolution: AgentHostResolution): string {
 		"the first herdr-core read starts that session's core when none runs)"
 	);
 }
+
+// ---------------------------------------------------------------------------
+// Host availability and the lines it states
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the run's host can reach the host a start names (issue #409).
+ *
+ * A host a start names is reachable when the plane's run can run that
+ * host's commands. The herdr host answers only where a herdr server runs:
+ * a run that resolved herdr-core stands outside herdr - a herdr mark would
+ * have named herdr instead - and the measurement ADR 0141 recorded stands
+ * for it, that no herdr server answers there. A herdr run reaches
+ * herdr-core: the first core command starts the session's core when none
+ * runs, and the run states that effect at boot rather than pre-checking it
+ * (ADR 0141). The plane pre-checks nothing it cannot check without causing
+ * the effect, so a host whose command cannot run answers at start with its
+ * own refusal.
+ */
+export function agentHostReachable(run: AgentHostResolution, host: AgentHost): boolean {
+	if (host === "herdr") return run.host === "herdr";
+	return true;
+}
+
+/**
+ * The one line that names a host the plane's run cannot reach, and the
+ * reason (issue #409, ADR 0141). The Consultation launcher's Launch row, the
+ * override panel's Agent host row, the start's pre-flight, and the Key
+ * guide all state this one line, so the host the plane cannot reach never
+ * has two phrasings.
+ */
+export function agentHostUnreachableLine(host: AgentHost): string {
+	return `host ${host} is unreachable from this run: the plane runs outside herdr, and no herdr server answers there`;
+}
+
+/**
+ * The refusal Goto states on the herdr-core host (ADR 0141): the host
+ * answers no focus move, and the line hands the operator the attach command
+ * when the Agent's terminal stands on the host. `name` is null for a
+ * handoff the run's host cannot reach, and for those the line states the
+ * refusal without a command to type.
+ */
+export function herdrCoreGotoLine(name: string | null): string {
+	return name === null
+		? "the herdr-core host answers no focus move"
+		: `the herdr-core host answers no focus move: type ${HERDR_CORE_COMMAND} attach ${name}`;
+}
+
+/**
+ * The refusal the Live view states on the herdr-core host (ADR 0141): the
+ * host reads a screen as text and answers no styled read, and the Live view
+ * built from a fake of that stream is worse than the Live view that is
+ * absent.
+ */
+export const HERDR_CORE_LIVE_VIEW_LINE =
+	"the herdr-core host answers no styled read: the Live view is not offered";
 
 /**
  * The version floor of the herdr-core host (ADR 0141): the release every

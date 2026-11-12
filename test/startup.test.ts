@@ -557,6 +557,7 @@ describe("the whole startup", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -622,14 +623,14 @@ describe("the Agent host the boot resolves (issue #408, ADR 0141)", () => {
 				herdrEnv: "",
 				hcTerminalId: "t1",
 			}),
-		).resolves.toEqual({ host: "herdr", fact: "config" });
+		).resolves.toEqual({ host: "herdr" as const, fact: "config" });
 	});
 
 	test("with the herdr mark and no pin, the boot names herdr", async () => {
 		const statePath = inTempDir("host-herdr-mark")("state.sqlite");
 		await expect(
 			resolveHost("host-herdr-mark", configBody(statePath), { herdrEnv: "1" }),
-		).resolves.toEqual({ host: "herdr", fact: "herdr-mark" });
+		).resolves.toEqual({ host: "herdr" as const, fact: "herdr-mark" });
 	});
 
 	test("with the herdr-core mark and no pin, the boot names herdr-core", async () => {
@@ -663,7 +664,7 @@ describe("the Agent host the boot resolves (issue #408, ADR 0141)", () => {
 		const result = await runStartup(configPath);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
-		expect(result.agentHost).toEqual({ host: "herdr", fact: "herdr-mark" });
+		expect(result.agentHost).toEqual({ host: "herdr" as const, fact: "herdr-mark" });
 		result.state.close();
 		// The record entry is the statement the App stands on the Message line:
 		// the host the boot resolved, the fact that resolved it, and the core-
@@ -703,7 +704,7 @@ describe("the Agent host the boot resolves (issue #408, ADR 0141)", () => {
 		const result = await runStartup(configPath);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
-		expect(result.agentHost).toEqual({ host: "herdr", fact: "config" });
+		expect(result.agentHost).toEqual({ host: "herdr" as const, fact: "config" });
 		expect(result.notes.filter((line) => line.includes("version floor"))).toEqual([]);
 		result.state.close();
 	});

@@ -819,6 +819,10 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 				taskType: choice.taskType,
 				agentType: choice.agentType,
 				environment: choice.environment,
+				// The host the handoff ran on, read from the record beside its
+				// handles: a Restart takes this host whatever the config names now
+				// (issue #409, ADR 0142).
+				host: handoff.host,
 				model: choice.model,
 				thinking: choice.thinking,
 				contextWindow: choice.contextWindow,

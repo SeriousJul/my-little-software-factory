@@ -9,6 +9,7 @@
  * work.
  */
 
+import type { AgentHost, AgentHostResolution } from "./agent-host.ts";
 import {
 	type CheckoutChannel,
 	type CheckoutGate,
@@ -82,6 +83,11 @@ export interface StoredHandoffFacts {
 	environment: EnvironmentKind;
 	tabId: string | null;
 	workspaceId: string | null;
+	/**
+	 * The Agent host the handoff ran on (issue #409): the close reaches the
+	 * environment on the host it stands on.
+	 */
+	host: AgentHost;
 }
 
 /**
@@ -312,6 +318,12 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	runner: CommandRunner;
 	/** The current config. A queued handoff reads it when it starts. */
 	config: () => FactoryConfig;
+	/**
+	 * The host the run resolved at boot (issue #409): every start this module
+	 * claims runs its pre-flight against it, and a choice that names a host the
+	 * run cannot reach fails the start before any external step.
+	 */
+	agentHost: AgentHostResolution;
 	/**
 	 * The Parallel limit seats held now, from one shared source (ADR 0034):
 	 * the ticket seats, the unresolved claims, and the Consultation seats.
@@ -568,6 +580,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private readonly state: HandoffDispatchAggregates;
 	private readonly runner: CommandRunner;
 	private readonly config: () => FactoryConfig;
+	private readonly agentHost: AgentHostResolution;
 	private readonly seatCount: () => number;
 	private readonly missingSeatTickets: () => readonly string[];
 	private readonly pickupConsultation?: (
@@ -706,6 +719,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.state = options.state;
 		this.runner = options.runner;
 		this.config = options.config;
+		this.agentHost = options.agentHost;
 		this.seatCount = options.seatCount;
 		this.missingSeatTickets = options.missingSeatTickets ?? (() => []);
 		this.pickupConsultation = options.pickupConsultation;
@@ -2578,6 +2592,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		}
 		return handOffTicket(ticket, choice, {
 			config: this.config(),
+			// The host the run resolved (issue #409): the start's pre-flight
+			// refuses a host the run cannot reach, and the choice's host is the
+			// dialect the start runs whatever that answer says.
+			agentHost: this.agentHost,
 			runner: this.runner,
 			home: this.home,
 			onStage,
@@ -2697,6 +2715,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 			environment: stored.environment,
 			tabId: stored.tabId,
 			workspaceId: stored.workspaceId,
+			// The close reaches the environment on the host the handoff ran on
+			// (issue #409): a terminal the run's host holds, the way a workspace
+			// or tab the herdr host holds.
+			host: stored.host,
 		};
 		try {
 			return reach === "cleanup"
@@ -2940,19 +2962,22 @@ class HandoffDispatchModule implements HandoffDispatch {
 					environment: handoff.environment,
 					tabId: handoff.tabId,
 					workspaceId: handoff.workspaceId,
+					host: handoff.host,
 				},
 				this.runner,
 				options,
 			);
 			if (failure === undefined) {
-				const reach = closeCleanupReach(handoff);
+				const reach = closeCleanupReach({ ...handoff });
 				this.state.handoff.clearLeftoverEnvironments(
 					identity,
 					reach.scope === "workspace"
 						? { workspaceId: reach.workspaceId }
 						: reach.scope === "tab"
 							? { tabId: reach.tabId }
-							: { handoffId: handoff.handoffId },
+							: reach.scope === "terminal"
+								? { tabId: reach.terminalId }
+								: { handoffId: handoff.handoffId },
 				);
 				return undefined;
 			}

@@ -10,7 +10,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-
+import type { AgentHost } from "../src/agent-host.ts";
 import { ConsultationLauncher } from "../src/components/consultation-launcher.ts";
 import type { StandingFacts } from "../src/components/controls.ts";
 import { frameText, launchConsultationDraft, waitFor } from "./app-harness.ts";
@@ -40,7 +40,7 @@ const BASE_STANDING: StandingFacts = {
 };
 
 async function launcher(
-	draft?: { typeName: string; repositoryIdentity: string; input: string } | null,
+	draft?: { typeName: string; repositoryIdentity: string; input: string; host: AgentHost } | null,
 	repositoriesOverride?: typeof repositories,
 ) {
 	const onLaunch = mock();
@@ -91,6 +91,9 @@ describe("Consultation launcher Repository choice", () => {
 				typeName: "grill",
 				repositoryIdentity: "github.com/Acme/Factory",
 				input: "review the design",
+				// The run stands on the herdr-core host (ADR 0141), so the host
+				// row starts on it and the launch carries it.
+				host: "herdr-core",
 			},
 			options,
 		);
@@ -99,7 +102,7 @@ describe("Consultation launcher Repository choice", () => {
 			// The draft holds the input, so the typed input is the empty text: the
 			// route stands on the draft's own value.
 			await launchConsultationDraft(setup, "");
-			expect(onLaunch).toHaveBeenCalledWith("grill", options[1], "review the design");
+			expect(onLaunch).toHaveBeenCalledWith("grill", options[1], "review the design", "herdr-core");
 		} finally {
 			await setup.renderer.destroy();
 		}
@@ -114,7 +117,12 @@ describe("Consultation launcher input", () => {
 			expect(frame).toContain("Type grill");
 			expect(frame).toContain("Repository acme/factory");
 			await launchConsultationDraft(setup, "review the design");
-			expect(onLaunch).toHaveBeenCalledWith("grill", repositories[0], "review the design");
+			expect(onLaunch).toHaveBeenCalledWith(
+				"grill",
+				repositories[0],
+				"review the design",
+				"herdr-core",
+			);
 		} finally {
 			await setup.renderer.destroy();
 		}
@@ -141,6 +149,7 @@ describe("Consultation launcher input", () => {
 			typeName: "grill",
 			repositoryIdentity: repositories[0].identity,
 			input: "a".repeat(bytes),
+			host: "herdr-core",
 		});
 		try {
 			// The draft holds the oversized input, so the route types nothing

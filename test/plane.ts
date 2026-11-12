@@ -123,6 +123,7 @@ export interface ConsultationSeed {
 	id?: string;
 	typeName: string;
 	agentType: string;
+	host: "herdr";
 	environment: EnvironmentKind;
 	model?: string;
 	thinking?: string;
@@ -584,6 +585,7 @@ function seedRowHandoff(state: FactoryState, row: Ticket): void {
 		agentType: handoff.agentType,
 		environment: handoff.environment,
 		taskType: handoff.taskType,
+		host: handoff.host,
 		model: handoff.model,
 		thinking: handoff.thinking,
 		contextWindow: handoff.contextWindow,
@@ -651,6 +653,7 @@ function seedConsultation(state: FactoryState, seed: ConsultationSeed): void {
 		...(seed.id === undefined ? {} : { id: seed.id }),
 		typeName: seed.typeName,
 		agentType: seed.agentType,
+		host: seed.host,
 		environment: seed.environment,
 		...(seed.model === undefined ? {} : { model: seed.model }),
 		...(seed.thinking === undefined ? {} : { thinking: seed.thinking }),
@@ -874,6 +877,7 @@ function seedTicketHandoffs(state: FactoryState, handoffs: readonly PlaneTicketH
 			agentType: entry.choice?.agentType,
 			environment: entry.choice?.environment,
 			taskType: entry.choice?.taskType,
+			host: "herdr",
 			model: entry.choice?.model,
 			thinking: entry.choice?.thinking,
 			contextWindow: entry.choice?.contextWindow,
