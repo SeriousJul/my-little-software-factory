@@ -1,22 +1,27 @@
 # The Agent host verification
 
-Status: **the decision records stand, and step 1 of the change is in the tree.**
-ADR 0141,
-ADR 0142, ADR 0143, and ADR 0144 and the glossary's **Agent host**, **Host
-resolution**, and **Adoption label** entries landed on 2026-11-12, and the
-first step of the change landed beside them (pull request #414): one module
-(`src/agent-host.ts`) owns both Agent host dialects, the host word map, and the
-host resolution the plane will call once per start - the config, then the
-environment mark, then the default - as a tested function beside its marks,
-with the config key and the boot statement that call it owed to step 2; the
-Stub herdr world answers the herdr-core dialect beside herdr and git, its
-closed-surface rule walking the host dialects the module builds, and the check
-that refuses a `herdr` or `hc` argument outside the module stands. The plane
-still sends no herdr-core command and no launcher or override-panel row exists,
-and every plane-side flow on that host is recorded as not run below. Nothing
-in this file is a claim about the plane: every herdr-core fact below is a hand
-probe of the host program. A check that could not run is recorded as
-incomplete; it is not a pass.
+Status: **the decision records stand, and steps 1 and 2 of the change are in
+the tree.** ADR 0141, ADR 0142, ADR 0143, and ADR 0144 and the glossary's
+**Agent host**, **Host resolution**, and **Adoption label** entries landed on
+2026-11-12, and the first step of the change landed beside them (pull request
+#414): one module (`src/agent-host.ts`) owns both Agent host dialects, the host
+word map, and the host resolution - the config, then the environment mark,
+then the default - as a tested function beside its marks; the Stub herdr world
+answers the herdr-core dialect beside herdr and git, its closed-surface rule
+walking the host dialects the module builds, and the check that refuses a
+`herdr` or `hc` argument outside the module stands. Step 2 (issue #408) landed
+on the same branch: the config takes the `agent-host` key and the
+`[agent-host.herdr-core]` table, the boot resolves the host once - the
+operator's key first, then the environment mark it reads once, then the
+default - and states the host and the fact that resolved it on the Message
+line and in the Plane boot record, and a herdr-core host below 0.1.20 wears
+one Warning line at the boot from its own version read, the one host command
+the boot runs. The plane still sends no herdr-core host command beyond that
+version read, no launcher or override-panel row exists, and every plane-side
+flow on that host is recorded as not run below. Nothing in this file is a
+claim about the plane: every herdr-core fact below is a hand probe of the host
+program. A check that could not run is recorded as incomplete; it is not a
+pass.
 
 See [ADR 0141](../adr/0141-the-plane-resolves-its-agent-host-herdr-or-herdr-core.md),
 [ADR 0142](../adr/0142-one-run-holds-agents-on-both-hosts-and-the-host-stands-on-the-handoff.md),
@@ -77,6 +82,12 @@ is the answer a caller gets.
 - **herdr-core's terminal size**: a start from a non-terminal gets `200x120`, and
   the child program receives `HC_TERMINAL_ID` (a probe printed its own address and
   `stty size` as `120 200`).
+- **The version read the boot runs**: `hc --version` in an isolated session
+  (2026-11-12, this machine) answered `hc 0.1.20` with exit 0 and left the
+  session's runtime directory empty - the read answers from the binary and
+  starts no core, the measurement ADR 0141's no-lifecycle rule rests on. The
+  boot's floor check runs this same probe, and an older host states the
+  Warning line beside it.
 - **The poll cost ADR 0142 states**: one roster read plus one `hc get` per Agent,
   because the roster carries no status word. At the shipped
   `max-parallel-agents = 2` that is **three commands per poll** on that host,
@@ -97,8 +108,10 @@ is the answer a caller gets.
 Everything on the plane's side of this design. Recorded as incomplete, each one
 owed by the change that lands it:
 
-- No plane command has ever gone to herdr-core: no start, prompt, roster, wait,
-  read, kill, or removal, and no Observation cycle over a herdr-core roster.
+- No plane command has ever gone to herdr-core as a host command: no start,
+  prompt, roster, wait, read, kill, or removal, and no Observation cycle over
+  a herdr-core roster. The version read the boot runs is the one host command
+  the plane sends, and it is a read that starts no core.
 - The launcher's and the override panel's Agent host row do not exist, so no
   frame test, no refusal wording, and no Key guide row stands.
 - The Goto refusal that states `hc attach <name>` is unwritten and untested.

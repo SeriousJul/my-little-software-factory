@@ -486,6 +486,7 @@ export async function bootApp(fields: AppBootFields = {}): Promise<AppSetup> {
 		state: planeRecord.props.state,
 		sources: planeRecord.props.sources,
 		logger: logger ?? planeRecord.props.logger,
+		agentHostResolution: planeRecord.props.agentHostResolution,
 		loopPolicy: loopPolicy ?? planeRecord.props.loopPolicy,
 	};
 	let stopApp: (() => void) | null = null;

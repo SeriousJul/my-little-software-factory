@@ -32,7 +32,10 @@ export interface MessageFact {
  * fact an operation wrote; it wears the severity it was written with, a
  * refusal's warning by default and the info of a plain result. `sourceHealth`
  * is a standing condition of the Ticket sources rather than the result of a
- * request.
+ * request. `agentHost` is the Agent host boot statement (issue #408): written
+ * once at boot, and the lowest fact on the line: buried beneath every other
+ * fact, it returns to the line whenever the plane is quiet again, and no
+ * writer clears it.
  */
 export interface MessageFacts {
 	working?: string;
@@ -40,6 +43,7 @@ export interface MessageFacts {
 	news?: string;
 	notice?: { severity: "info" | "warning"; text: string };
 	sourceHealth?: string;
+	agentHost?: string;
 }
 
 /**
@@ -67,6 +71,9 @@ export function selectMessage(facts: MessageFacts): MessageFact | null {
 	if (facts.notice !== undefined)
 		return { severity: facts.notice.severity, text: facts.notice.text };
 	if (facts.sourceHealth !== undefined) return { severity: "warning", text: facts.sourceHealth };
+	// The boot statement is the lowest fact on the line: the plane's standing
+	// word on its host, visible only while no other fact stands.
+	if (facts.agentHost !== undefined) return { severity: "info", text: facts.agentHost };
 	return null;
 }
 

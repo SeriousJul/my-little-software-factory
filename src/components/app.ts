@@ -35,7 +35,9 @@ import {
 	useState,
 } from "react";
 import {
+	type AgentHostResolution,
 	type AgentStatus,
+	agentHostBootLine,
 	herdrAgentFocus,
 	herdrWorkspaceGet,
 	normalizeAgentStatus,
@@ -445,6 +447,12 @@ export interface AppProps {
 	sources: readonly TicketSource[];
 	/** The plane's logger: the file logger, or the no-op logger. */
 	logger: Logger;
+	/**
+	 * The Agent host the boot resolved, and the fact that resolved it
+	 * (issue #408, ADR 0141): the boot record wrote the statement for the same
+	 * resolution, and the App states it once on the Message line from it.
+	 */
+	agentHostResolution: AgentHostResolution;
 	/** The loop policy: the named fact that decides which loops run. */
 	loopPolicy: AppLoopPolicy;
 	/**
@@ -895,7 +903,7 @@ function useAppDispatches(prev: AppOpsFieldsStage) {
 type AppDispatchesStage = ReturnType<typeof useAppDispatches>;
 
 /** The plane's standing facts, stated once per render (ADR 0014): the run state, the source counts, the configured Consultation types, and the exit key. */
-function useAppStanding(prev: AppDispatchesStage) {
+function useAppStanding(props: AppProps, prev: AppDispatchesStage) {
 	const { config, configRef, coordinatorRef, handoffDispatch, liveSources } = prev;
 	/**
 	 * The plane's standing facts, stated once per render (ADR 0014).
@@ -922,6 +930,10 @@ function useAppStanding(prev: AppDispatchesStage) {
 		// the header's corner lamp and the border lamp read it from here, the
 		// same value the key toggles and the drain honors.
 		queuePaused: prev.queuePaused,
+		// The Agent host the boot resolved (issue #408): the launcher, the
+		// override panel, and the Key guide read it from this one record and
+		// restate nothing, the way every other standing fact is read.
+		agentHost: props.agentHostResolution,
 	};
 	return { ...prev, standing };
 }
@@ -2135,7 +2147,7 @@ function useAppBaseStages(props: AppProps): AppConsultationOpsFieldsStage {
 	const s9a = useAppFactReads(s9);
 	const s10 = useAppTicketFacts(props, s9a);
 	const s11 = useAppSourceFacts(props, s10);
-	const s12 = useAppMessageState(s11);
+	const s12 = useAppMessageState(props, s11);
 	const s13 = useAppHeaderFacts(props, s12);
 	const s14a = useAppCompactLayout(s13);
 	const s14 = useAppLayoutFacts(s14a);
@@ -2155,7 +2167,7 @@ function useAppBaseStages(props: AppProps): AppConsultationOpsFieldsStage {
 	const o10 = useAppRepoInitShell(props, o9);
 	const o11 = useAppOpsFields(props, o10);
 	const o12 = useAppDispatches(o11);
-	const o13 = useAppStanding(o12);
+	const o13 = useAppStanding(props, o12);
 	const o14 = useAppBaseMode(o13);
 	const o15 = useAppMainFacts(props, o14);
 	const o16 = useAppHandoffCallbacks(o15);
@@ -8329,7 +8341,7 @@ function useAppSourceFacts(props: AppProps, prev: AppTicketFactsStage) {
 type AppSourceFactsStage = ReturnType<typeof useAppSourceFacts>;
 
 /** The Message line's state (ADR 0118). */
-function useAppMessageState(prev: AppSourceFactsStage) {
+function useAppMessageState(props: AppProps, prev: AppSourceFactsStage) {
 	const { themeWarning, attention, staleSourceFacts } = prev;
 	// The Theme the control plane paints in, resolved once for the run: the
 	// herdr theme when the app runs inside herdr, the standalone dark theme
@@ -8347,6 +8359,10 @@ function useAppMessageState(prev: AppSourceFactsStage) {
 			? undefined
 			: { severity: "info", text: themeWarning },
 		attention,
+		// The Agent host boot statement (issue #408): the one line the boot
+		// stands on the Message line beside the Plane boot record entry it
+		// wrote for the same resolution, the lowest fact the line holds.
+		agentHostBootLine(props.agentHostResolution),
 	);
 	const {
 		clearOperation: clearOperationMessage,

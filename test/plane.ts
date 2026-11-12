@@ -46,7 +46,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
+import { resolveAgentHost } from "../src/agent-host.ts";
 import type { AppProps } from "../src/components/app.ts";
 import {
 	configToToml,
@@ -296,6 +296,15 @@ export interface PlaneStanding {
 	runner?: (fake: FakeRunner) => CommandRunner;
 	/** The per-case command runner answers, run over the plane's own FakeRunner. */
 	commands?: (fake: FakeRunner, home: string) => void;
+	/**
+	 * The environment marks the boot reads for the Agent host resolution
+	 * (issue #408, ADR 0141). The default stands no mark, so a case that pins
+	 * no host resolves the default herdr-core, the way a machine outside any
+	 * herdr and herdr-core session does: the plane never reads the test
+	 * process's own marks. A case that stands a mark names the variable it
+	 * stands, the way the boot reads the process's.
+	 */
+	agentHostEnv?: { herdrEnv?: string; hcTerminalId?: string };
 	// The Ticket source doubles.
 	/**
 	 * The settled reads of the standing's sources on the state file, before
@@ -1169,6 +1178,10 @@ export async function plane(standing: PlaneStanding = {}): Promise<Plane> {
 			configPath,
 			sources,
 			logger: NOOP_LOGGER,
+			agentHostResolution: resolveAgentHost(config.agentHost, {
+				herdrEnv: standing.agentHostEnv?.herdrEnv,
+				hcTerminalId: standing.agentHostEnv?.hcTerminalId,
+			}),
 			loopPolicy:
 				standing.pollIntervalMs === undefined
 					? { kind: "held" }

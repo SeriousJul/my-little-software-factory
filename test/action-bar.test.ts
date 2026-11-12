@@ -715,11 +715,15 @@ describe("the contextual Action bar", () => {
 				expect(await settle(setup)).toContain("○ auto 2/2");
 				await toggleAutoHandoff(setup, { quiet: true });
 				expect(await settle(setup)).toContain("● manual 2/2");
-				// r refreshes the configured source, and the progress clears.
+				// r refreshes the configured source, and the progress clears: the
+				// line returns to the boot statement the plane states while it is
+				// quiet (issue #408).
 				await pressControl(setup, "refresh", { shows: "Working: refreshing" });
 				await callsReached(source, 2);
 				source.settleCurrent();
-				await frameUntil(setup, "the refresh to clear", (f) => messageRowOf(f).trim() === "");
+				await frameUntil(setup, "the refresh to clear", (f) =>
+					messageRowOf(f).trim().includes("agent host: herdr-core"),
+				);
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);

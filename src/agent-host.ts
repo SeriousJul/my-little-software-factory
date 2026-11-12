@@ -12,7 +12,9 @@
  *   plane's named facts in one table, so a host rename is a change to this
  *   table, not a search-and-replace across the surfaces.
  * - the host resolution: the operator's config, then the environment mark,
- *   then the default.
+ *   then the default. The boot calls it once with the config's value or
+ *   nothing and the marks it read once (issue #408), and the boot statement
+ *   the module owns states the answer beside the fact that resolved it.
  *
  * This module is not a command runner: the Command runner seam (src/runner.ts)
  * is still the plane's only egress to the outside world. The module builds
@@ -21,7 +23,7 @@
  * Step 1 of issue #407 stands the module up and moves the existing `herdr`
  * dialect through it. The `herdr-core` dialect stands in the module and in the
  * Stub herdr world (ADR 0132) without a product-side caller: the plane sends
- * no `herdr-core` command until the step 2 flows land.
+ * no `herdr-core` command until the later flows land.
  *
  * The answer shapes the readers trace to the recorded probes in
  * docs/verification/agent-host-herdr-core.md. A shape the probes could not
@@ -879,4 +881,94 @@ export function resolveAgentHost(
 		return { host: "herdr-core", fact: "herdr-core-mark" };
 	}
 	return { host: "herdr-core", fact: "default" };
+}
+
+// ---------------------------------------------------------------------------
+// The boot statement and the version floor
+// ---------------------------------------------------------------------------
+
+/** The fact word the boot statement names beside the host it resolved. */
+const AGENT_HOST_FACT_WORDS: Record<AgentHostFact, string> = {
+	config: "the config",
+	"herdr-mark": "the herdr mark",
+	"herdr-core-mark": "the herdr-core mark",
+	default: "the default",
+};
+
+/**
+ * The boot statement (issue #408, ADR 0141): the one line the boot writes
+ * once, on the Message line and in the Plane boot record (ADR 0129). It names
+ * the host the boot resolved and the fact that resolved it, and it states the
+ * core-start effect the measurement stands on: on Unix no herdr-core read
+ * answers without starting the session's core when none runs, so the run
+ * states the effect instead of pre-checking it (ADR 0141).
+ */
+export function agentHostBootLine(resolution: AgentHostResolution): string {
+	return (
+		`agent host: ${resolution.host} ` +
+		`(resolved from ${AGENT_HOST_FACT_WORDS[resolution.fact]}; ` +
+		"the first herdr-core read starts that session's core when none runs)"
+	);
+}
+
+/**
+ * The version floor of the herdr-core host (ADR 0141): the release every
+ * answer shape in the verification record was read against. An older host is
+ * one Warning line at the boot, and a shape that host refuses comes back as
+ * that host's own reason: the plane does not guess which shape an older core
+ * refuses.
+ */
+export const HERDR_CORE_VERSION_FLOOR = "0.1.20";
+
+/**
+ * The herdr-core version read: the one host command the boot may run beside
+ * its no-lifecycle rule, because the version flag answers from the binary and
+ * starts no core. `binary` is the operator's `[agent-host.herdr-core]`
+ * binary, and an unset one stands on the host's own command word.
+ */
+export function herdrCoreVersionRead(binary?: string): HostInvocation {
+	return { command: binary ?? HERDR_CORE_COMMAND, args: ["--version"] };
+}
+
+/**
+ * The version one `--version` answer carries, or null when it carries none:
+ * a failed command and an answer whose lines name no dotted version read as
+ * absent. A tool manager's preamble may stand above the answer's line, so the
+ * read takes the first line that carries a version, not the first line.
+ */
+export function herdrCoreVersionOf(result: CommandResult): string | null {
+	if (result.code !== 0) {
+		return null;
+	}
+	for (const line of result.stdout.split("\n")) {
+		const match = /(\d+\.\d+\.\d+)/.exec(line);
+		if (match !== null) return match[1];
+	}
+	return null;
+}
+
+/**
+ * Whether one version stands below another, segment by segment on the digits:
+ * `0.1.20` stands above `0.1.9`, which a string compare would read the other
+ * way. A missing segment stands as zero, so a shorter version stands below a
+ * longer one that agrees on every segment it has.
+ */
+export function versionIsBelow(version: string, above: string): boolean {
+	const left = version.split(".").map((part) => Number.parseInt(part, 10));
+	const right = above.split(".").map((part) => Number.parseInt(part, 10));
+	const length = Math.max(left.length, right.length);
+	for (let i = 0; i < length; i += 1) {
+		const a = left[i] ?? 0;
+		const b = right[i] ?? 0;
+		if (a !== b) return a < b;
+	}
+	return false;
+}
+
+/** The one Warning line the boot states for a herdr-core host below the floor. */
+export function herdrCoreFloorWarningLine(version: string): string {
+	return (
+		`the herdr-core host is ${version}, below the plane's version floor ${HERDR_CORE_VERSION_FLOOR}: ` +
+		"the plane's answer shapes were read on the floor, and a shape that host refuses comes back as that host's own reason"
+	);
 }

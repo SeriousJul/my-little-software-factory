@@ -4,7 +4,7 @@ import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs
 import os from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
-
+import type { AgentHost } from "./agent-host.ts";
 import {
 	ConfigMigrationError,
 	hasOldWorkflowMachineKeys,
@@ -208,6 +208,31 @@ export interface WorkflowTransition {
 }
 
 /**
+ * The [agent-host.herdr-core] table (ADR 0141): the herdr-core host's own
+ * connection, beside the `agent-host` key that pins the host to it. The plane
+ * writes no herdr-core config of its own: these keys stand in the operator's
+ * file, and an unset one takes herdr-core's own answer.
+ */
+export interface AgentHostHerdrCoreConfig {
+	/**
+	 * The hc binary the plane runs. Unset stands on the host's own command
+	 * word, the `hc` on the PATH.
+	 */
+	binary?: string;
+	/**
+	 * The herdr-core session the plane's terminals stand in. Unset is
+	 * herdr-core's own default session, the one the operator's terminals and
+	 * the Herdr desktop share: the plane takes no private session the operator
+	 * cannot see into (ADR 0141).
+	 */
+	session?: string;
+	/** The cols of a start from a non-terminal. Unset takes herdr-core's own. */
+	cols?: number;
+	/** The rows of a start from a non-terminal. Unset takes herdr-core's own. */
+	rows?: number;
+}
+
+/**
  * What one Transition fire did, stored on the settled turn's trace (ADR
  * 0027). The decision modal reads the written facts from it, and the
  * automatic decision reads the new position: the task the written labels
@@ -365,6 +390,19 @@ export interface FactoryConfig {
 	 * seeded before logging stayed silent.
 	 */
 	logging?: LoggingConfig;
+	/**
+	 * The Agent host the operator pinned (ADR 0141): the value of the top-level
+	 * `agent-host` key, or the host the `[agent-host.herdr-core]` table names.
+	 * Absent means the boot resolves the host from the environment mark, then
+	 * the default, and states the answer and the fact that resolved it.
+	 */
+	agentHost?: AgentHost;
+	/**
+	 * The herdr-core connection the `[agent-host.herdr-core]` table carries.
+	 * It stands beside a pinned herdr-core host, the table's presence naming
+	 * the host it configures.
+	 */
+	agentHostHerdrCore?: AgentHostHerdrCoreConfig;
 }
 
 /** The [logging] table: the plane's own file log. */
@@ -638,6 +676,7 @@ function checkConfigTopKeys(data: Record<string, unknown>): void {
 		"max-handoffs-per-ticket",
 		"scroll",
 		"logging",
+		"agent-host",
 	]);
 	// The retired keys (ADR 0027, ADR 0050) are named before any other key is
 	// judged: the load migrates a file that carries them, and a file that still
@@ -704,6 +743,8 @@ type ParsedConfigFields = Pick<
 	| "sources"
 	| "stateFile"
 	| "logging"
+	| "agentHost"
+	| "agentHostHerdrCore"
 > & { limits: ParsedConfigLimits };
 
 function parseConfigFields(data: Record<string, unknown>): ParsedConfigFields {
@@ -733,6 +774,7 @@ function parseConfigFields(data: Record<string, unknown>): ParsedConfigFields {
 	const workflowStates = validateWorkflowStates(data.states, taskTypes);
 	const stateFile = data["state-file"] === undefined ? undefined : stringField(data, "state-file");
 	const logging = validateLogging(data.logging);
+	const agentHost = validateAgentHost(data["agent-host"]);
 	return {
 		defaultAgent,
 		...(defaultModel === undefined ? {} : { defaultModel }),
@@ -749,6 +791,8 @@ function parseConfigFields(data: Record<string, unknown>): ParsedConfigFields {
 		sources,
 		...(stateFile === undefined ? {} : { stateFile }),
 		...(logging === undefined ? {} : { logging }),
+		...(agentHost.agentHost === undefined ? {} : { agentHost: agentHost.agentHost }),
+		...(agentHost.herdrCore === undefined ? {} : { agentHostHerdrCore: agentHost.herdrCore }),
 		limits: parseConfigLimits(data),
 	};
 }
@@ -815,6 +859,77 @@ function describeValue(value: unknown): string {
 	if (Array.isArray(value)) return "a list";
 	if (typeof value === "object") return "a table";
 	return `a ${typeof value}`;
+}
+
+/** The host the operator pinned, and the herdr-core connection the table carried, if any. */
+interface AgentHostParsed {
+	agentHost?: AgentHost;
+	herdrCore?: AgentHostHerdrCoreConfig;
+}
+
+/**
+ * The `agent-host` key (ADR 0141). Two forms stand behind one key, and a
+ * file holds one: the top-level string pins a host by its name, and the
+ * `[agent-host.herdr-core]` table pins the herdr-core host and carries its
+ * connection. There is no `auto` value: an absent key is the word for
+ * "resolve it from the mark", and a value outside the two host names is a
+ * boot refusal through the same strict rule that refuses an unknown key.
+ *
+ * A table that names nothing pins nothing: it stands beside the absent key
+ * for the resolution, the way an empty `[repos]` table maps nothing.
+ */
+function validateAgentHost(value: unknown): AgentHostParsed {
+	if (value === undefined) return {};
+	if (typeof value === "string") {
+		if (value !== "herdr" && value !== "herdr-core") {
+			throw new ConfigError(`config: agent-host: must be one of: herdr, herdr-core`);
+		}
+		return { agentHost: value };
+	}
+	if (!isRecord(value)) {
+		throw new ConfigError(
+			`config: agent-host: must be a host name or a table; got ${describeValue(value)}`,
+		);
+	}
+	for (const key of Object.keys(value)) {
+		if (key !== "herdr-core") {
+			throw new ConfigError(`config: agent-host: unknown key "${key}"`);
+		}
+	}
+	if (Object.keys(value).length === 0) return {};
+	return {
+		agentHost: "herdr-core",
+		herdrCore: validateAgentHostHerdrCore(value["herdr-core"]),
+	};
+}
+
+/** The [agent-host.herdr-core] table: the host's connection, on its own keys. */
+function validateAgentHostHerdrCore(value: unknown): AgentHostHerdrCoreConfig {
+	const where = "agent-host.herdr-core";
+	if (!isRecord(value)) {
+		throw new ConfigError(`config: ${where}: must be a table`);
+	}
+	const known = new Set(["binary", "session", "cols", "rows"]);
+	for (const key of Object.keys(value)) {
+		if (!known.has(key)) {
+			throw new ConfigError(`config: ${where}: unknown key "${key}"`);
+		}
+	}
+	// An omitted key takes herdr-core's own answer: the `hc` on the PATH, the
+	// host's default session, and its own terminal size for a non-terminal
+	// start. A present key is checked the way its kind is checked elsewhere
+	// in the file, and the default argument stands unread: the undefined
+	// guard above already took the absent key out.
+	const binary = value.binary === undefined ? undefined : stringField(value, "binary", where);
+	const session = value.session === undefined ? undefined : stringField(value, "session", where);
+	const cols = value.cols === undefined ? undefined : positiveIntField(value, "cols", 1, where);
+	const rows = value.rows === undefined ? undefined : positiveIntField(value, "rows", 1, where);
+	return {
+		...(binary === undefined ? {} : { binary }),
+		...(session === undefined ? {} : { session }),
+		...(cols === undefined ? {} : { cols }),
+		...(rows === undefined ? {} : { rows }),
+	};
 }
 
 function validateScroll(value: unknown): ScrollConfig {
@@ -1928,6 +2043,7 @@ export function configToToml(config: FactoryConfig): string {
 			"completion-message-lines": config.completionMessageLines,
 			"max-handoffs-per-ticket": config.maxHandoffsPerTicket,
 			...(config.logging === undefined ? {} : { logging: loggingToToml(config.logging) }),
+			...agentHostToToml(config),
 			scroll: {
 				speed: config.scroll.speed,
 				acceleration: config.scroll.acceleration,
@@ -2023,6 +2139,31 @@ function loggingToToml(logging: LoggingConfig): Record<string, unknown> {
 		"max-size-mib": logging.maxSizeMib,
 		keep: logging.keep,
 	};
+}
+
+/**
+ * The `agent-host` key the writer keeps. One key holds one form in the file:
+ * the herdr-core table writes the host it pins beside its connection, the
+ * string writes the host's name alone, and a config that pins nothing writes
+ * no key. An empty table writes its empty block, the form the operator's
+ * file held.
+ */
+function agentHostToToml(config: FactoryConfig): Record<string, unknown> {
+	if (config.agentHostHerdrCore !== undefined) {
+		const table = config.agentHostHerdrCore;
+		return {
+			"agent-host": {
+				"herdr-core": {
+					...(table.binary === undefined ? {} : { binary: table.binary }),
+					...(table.session === undefined ? {} : { session: table.session }),
+					...(table.cols === undefined ? {} : { cols: table.cols }),
+					...(table.rows === undefined ? {} : { rows: table.rows }),
+				},
+			},
+		};
+	}
+	if (config.agentHost === undefined) return {};
+	return { "agent-host": config.agentHost };
 }
 
 function formatMultilineStrings(text: string): string {

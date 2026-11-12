@@ -13,6 +13,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { agentHostBootLine } from "../src/agent-host.ts";
 import { padToWidth, truncateToWidth, widthOf } from "../src/components/text.ts";
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { EnvironmentKind, FetchedTicket, Ticket } from "../src/domain/ticket.ts";
@@ -1245,9 +1246,14 @@ describe("the permanent Message line", () => {
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
-				// The scheduled fetch runs silent: the list loads, the line stays clear.
+				// The scheduled fetch runs silent: the list loads, and the line
+				// keeps the plane's boot statement, the host it states while
+				// the plane is quiet (issue #408).
 				await waitFor(setup, { shows: "loading tickets..." });
-				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe("");
+				const bootLine = `Info: ${agentHostBootLine({ host: "herdr-core", fact: "default" })}`;
+				expect(messageRowOf(setup.captureCharFrame())).toBe(
+					padToWidth(truncateToWidth(bootLine, WIDTH), WIDTH),
+				);
 				// A failed fetch warns in the source's own words.
 				source.settle(fetchRateLimited);
 				await waitFor(setup, { refuses: "issues: stale - GitHub rate limit exceeded" });

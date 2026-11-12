@@ -36,6 +36,7 @@ const STANDING: StandingFacts = {
 	consultationTypesConfigured: true,
 	interactionExitKey: "f12",
 	queuePaused: false,
+	agentHost: { host: "herdr-core", fact: "default" },
 };
 
 /** The facts a mode's controls read when a test says nothing about them. */

@@ -24,9 +24,11 @@ import { describe, expect, test } from "bun:test";
 
 import {
 	type AgentStatus,
+	agentHostBootLine,
 	HERDR_AGENT_WAIT_UNTIL,
 	HERDR_COMMAND,
 	HERDR_CORE_COMMAND,
+	HERDR_CORE_VERSION_FLOOR,
 	HOST_WORD_TABLE,
 	type HostInvocation,
 	herdrAgentFocus,
@@ -37,6 +39,7 @@ import {
 	herdrAgentWait,
 	herdrCoreErrorKind,
 	herdrCoreFailureText,
+	herdrCoreFloorWarningLine,
 	herdrCoreGet,
 	herdrCoreKill,
 	herdrCoreList,
@@ -47,6 +50,8 @@ import {
 	herdrCoreRoster,
 	herdrCoreRun,
 	herdrCoreSend,
+	herdrCoreVersionOf,
+	herdrCoreVersionRead,
 	herdrCoreWait,
 	herdrErrorCode,
 	herdrFailureText,
@@ -74,6 +79,7 @@ import {
 	normalizeAgentStatus,
 	type RefusalFact,
 	resolveAgentHost,
+	versionIsBelow,
 	worktreeAlreadyOpen,
 } from "../src/agent-host.ts";
 import type { CommandResult } from "../src/runner.ts";
@@ -135,6 +141,77 @@ describe("the host resolution (ADR 0141)", () => {
 			host: "herdr-core",
 			fact: "default",
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The boot statement and the version floor
+// ---------------------------------------------------------------------------
+
+describe("the boot statement (issue #408, ADR 0141)", () => {
+	test("the line names the host it resolved and the fact that resolved it", () => {
+		expect(agentHostBootLine({ host: "herdr", fact: "herdr-mark" })).toBe(
+			"agent host: herdr (resolved from the herdr mark; the first herdr-core read starts that session's core when none runs)",
+		);
+		expect(agentHostBootLine({ host: "herdr", fact: "config" })).toBe(
+			"agent host: herdr (resolved from the config; the first herdr-core read starts that session's core when none runs)",
+		);
+		expect(agentHostBootLine({ host: "herdr-core", fact: "herdr-core-mark" })).toBe(
+			"agent host: herdr-core (resolved from the herdr-core mark; the first herdr-core read starts that session's core when none runs)",
+		);
+		expect(agentHostBootLine({ host: "herdr-core", fact: "config" })).toBe(
+			"agent host: herdr-core (resolved from the config; the first herdr-core read starts that session's core when none runs)",
+		);
+		expect(agentHostBootLine({ host: "herdr-core", fact: "default" })).toBe(
+			"agent host: herdr-core (resolved from the default; the first herdr-core read starts that session's core when none runs)",
+		);
+	});
+});
+
+describe("the herdr-core version floor (ADR 0141)", () => {
+	test("the floor stands on the release the shapes were read against", () => {
+		expect(HERDR_CORE_VERSION_FLOOR).toBe("0.1.20");
+	});
+
+	test("the version read takes the binary the table names, and the host's word where it names none", () => {
+		expect(herdrCoreVersionRead()).toEqual({ command: "hc", args: ["--version"] });
+		expect(herdrCoreVersionRead("/opt/hc/bin/hc")).toEqual({
+			command: "/opt/hc/bin/hc",
+			args: ["--version"],
+		});
+	});
+
+	test("the version one --version answer carries", () => {
+		expect(herdrCoreVersionOf({ code: 0, stdout: "hc 0.1.20\n", stderr: "" })).toBe("0.1.20");
+		// A tool manager's preamble stands above the answer's line: the read
+		// takes the first line that carries a version, not the first line.
+		expect(herdrCoreVersionOf({ code: 0, stdout: "some manager\nhc 0.1.20\n", stderr: "" })).toBe(
+			"0.1.20",
+		);
+		// A failed command and an answer that names no version carry none.
+		expect(
+			herdrCoreVersionOf({ code: 127, stdout: "hc 0.1.20\n", stderr: "not found" }),
+		).toBeNull();
+		expect(herdrCoreVersionOf({ code: 0, stdout: "", stderr: "" })).toBeNull();
+		expect(herdrCoreVersionOf({ code: 0, stdout: "no number here\n", stderr: "" })).toBeNull();
+	});
+
+	test("a version below the floor reads as below, on the digits", () => {
+		expect(versionIsBelow("0.1.9", HERDR_CORE_VERSION_FLOOR)).toBe(true);
+		expect(versionIsBelow("0.1.20", HERDR_CORE_VERSION_FLOOR)).toBe(false);
+		expect(versionIsBelow("0.1.21", HERDR_CORE_VERSION_FLOOR)).toBe(false);
+		expect(versionIsBelow("0.2.0", HERDR_CORE_VERSION_FLOOR)).toBe(false);
+		// Digits, not the string: 0.1.9 stands below 0.1.20, which a string
+		// compare reads the other way.
+		expect(versionIsBelow("0.1.9", "0.1.20")).toBe(true);
+		expect(versionIsBelow("0.1.9", "0.1.10")).toBe(true);
+	});
+
+	test("the warning line names the host version and the floor", () => {
+		expect(herdrCoreFloorWarningLine("0.1.9")).toBe(
+			`the herdr-core host is 0.1.9, below the plane's version floor ${HERDR_CORE_VERSION_FLOOR}: ` +
+				"the plane's answer shapes were read on the floor, and a shape that host refuses comes back as that host's own reason",
+		);
 	});
 });
 

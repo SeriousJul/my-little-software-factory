@@ -40,6 +40,31 @@ agent-poll-interval-seconds = 5
 completion-message-lines = 200
 max-handoffs-per-ticket = 20
 
+# --- Agent host -----------------------------------------------------------
+# The host the plane's starts run on: "herdr" (a Herdr desktop session)
+# or "herdr-core" (the headless core the operator's terminals talk to).
+# Absent, the boot resolves the host from the environment marks and states
+# the fact: a non-empty HERDR_ENV names herdr, a non-empty HC_TERMINAL_ID
+# names herdr-core, and with no mark the default is herdr-core. The boot
+# states the host it resolved and the fact that resolved it on one Message
+# line and in one Plane boot record entry (ADR 0141).
+#
+# The [agent-host.herdr-core] table carries the herdr-core connection. An
+# unset key takes herdr-core's own answer: the `hc` on the PATH, the core's
+# default session, and its own terminal size for a start from a non-terminal.
+# The plane holds no herdr-core lifecycle: it never starts, stops, or restarts
+# the core, and the boot states that the first herdr-core read starts that
+# session's core when none runs. A host older than 0.1.20 wears one Warning
+# line at boot: the shapes were read on that release.
+#
+# agent-host = "herdr-core"
+#
+# [agent-host.herdr-core]
+# binary = "hc"
+# session = "my-core"
+# cols = 200
+# rows = 50
+
 [scroll]
 speed = 1
 acceleration = 0.8

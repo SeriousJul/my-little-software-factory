@@ -18,6 +18,7 @@ const BASE_STANDING: StandingFacts = {
 	consultationTypesConfigured: false,
 	interactionExitKey: "f12",
 	queuePaused: false,
+	agentHost: { host: "herdr-core", fact: "default" },
 };
 
 describe("the Missing modal", () => {

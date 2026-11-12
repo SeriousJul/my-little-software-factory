@@ -128,8 +128,12 @@ describe("Auto copy", () => {
 					expect(taken.writes).toHaveLength(1);
 					const silent = await settle(inner);
 					expect(frameText(silent)).not.toContain(COPY_REFUSED_TEXT);
-					// No "copied" indicator: the Message line stays blank.
-					expect(messageRowOf(silent).trim()).toBe("");
+					// A taken copy writes no fact of its own: no "copied"
+					// indicator stands, and the line keeps the boot statement
+					// the plane stated at boot (issue #408).
+					const line = messageRowOf(silent).trim();
+					expect(line).toContain("agent host: herdr-core");
+					expect(line).not.toContain("copied");
 				} finally {
 					taken.restore();
 				}
