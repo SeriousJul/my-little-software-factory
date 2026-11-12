@@ -1,13 +1,20 @@
 # The Agent host verification
 
-Status: **the decision records stand; the change does not exist yet.** ADR 0141,
+Status: **the decision records stand, and step 1 of the change is in the tree.**
+ADR 0141,
 ADR 0142, ADR 0143, and ADR 0144 and the glossary's **Agent host**, **Host
-resolution**, and **Adoption label** entries landed on 2026-11-12. No plane code
-drives herdr-core, no launcher or override-panel row exists, and the Stub herdr
-world answers no herdr-core dialect. Nothing in this file is a claim about the
-plane: every herdr-core fact below is a hand probe of the host program, and every
-plane-side flow on that host is recorded as not run below. A check that could not
-run is recorded as incomplete; it is not a pass.
+resolution**, and **Adoption label** entries landed on 2026-11-12, and the
+first step of the change landed beside them (pull request #414): one module
+(`src/agent-host.ts`) owns both Agent host dialects and the host word map, the
+plane resolves its host once per start from the config, the environment mark,
+and the default, the Stub herdr world answers the herdr-core dialect beside
+herdr and git with its closed-surface rule over both dialects, and the check
+that refuses a `herdr` or `hc` argument outside the module stands. The plane
+still sends no herdr-core command and no launcher or override-panel row exists,
+and every plane-side flow on that host is recorded as not run below. Nothing
+in this file is a claim about the plane: every herdr-core fact below is a hand
+probe of the host program. A check that could not run is recorded as
+incomplete; it is not a pass.
 
 See [ADR 0141](../adr/0141-the-plane-resolves-its-agent-host-herdr-or-herdr-core.md),
 [ADR 0142](../adr/0142-one-run-holds-agents-on-both-hosts-and-the-host-stands-on-the-handoff.md),
@@ -50,7 +57,7 @@ is the answer a caller gets.
 | `hc read --lines 5 --json <t>` | `{"complete":true,"how":"history","text":"hello-plane\nGOT:hello-plane"}`. Herdr-core's manual adds the rule the plane needs: with the program in `working`, `blocked`, or `error` state a history read returns the **screen only**, marked incomplete with `why` set to that state, and no scroll input is sent |
 | `hc wait --timeout 5 --json <t>` | `{"children":[],"ended":true,"exit_code":0,"reason":"exit","signal":null,"status":null,"terminal":"t1","turn":0}`: `reason: exit` with an `exit_code` is the answer for a program that ended rather than a turn that settled |
 | `hc ls --label factory.ticket=t-1 --json` | `{"hidden_finished":1,"terminals":[]}`: a label-scoped roster **still hides finished terminals**, so a Missing agent or Leftover environment read must ask for `--all` |
-| `hc kill --json <t>`, `hc rm <t>` | the killed record with `state: "finished"`, `reason: "exited"`, `exit_code: 0`, then `{"removed":"t1"}` |
+| `hc kill --json <t>`, `hc rm <t>` | the killed record with `state: "finished"`, `reason: "exited"`, `exit_code: 0`, then `{"removed":"t1"}`. The probe's program had finished before the kill ran, so the line is a kill answer on a finished terminal: the answer of a kill of a live program is not measured, and the Stub herdr world stands this line for it |
 | `hc ls --all --json` | a finished terminal stays listed with `reason: "exited"` and its `exit_code` until `hc rm`, so a started-then-dead Agent stays readable |
 | A taken or unusable name | `{"error":{"kind":"name_taken",…}}` for a live name (the code list from `hc schema` also holds `not_found`, `finished`, `blocked`, `status_mismatch`, `unsupported_generation`, `needs_update`, `spawn_failed`), and `{"kind":"invalid_params","message":"bad name \"probeA\": use 1-32 of a-z 0-9 - _ . starting with a letter or digit, not shaped like an id (t7)"}` for a bad one |
 | The plane's own names against that rule | Derived, not run: every name `src/naming.ts` builds carries a leading word and a fixed 8-hex identity tag (`agentNameFor`, `cycleAgentName`, `consultationAgentName`), so none takes the refused `t<digits>` shape and none uses a character outside hc's set. The naming suite's check that it stays that way is an **open item** below, not a measured pass |
@@ -102,9 +109,6 @@ owed by the change that lands it:
   probes, so no terminal was ever seen in a desktop window through those labels.
   The adoption rule itself is quoted from the desktop app's own generated
   instructions, and the walk is unverified.
-- The Stub herdr world's herdr-core dialect, its closed-surface rule over two
-  dialects, and the check that rejects a `"herdr"` or `"hc"` argument outside the
-  host module.
 - The naming-suite check that keeps the plane's names inside herdr-core's refused
   id shape (the derived row above).
 - Two runs of the plane on one machine sharing one herdr-core session: never

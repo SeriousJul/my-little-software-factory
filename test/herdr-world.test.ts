@@ -1415,6 +1415,57 @@ describe("the herdr-core side", () => {
 		).terminals;
 		expect(all.some((row) => row.name === "core-done" && row.state === "finished")).toBe(true);
 	});
+
+	test("a label-scoped roster stands the rows that carry every asked label, and the hidden count counts inside the scope", async () => {
+		const world = stubHerdrWorld({
+			checkouts: [{ path: CHECKOUT, cloneUrl: CLONE_URL }],
+			terminals: [
+				{
+					name: "scope-a",
+					cwd: CHECKOUT,
+					labels: { "factory.run": "probe", "factory.ticket": "407" },
+				},
+				{
+					name: "scope-b",
+					cwd: CHECKOUT,
+					state: "finished",
+					reason: "exited",
+					exitCode: 0,
+					labels: { "factory.run": "probe" },
+				},
+				{ name: "scope-none", cwd: CHECKOUT },
+			],
+		});
+		// One label: the rows that carry it stand, and the finished one hides
+		// inside the scope, the way the recorded scoped roster hides it.
+		const scoped = coreOf<{ hidden_finished: number; terminals: CoreRow[] }>(
+			(await world.run("hc", ["ls", "--json", "--label", "factory.run=probe"])).stdout,
+		);
+		expect(scoped.hidden_finished).toBe(1);
+		expect(scoped.terminals.map((row) => row.name)).toEqual(["scope-a"]);
+		// The same label with --all lists the finished row inside the scope,
+		// and a terminal that carries no label stays out of it.
+		const all = coreOf<{ hidden_finished: number; terminals: CoreRow[] }>(
+			(await world.run("hc", ["ls", "--json", "--label", "factory.run=probe", "--all"])).stdout,
+		);
+		expect(all.hidden_finished).toBe(0);
+		expect(all.terminals.map((row) => row.name)).toEqual(["scope-a", "scope-b"]);
+		// Two labels: a row that carries only one of them is out of the scope.
+		const both = coreOf<{ hidden_finished: number; terminals: CoreRow[] }>(
+			(
+				await world.run("hc", [
+					"ls",
+					"--json",
+					"--label",
+					"factory.run=probe",
+					"--label",
+					"factory.ticket=407",
+				])
+			).stdout,
+		);
+		expect(both.hidden_finished).toBe(0);
+		expect(both.terminals.map((row) => row.name)).toEqual(["scope-a"]);
+	});
 });
 
 describe("the closed surface", () => {
@@ -1637,6 +1688,7 @@ describe("the closed surface", () => {
 		// it yet. The kill finishes the live terminal, and the remove takes
 		// the finished one from the standing.
 		await settled("hc", ["ls", "--json", "--all"]);
+		await settled("hc", ["ls", "--json", "--label", "factory:ticket=407"]);
 		await settled("hc", ["get", "--json", "core-live"]);
 		await settled("hc", ["get", "--json", "core-done"]);
 		await settled("hc", [

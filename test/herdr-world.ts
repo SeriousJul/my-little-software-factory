@@ -1574,7 +1574,7 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 	/** The full record a `hc get` of one terminal answers, on stdout. */
 	const coreRecordOf = (terminal: WorldTerminal): Record<string, unknown> => ({
 		address: terminal.address,
-		agv: [terminal.agent],
+		argv: [terminal.agent],
 		cwd: terminal.cwd,
 		die_with_parent: false,
 		exit_code: terminal.exitCode,
@@ -1710,10 +1710,22 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 
 	const answerHcLs = (args: readonly string[]): CommandResult => {
 		const all = args.includes("--all");
-		const rows = [...terminals.values()].filter((terminal) => all || terminal.state === "live");
-		const hidden = all
-			? 0
-			: [...terminals.values()].filter((terminal) => terminal.state === "finished").length;
+		// A label-scoped roster: a row stands when it carries every label the
+		// ask names, and the hidden count counts inside that scope.
+		const labels: Array<[string, string]> = [];
+		for (let i = 1; i < args.length; i += 1) {
+			if (args[i] === "--label") {
+				const label = args[i + 1] ?? "";
+				const [key, ...rest] = label.split("=");
+				labels.push([key ?? "", rest.join("=")]);
+				i += 1;
+			}
+		}
+		const inScope = (terminal: WorldTerminal): boolean =>
+			labels.every(([key, value]) => terminal.labels[key] === value);
+		const scoped = [...terminals.values()].filter(inScope);
+		const rows = scoped.filter((terminal) => all || terminal.state === "live");
+		const hidden = all ? 0 : scoped.filter((terminal) => terminal.state === "finished").length;
 		const list = rows.map((terminal) => {
 			const row: Record<string, unknown> = {
 				address: terminal.address,
@@ -1848,9 +1860,13 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 			return hcError("not_found", `no terminal "${reference}"`, "see `hc ls --all`");
 		if (terminal.state === "live") {
 			terminal.state = "finished";
-			terminal.reason = "killed";
-			terminal.signal = 1;
-			terminal.exitCode = null;
+			// The recorded kill line (the Agent host verification) stands
+			// `reason: "exited"` with `exit_code: 0`: the probe's program had
+			// finished before its kill ran, so the answer of a kill of a live
+			// program was not measured, and the world stands the recorded line
+			// for it.
+			terminal.reason = "exited";
+			terminal.exitCode = 0;
 			terminal.status = null;
 			releaseHeldCoreWaits(terminal.address);
 		}

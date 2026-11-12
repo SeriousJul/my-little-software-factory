@@ -34,6 +34,14 @@ unverified in the table at the end of the tracing section, so the claim
 stops at what was measured. A check that could not run is recorded as
 incomplete. It is not a pass, and it is not silently dropped.
 
+Since then the world answers a second dialect beside herdr and git: the
+herdr-core (`hc`) verbs the Agent host module builds (issue #407, ADR 0141),
+traced to the recorded hc 0.1.20 probes in
+[the Agent host verification](agent-host-herdr-core.md) rather than to the
+herdr 0.8.2 run below, and the world's closed-surface rule runs over both
+dialects. The one herdr-core shape the probes could not measure, the answer
+of a kill of a live program, stands untraced in that file.
+
 See [ADR 0132](../adr/0132-the-stub-herdr-world-answers-herdr-and-git-from-one-standing-world.md)
 for the decision, [issue #361](https://github.com/SeriousJul/my-little-software-factory/issues/361)
 for the requirement, [issue #376](https://github.com/SeriousJul/my-little-software-factory/issues/376)
@@ -64,7 +72,7 @@ the module.
 | The plane reads the refusal codes it reads | the blocks assert the codes the handoff and the observation read: `worktree_not_found`, `agent_name_taken`, `agent_pane_busy`, `tab_not_found`, `workspace_not_found`, and `worktree_remove_failed` | Passed |
 | The held `agent wait` is the one exception to the refusal rule | "the Agent side": a wait for an Agent the world holds not at a settle state holds instead of answering, a `setAgentStatus` move to a settle state releases it with code zero, a wait for an Agent already at a settle state answers at once, and a wait for a target the world does not hold is refused | Passed |
 | The recording keeps the fake runner's shape | "the recording": `commands()`, `settledCommands()`, `peakConcurrency()`, the raw `calls`, the `hold`/`release`, the `raise`, and the `set`/`setSequence` sequence all answer the way the fake command runner answers, so the gate and delay wrappers compose over the world unchanged | Passed |
-| The closed surface stays closed | "the closed surface": every herdr and git command shape the plane builds is driven against a healthy world and meets no refusal; a shape the world never answers and a command the plane starts sending both fail there | Passed |
+| The closed surface stays closed | "the closed surface": every herdr, git, and herdr-core command shape the plane builds is driven against a healthy world and meets no refusal; a shape the world never answers and a command the plane starts sending both fail there | Passed |
 | The gate and delay wrappers compose over the world | the wrappers take a `CommandRunner`, and the world satisfies it; the suites that gate and delay a handoff run over the world without change | Passed |
 | The checkout verification moves off the local builder | the Consultation operations and the auto-mode suite state the checkout as a world now, and their local `stubCheckout` builders are deleted; the seven frame suites that re-landed on the pin table in #366 (the Action bar, the Consultation frame, the Handoff frame, the Key guide, the Live view, the Message line, and the Starting face) hold their local pin builders again | Passed |
 | The Agent interaction's text and key sends are answered by the world | the Agent input queue's send tests and the Consultation frame's interaction test stand the world's own pane: the sends reach it, and the tests read them from `sentTextFor` and `sentKeysFor` instead of the recorded commands | Passed |
@@ -78,7 +86,11 @@ the module.
 The ADR requires every answer shape the world produces to be traced to a
 recorded real herdr answer, with the herdr version named, and every shape
 inferred from the plane's own reader recorded as unverified. The tracing ran
-on 2026-10-14:
+on 2026-10-14. It stands beside the herdr-core dialect the world answers from
+the same standing: those shapes trace to the recorded hc 0.1.20 probes in
+[the Agent host verification](agent-host-herdr-core.md), and the one shape
+those probes could not measure, the answer of a kill of a live program, stands
+untraced in that file.
 
 1. The isolated herdr 0.8.2 server stood up with its own socket path and its
    own home, and its panes launched the real pi 1.2.0 through the operator's
