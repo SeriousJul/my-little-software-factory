@@ -66,10 +66,12 @@ with the fail-open `unknown` cause and the settle's one line on the Message
 record, never a failure of the turn and never `no-turn`; the derivation is one
 directory read of one session home, the plane writes nothing into a runtime's
 session home, and it stands only for an Agent that runs on the plane's own
-machine. What has not run is the same boundary it was before, and it stands
-below: no plane command has ever gone to a real herdr-core host, and the
-herdr-core facts the plane reads on that host are the probe answers above,
-not a live run. A check that could not run is recorded as incomplete; it is
+machine. probes, and no terminal was ever seen in a desktop window through those
+  labels, until 2026-11-13: a plane Consultation start, its prompt, and the
+  merged poll went to the operator's real `herdr-core serve` session on this
+  machine, and that live run exposed the nameless-record reader gap this
+  record now states. What has not run still stands below, and it is recorded
+  as incomplete, not as a pass. A check that could not run is recorded as incomplete; it is
 not a pass. Step 7 (issue #413) lands beside them: the two controls the
 plane owns that have no herdr-core answer stand off that host and state why
 instead of faking it. Goto refuses on a herdr-core Agent and names the
@@ -102,7 +104,13 @@ rule this file follows.
 
 `herdr` 0.9.5 (`herdr server`, protocol 22) and `herdr-core` (`hc`) 0.1.20,
 installed as system packages; `git` 2.56.0; `bun` 1.4.2; `pi` 1.5.2; Linux 7.2.15
-(Omarchy). Probes ran on 2026-11-12.
+(Omarchy). Probes ran on 2026-11-12. The Adoption walk of ADR 0141 ran on
+this machine on 2026-11-13 beside the Herdr desktop (`herdr-app` 0.1.15),
+which watches the operator's default `herdr-core serve` session on
+`/run/user/1000/herdr-core/default.sock`. The desktop creates its own
+terminals without a name: the record of one of them, the terminal the plane
+ran in that day, names `null` beside its `herdr.space` and `herdr.tab`
+labels.
 
 **Method, and the cleanup that goes with it.** Every herdr-core probe ran in a
 scratch session: `HC_SESSION=factoryprobe`, `HC_SOCKET` and `XDG_RUNTIME_DIR`
@@ -227,6 +235,47 @@ is the answer a caller gets.
   1.5.2 writes them on this machine. What it does not cover: a session a
   herdr-core-launched Agent opens, a settle on a real herdr-core host, and any
   runtime but pi.
+- **The Adoption walk against the live desktop (2026-11-13)**: the plane ran
+  in the desktop's own terminal, whose record names `null` and carries the
+  labels `herdr.space`, `herdr.tab`, and `herdr.seen`. The plane's `hc get`
+  reader required a string `name` and rejected that record, so the
+  Consultation the plane started that day in that terminal (terminal `t2`,
+  name `consultation-c17c6fd7`, agent `pi`) carried its run labels -
+  `factory.run`, `factory.ticket`, `factory.handoff`, `factory.repository` -
+  and no Adoption labels, and the desktop showed it nowhere. The reader now
+  answers `name: null` the way the host writes it, and the walk's plane side
+  stands on two regression tests: the reader takes the nameless record with
+  its labels (`test/agent-host.test.ts`), and a herdr-core start in a
+  nameless desktop terminal copies that terminal's adoption labels
+  (`test/handoff-dispatch.test.ts`). A probe start that wrote the Adoption
+  labels beside the run's labels (terminal `t3`, name `loop-adopt-probe`, a
+  `sleep` program) stands beside this record; whether the desktop's window
+  shows it is an operator read, recorded as pending until confirmed, and the
+  probe terminal is then killed and removed. The operator confirmed both on
+  2026-11-13: the probe terminal appeared in the desktop window, and a fresh
+  herdr-core start from the plane appeared in the desktop app.
+- **The Consultation close against the live desktop (2026-11-13)**: that day
+  the plane closed a herdr-core Consultation it had started (record
+  `ad246244`, terminal `t7`) from the desktop. The record closed with the
+  result `closed without a command; its Agent is missing and its resources
+  remain in herdr`, while the terminal, its worktree, and its branch all kept
+  standing. Two defects of the close chain stood behind it: the close's
+  verification of its Agent ran after the record was already in the
+  `closing` state, and the merged reader's name set stood on the
+  opening, working, and awaiting-response records only - so the close's own
+  terminal was filtered out of the core half of the merged list, and the
+  identification answered `Agent is missing` with no command issued. And the
+  close plan knew only herdr's shape - workspace, tab, and pane topology and
+  herdr's close commands - so a herdr-core Consultation would have probed its
+  terminal's name as a herdr workspace id. The verification now reads the
+  `closing` record's terminal, in the operation's reader and in the
+  observation cycle's name set, and the core host's close plan issues the
+  kill that takes the terminal's program down and the rm that takes its
+  record, tolerating the host's own words that the terminal is already gone,
+  with the worktree and its branch kept. The regression stands in
+  `test/consultation-operations.test.ts` ("closes its terminal on the
+  herdr-core host and keeps its worktree"); it was red before the fix, its
+  command list stopping after the two roster reads.
 
 ## What has not run
 
@@ -238,22 +287,34 @@ the suites named in the table below, beside the shared controls' own suites.
 What has not run is the same boundary it was before, and
 it stands below, each one owed by the change that lands it:
 
-- No plane command has ever gone to a real herdr-core host: no start, prompt,
-  roster, wait, read, kill, or removal, and no worktree, branch, or checkout
-  command of the plane's own git, and no merged Observation cycle over a real
-  herdr-core roster. Every herdr-core command the plane runs in the suite runs
-  against the Stub herdr world, and the version read the boot runs is the one
-  host command a real boot sends, a read that starts no core.
+- No plane command had gone to a real herdr-core host before 2026-11-13. On
+  that day a Consultation start and its prompt landed on the operator's
+  default `herdr-core serve` session beside the plane's own terminal, and the
+  merged poll ran over the live roster while the Agent stood; that run exposed
+  the reader gap recorded above. What still has not run on a real herdr-core
+  host: a wait, a read, a kill, or a removal the plane sends the host; a
+  worktree, branch, or checkout command of the plane's own git; and a settle
+  over a record a herdr-core-launched Agent wrote. A Consultation close the
+  plane sends the host - the kill and rm its close plan now issues - stands
+  on the day's close that issued no command and on the unit test above; it
+  has not run against the live host. Every herdr-core command
+  the plane runs in the suite runs against the Stub herdr world, and the
+  version read the boot runs is the one host command a real boot sends, a
+  read that starts no core.
 - The settle that reads a record a herdr-core-launched Agent wrote on a real
   host: the derivation of ADR 0144 and its ambiguous-match answer run in the
   suite on fixture session homes, one of them standing in for the real pi
   session measured above, but no settle on this host has read a record a
   herdr-core-launched Agent opened, and no runtime but pi has stood on the
   derivation at all.
-- The Adoption labels of ADR 0141: the Herdr desktop was not running during
-  the probes, so no terminal was ever seen in a desktop window through those
-  labels. The adoption rule itself is quoted from the desktop app's own
-  generated instructions, and the walk is unverified.
+- The Adoption labels of ADR 0141: the walk ran on this machine on
+  2026-11-13 with the Herdr desktop live, and it failed on the plane's own
+  reader, the nameless-record gap recorded above. The plane's side of the
+  walk now stands: the reader takes the nameless record, and the regression
+  tests stand at both seams. What still stands open: a start of the plane on
+  a real herdr-core host from a desktop terminal after the fix, and the
+  desktop's side of the rule - a labeled terminal showing in its window -
+  which stands on the probe terminal the operator confirms.
 - The naming-suite check that keeps the plane's names inside herdr-core's
   refused id shape (the derived row above).
 - Two runs of the plane on one machine sharing one herdr-core session: never
@@ -330,7 +391,7 @@ they read is the Stub world's standing for the probe answers above.
 | The Parallel limit's seat count over the merged list: a herdr-core terminal holds the seat the herdr pane holds, a started herdr-core Agent holds inside its startup grace, and the one count sums both hosts' Agents | `test/parallel.test.ts`, the merged-list seat suite |
 | The wake-wait mapping: `hc wait`'s `reason: exit` beside an `exit_code` reads as the settle fact herdr's `done` is, and nothing else - no code, `ended: false`, a killed reason, a failed command, or unreadable output - matches | `test/observation.test.ts`, the merged reader's wait suite, and `test/auto-mode.test.ts`, the full loop over both hosts |
 | One name across both hosts: a herdr start is refused on a name herdr-core holds and vice versa, each failure and the Ticket's standing collision record name the holding host, and the start reads the other host's roster | `test/handoff-dispatch.test.ts`, the one-name-across-both-hosts suite, and `test/handoff-frame.test.ts`, the start's command sequence |
-| The labels written at the start: the run labels on the herdr-core start's `hc run`, beside the adoption labels its own terminal carries - a terminal that carries `herdr.space` and one that does not, and the standalone run identity - with the flags ADR 0141 fixes | `test/handoff-dispatch.test.ts`, the label tests of the same suite |
+| The labels written at the start: the run labels on the herdr-core start's `hc run`, beside the adoption labels its own terminal carries - a terminal that carries `herdr.space` and one that does not, and the standalone run identity, beside the nameless desktop terminal whose record names `null` and whose adoption labels the start still copies - with the flags ADR 0141 fixes | `test/handoff-dispatch.test.ts`, the label tests of the same suite |
 | The poll's command set per frame: the merged read's `herdr agent list` beside `hc ls --json --all` is the only command the observation frame runs | `test/ignored-ticket.test.ts` and `test/muted-source.test.ts`, the frame command assertions |
 | The closed surface over the merged dialect: the Stub world answers `ls` with `--all` and label scopes, the per-terminal `get`, and the refusal kinds, and the argument check walks the builders the module builds | `test/herdr-world.test.ts`, the closed-surface walk, and `test/agent-host.test.ts` |
 
