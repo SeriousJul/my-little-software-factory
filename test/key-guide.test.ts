@@ -20,6 +20,7 @@ import type { Setup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
 	detailFocused,
+	frameText,
 	frameUntil,
 	guideKey,
 	HEIGHT,
@@ -876,6 +877,65 @@ describe("the in-app Key guide", () => {
 				bar = actionBarRowOf(setup.captureCharFrame());
 				expect(bar).toContain("Enter Live view");
 				expect(bar).not.toContain("Hand off");
+				expect(bar).not.toContain("Decide");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
+		);
+	});
+
+	test("on a herdr-core run the guide states the host's line on Goto and the Live view", async () => {
+		const runner = new FakeRunner();
+		// No herdr environment: the run resolves herdr-core by default, and
+		// the focus move and the styled read are lines that host does not
+		// answer (issue #409).
+		const planeRecord = await plane({ runner: () => runner });
+		await withApp(
+			async (setup) => {
+				// Walk from the awaiting Ticket the selection boots on to the
+				// in-flight one, whose handoff stands on a terminal the host
+				// cannot focus.
+				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
+				const frame = await settle(setup);
+				const rows = rowsOf(frame);
+				// The host's lines flow onto continuation rows at the guide's
+				// capped width, so the frame as one string is what the test reads.
+				const body = frameText(frame);
+				expect(body).toContain(
+					"the herdr-core host answers no focus move: type hc attach pane-fix",
+				);
+				expect(body).toContain(
+					"the herdr-core host answers no styled read: the Live view is not offered",
+				);
+				// The lines the host states paint dim, the way every unavailable
+				// line does: a terminal that paints no color keeps the words.
+				expect(
+					spanColorAt(
+						setup,
+						rows.findIndex((r) => norm(r).includes("g Goto")),
+						"Goto",
+					),
+				).toEqual(rgb(roleColor("subtext0")));
+				expect(
+					spanColorAt(
+						setup,
+						rows.findIndex((r) => norm(r).includes("Enter Live view")),
+						"Live view",
+					),
+				).toEqual(rgb(roleColor("subtext0")));
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
+				// The bar keeps the key the host cannot run: Goto and Hand off
+				// still own their keys and state their refusal, while the two
+				// other meanings of Enter hide behind the first one.
+				const bar = actionBarRowOf(setup.captureCharFrame());
+				expect(bar).toContain("g Goto");
+				expect(bar).toContain("Enter Hand off");
+				expect(bar).not.toContain("Live view");
 				expect(bar).not.toContain("Decide");
 			},
 			{

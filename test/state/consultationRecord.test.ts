@@ -6,15 +6,21 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
+import { jsonChoice } from "../../src/state/json.ts";
 import { workQueueIdentityOf } from "../../src/state/work-queue.ts";
 import type { FactoryState } from "../../src/state.ts";
 import { openFactoryState } from "../../src/state.ts";
 import {
+	choice,
+	claim,
 	cleanup,
 	downgradeToV4,
 	enqueue,
 	queuedConsultation,
 	repository,
+	seeded,
+	settle,
+	settleAttempt,
 	statePath,
 	uid,
 } from "./harness.ts";
@@ -771,5 +777,90 @@ describe("pending responses across restart and migration", () => {
 			"pane-1",
 		]);
 		reopened.close();
+	});
+
+	test("migrates a v30 database to v31: both tables take the host column, and old rows take the host their run resolved", () => {
+		const { state, path, rows } = seeded({ file: true });
+		const [ticket] = rows;
+		// The one start the v30 run made, on the host it only had, and the
+		// Consultation it ran beside it.
+		settle(state, ticket.identity, {
+			handles: { paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1" },
+		});
+		const consultation = createConsultation(state);
+		state.close();
+		// Downgrade the record to the v30 shape: neither table held a host
+		// column, and the choice cell named no host.
+		const db = new Database(path);
+		db.exec("ALTER TABLE handoffs DROP COLUMN host;");
+		db.exec("ALTER TABLE consultations DROP COLUMN host;");
+		db.exec("UPDATE handoffs SET choice_json = json_remove(choice_json, '$.host');");
+		db.prepare("UPDATE schema_version SET version = 30").run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		for (const table of ["handoffs", "consultations"]) {
+			const columns = (
+				new Database(path).prepare(`PRAGMA table_info(${table})`).all() as Array<{
+					name: string;
+				}>
+			).map((column) => column.name);
+			expect(columns).toContain("host");
+		}
+		// The old rows read back the host their run resolved, stated, not
+		// guessed: a plane before the host existed only had herdr.
+		expect(reopened.handoff.latestHandoff(ticket.identity)?.host).toBe("herdr");
+		expect(reopened.consultationRecord.consultation(consultation.id)?.host).toBe("herdr");
+		// The old choice cell names no host, and the read answers the host
+		// the run resolved.
+		const oldCell = (
+			new Database(path)
+				.prepare(
+					"SELECT choice_json FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC LIMIT 1",
+				)
+				.get(ticket.identity) as { choice_json: string }
+		).choice_json;
+		expect(jsonChoice(oldCell)?.host).toBe("herdr");
+
+		// A row the run after the step writes keeps the host it names, and the
+		// old rows keep theirs beside it.
+		const coreAttempt = claim(reopened, ticket.identity, {
+			choice: { ...choice, host: "herdr-core" },
+			origin: "restart",
+		});
+		settleAttempt(reopened, coreAttempt, {
+			handles: { paneId: "pane-2", tabId: "tab-2", workspaceId: "ws-2" },
+		});
+		reopened.consultationRecord.createConsultation({
+			id: "consultation-2",
+			typeName: "grill-with-docs",
+			agentType: "pi",
+			host: "herdr-core",
+			environment: "worktree",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			template: "/skill:grill-with-docs {input}",
+			initialInput: "Review this repository",
+			renderedOpeningPrompt: "/skill:grill-with-docs Review this repository",
+			repository,
+			agentName: "consultation-22222222",
+			createdAt: "2026-09-01T00:00:00.000Z",
+		});
+		reopened.close();
+
+		const final = openFactoryState(path);
+		expect(final.handoff.latestHandoff(ticket.identity)?.host).toBe("herdr-core");
+		const newCell = (
+			new Database(path)
+				.prepare(
+					"SELECT choice_json FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC LIMIT 1",
+				)
+				.get(ticket.identity) as { choice_json: string }
+		).choice_json;
+		expect(jsonChoice(newCell)?.host).toBe("herdr-core");
+		expect(final.consultationRecord.consultation("consultation-2")?.host).toBe("herdr-core");
+		expect(final.consultationRecord.consultation(consultation.id)?.host).toBe("herdr");
+		final.close();
 	});
 });

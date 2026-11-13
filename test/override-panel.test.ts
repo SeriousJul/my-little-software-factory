@@ -11,6 +11,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
+import type { AgentHostResolution } from "../src/agent-host.ts";
 import type { StandingFacts } from "../src/components/controls.ts";
 import {
 	type AgentModelList,
@@ -78,6 +79,8 @@ const WIDE = 220;
 const NO_SETTINGS = { model: "", thinking: "", contextWindow: "" };
 /** The list state of a kind that reports none, as the panel is told it. */
 const NO_LIST = { status: "unavailable", cause: "no-list" } as const;
+/** The pilot's own list is missing: the Model row states it, the rest stand. */
+const PILOT_NO_LIST: AgentModelList = { agentType: "pilot", status: NO_LIST };
 
 /**
  * The color one ink role paints in the ink the panel paints in. A panel that
@@ -138,6 +141,8 @@ afterEach(async () => {
 
 /** What the panel reported as refused, so a test can read the refusal itself. */
 let refusals: string[] = [];
+/** The choices the panel confirmed, so a test can read what reached start. */
+let confirms: HandoffChoice[] = [];
 
 /**
  * Boot the panel with one Model list, and run the body.
@@ -155,9 +160,11 @@ async function withPanel(
 		height?: number;
 		taskTypes?: readonly string[];
 		planeActionTaskTypes?: readonly string[];
+		agentHost?: AgentHostResolution;
 	} = {},
 ): Promise<void> {
 	refusals = [];
+	confirms = [];
 	const setup = await testRender(
 		createElement(OverridePanel, {
 			agents: AGENTS,
@@ -167,9 +174,9 @@ async function withPanel(
 			modelList,
 			onAgentChange: () => undefined,
 			initial,
-			onConfirm: () => undefined,
+			onConfirm: (choice) => confirms.push(choice),
 			onCancel: () => undefined,
-			standing: BASE_STANDING,
+			standing: { ...BASE_STANDING, agentHost: options.agentHost ?? BASE_STANDING.agentHost },
 			message: null,
 			onUnavailable: (reason: string) => refusals.push(reason),
 			onCopy: () => undefined,
@@ -913,5 +920,92 @@ describe("the plane action's task type states that no Agent runs", () => {
 				width: WIDE,
 			},
 		);
+	});
+});
+
+// The one line the host that the run cannot reach states, whatever surface
+// asks it (issue #409, ADR 0142).
+const HERDR_UNREACHABLE =
+	"host herdr is unreachable from this run: the plane runs outside herdr, and no herdr server answers there";
+
+/** The host carried by the choice the panel confirms, or its empty note. */
+function confirmedHost(): string | undefined {
+	return confirms.at(-1)?.host;
+}
+
+describe("the Agent host row (issue #409)", () => {
+	test("on a herdr run the row defaults to the run's host, and the confirm reaches start on it", async () => {
+		await withPanel(
+			PILOT_NO_LIST,
+			{ ...INITIAL, host: "herdr" },
+			async (setup) => {
+				const frame = frameText(setup.captureCharFrame());
+				expect(frame).toContain("Agent host herdr");
+				// Both hosts answer on a herdr run, so the row states no refusal.
+				expect(frame).not.toContain("Error: Agent host:");
+				await pressControl(setup, "handoff", { quiet: true });
+				expect(confirms).toHaveLength(1);
+				expect(confirms[0]).toMatchObject({
+					agentType: "pilot",
+					environment: "worktree",
+					taskType: "implement",
+					host: "herdr",
+				});
+			},
+			{ agentHost: { host: "herdr", fact: "default" } },
+		);
+	});
+
+	test("on a herdr run the row cycles to herdr-core, and the confirm reaches start on the cycled host", async () => {
+		await withPanel(
+			PILOT_NO_LIST,
+			{ ...INITIAL, host: "herdr" },
+			async (setup) => {
+				await pressControl(setup, "move-list", { via: "j", shows: "❯ Agent host" });
+				await pressControl(setup, "change-override", { quiet: true });
+				const frame = frameText(setup.captureCharFrame());
+				expect(frame).toContain("Agent host herdr-core");
+				expect(frame).not.toContain("Error: Agent host:");
+				await pressControl(setup, "handoff", { quiet: true });
+				expect(confirmedHost()).toBe("herdr-core");
+			},
+			{ agentHost: { host: "herdr", fact: "default" } },
+		);
+	});
+
+	test("on a herdr-core run the herdr host is refused on the row with the host's own line", async () => {
+		// The default panel stands on the herdr-core run with the herdr host
+		// selected: wide enough for the host's whole line to appear once.
+		await withPanel(
+			PILOT_NO_LIST,
+			INITIAL,
+			async (setup) => {
+				const frame = frameText(setup.captureCharFrame());
+				expect(frame).toContain("Agent host herdr");
+				// The row states the refusal under itself, the way every refused
+				// row does: a terminal that paints no color keeps the words.
+				expect(reasonOf(setup.captureCharFrame(), "Agent host")).toBe(
+					`Error: Agent host: ${HERDR_UNREACHABLE}`,
+				);
+				// The panel states the line; it never starts on the host the run
+				// cannot reach, so the confirm is the start's own pre-flight to
+				// refuse, not the panel's.
+				await pressControl(setup, "handoff", { quiet: true });
+				expect(confirmedHost()).toBe("herdr");
+				expect(refusals).toEqual([]);
+			},
+			{ width: WIDE },
+		);
+	});
+
+	test("on a herdr-core run the run's own host is not refused, and the confirm reaches start on it", async () => {
+		await withPanel(PILOT_NO_LIST, { ...INITIAL, host: "herdr-core" }, async (setup) => {
+			const frame = frameText(setup.captureCharFrame());
+			expect(frame).toContain("Agent host herdr-core");
+			expect(frame).not.toContain("Error: Agent host:");
+			await pressControl(setup, "handoff", { quiet: true });
+			expect(confirms).toHaveLength(1);
+			expect(confirms[0].host).toBe("herdr-core");
+		});
 	});
 });

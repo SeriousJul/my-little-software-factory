@@ -5003,16 +5003,24 @@ describe("the seat a missing Agent left (ADR 0108)", () => {
 });
 
 /**
- * The host the restart runs (issue #409): the start re-runs the dialect of
+ * The host each route takes (issue #409): a restart re-runs the dialect of
  * the host the handoff recorded, whatever the run resolves now, and a host
  * the run cannot reach is refused at the pre-flight, before the start spends
- * a command on the dialect.
+ * a command on the dialect. The automatic routes ask nothing: a queue pickup
+ * starts the host its item recorded - the run's host the automatic add put
+ * there - and never the host the ticket's handoff recorded earlier.
  */
-describe("the host the restart runs (issue #409)", () => {
+describe("the host each route takes (issue #409)", () => {
 	/** A clean live-worktree handoff on the herdr-core host. */
 	const coreChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement", {
 		host: "herdr-core" as const,
 	});
+
+	/** Pump the microtasks and timers until the queue holds nothing again. */
+	async function untilQueueDrains(rigRef: Rig): Promise<void> {
+		for (let turn = 0; turn < 200 && rigRef.state.workQueue.items().length > 0; turn += 1)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+	}
 
 	test("a restart of a herdr-core handoff runs the core's dialect on a run that resolves herdr", async () => {
 		const rigRef = await rig([FIRST]);
@@ -5081,5 +5089,41 @@ describe("the host the restart runs (issue #409)", () => {
 		// the core's first command never runs.
 		expect(world.commands().some((c) => c.startsWith("hc "))).toBe(false);
 		dispatch.stop();
+	});
+
+	test("a pickup starts the run's host, never the host the ticket's handoff recorded", async () => {
+		const rigRef = await rig([FIRST]);
+		// The ticket's handoff records the herdr-core host: a manual start on
+		// the core left its override on the record.
+		const stored = seedHandoff(rigRef, FIRST, coreChoice, { workspaceId: rigRef.checkout });
+		closeCycle(rigRef, FIRST, stored.handoffId);
+		// The capped dispatch enqueues the open ticket on the run's host, the
+		// way the automatic routes record their choice.
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "open",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).resolves.toEqual({ ok: true });
+		// One seat frees: the pickup claims the item and starts it.
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(1);
+		await untilQueueDrains(rigRef);
+		expect(rigRef.state.workQueue.items()).toHaveLength(0);
+		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
+		// The start ran the run's dialect on the host the item recorded...
+		expect(rigRef.commands()).toContain(agentStart(FIRST.name));
+		expect(rigRef.state.handoff.latestHandoff(FIRST.identity)?.host).toBe("herdr");
+		// ...and never the dialect of the host the ticket's handoff recorded:
+		// the core's first command did not run.
+		expect(rigRef.commands().some((c) => c.startsWith("hc run "))).toBe(false);
+		expect(rigRef.events).toContain(`notice:"${FIRST.title}" started from the Work queue`);
 	});
 });

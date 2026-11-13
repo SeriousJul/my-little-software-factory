@@ -120,9 +120,9 @@ is the answer a caller gets.
 The plane's side of this design has run in the suite against the Stub herdr
 world since step 3 (issue #409): the start's dialect, the prompt, the Close
 and the residue cleanup, the Restart seam that repeats the recorded host's
-dialect, and the launcher and panel frames per host all stand in the tests
-named in [the shared-controls verification](./shared-controls.md) and the
-modules' own suites. What has not run is the same boundary it was before, and
+dialect, and the launcher, panel, and Key guide frames per host all stand in
+the suites named in the table below, beside the shared controls' own suites.
+What has not run is the same boundary it was before, and
 it stands below, each one owed by the change that lands it:
 
 - No plane command has ever gone to a real herdr-core host: no start, prompt,
@@ -156,10 +156,10 @@ one entry per behavior, each beside the behavior's home module.
 | Behavior the change lands | Where it stands in the suite |
 | --- | --- |
 | The launcher's host row, per host: the row, its default on the run's resolved host, the replacement launcher's host from the replaced record, and the Launch row's refusal line on a host the run cannot reach | `test/consultation-launcher.test.ts`, the frame tests per host |
-| The override panel's host row, per host, beside the panel's other rows; the row's one refusal line and the Key guide's statement of it | `test/override-panel.test.ts`, the frame tests per host |
+| The override panel's host row, per host, beside the panel's other rows; the row's one refusal line and the Key guide's statement of it on a herdr-core run | `test/override-panel.test.ts`, the frame tests per host, and `test/key-guide.test.ts`, the guide's statement of the host's line |
 | The start's dialect on the recorded host: a herdr-core start issues `hc run`, `hc send`, and the terminal's handles beside them; the Handoff detail and the Work queue name the host | `test/handoff.test.ts`, the herdr-core start, Close, and residue suites |
 | The Restart seam: a restart of a herdr-core handoff runs the core's dialect on a run that resolves herdr, and a restart of a herdr handoff is refused at the pre-flight on a herdr-core run, before the core's first command | `test/handoff-dispatch.test.ts`, the describe block the issue names |
-| The automatic routes take the run's host, not the record's: the top-up's open add resolves the run's host beside a ticket whose last handoff recorded the other host | `test/observation.test.ts`, the open-dispatch suite |
+| The automatic routes take the run's host, not the record's: the top-up's open add resolves the run's host beside a ticket whose last handoff recorded the other host, and the Work queue's pickup starts the run's host, never the host the ticket's handoff recorded | `test/observation.test.ts`, the open-dispatch suite, and `test/handoff-dispatch.test.ts`, the route's host block |
 | The V31 migration: the handoff and Consultation tables gain one host column each, and the old rows take the host their runs resolved, stated, not guessed | `test/state/consultationRecord.test.ts`, the V30-to-V31 walk |
 | The closed surface: no `herdr` or `hc` argument outside the module, and the Stub world answers the dialects the module builds | `test/agent-host.test.ts` and the closed-surface walk in `test/herdr-world.test.ts` |
 
