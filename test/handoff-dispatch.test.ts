@@ -5059,12 +5059,15 @@ describe("the host each route takes (issue #409)", () => {
 		});
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({ ok: true });
 		// The core's dialect end to end: the start runs `hc run` for the new
-		// terminal and `hc send` for the prompt, and the run resolves herdr,
-		// and no herdr command runs.
+		// terminal and `hc send` for the prompt. The run resolves herdr, so the
+		// merged name check reads the other host's roster (`herdr agent list`)
+		// - the only herdr command that runs.
 		const commands = world.commands();
 		expect(commands.some((c) => c.startsWith("hc run "))).toBe(true);
 		expect(commands.some((c) => c.startsWith("hc send "))).toBe(true);
-		expect(commands.some((c) => c.startsWith("herdr "))).toBe(false);
+		expect(
+			commands.filter((c) => c.startsWith("herdr ")).every((c) => c === "herdr agent list"),
+		).toBe(true);
 		// The record the restart wrote stands on the recorded host, beside the
 		// terminal name the new start took.
 		const now = rigRef.state.handoff.latestHandoff(FIRST.identity);

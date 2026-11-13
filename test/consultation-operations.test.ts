@@ -663,6 +663,7 @@ describe("Consultation operations: launch", () => {
 			`git -C ${fixture.checkout} symbolic-ref refs/remotes/origin/HEAD`,
 			`git -C ${fixture.checkout} fetch origin main`,
 			`herdr worktree create --cwd ${fixture.checkout} --branch ${consultationBranchName(id, "grill")} --base origin/main --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${agentOf(id)} --kind pi --pane ${WORKTREE_LAUNCH.paneId}`,
 			`herdr agent prompt ${agentOf(id)} /grill review auth`,
 		]);
@@ -1404,7 +1405,7 @@ describe("Consultation operations: recovery", () => {
 			workspaceId: "ws-new",
 		});
 		expect(statusTexts(harness).at(-1)).toContain("reconnected");
-		expect(runner.commands()).toEqual(["herdr agent list"]);
+		expect(runner.commands()).toEqual(["herdr agent list", "hc ls --json --all"]);
 	});
 
 	test("fails an interrupted opening whose Agent is gone", async () => {
@@ -1605,6 +1606,7 @@ describe("Consultation operations: close", () => {
 
 		expect(runner.commands()).toEqual([
 			"herdr agent list",
+			"hc ls --json --all",
 			`herdr agent read ${LAUNCH.paneId} --lines 200 --source recent-unwrapped --format text`,
 			`herdr tab list --workspace ${LAUNCH.workspaceId}`,
 			`herdr pane list --workspace ${LAUNCH.workspaceId}`,
@@ -1953,10 +1955,10 @@ describe("Consultation operations: close", () => {
 
 		await harness.operations.close(consultation);
 
-		// The record retires on the identity check: the only command the close
-		// issued was the probe, so the topology that would have taken the
-		// reused tab down was never even asked.
-		expect(runner.commands()).toEqual(["herdr agent list"]);
+		// The record retires on the identity check: the close issued only the
+		// host probes, so the topology that would have taken the reused tab
+		// down was never even asked.
+		expect(runner.commands()).toEqual(["herdr agent list", "hc ls --json --all"]);
 		const closed = current(fixture.state, id);
 		expect(closed.state).toBe("closed");
 		expect(closed.closeResult).toContain("Agent is missing");
@@ -2001,7 +2003,7 @@ describe("Consultation operations: close", () => {
 
 		await harness.operations.close(consultation);
 
-		expect(runner.commands()).toEqual(["herdr agent list"]);
+		expect(runner.commands()).toEqual(["herdr agent list", "hc ls --json --all"]);
 		const closed = current(fixture.state, id);
 		expect(closed.state).toBe("closed");
 		expect(closed.resources.find((item) => item.kind === "pane")).toMatchObject({
@@ -2039,7 +2041,7 @@ describe("Consultation operations: close", () => {
 		const stuck = current(fixture.state, id);
 		expect(stuck.state).toBe("closing");
 		expect(stuck.warning).toContain("the Agent is not visible");
-		expect(runner.commands()).toEqual(["herdr agent list"]);
+		expect(runner.commands()).toEqual(["herdr agent list", "hc ls --json --all"]);
 	});
 
 	test("keeps an ambiguous Agent identity as a recovery, never a blind close", async () => {

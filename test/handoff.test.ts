@@ -649,6 +649,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 			"herdr workspace list",
 			`herdr workspace create --cwd ${repoPath(p.home)} --no-focus`,
 			`herdr tab create --workspace ws-new --cwd ${repoPath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -691,6 +692,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 			"herdr workspace list",
 			`herdr workspace create --cwd ${repoPath(p.home)} --no-focus`,
 			`herdr tab create --workspace ws-new --cwd ${repoPath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
@@ -868,6 +870,7 @@ describe("handOffTicket: the worktree sequence", () => {
 			`git -C ${repoPath(p.home)} symbolic-ref refs/remotes/origin/HEAD`,
 			`git -C ${repoPath(p.home)} fetch origin main`,
 			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base origin/main --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -1049,6 +1052,7 @@ describe("handOffTicket: the worktree sequence", () => {
 			`git -C ${repoPath(p.home)} branch --list factory/9-persist-source-facts`,
 			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 			`herdr tab create --workspace ws-wt --cwd ${worktreePath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-tab`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -1418,6 +1422,7 @@ describe("handOffTicket: the worktree sequence", () => {
 			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 			`herdr worktree list --cwd ${repoPath(p.home)}`,
 			`herdr worktree open --cwd ${repoPath(p.home)} --path ${worktreePath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -2347,6 +2352,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 			`git -C ${repoPath(p.home)} remote get-url origin`,
 			"herdr workspace list",
 			"herdr tab create --workspace ws-stored --no-focus",
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-2`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 			"herdr tab close tab-prev",
@@ -4128,6 +4134,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 			pushBranchCommand(repoPath(p.home)),
 			`gh ${PR_READ_ARGS.join(" ")}`,
 			PR_CREATE_COMMAND,
+			"hc ls --json",
 			`herdr agent start ${PR_AGENT} --kind pi --pane pane-wt`,
 			`herdr agent prompt ${PR_AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
 		]);
@@ -5818,6 +5825,7 @@ describe("handOffTicket: the pull request ticket's branch (ADR 0112)", () => {
 			`git -C ${repoPath(p.home)} branch --list ${HEAD_BRANCH}`,
 			`herdr worktree open --cwd ${repoPath(p.home)} --branch ${HEAD_BRANCH} --no-focus`,
 			`herdr tab create --workspace ws-impl --cwd ${worktreePath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${PULL_AGENT} --kind pi --pane pane-tab`,
 			`herdr agent prompt ${PULL_AGENT} ${PULL_PROMPT}`,
 		]);
@@ -5877,6 +5885,7 @@ describe("handOffTicket: the pull request ticket's branch (ADR 0112)", () => {
 			`git -C ${repoPath(p.home)} fetch origin ${HEAD_BRANCH}:refs/heads/${HEAD_BRANCH}`,
 			`herdr worktree open --cwd ${repoPath(p.home)} --branch ${HEAD_BRANCH} --no-focus`,
 			`herdr tab create --workspace ws-impl --cwd ${worktreePath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${PULL_AGENT} --kind pi --pane pane-tab`,
 			`herdr agent prompt ${PULL_AGENT} ${PULL_PROMPT}`,
 		]);

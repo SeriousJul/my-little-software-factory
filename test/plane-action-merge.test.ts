@@ -2661,7 +2661,10 @@ describe("the auto top-up merge", () => {
 		const bellSpy = spyOn(process.stdout, "write").mockImplementation(((
 			chunk: Uint8Array | string,
 		) => {
-			if (String(chunk).includes("\u0007")) bells += 1;
+			if (String(chunk).includes("\u0007")) {
+				bells += 1;
+				if (bells === 1) console.log("BELL-STACK", new Error().stack);
+			}
 			return true;
 		}) as typeof process.stdout.write);
 		try {
