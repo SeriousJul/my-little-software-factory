@@ -34,6 +34,7 @@ import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import { resolveTheme, type ThemeRole } from "../src/components/shared/theme.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
 import type { Logger } from "../src/logging.ts";
+import { type SessionRecordLookup, UNAVAILABLE_SESSION_RECORD } from "../src/session-record.ts";
 import type { FactoryState } from "../src/state.ts";
 import { flushPassiveNow } from "./passive-flush-hold.ts";
 import { type Plane, plane, sleep } from "./plane.ts";
@@ -467,6 +468,13 @@ export interface AppBootFields {
 	loopPolicy?: AppLoopPolicy;
 	/** The logger the loops write to. The default is the no-op logger. */
 	logger?: Logger;
+	/**
+	 * The derived session record lookup (ADR 0144) the app takes. The default
+	 * is the unavailable lookup: a frame test never reads the operator's real
+	 * session home, and a case that measures the derivation names its own
+	 * fixture lookup.
+	 */
+	sessionRecord?: SessionRecordLookup;
 	width?: number;
 	height?: number;
 	rendererOptions?: { kittyKeyboard?: boolean };
@@ -490,6 +498,7 @@ export async function bootApp(fields: AppBootFields = {}): Promise<AppSetup> {
 		state: planeRecord.props.state,
 		sources: planeRecord.props.sources,
 		logger: logger ?? planeRecord.props.logger,
+		sessionRecord: fields.sessionRecord ?? UNAVAILABLE_SESSION_RECORD,
 		agentHostResolution: planeRecord.props.agentHostResolution,
 		agentHostMarks: planeRecord.props.agentHostMarks,
 		loopPolicy: loopPolicy ?? planeRecord.props.loopPolicy,

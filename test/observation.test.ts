@@ -1,4 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
@@ -17,6 +19,7 @@ import {
 	stripAnsi,
 } from "../src/observation.ts";
 import type { RefreshClock } from "../src/refresh.ts";
+import { resolveSessionRecord, SESSION_RECORD_LAYOUTS } from "../src/session-record.ts";
 import type { ConsultationState } from "../src/state/consultation-record.ts";
 import type { HandoffOrigin } from "../src/state/handoff.ts";
 import type { FactoryState } from "../src/state.ts";
@@ -26,6 +29,7 @@ import { BASE_CONFIG } from "./base-config.ts";
 import { fetchedTicket, RUN_AGENT_HOST } from "./fact-fixtures.ts";
 import { FakeRunner, tabCreateJson, worktreeOpenJson } from "./fake-runner.ts";
 import {
+	PINNED_EPOCH,
 	type RigOptions,
 	rig as rigFixture,
 	settleFor as settleDispatch,
@@ -145,6 +149,62 @@ function agent(
 		...(stableSessionId === undefined ? {} : { stableSessionId }),
 		...(name === undefined ? {} : { name }),
 	};
+}
+
+/**
+ * The herdr-core host record: the terminal names the checkout, not the
+ * session record (ADR 0144). The pane stands for the tab and the workspace.
+ */
+function coreAgent(
+	paneId: string,
+	fields: { status?: string; checkoutPath?: string } = {},
+): HerdrAgent {
+	const { status = "working", checkoutPath } = fields;
+	return {
+		host: "herdr-core",
+		paneId,
+		tabId: paneId,
+		workspaceId: paneId,
+		agent: "factory-implement-I_5",
+		status,
+		sessionId: "",
+		...(checkoutPath === undefined ? {} : { checkoutPath }),
+	};
+}
+
+/** pi's stamp for a start time, the way the runtime names the record file. */
+function stampOf(ms: number): string {
+	const d = new Date(ms);
+	const two = (n: number) => String(n).padStart(2, "0");
+	const three = (n: number) => String(n).padStart(3, "0");
+	return `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.getUTCDate())}T${two(
+		d.getUTCHours(),
+	)}-${two(d.getUTCMinutes())}-${two(d.getUTCSeconds())}-${three(d.getUTCMilliseconds())}Z`;
+}
+
+/**
+ * One pi session record under the home the derivation reads: the record the
+ * runtime opened for the checkout, its name's stamp and its header both
+ * saying when it began and whose checkout it is.
+ */
+function putSessionRecord(
+	home: string,
+	checkout: string,
+	startedAtMs: number,
+	recordId = "record-a",
+): string {
+	const directory = SESSION_RECORD_LAYOUTS.pi.checkoutDirectory(checkout);
+	if (directory === null) throw new Error("the checkout names no session directory");
+	const recordsDir = join(home, ".pi", "agent", "sessions", directory);
+	mkdirSync(recordsDir, { recursive: true });
+	const startedAt = new Date(startedAtMs).toISOString();
+	const path = join(recordsDir, `${stampOf(startedAtMs)}_${recordId}.jsonl`);
+	writeFileSync(
+		path,
+		`${JSON.stringify({ type: "session", id: recordId, cwd: checkout, timestamp: startedAt })}\n`,
+		"utf8",
+	);
+	return path;
 }
 
 type Rig = ReturnType<typeof rigFixture>;
@@ -665,6 +725,138 @@ describe("the observation cycle", () => {
 		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(asked).toBe(false);
 		expect(ticket.lastCompletion?.message).toBe("Done. message of pane-implement");
+		state.close();
+	});
+
+	test("a herdr-core settle derives the session record path and reads it (issue #412)", async () => {
+		// The host names no record, so the derivation stands in: one directory
+		// read of the fixture home, the record picked by the run's checkout
+		// and start time, the same reader the herdr path uses (ADR 0144).
+		const home = mkdtempSync(join(tmpdir(), "observation-core-"));
+		const checkout = join(home, "src", "factory");
+		const recordStart = PINNED_EPOCH + 500;
+		const expectedRecord = putSessionRecord(home, checkout, recordStart);
+		const calls: Array<{ kind: string; path: string }> = [];
+		const paneReads: string[] = [];
+		const entries: TurnLogEntry[] = [
+			{ kind: "text", text: "I looked at the code." },
+			{ kind: "text", text: "Done. the record speaks." },
+		];
+		const { state, coordinator, advance } = rig({
+			home,
+			agents: [coreAgent("pane-implement", { status: "done", checkoutPath: checkout })],
+			turnLogs: async (kind, path) => {
+				calls.push({ kind, path });
+				return {
+					kind: "ended",
+					turnEnd: { log: entries, cause: "completed", detail: "" },
+				};
+			},
+			readPane: async (paneId) => {
+				paneReads.push(paneId);
+				return "the pane capture";
+			},
+			sessionRecord: (kind, facts) => resolveSessionRecord(kind, facts, home),
+		});
+		handOut(state, "github:github.com:I_5");
+		advance(30_001);
+		await coordinator.tick();
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
+		// The derivation named the record: the reader was asked for the
+		// derived path, the pane stayed unread, and the trace holds the log
+		// and its final text, the way the herdr path's settle does.
+		expect(calls).toEqual([{ kind: "pi", path: expectedRecord }]);
+		expect(paneReads).toEqual([]);
+		expect(ticket.state).toBe("awaiting");
+		expect(ticket.lastCompletion).toEqual(
+			expect.objectContaining({
+				message: "Done. the record speaks.",
+				turnLog: entries,
+				cause: "completed",
+				decision: null,
+			}),
+		);
+		state.close();
+	});
+
+	test("a herdr-core settle whose derivation is ambiguous takes the capture (issue #412)", async () => {
+		// The first-class answer: two candidate records that both fit refuse
+		// the path, the settle takes the capture, and the turn settles with
+		// the fail-open cause and one line on the Message record - never a
+		// failure of the turn (ADR 0144).
+		const home = mkdtempSync(join(tmpdir(), "observation-core-"));
+		const checkout = join(home, "src", "factory");
+		let readersAsked = 0;
+		const { state, coordinator, advance, statuses } = rig({
+			home,
+			agents: [coreAgent("pane-implement", { status: "done", checkoutPath: checkout })],
+			turnLogs: async () => {
+				readersAsked += 1;
+				return {
+					kind: "ended" as const,
+					turnEnd: {
+						log: [{ kind: "text" as const, text: "a log" }],
+						cause: "completed" as const,
+						detail: "",
+					},
+				};
+			},
+			sessionRecord: (kind, facts) => resolveSessionRecord(kind, facts, home),
+		});
+		// Two records that both fit: the run's own, and a second of the same
+		// checkout opened a moment later.
+		putSessionRecord(home, checkout, PINNED_EPOCH + 500, "record-a");
+		putSessionRecord(home, checkout, PINNED_EPOCH + 600, "record-b");
+		handOut(state, "github:github.com:I_5");
+		advance(30_001);
+		await coordinator.tick();
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
+		// The unavailable answer is the capture plus one line: the reader was
+		// never asked, the cause is the fail-open `unknown`, and the settle
+		// reports the fact on the Message line the operator watches.
+		expect(readersAsked).toBe(0);
+		expect(ticket.lastCompletion).toEqual(
+			expect.objectContaining({
+				message: "Done. message of pane-implement",
+				turnLog: [{ kind: "text", text: "Done. message of pane-implement" }],
+				cause: "unknown",
+				decision: null,
+			}),
+		);
+		expect(statuses).toContainEqual(
+			expect.objectContaining({
+				kind: "info",
+				text: "agent settled a turn on ticket github:github.com:I_5",
+			}),
+		);
+		state.close();
+	});
+
+	test("a host that names its record keeps it: the derivation is never asked (issue #412)", async () => {
+		let lookupAsked = false;
+		const { state, coordinator, advance } = rig({
+			agents: [agent("pane-implement", { status: "done", sessionId: "/tmp/session.jsonl" })],
+			turnLogs: async (_kind, sessionId) => ({
+				kind: "ended" as const,
+				turnEnd: {
+					log: [{ kind: "text" as const, text: `a log of ${sessionId}` }],
+					cause: "completed" as const,
+					detail: "",
+				},
+			}),
+			sessionRecord: () => {
+				lookupAsked = true;
+				return { kind: "unavailable" as const, reason: "no-derivation" as const };
+			},
+		});
+		handOut(state, "github:github.com:I_5");
+		advance(30_001);
+		await coordinator.tick();
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
+		// A host that names the record is never overruled by the derivation:
+		// the reader reads the host's path, and the lookup stands unasked.
+		expect(lookupAsked).toBe(false);
+		expect(ticket.lastCompletion?.message).toBe("a log of /tmp/session.jsonl");
 		state.close();
 	});
 
@@ -6305,6 +6497,133 @@ describe("the agent wake wait (ADR 0084)", () => {
 		// the visible read stands out of it.
 		expect(reads).toEqual(["recent pane-consult"]);
 		fake.coordinator.stop();
+		fake.state.close();
+	});
+
+	/**
+	 * The herdr-core Consultation the settle seam picks up (ADR 0144): the
+	 * same record the ticket settle takes, the handles the terminal carries,
+	 * the response begun and accepted. The host names no session handle, so
+	 * the handles' session id is none.
+	 */
+	function herdrCoreConsultationWithTurn(
+		state: FactoryState,
+		id: string,
+		paneId: string,
+		checkout: string,
+	): void {
+		state.consultationRecord.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			host: "herdr-core" as const,
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository: { ...fetched().repository, path: checkout },
+			agentName: `consultation-${id}`,
+		});
+		state.consultationRecord.recordConsultationAgentHandles(id, {
+			paneId,
+			tabId: paneId,
+			workspaceId: paneId,
+			sessionId: null,
+		});
+		state.consultationRecord.setConsultationState(id, "awaiting-response");
+		const pending = state.consultationRecord.beginConsultationResponse(id, "go");
+		if (pending === undefined) throw new Error("the response did not begin");
+		const turn = state.consultationRecord.acceptConsultationResponse(id, pending.id);
+		if (turn === undefined) throw new Error("the response did not accept");
+	}
+
+	test("a herdr-core Consultation settles its turn on the derived record (issue #412)", async () => {
+		const home = mkdtempSync(join(tmpdir(), "observation-core-"));
+		const checkout = join(home, "src", "factory");
+		const calls: string[] = [];
+		const reads: string[] = [];
+		const fake = rig({
+			home,
+			agents: [],
+			turnLogs: async (_kind, path) => {
+				calls.push(path);
+				return {
+					kind: "ended" as const,
+					turnEnd: {
+						log: [{ kind: "text" as const, text: "done" }],
+						cause: "completed" as const,
+						detail: "",
+					},
+				};
+			},
+			readPane: async (paneId) => {
+				reads.push(`recent ${paneId}`);
+				return `recent ${paneId}`;
+			},
+			readPaneVisible: async (paneId) => {
+				reads.push(`visible ${paneId}`);
+				return `visible ${paneId}`;
+			},
+			sessionRecord: (kind, facts) => resolveSessionRecord(kind, facts, home),
+		});
+		const id = "c-derive";
+		herdrCoreConsultationWithTurn(fake.state, id, "pane-consult", checkout);
+		// The record the run opened: the Consultation's created time is the
+		// run's start the derivation picks by.
+		const record = fake.state.consultationRecord.consultation(id);
+		if (record === undefined) throw new Error("the Consultation did not record");
+		const created = record.createdAt;
+		const expectedRecord = putSessionRecord(home, checkout, Date.parse(created) + 50);
+		fake.setAgents([coreAgent("pane-consult", { status: "done", checkoutPath: checkout })]);
+		await fake.coordinator.tick();
+		expect(fake.state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
+		// The derivation named the record: the reader reads it the way the
+		// herdr path's reader does, and the settled turn stands beside the
+		// visible screen, the recent scroll out of the path.
+		expect(calls).toEqual([expectedRecord]);
+		expect(reads).toEqual(["visible pane-consult"]);
+		fake.state.close();
+	});
+
+	test("a herdr-core Consultation whose derivation is unavailable settles on the capture (issue #412)", async () => {
+		// The home holds no record of the run: the derivation answers
+		// unavailable, the settle takes the recent scroll capture, the cause
+		// is the fail-open `unknown`, and the turn still settles.
+		const home = mkdtempSync(join(tmpdir(), "observation-core-"));
+		const checkout = join(home, "src", "factory");
+		let readersAsked = 0;
+		const reads: string[] = [];
+		const fake = rig({
+			home,
+			agents: [],
+			turnLogs: async () => {
+				readersAsked += 1;
+				return { kind: "unavailable" as const };
+			},
+			readPane: async (paneId) => {
+				reads.push(`recent ${paneId}`);
+				return `recent ${paneId}`;
+			},
+			readPaneVisible: async (paneId) => {
+				reads.push(`visible ${paneId}`);
+				return `visible ${paneId}`;
+			},
+			sessionRecord: (kind, facts) => resolveSessionRecord(kind, facts, home),
+		});
+		const id = "c-capture";
+		herdrCoreConsultationWithTurn(fake.state, id, "pane-consult", checkout);
+		fake.setAgents([coreAgent("pane-consult", { status: "done", checkoutPath: checkout })]);
+		await fake.coordinator.tick();
+		expect(fake.state.consultationRecord.consultation(id)?.state).toBe("awaiting-response");
+		// The reader was never asked, the recent capture stands beside the
+		// settled turn, and the settled turn carries the fail-open cause.
+		expect(readersAsked).toBe(0);
+		expect(reads).toEqual(["recent pane-consult"]);
+		const turns = fake.state.consultationRecord.consultationTurns(id);
+		const settled = turns.at(-1);
+		expect(settled).toEqual(
+			expect.objectContaining({ cause: "unknown", settledAt: expect.any(String) }),
+		);
 		fake.state.close();
 	});
 });

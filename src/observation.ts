@@ -139,7 +139,12 @@ import { identifyHandoffAgentName } from "./naming.ts";
 import { isPlaneActionTaskType } from "./plane-action-registry.ts";
 import type { RefreshClock } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
-import type { Consultation, ConsultationRecordAggregate } from "./state/consultation-record.ts";
+import { realSessionRecordLookup, type SessionRecordLookup } from "./session-record.ts";
+import type {
+	Consultation,
+	ConsultationRecordAggregate,
+	ConsultationTurn,
+} from "./state/consultation-record.ts";
 import type { HandoffAggregate, HandoffTicket } from "./state/handoff.ts";
 import type { PlaneActionAggregate } from "./state/plane-action.ts";
 import type {
@@ -615,7 +620,15 @@ export class MergedAgentReader implements AgentReader {
 			return agent;
 		}
 		if (record.state === "live") {
-			return { ...agent, agent: row.agent ?? "agent", status: record.status };
+			// The record's checkout is the derivation's checkout fact (ADR
+			// 0144): the session record the host names no path of stands under
+			// the checkout the Agent runs in.
+			return {
+				...agent,
+				agent: row.agent ?? "agent",
+				status: record.status,
+				checkoutPath: record.cwd,
+			};
 		}
 		const exited =
 			(record.reason === "exited" || record.reason === "exit") && record.exitCode !== null;
@@ -625,7 +638,7 @@ export class MergedAgentReader implements AgentReader {
 			// settle stands beside it.
 			return null;
 		}
-		return { ...agent, agent: row.agent ?? "agent", status: "done" };
+		return { ...agent, agent: row.agent ?? "agent", status: "done", checkoutPath: record.cwd };
 	}
 
 	private async readCorePane(name: string, lines: number): Promise<string | null> {
@@ -819,6 +832,13 @@ interface ObservationOptions {
 	 */
 	turnLogs: TurnLogSource;
 	/**
+	 * The derived session record path on the host that reports none (ADR
+	 * 0144): the per-kind table's lookup, the second supplier the settle and
+	 * the Session view take when a herdr-core Agent names no record. Omitted:
+	 * the real lookup of the machine the run stands on.
+	 */
+	sessionRecord?: SessionRecordLookup;
+	/**
 	 * The transition fire of a completed turn (ADR 0027): the app's seam
 	 * writes the task type's label facts through the command runner and
 	 * returns the outcome the completion decision reads. Omitted: the turn
@@ -868,6 +888,7 @@ export class ObservationCoordinator {
 	) => void;
 	private readonly log: Logger;
 	private readonly turnLogs: TurnLogSource;
+	private readonly sessionRecord: SessionRecordLookup;
 	private readonly fireCompleted?: (ticket: HandoffTicket) => Promise<TransitionOutcome | null>;
 	private readonly refireRecordedSkips?: () => Promise<RefiredSkip[]>;
 	private timer: ReturnType<typeof setTimeout> | null = null;
@@ -984,6 +1005,7 @@ export class ObservationCoordinator {
 		this.onStatus = options.onStatus;
 		this.log = options.log;
 		this.turnLogs = options.turnLogs;
+		this.sessionRecord = options.sessionRecord ?? realSessionRecordLookup;
 		this.fireCompleted = options.fireCompleted;
 		this.refireRecordedSkips = options.refireRecordedSkips;
 	}
@@ -1499,17 +1521,55 @@ export class ObservationCoordinator {
 	/**
 	 * The settled turn, read once from the agent's session record.
 	 *
-	 * `unavailable` when herdr reports no session, the agent type has no
-	 * known kind, or the reader cannot read the record: the settle then falls
-	 * back to the terminal capture with an `unknown` cause.
+	 * `unavailable` when the agent type has no known kind, herdr reports no
+	 * session and the host is not the derivation's, or the reader cannot read
+	 * the record: the settle then falls back to the terminal capture with an
+	 * `unknown` cause.
+	 *
+	 * The herdr host keeps its supplier: a host that names the record is never
+	 * overruled by the derivation. On the herdr-core host, which names no
+	 * record, the per-kind derivation is the second supplier (ADR 0144); its
+	 * unavailable answer is the capture, one line in the run's record, and
+	 * never `no-turn`.
 	 */
 	private async maybeReadTurnEnd(
 		ticket: { ticketIdentity: string; agentType: string; startedAt: string },
 		agent: HerdrAgent,
 	): Promise<SessionTurnRead> {
 		const kind = this.config().agents[ticket.agentType]?.kind;
-		if (kind === undefined || agent.sessionId === "") return { kind: "unavailable" };
-		return await this.turnLogs.read(kind, agent.sessionId, ticket.startedAt);
+		if (kind === undefined) return { kind: "unavailable" };
+		if (agent.sessionId !== "")
+			return await this.turnLogs.read(kind, agent.sessionId, ticket.startedAt);
+		if (agent.host !== "herdr-core") return { kind: "unavailable" };
+		const derived = this.sessionRecord(kind, {
+			checkoutPath: agent.checkoutPath ?? null,
+			startedAt: ticket.startedAt,
+		});
+		if (derived.kind === "unavailable") return { kind: "unavailable" };
+		return await this.turnLogs.read(kind, derived.path, ticket.startedAt);
+	}
+
+	/**
+	 * The Consultation turn read when the host names no session record (ADR
+	 * 0144): the herdr-core derivation's path through the same reader the
+	 * herdr path uses, or unavailable. The record is picked by the Agent's
+	 * checkout, the Consultation's when the Agent names none, and the
+	 * Consultation's created time; the pending turn's accepted time feeds the
+	 * reader's staleness guard.
+	 */
+	private async consultationTurnRead(
+		kind: string | undefined,
+		match: HerdrAgent,
+		consultation: Consultation,
+		pendingTurn: ConsultationTurn | undefined,
+	): Promise<SessionTurnRead> {
+		if (kind === undefined || match.host !== "herdr-core") return { kind: "unavailable" };
+		const derived = this.sessionRecord(kind, {
+			checkoutPath: match.checkoutPath ?? consultation.repository.path,
+			startedAt: consultation.createdAt,
+		});
+		if (derived.kind === "unavailable") return { kind: "unavailable" };
+		return await this.turnLogs.read(kind, derived.path, pendingTurn?.acceptedAt ?? null);
 	}
 
 	/** Whether a done or idle agent settles the ticket's turn now. */
@@ -1850,7 +1910,7 @@ export class ObservationCoordinator {
 		const turnRead =
 			kind !== undefined && match.sessionId !== ""
 				? await this.turnLogs.read(kind, match.sessionId, pendingTurn?.acceptedAt ?? null)
-				: ({ kind: "unavailable" } as SessionTurnRead);
+				: await this.consultationTurnRead(kind, match, consultation, pendingTurn);
 		// The settled turn's body beside the session record: the visible screen
 		// when the record holds the turn, the recent scroll capture when it
 		// does not, the fallback the ticket settle runs (ADR 0140, issue #405).

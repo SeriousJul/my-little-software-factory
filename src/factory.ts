@@ -15,6 +15,7 @@ import { App } from "./components/app.ts";
 import { createHerdrIdentityReporter } from "./herdr-identity.ts";
 import { errorMessage } from "./runner.ts";
 import { isSupportedBunVersion, unsupportedBunVersionMessage } from "./runtime.ts";
+import { realSessionRecordLookup } from "./session-record.ts";
 import { installStateShutdown, runStartup, startupArgs } from "./startup.ts";
 import { factoryVersion } from "./version.ts";
 
@@ -120,6 +121,9 @@ createRoot(renderer).render(
 		logger: startup.logger,
 		agentHostResolution: startup.agentHost,
 		agentHostMarks: startup.agentHostMarks,
+		// The derived session record path on the host that reports none
+		// (ADR 0144): the real lookup of the machine this run stands on.
+		sessionRecord: realSessionRecordLookup,
 		loopPolicy: { kind: "production" },
 		onReady: (ready) => {
 			appStop.current = ready.stop;

@@ -146,6 +146,7 @@ import {
 	errorMessage,
 	supportsModelList,
 } from "../runner.ts";
+import { realSessionRecordLookup, type SessionRecordLookup } from "../session-record.ts";
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
 import type {
 	Consultation,
@@ -463,6 +464,14 @@ export interface AppProps {
 	 * (ADR 0141).
 	 */
 	agentHostMarks: AgentHostMarks;
+	/**
+	 * The derived session record path on the host that reports none (ADR
+	 * 0144): the per-kind table's lookup. The Observation loop takes it for
+	 * the settle, and the Session view takes it for the exchange of a
+	 * herdr-core Agent. Omitted: the real lookup of the machine the run
+	 * stands on.
+	 */
+	sessionRecord?: SessionRecordLookup;
 	/** The loop policy: the named fact that decides which loops run. */
 	loopPolicy: AppLoopPolicy;
 	/**
@@ -1482,6 +1491,7 @@ function useAppSessionRefresh(props: AppProps, prev: AppKeyHandlersStage) {
 			agentsRef: prev.agentsRef,
 			configRef: prev.configRef,
 			commandRunner: prev.commandRunner,
+			sessionRecord: props.sessionRecord ?? realSessionRecordLookup,
 			consultationOperations: prev.consultationOperations,
 			interaction: prev.interaction,
 			consultationFollowRef: prev.consultationFollowRef,
@@ -1498,6 +1508,7 @@ function useAppSessionRefresh(props: AppProps, prev: AppKeyHandlersStage) {
 			prev.agentsRef,
 			prev.configRef,
 			prev.commandRunner,
+			props.sessionRecord,
 			prev.consultationOperations,
 			prev.interaction,
 			prev.consultationFollowRef,
@@ -1514,38 +1525,49 @@ function useAppSessionRefresh(props: AppProps, prev: AppKeyHandlersStage) {
 }
 type AppSessionRefreshStage = ReturnType<typeof useAppSessionRefresh>;
 
+/** The fields the observation loop reads and writes (ADR 0034). */
+function observationLoopFields(
+	props: AppProps,
+	prev: AppSessionRefreshStage,
+): AppObservationFields {
+	return {
+		state: props.state,
+		handoffDispatch: prev.handoffDispatch,
+		loopPolicy: props.loopPolicy,
+		commandRunner: prev.commandRunner,
+		sessionRecord: props.sessionRecord ?? realSessionRecordLookup,
+		configRef: prev.configRef,
+		autoModeRef: prev.autoModeRef,
+		replaceTickets: prev.replaceTickets,
+		replaceConsultations: prev.replaceConsultations,
+		setAgents: prev.setAgents,
+		setBell: prev.setBell,
+		attention: prev.attention,
+		onReady: props.onReady,
+		clearOperationMessage: prev.clearOperationMessage,
+		setStatus: prev.setStatus,
+		refreshTicketSources: prev.refreshTicketSources,
+		closeCycleEndDraft: prev.closeCycleEndDraft,
+		refreshPullRequestSources: prev.refreshPullRequestSources,
+		logger: props.logger,
+		observationRef: prev.observationRef,
+		coordinatorRef: prev.coordinatorRef,
+		handoffDispatchRef: prev.handoffDispatchRef,
+		consultationOperationsRef: prev.consultationOperationsRef,
+	};
+}
+
 /** The observation loop's fields: the poll's inputs and the writes its tick makes (ADR 0034). */
 function useAppObservationFields(props: AppProps, prev: AppSessionRefreshStage) {
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the fields below are listed one by one; `prev` is a stage object rebuilt each render, and the memo must track its fields, not the object
 	const observationFields = useMemo<AppObservationFields>(
-		() => ({
-			state: props.state,
-			handoffDispatch: prev.handoffDispatch,
-			loopPolicy: props.loopPolicy,
-			commandRunner: prev.commandRunner,
-			configRef: prev.configRef,
-			autoModeRef: prev.autoModeRef,
-			replaceTickets: prev.replaceTickets,
-			replaceConsultations: prev.replaceConsultations,
-			setAgents: prev.setAgents,
-			setBell: prev.setBell,
-			attention: prev.attention,
-			onReady: props.onReady,
-			clearOperationMessage: prev.clearOperationMessage,
-			setStatus: prev.setStatus,
-			refreshTicketSources: prev.refreshTicketSources,
-			closeCycleEndDraft: prev.closeCycleEndDraft,
-			refreshPullRequestSources: prev.refreshPullRequestSources,
-			logger: props.logger,
-			observationRef: prev.observationRef,
-			coordinatorRef: prev.coordinatorRef,
-			handoffDispatchRef: prev.handoffDispatchRef,
-			consultationOperationsRef: prev.consultationOperationsRef,
-		}),
+		() => observationLoopFields(props, prev),
 		[
 			props.state,
 			prev.handoffDispatch,
 			props.loopPolicy,
 			prev.commandRunner,
+			props.sessionRecord,
 			prev.configRef,
 			prev.autoModeRef,
 			prev.replaceTickets,
@@ -5478,6 +5500,7 @@ interface AppConsultationSessionFields {
 	agentsRef: RefObject<readonly HerdrAgent[] | null>;
 	configRef: RefObject<FactoryConfig>;
 	commandRunner: CommandRunner;
+	sessionRecord: SessionRecordLookup;
 	consultationOperations: ConsultationOperations | undefined;
 	interaction: boolean;
 	consultationFollowRef: RefObject<boolean>;
@@ -5486,17 +5509,36 @@ interface AppConsultationSessionFields {
 	outputRefreshRef: RefObject<(() => void) | null>;
 }
 
+/**
+ * The session record path of a Consultation agent the herdr-core host names
+ * no record for (ADR 0144): the per-kind derivation is the second supplier,
+ * and it answers the same readers the herdr path reads. A host that names
+ * its record is never overruled, and a derivation that names nothing
+ * answers the empty path: the Session view stays on the captured history,
+ * because the record's absence says nothing about whether the turn ran.
+ */
+function coreHostRecordPath(
+	f: AppConsultationSessionFields,
+	kind: string,
+	match: HerdrAgent | "ambiguous" | undefined,
+	consultation: Consultation,
+): string {
+	if (match === undefined || match === "ambiguous" || match.host !== "herdr-core") return "";
+	const derived = f.sessionRecord(kind, {
+		checkoutPath: match.checkoutPath ?? consultation.repository.path,
+		startedAt: consultation.createdAt,
+	});
+	return derived.kind === "path" ? derived.path : "";
+}
+
 /** The session record read the effect takes for the selected Consultation. */
 function consultationSessionRead(f: AppConsultationSessionFields, consultation: Consultation) {
-	const sessionPath = (): string => {
-		const polled = f.agentsRef.current;
-		if (polled === null) return "";
-		const match = matchConsultationAgent(consultation, polled);
-		return match === undefined || match === "ambiguous" ? "" : match.sessionId;
-	};
 	return (): readonly SessionEntry[] | null => {
 		const kind = f.configRef.current.agents[consultation.agentType]?.kind;
-		const path = sessionPath();
+		const polled = f.agentsRef.current;
+		const match = polled === null ? undefined : matchConsultationAgent(consultation, polled);
+		let path = match === undefined || match === "ambiguous" ? "" : match.sessionId;
+		if (kind !== undefined && path === "") path = coreHostRecordPath(f, kind, match, consultation);
 		const read =
 			kind !== undefined && path !== ""
 				? readSessionExchange(kind, path)
@@ -5606,6 +5648,7 @@ interface AppObservationFields {
 	handoffDispatch: HandoffDispatch;
 	loopPolicy: AppLoopPolicy;
 	commandRunner: CommandRunner;
+	sessionRecord: SessionRecordLookup;
 	configRef: RefObject<FactoryConfig>;
 	autoModeRef: RefObject<boolean>;
 	replaceTickets: () => void;
@@ -5726,6 +5769,10 @@ function observationCoordinatorBase(
 		// The settled turn's log: the session record reader, supplied here
 		// rather than constructed inside the cycle.
 		turnLogs: SESSION_TURN_LOGS,
+		// The derived session record path on the host that reports none
+		// (ADR 0144): the per-kind table's lookup, supplied here the way the
+		// reader is.
+		sessionRecord: f.sessionRecord,
 		onStatus: (kind, text, topic) => {
 			// Both sections read the same observation events: an outcome is
 			// a fact for the one Message line, whichever section is expanded.
