@@ -2140,7 +2140,8 @@ export function worldEgress(world: CommandRunner, fallback: CommandRunner): Worl
 	};
 	const egress: WorldEgress = {
 		run(command: string, args: readonly string[], options?: CommandOptions) {
-			const target = command === "herdr" || command === "git" ? world : fallback;
+			const target =
+				command === "herdr" || command === "git" || command === "hc" ? world : fallback;
 			return record(command, args, () => target.run(command, args, options));
 		},
 		listModels(kind: string): Promise<ModelListResult> {

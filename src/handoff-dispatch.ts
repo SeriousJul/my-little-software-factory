@@ -9,7 +9,8 @@
  * work.
  */
 
-import type { AgentHost, AgentHostResolution } from "./agent-host.ts";
+import type { AgentHost, AgentHostMarks, AgentHostResolution } from "./agent-host.ts";
+import { runIdentityOf } from "./agent-host.ts";
 import {
 	type CheckoutChannel,
 	type CheckoutGate,
@@ -325,6 +326,12 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	 */
 	agentHost: AgentHostResolution;
 	/**
+	 * The environment marks the run resolved from (issue #410): the marks name
+	 * the run for the labels a herdr-core start writes, and the herdr-core mark
+	 * is the terminal whose Adoption labels the start copies (ADR 0141).
+	 */
+	agentHostMarks: AgentHostMarks;
+	/**
 	 * The Parallel limit seats held now, from one shared source (ADR 0034):
 	 * the ticket seats, the unresolved claims, and the Consultation seats.
 	 * A manual start at a full cap enters the Work queue instead of starting.
@@ -581,6 +588,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private readonly runner: CommandRunner;
 	private readonly config: () => FactoryConfig;
 	private readonly agentHost: AgentHostResolution;
+	private readonly agentHostMarks: AgentHostMarks;
 	private readonly seatCount: () => number;
 	private readonly missingSeatTickets: () => readonly string[];
 	private readonly pickupConsultation?: (
@@ -720,6 +728,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.runner = options.runner;
 		this.config = options.config;
 		this.agentHost = options.agentHost;
+		this.agentHostMarks = options.agentHostMarks;
 		this.seatCount = options.seatCount;
 		this.missingSeatTickets = options.missingSeatTickets ?? (() => []);
 		this.pickupConsultation = options.pickupConsultation;
@@ -2483,6 +2492,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 				// there: the stable name, or the cycle name when the Ticket's own
 				// Leftover environment held the stable one (issue #299).
 				heldName: collision.heldName,
+				// The host that holds the name (issue #410): the record names it,
+				// and the holder's handles are read on that host.
+				holderHost: collision.host,
 				holderPaneId: collision.holder?.paneId ?? null,
 				holderWorkspaceId: collision.holder?.workspaceId ?? null,
 				reason: outcome.reason,
@@ -2494,7 +2506,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.state.handoff.recordLeftoverEnvironment({
 			ticketIdentity: identity,
 			paneId: collision.holder?.paneId ?? null,
-			reason: `the leftover agent still holds the herdr name ${collision.heldName}: ${collision.reason}`,
+			reason: `the leftover agent still holds the ${collision.host === "herdr-core" ? "herdr-core" : "herdr"} name ${collision.heldName}: ${collision.reason}`,
 		});
 	}
 
@@ -2596,6 +2608,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// refuses a host the run cannot reach, and the choice's host is the
 			// dialect the start runs whatever that answer says.
 			agentHost: this.agentHost,
+			// The marks the start's labels name (issue #410, ADR 0141).
+			agentHostMarks: this.agentHostMarks,
+			// The run's identity facts a herdr-core start writes on its terminal.
+			coreStartLabels: {
+				runIdentity: runIdentityOf(this.agentHostMarks),
+				ticketIdentity: ticket.identity,
+				repositoryIdentity: ticket.repositoryRef.identity,
+			},
 			runner: this.runner,
 			home: this.home,
 			onStage,

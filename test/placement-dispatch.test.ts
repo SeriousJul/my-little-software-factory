@@ -27,7 +27,7 @@ import { agentNameFor } from "../src/naming.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { RUN_AGENT_HOST } from "./fact-fixtures.ts";
+import { RUN_AGENT_HOST, RUN_AGENT_HOST_MARKS } from "./fact-fixtures.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -200,6 +200,7 @@ function rig(listings: Listing[], machine: WorkflowState[] = BASE_CONFIG.workflo
 		seatCount: () => 0,
 		home,
 		agentHost: RUN_AGENT_HOST,
+		agentHostMarks: RUN_AGENT_HOST_MARKS,
 		...recorder(events),
 	});
 	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
@@ -239,6 +240,7 @@ function withSeats(rig: Rig, seatCount: () => number): HandoffDispatch {
 		seatCount,
 		home: rig.home,
 		agentHost: RUN_AGENT_HOST,
+		agentHostMarks: RUN_AGENT_HOST_MARKS,
 		...recorder(rig.events),
 	});
 }

@@ -119,6 +119,7 @@ createRoot(renderer).render(
 		sources: startup.sources,
 		logger: startup.logger,
 		agentHostResolution: startup.agentHost,
+		agentHostMarks: startup.agentHostMarks,
 		loopPolicy: { kind: "production" },
 		onReady: (ready) => {
 			appStop.current = ready.stop;

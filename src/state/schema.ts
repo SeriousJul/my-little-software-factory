@@ -6,7 +6,7 @@
 
 import type { Database } from "bun:sqlite";
 import { StateError } from "./store.ts";
-export const SCHEMA_VERSION = 31;
+export const SCHEMA_VERSION = 32;
 export const SCHEMA_V1 = `
 	CREATE TABLE tickets (
 		identity TEXT PRIMARY KEY, state TEXT NOT NULL, work_cycle INTEGER NOT NULL,
@@ -338,6 +338,14 @@ export const MIGRATION_V30_TO_V31_HANDOFF_HOST =
 	"ALTER TABLE handoffs ADD COLUMN host TEXT NOT NULL DEFAULT 'herdr';";
 export const MIGRATION_V30_TO_V31_CONSULTATION_HOST =
 	"ALTER TABLE consultations ADD COLUMN host TEXT NOT NULL DEFAULT 'herdr';";
+/**
+ * The collision's holding host (issue #410, ADR 0142): one name holds one
+ * live Agent across both hosts, and the record names the host that holds it.
+ * An older file's rows are herdr refusals by construction - no herdr-core
+ * refusal existed to store - and the default is that fact, not a guess.
+ */
+export const MIGRATION_V31_TO_V32_NAME_COLLISION_HOST =
+	"ALTER TABLE name_collisions ADD COLUMN holder_host TEXT NOT NULL DEFAULT 'herdr';";
 export function hasTable(db: Database, name: string): boolean {
 	return (
 		db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null
@@ -402,6 +410,7 @@ export function migrate(db: Database, path: string): void {
 		migrateV21ToV24(db);
 		migrateV24ToV30(db);
 		migrateV30ToV31(db);
+		migrateV31ToV32(db);
 		// The `queued` state the retired route wait stood in (ADR 0072): a
 		// file that still carries it ends those cycles the way a close does -
 		// the ticket rests open with the cycle counted once - in one state
@@ -512,4 +521,14 @@ function migrateV30ToV31(db: Database) {
 	// which read back the default, the host their runs resolved (issue #409).
 	if (!hasColumn(db, "handoffs", "host")) db.exec(MIGRATION_V30_TO_V31_HANDOFF_HOST);
 	if (!hasColumn(db, "consultations", "host")) db.exec(MIGRATION_V30_TO_V31_CONSULTATION_HOST);
+}
+
+function migrateV31ToV32(db: Database) {
+	// The collision's holding host is asked for by name, the way the handoff's
+	// host is: a file the step already ran keeps the column and its stored
+	// host, and an older file gains the column beside the rows it already
+	// holds, which read back the default, the host the refusal it stored came
+	// from (issue #410, ADR 0142).
+	if (!hasColumn(db, "name_collisions", "holder_host"))
+		db.exec(MIGRATION_V31_TO_V32_NAME_COLLISION_HOST);
 }

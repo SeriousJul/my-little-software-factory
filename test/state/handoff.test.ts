@@ -1004,6 +1004,7 @@ describe("the Agent name collision a refused start leaves (issue #299)", () => {
 		state.handoff.recordNameCollision({
 			ticketIdentity: TICKET,
 			heldName: "watch-agent-turns-1a2b3c4d",
+			holderHost: "herdr",
 			holderPaneId: "w13K:p1",
 			holderWorkspaceId: "w13K",
 			reason:
@@ -1018,6 +1019,7 @@ describe("the Agent name collision a refused start leaves (issue #299)", () => {
 		recordCollision(state);
 		expect(state.handoff.nameCollision(TICKET)).toEqual({
 			heldName: "watch-agent-turns-1a2b3c4d",
+			host: "herdr",
 			holderPaneId: "w13K:p1",
 			holderWorkspaceId: "w13K",
 			reason:

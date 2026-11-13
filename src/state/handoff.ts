@@ -218,6 +218,8 @@ export interface HandoffAggregate {
 	recordNameCollision(input: {
 		ticketIdentity: string;
 		heldName: string;
+		/** The host that holds the name: the record names it (issue #410). */
+		holderHost: AgentHost;
 		holderPaneId: string | null;
 		holderWorkspaceId: string | null;
 		reason: string;
@@ -914,6 +916,8 @@ export class HandoffModule implements HandoffAggregate {
 	recordNameCollision(input: {
 		ticketIdentity: string;
 		heldName: string;
+		/** The host that holds the name: the record names it (issue #410). */
+		holderHost: AgentHost;
 		holderPaneId: string | null;
 		holderWorkspaceId: string | null;
 		reason: string;
@@ -921,16 +925,18 @@ export class HandoffModule implements HandoffAggregate {
 	}): AgentNameCollision {
 		const at = input.at ?? new Date(this.db.now()).toISOString();
 		// One row per Ticket, refreshed by the next refusal: the collision is one
-		// standing fact, and the handles herdr names now are the ones the operator
-		// is sent to. The clear is stamped, never deleted, so the fact the operator
-		// acted on stays readable in the file the way a cleared leftover does.
+		// standing fact, and the handles the host names now are the ones the
+		// operator is sent to. The clear is stamped, never deleted, so the fact
+		// the operator acted on stays readable in the file the way a cleared
+		// leftover does.
 		this.db
 			.prepare(
-				"INSERT INTO name_collisions(ticket_identity, held_name, holder_pane_id, holder_workspace_id, reason, at, cleared_at) VALUES (?, ?, ?, ?, ?, ?, NULL) ON CONFLICT(ticket_identity) DO UPDATE SET held_name = excluded.held_name, holder_pane_id = excluded.holder_pane_id, holder_workspace_id = excluded.holder_workspace_id, reason = excluded.reason, at = excluded.at, cleared_at = NULL",
+				"INSERT INTO name_collisions(ticket_identity, held_name, holder_host, holder_pane_id, holder_workspace_id, reason, at, cleared_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL) ON CONFLICT(ticket_identity) DO UPDATE SET held_name = excluded.held_name, holder_host = excluded.holder_host, holder_pane_id = excluded.holder_pane_id, holder_workspace_id = excluded.holder_workspace_id, reason = excluded.reason, at = excluded.at, cleared_at = NULL",
 			)
 			.run(
 				input.ticketIdentity,
 				input.heldName,
+				input.holderHost,
 				input.holderPaneId,
 				input.holderWorkspaceId,
 				input.reason,
@@ -938,6 +944,7 @@ export class HandoffModule implements HandoffAggregate {
 			);
 		return {
 			heldName: input.heldName,
+			host: input.holderHost,
 			holderPaneId: input.holderPaneId,
 			holderWorkspaceId: input.holderWorkspaceId,
 			reason: input.reason,
@@ -953,11 +960,12 @@ export class HandoffModule implements HandoffAggregate {
 		for (const chunk of identityChunks(identities)) {
 			const rows = this.db
 				.prepare(
-					`SELECT ticket_identity, held_name, holder_pane_id, holder_workspace_id, reason, at FROM name_collisions WHERE ticket_identity IN (${placeholders(chunk.length)}) AND cleared_at IS NULL`,
+					`SELECT ticket_identity, held_name, holder_host, holder_pane_id, holder_workspace_id, reason, at FROM name_collisions WHERE ticket_identity IN (${placeholders(chunk.length)}) AND cleared_at IS NULL`,
 				)
 				.all(...chunk) as unknown as Array<{
 				ticket_identity: string;
 				held_name: string;
+				holder_host: string;
 				holder_pane_id: string | null;
 				holder_workspace_id: string | null;
 				reason: string;
@@ -966,6 +974,7 @@ export class HandoffModule implements HandoffAggregate {
 			for (const row of rows)
 				found.set(row.ticket_identity, {
 					heldName: row.held_name,
+					host: row.holder_host === "herdr-core" ? "herdr-core" : "herdr",
 					holderPaneId: row.holder_pane_id,
 					holderWorkspaceId: row.holder_workspace_id,
 					reason: row.reason,

@@ -94,6 +94,7 @@ function ticketAt(
 /** The Agent facts the conflict read uses, in one poll's shape. */
 function agentIn(paneId: string, checkoutPath: string): HerdrAgent {
 	return {
+		host: "herdr",
 		paneId,
 		tabId: `tab-${paneId}`,
 		workspaceId: `workspace-${paneId}`,
@@ -111,6 +112,7 @@ function agentIn(paneId: string, checkoutPath: string): HerdrAgent {
  */
 function planeRow(paneId: string, checkoutPath: string): HerdrAgent {
 	return {
+		host: "herdr",
 		paneId,
 		tabId: `tab-${paneId}`,
 		workspaceId: `workspace-${paneId}`,

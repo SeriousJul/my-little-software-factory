@@ -58,6 +58,7 @@ function consultationFact(
 /** The agent list's entry for one pane, under the given name. */
 function listed(paneId: string, name: string): HerdrAgent {
 	return {
+		host: "herdr",
 		paneId,
 		tabId: "tab-1",
 		workspaceId: "ws-1",
@@ -285,5 +286,89 @@ describe("parallelSeatCount", () => {
 		expect(parallelSeatReading(1, 2)).toBe("seats 1/2");
 		expect(parallelSeatReading(3, 2)).toBe("seats 3/2");
 		expect(parallelSeatReading(3, 0)).toBe("seats 3");
+	});
+});
+
+/** The agent list's entry for one herdr-core terminal, under its own name. */
+function coreListed(name: string, status: HerdrAgent["status"]): HerdrAgent {
+	return {
+		host: "herdr-core",
+		// The terminal name is the record of the terminal's place: the pane,
+		// the tab, and the workspace are all the terminal (ADR 0141).
+		paneId: name,
+		tabId: name,
+		workspaceId: name,
+		name,
+		agent: "pi",
+		status,
+		sessionId: "",
+	};
+}
+
+const CORE_NAME = "persist-source-facts";
+
+describe("the merged list's seat count (issue #410)", () => {
+	test("a herdr-core terminal holds the seat the herdr pane holds", () => {
+		const own = ticketFact("github:github.com:I_5", CORE_NAME, CORE_NAME);
+		// Running: the terminal the poll lists under the ticket's own name
+		// holds the seat the herdr pane holds, past the grace included.
+		expect(
+			parallelSeatCount(facts({ tickets: [own], agents: [coreListed(CORE_NAME, "working")] })),
+		).toBe(1);
+		expect(
+			parallelSeatCount(
+				facts({
+					tickets: [own],
+					agents: [coreListed(CORE_NAME, "working")],
+					now: NOW + GRACE + 1,
+				}),
+			),
+		).toBe(1);
+		// Finished record: a terminal that exited with a code reads `done`, and
+		// the ticket that holds it keeps the seat while it is in flight: the
+		// ticket's turn settles the terminal, not the seat rule.
+		expect(
+			parallelSeatCount(
+				facts({ tickets: [own], agents: [coreListed(CORE_NAME, "done")], now: NOW + GRACE + 1 }),
+			),
+		).toBe(1);
+	});
+
+	test("a started herdr-core Agent holds the seat inside its startup grace", () => {
+		const own = ticketFact("github:github.com:I_5", CORE_NAME, CORE_NAME);
+		// The roster lists no terminal of the ticket yet - a successful poll
+		// with an empty standing, and the no-poll standing alike: the Agent is
+		// booting inside the grace, so it holds its seat.
+		expect(parallelSeatCount(facts({ tickets: [own], agents: [] }))).toBe(1);
+		expect(parallelSeatCount(facts({ tickets: [own], agents: null }))).toBe(1);
+		// Past the grace, a terminal the roster never listed is the lost Agent
+		// the read answers: the seat releases, and the ticket stands reserved
+		// for its own restart row.
+		expect(
+			parallelSeatAccount(
+				facts({
+					tickets: [own],
+					agents: [coreListed("stranger", "working")],
+					now: NOW + GRACE + 1,
+				}),
+			),
+		).toEqual({ count: 0, missingTickets: ["github:github.com:I_5"] });
+	});
+
+	test("the one count sums the herdr and the herdr-core Agents of the merged list", () => {
+		const herdr = ticketFact("github:github.com:I_5", "pane-5", OWN_NAME);
+		const core = ticketFact("github:github.com:I_7", CORE_NAME, CORE_NAME);
+		const merged = [listed("pane-5", OWN_NAME), coreListed(CORE_NAME, "working")];
+		expect(parallelSeatCount(facts({ tickets: [herdr, core], agents: merged }))).toBe(2);
+		// The one cap reads the one count: against a limit of one, the merged
+		// list leaves no free seat, and the pickup takes no item off the queue.
+		expect(
+			overParallelLimit(1, parallelSeatCount(facts({ tickets: [herdr, core], agents: merged }))),
+		).toBe(true);
+		// Both terminals drop out of the list: past the grace, the two tickets
+		// read Missing, in the order the facts name them.
+		expect(
+			parallelSeatAccount(facts({ tickets: [herdr, core], agents: [], now: NOW + GRACE + 1 })),
+		).toEqual({ count: 0, missingTickets: ["github:github.com:I_5", "github:github.com:I_7"] });
 	});
 });

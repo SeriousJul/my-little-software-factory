@@ -54,7 +54,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { RUN_AGENT_HOST } from "./fact-fixtures.ts";
+import { RUN_AGENT_HOST, RUN_AGENT_HOST_MARKS } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -892,6 +892,7 @@ describe("the dispatch's ask and pickup", () => {
 				),
 			home: checkout,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 		// One free seat, and three asks for it: the merge takes no seat, the
@@ -971,6 +972,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 	}
@@ -999,6 +1001,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 1,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			log: recordLogger(lines),
 			...recorder(events),
 		});
@@ -1062,6 +1065,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 1,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			log: recordLogger(lines),
 			...recorder(events),
 		});
@@ -1165,6 +1169,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({
@@ -1262,6 +1267,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 
@@ -1317,6 +1323,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			log: recordLogger(lines),
 			...recorder(events),
 		});
@@ -1406,6 +1413,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			log: recordLogger(lines),
 			...recorder(events),
 		});
@@ -1448,6 +1456,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({
@@ -1480,6 +1489,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 1,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({
@@ -1519,6 +1529,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({
@@ -1572,6 +1583,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			log: recordLogger(lines),
 			...recorder(events),
 		});
@@ -1645,6 +1657,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 1,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 		// The seats-bound item stands first, and a full cap holds it the way
@@ -1738,6 +1751,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 
@@ -1836,6 +1850,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 		// The operator's ask: no `automatic` word, the way the decision
@@ -1912,6 +1927,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({
@@ -2086,6 +2102,7 @@ describe("the dispatch's ask and pickup", () => {
 			seatCount: () => 0,
 			home: home(),
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...recorder(events),
 		});
 		state.workQueue.setQueuePaused(true);
@@ -2644,7 +2661,9 @@ describe("the auto top-up merge", () => {
 		const bellSpy = spyOn(process.stdout, "write").mockImplementation(((
 			chunk: Uint8Array | string,
 		) => {
-			if (String(chunk).includes("\u0007")) bells += 1;
+			if (String(chunk).includes("\u0007")) {
+				bells += 1;
+			}
 			return true;
 		}) as typeof process.stdout.write);
 		try {

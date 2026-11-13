@@ -10,6 +10,7 @@
 import { randomUUID } from "node:crypto";
 import {
 	type AgentHost,
+	type AgentHostMarks,
 	type AgentHostResolution,
 	type HostInvocation,
 	herdrAgentPrompt,
@@ -18,6 +19,7 @@ import {
 	herdrTabClose,
 	herdrTabList,
 	herdrWorkspaceClose,
+	runIdentityOf,
 } from "./agent-host.ts";
 import type { ConsultationCheckoutHold } from "./checkout-hold.ts";
 import type { FactoryConfig } from "./config.ts";
@@ -48,7 +50,7 @@ import {
 import type { HerdrAgent } from "./herdr.ts";
 import type { Logger } from "./logging.ts";
 import { consultationAgentName } from "./naming.ts";
-import { HerdrAgentReader, matchConsultationAgent } from "./observation.ts";
+import { MergedAgentReader, matchConsultationAgent } from "./observation.ts";
 import { serializeRepositoryOperation } from "./operation-serializer.ts";
 import { parallelSeatReading } from "./parallel.ts";
 import {
@@ -147,6 +149,12 @@ export interface ConsultationOperationsOptions {
 	 * record's own host beside that check.
 	 */
 	agentHost: AgentHostResolution;
+	/**
+	 * The environment marks the run resolved from (issue #410): the marks name
+	 * the run for the labels a herdr-core start writes, and the herdr-core mark
+	 * is the terminal whose Adoption labels the start copies (ADR 0141).
+	 */
+	agentHostMarks: AgentHostMarks;
 	home: string;
 	/** The live Ticket projection used by the checkout safety check. */
 	tickets: () => readonly Ticket[];
@@ -272,6 +280,7 @@ export class ConsultationOperations {
 	private readonly runner: CommandRunner;
 	private readonly config: () => FactoryConfig;
 	private readonly agentHost: AgentHostResolution;
+	private readonly agentHostMarks: AgentHostMarks;
 	private readonly home: string;
 	private readonly tickets: () => readonly Ticket[];
 	private readonly callbacks: ConsultationOperationCallbacks;
@@ -301,11 +310,36 @@ export class ConsultationOperations {
 	 */
 	private stopped = false;
 
+	/**
+	 * The merged Agent reader an operation reads from (issue #410, ADR 0142):
+	 * both hosts stand in one list, so the operation finds the Consultation's
+	 * Agent on whatever host the record stands on, and a pane read routes to
+	 * that host.
+	 */
+	private mergedAgentReader(host: AgentHost): MergedAgentReader {
+		return new MergedAgentReader({
+			runner: this.runner,
+			runHost: this.agentHost.host,
+			coreNames: () => {
+				const names: string[] = [];
+				for (const record of this.state.consultationRecord.consultationsByState([
+					"opening",
+					"working",
+					"awaiting-response",
+				]))
+					if (record.host === "herdr-core" && record.paneId !== null) names.push(record.paneId);
+				return names;
+			},
+			hostOf: () => host,
+		});
+	}
+
 	constructor(options: ConsultationOperationsOptions) {
 		this.state = options.state;
 		this.runner = options.runner;
 		this.config = options.config;
 		this.agentHost = options.agentHost;
+		this.agentHostMarks = options.agentHostMarks;
 		this.home = options.home;
 		this.tickets = options.tickets;
 		this.callbacks = options.callbacks;
@@ -492,7 +526,7 @@ export class ConsultationOperations {
 					this.agentHost,
 				);
 				if (!fit.ok) return { kind: "fit-failed" as const, reason: fit.reason };
-				const probe = await new HerdrAgentReader(this.runner).listAgents();
+				const probe = await this.mergedAgentReader(current.host).listAgents();
 				if (probe.kind === "error") return { kind: "error" as const, reason: probe.reason };
 				const agent = matchConsultationAgent(current, probe.agents);
 				return agent === undefined || agent === "ambiguous"
@@ -948,7 +982,7 @@ export class ConsultationOperations {
 		const output =
 			latest.paneId === null
 				? null
-				: await new HerdrAgentReader(this.runner).readPane(
+				: await this.mergedAgentReader(latest.host).readPane(
 						latest.paneId,
 						this.config().completionMessageLines,
 					);
@@ -1074,7 +1108,7 @@ export class ConsultationOperations {
 	private async identifyCloseAgent(
 		consultation: Consultation,
 	): Promise<{ kind: "agent"; agent: HerdrAgent } | { kind: "none" }> {
-		const probe = await new HerdrAgentReader(this.runner).listAgents();
+		const probe = await this.mergedAgentReader(consultation.host).listAgents();
 		if (probe.kind === "error")
 			throw new Error(`cannot verify the Consultation Agent's identity: ${probe.reason}`);
 		const agents = probe.agents;
@@ -1418,7 +1452,7 @@ export class ConsultationOperations {
 			current.id,
 			`Consultation ${current.id.slice(0, 8)}: checking-live-checkout-safety`,
 		);
-		const probe = await new HerdrAgentReader(this.runner).listAgents();
+		const probe = await this.mergedAgentReader(current.host).listAgents();
 		if (probe.kind === "error")
 			return { status: "failed", reason: `cannot verify live checkout safety: ${probe.reason}` };
 		const safety = await inspectLiveCheckout({
@@ -1455,6 +1489,14 @@ export class ConsultationOperations {
 			consultation: current,
 			config: this.config(),
 			agentHost: this.agentHost,
+			// The marks the start's labels name (issue #410, ADR 0141).
+			agentHostMarks: this.agentHostMarks,
+			// The run's identity facts a herdr-core start writes on its terminal.
+			coreStartLabels: {
+				runIdentity: runIdentityOf(this.agentHostMarks),
+				ticketIdentity: current.id,
+				repositoryIdentity: current.repository.identity,
+			},
 			runner: this.runner,
 			home: this.home,
 			onStage,

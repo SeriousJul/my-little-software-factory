@@ -30,7 +30,12 @@ import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { SessionTurnRead } from "../src/turn-log.ts";
 import { fireTransition, type RefiredSkip, refireRecordedSkips } from "../src/workflow.ts";
-import { fetchedTicket, fetchSuccess, RUN_AGENT_HOST } from "./fact-fixtures.ts";
+import {
+	fetchedTicket,
+	fetchSuccess,
+	RUN_AGENT_HOST,
+	RUN_AGENT_HOST_MARKS,
+} from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -255,6 +260,7 @@ export function rig(options: RigOptions, baseConfig: FactoryConfig): Rig {
 		seatCount: options.seatCount ?? (() => config.maxParallelAgents),
 		home,
 		agentHost: RUN_AGENT_HOST,
+		agentHostMarks: RUN_AGENT_HOST_MARKS,
 		working: () => undefined,
 		warning: report("warning"),
 		error: report("error"),

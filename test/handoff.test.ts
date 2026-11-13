@@ -48,6 +48,7 @@ import {
 	DEFAULT_TICKET_TITLE,
 	ticket as defaultTicket,
 	RUN_AGENT_HOST,
+	RUN_AGENT_HOST_MARKS,
 } from "./fact-fixtures.ts";
 import {
 	FakeRunner,
@@ -161,6 +162,7 @@ async function handoffRun(
 		runner,
 		home,
 		agentHost: over.agentHost ?? RUN_AGENT_HOST,
+		agentHostMarks: RUN_AGENT_HOST_MARKS,
 		onStage: over.onStage,
 		names: over.names,
 		claim: over.claim ?? "open",
@@ -647,6 +649,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 			"herdr workspace list",
 			`herdr workspace create --cwd ${repoPath(p.home)} --no-focus`,
 			`herdr tab create --workspace ws-new --cwd ${repoPath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -689,6 +692,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 			"herdr workspace list",
 			`herdr workspace create --cwd ${repoPath(p.home)} --no-focus`,
 			`herdr tab create --workspace ws-new --cwd ${repoPath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
@@ -866,6 +870,7 @@ describe("handOffTicket: the worktree sequence", () => {
 			`git -C ${repoPath(p.home)} symbolic-ref refs/remotes/origin/HEAD`,
 			`git -C ${repoPath(p.home)} fetch origin main`,
 			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --base origin/main --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -1047,6 +1052,7 @@ describe("handOffTicket: the worktree sequence", () => {
 			`git -C ${repoPath(p.home)} branch --list factory/9-persist-source-facts`,
 			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 			`herdr tab create --workspace ws-wt --cwd ${worktreePath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-tab`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -1416,6 +1422,7 @@ describe("handOffTicket: the worktree sequence", () => {
 			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 			`herdr worktree list --cwd ${repoPath(p.home)}`,
 			`herdr worktree open --cwd ${repoPath(p.home)} --path ${worktreePath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
@@ -1934,6 +1941,7 @@ describe("handOffTicket: the guard rails", () => {
 				runner,
 				home: p.home,
 				agentHost: RUN_AGENT_HOST,
+				agentHostMarks: RUN_AGENT_HOST_MARKS,
 			});
 
 			expect(outcome.status).toBe("failed");
@@ -1956,6 +1964,7 @@ describe("handOffTicket: the guard rails", () => {
 				runner,
 				home: p.home,
 				agentHost: RUN_AGENT_HOST,
+				agentHostMarks: RUN_AGENT_HOST_MARKS,
 			});
 
 			expect(outcome.status).toBe("failed");
@@ -2002,6 +2011,7 @@ describe("handOffTicket: the guard rails", () => {
 					runner,
 					home: p.home,
 					agentHost: RUN_AGENT_HOST,
+					agentHostMarks: RUN_AGENT_HOST_MARKS,
 				});
 				expect(outcome.status, item.label).toBe("failed");
 				expect(reasonOf(outcome)).toContain(item.text);
@@ -2026,6 +2036,7 @@ describe("handOffTicket: the guard rails", () => {
 				runner,
 				home: p.home,
 				agentHost: RUN_AGENT_HOST,
+				agentHostMarks: RUN_AGENT_HOST_MARKS,
 			});
 			expect(outcome.status).toBe("failed");
 			expect(reasonOf(outcome)).toContain(
@@ -2048,6 +2059,7 @@ describe("handOffTicket: the guard rails", () => {
 				runner,
 				home: p.home,
 				agentHost: RUN_AGENT_HOST,
+				agentHostMarks: RUN_AGENT_HOST_MARKS,
 			});
 
 			expect(outcome.status).toBe("ok");
@@ -2089,6 +2101,7 @@ describe("handOffTicket: the guard rails", () => {
 				runner,
 				home: p.home,
 				agentHost: RUN_AGENT_HOST,
+				agentHostMarks: RUN_AGENT_HOST_MARKS,
 				startCheck,
 			});
 
@@ -2339,6 +2352,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 			`git -C ${repoPath(p.home)} remote get-url origin`,
 			"herdr workspace list",
 			"herdr tab create --workspace ws-stored --no-focus",
+			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-2`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 			"herdr tab close tab-prev",
@@ -2811,6 +2825,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 		expect(outcome.status === "ok" && outcome.collision).toEqual({
 			stableName: AGENT,
 			heldName: AGENT,
+			host: "herdr",
 			startedAs: cycle,
 			holder: {
 				terminalId: "term_1",
@@ -3450,6 +3465,7 @@ describe("the review verdict of the rework handoff prompt", () => {
 			runner,
 			home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 	}
 
@@ -4118,6 +4134,7 @@ describe("handOffTicket: the pull request the plane opens (ADR 0076)", () => {
 			pushBranchCommand(repoPath(p.home)),
 			`gh ${PR_READ_ARGS.join(" ")}`,
 			PR_CREATE_COMMAND,
+			"hc ls --json",
 			`herdr agent start ${PR_AGENT} --kind pi --pane pane-wt`,
 			`herdr agent prompt ${PR_AGENT} Implement #7.\n\nPull request: ${PR_URL}`,
 		]);
@@ -4841,6 +4858,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 		expect(reasonOf(onTicket)).toBe("unknown agent type: nope");
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4859,6 +4877,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 		expect(reasonOf(onTicket)).toBe("the container environment is reserved and not yet built");
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4903,6 +4922,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 		expect(reasonOf(onTicket)).toContain('has no model "gpt-4o"');
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -5006,6 +5026,7 @@ describe("the one start: one stage order on both paths", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			onStage: stageRecorder(stages),
 		});
 
@@ -5133,6 +5154,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5380,6 +5402,7 @@ describe("the one start: a command that raises", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...resourceCallbacks(recorded, confirmed),
 		});
 
@@ -5416,6 +5439,7 @@ describe("the one start: a command that raises", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...resourceCallbacks(recorded, confirmed),
 		});
 
@@ -5467,6 +5491,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			onResource: recorder(resources),
 		});
 
@@ -5502,6 +5527,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			onResource: recorder(resources),
 		});
 
@@ -5544,6 +5570,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			onResource: recorder(resources),
 		});
 
@@ -5578,6 +5605,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5616,6 +5644,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5796,6 +5825,7 @@ describe("handOffTicket: the pull request ticket's branch (ADR 0112)", () => {
 			`git -C ${repoPath(p.home)} branch --list ${HEAD_BRANCH}`,
 			`herdr worktree open --cwd ${repoPath(p.home)} --branch ${HEAD_BRANCH} --no-focus`,
 			`herdr tab create --workspace ws-impl --cwd ${worktreePath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${PULL_AGENT} --kind pi --pane pane-tab`,
 			`herdr agent prompt ${PULL_AGENT} ${PULL_PROMPT}`,
 		]);
@@ -5855,6 +5885,7 @@ describe("handOffTicket: the pull request ticket's branch (ADR 0112)", () => {
 			`git -C ${repoPath(p.home)} fetch origin ${HEAD_BRANCH}:refs/heads/${HEAD_BRANCH}`,
 			`herdr worktree open --cwd ${repoPath(p.home)} --branch ${HEAD_BRANCH} --no-focus`,
 			`herdr tab create --workspace ws-impl --cwd ${worktreePath(p.home)} --no-focus`,
+			"hc ls --json",
 			`herdr agent start ${PULL_AGENT} --kind pi --pane pane-tab`,
 			`herdr agent prompt ${PULL_AGENT} ${PULL_PROMPT}`,
 		]);

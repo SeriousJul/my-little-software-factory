@@ -122,14 +122,15 @@ describe("the shared frame harness boots the Seeded plane", () => {
 		// The standing the plane named names the loop policy, and the harness
 		// reads it off the plane's props, the way the App's own boot reads
 		// them: a plane that stands a poll interval boots the poll, and a
-		// policy named on the boot still stands over the plane's.
+		// policy named on the boot still stands over the plane's. The standing
+		// names no host mark, so the run resolves the default herdr-core, and
+		// its poll answers the core dialect: the unscoped roster read, not
+		// herdr's list (issue #410).
 		const named = await plane({ pollIntervalMs: 25 });
 		await withApp(
 			async (setup) => {
 				await frameUntil(setup, "the observation poll", () =>
-					setup.plane.fakeRunner
-						.commands()
-						.some((command) => command.startsWith("herdr agent list")),
+					setup.plane.fakeRunner.commands().some((command) => command.startsWith("hc ls")),
 				);
 			},
 			{ plane: named },

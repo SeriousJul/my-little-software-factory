@@ -171,7 +171,9 @@ function changed(commands: string[]): string[] {
 		(command) =>
 			!command.startsWith("herdr agent list") &&
 			!command.startsWith("herdr workspace list") &&
-			!command.startsWith("herdr pane"),
+			!command.startsWith("herdr pane") &&
+			!command.startsWith("hc ls") &&
+			!command.startsWith("hc get"),
 	);
 }
 
@@ -1300,8 +1302,9 @@ describe("the Ticket Close key", () => {
 				await settle(setup);
 				// Cancel is the way out with nothing changed: the ticket, its
 				// cycle, and its record stand, and Cancel ran no herdr command.
-				// (The read-only observation poll continues on its own clock, so
-				// the check names the commands that change state.)
+				// (The read-only observation poll over both hosts continues on
+				// its own clock, so the check names the commands that change
+				// state; changed() filters the read-only reads of both hosts.)
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("handed-off");
 				expect(app.state.ticketWorkCycle.ticketListViews([], "implement").rows[0].workCycle).toBe(
 					1,
@@ -1444,6 +1447,7 @@ describe("the Ticket Close key", () => {
 		app.state.handoff.recordNameCollision({
 			ticketIdentity: identity,
 			heldName: AGENT,
+			holderHost: "herdr",
 			holderPaneId: "w13K:p1",
 			holderWorkspaceId: "w13K",
 			reason:
@@ -3973,15 +3977,18 @@ describe("the auto dispatch", () => {
 				app.src.settle(success);
 				const frame = await waitFor(setup, { shows: "● manual 0/2" });
 				expect(ticketRow(frame)).toContain("[open]");
-				// No herdr handoff commands: only the agent list polls.
-				// No herdr handoff commands: only agent list polls plus the
-				// one-time repository validation for the launcher.
+				// No herdr handoff commands: only the roster polls over both
+				// hosts, the one-time repository validation for the launcher, and
+				// the warning the herdr-core gap states when that half cannot be
+				// read.
 				const commands = app.runner.commands();
 				expect(commands.length).toBeGreaterThan(0);
 				expect(
 					commands.every(
 						(c) =>
 							c === "herdr agent list" ||
+							c === "hc ls --json --all" ||
+							c.startsWith("notify-send") ||
 							c.endsWith(" rev-parse --git-dir") ||
 							c.endsWith(" remote get-url origin"),
 					),
