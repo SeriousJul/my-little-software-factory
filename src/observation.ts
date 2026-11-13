@@ -74,6 +74,7 @@
 
 import type { AgentHost, AgentHostResolution } from "./agent-host.ts";
 import {
+	type HerdrCoreRosterRow,
 	herdrAgentList,
 	herdrAgentRead,
 	herdrAgentWait,
@@ -85,7 +86,6 @@ import {
 	herdrCoreRoster,
 	herdrCoreWait,
 	normalizeAgentStatus,
-	type HerdrCoreRosterRow,
 } from "./agent-host.ts";
 import type { FactoryConfig, TransitionOutcome } from "./config.ts";
 // The Missing agent rule is the domain's, beside the host status words the

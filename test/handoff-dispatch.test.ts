@@ -48,7 +48,7 @@ import {
 	worktreeOpenJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
-import { stubHerdrWorld } from "./herdr-world.ts";
+import { type StubHerdrWorld, stubHerdrWorld } from "./herdr-world.ts";
 import { type Plane, plane, planeIssuesSource } from "./plane.ts";
 import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
 
@@ -205,6 +205,10 @@ const liveChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement",
 });
 const worktreeChoice: HandoffChoice = baseChoice("pi", "worktree", "implement", {
 	host: "herdr" as const,
+});
+/** A clean live-worktree handoff on the herdr-core host. */
+const coreChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement", {
+	host: "herdr-core" as const,
 });
 
 function issueTicket(seed: Seed): FetchedTicket {
@@ -5022,11 +5026,6 @@ describe("the seat a missing Agent left (ADR 0108)", () => {
  * there - and never the host the ticket's handoff recorded earlier.
  */
 describe("the host each route takes (issue #409)", () => {
-	/** A clean live-worktree handoff on the herdr-core host. */
-	const coreChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement", {
-		host: "herdr-core" as const,
-	});
-
 	/** Pump the microtasks and timers until the queue holds nothing again. */
 	async function untilQueueDrains(rigRef: Rig): Promise<void> {
 		for (let turn = 0; turn < 200 && rigRef.state.workQueue.items().length > 0; turn += 1)
@@ -5134,5 +5133,181 @@ describe("the host each route takes (issue #409)", () => {
 		// the core's first command did not run.
 		expect(rigRef.commands().some((c) => c.startsWith("hc run "))).toBe(false);
 		expect(rigRef.events).toContain(`notice:"${FIRST.title}" started from the Work queue`);
+	});
+});
+
+describe("the one name across both hosts (issue #410)", () => {
+	/**
+	 * Dispatch the ticket's start on `world`, and hand back the dispatch, the
+	 * started result, and the `hc run` line the world recorded, when one ran.
+	 */
+	async function routeStart(
+		rigRef: Rig,
+		world: StubHerdrWorld,
+		choice: HandoffChoice = liveChoice,
+		overrides: Partial<HandoffDispatchOptions> = {},
+	): Promise<{ dispatch: HandoffDispatch; result: DispatchResult; runLine: string | undefined }> {
+		const dispatch = withRunner(rigRef, world, overrides);
+		await dispatch.dispatch({
+			origin: "open",
+			ticketIdentity: FIRST.identity,
+			choice,
+			previousMessage: "",
+			onStarted: (result) => {
+				rigRef.reportStarted(FIRST.identity, result);
+			},
+		});
+		const result = await rigRef.waitForStarted(FIRST.identity);
+		const runLine = world.commands().find((command) => command.startsWith("hc run "));
+		return { dispatch, result, runLine };
+	}
+
+	test("a herdr start is refused on a name the herdr-core host holds, and the record names it", async () => {
+		const rigRef = await rig([FIRST]);
+		// The name the ticket's start asks for stands live on the other host:
+		// a terminal herdr-core holds. The merged live-name check reads the
+		// other host's roster and finds it (issue #410, ADR 0142).
+		const world = stubHerdrWorld({
+			checkouts: [{ path: rigRef.checkout, cloneUrl: "https://github.com/acme/factory.git" }],
+			terminals: [{ name: FIRST.name, cwd: rigRef.checkout, agent: "pi" }],
+		});
+		const { dispatch, result: final } = await routeStart(rigRef, world);
+		expect(final).toMatchObject({ ok: false });
+		if (!final.ok) {
+			// The failure names the host that holds the name, in the holder's
+			// own handles.
+			expect(final.reason).toContain(
+				`the terminal name ${FIRST.name} is held by terminal ${FIRST.name}`,
+			);
+			expect(final.reason).toContain("on the herdr-core host");
+			expect(final.reason).toContain("which is no agent of");
+		}
+		// The standing collision the Ticket carries names the holding host.
+		const collision = rigRef.state.handoff.nameCollision(FIRST.identity);
+		expect(collision).toMatchObject({
+			heldName: FIRST.name,
+			host: "herdr-core",
+			holderPaneId: FIRST.name,
+			holderWorkspaceId: FIRST.name,
+		});
+		// The merged check read the other host's roster, and the start never
+		// asked its own host for the name.
+		const commands = world.commands();
+		expect(commands).toContain("hc ls --json");
+		expect(commands.some((c) => c.startsWith("herdr agent start"))).toBe(false);
+		dispatch.stop();
+	});
+
+	test("a herdr-core start is refused on a name the herdr host holds, and the record names it", async () => {
+		const rigRef = await rig([FIRST]);
+		// The run resolves herdr, so the core start's merged check reaches the
+		// herdr half: the name stands live in herdr's pane list.
+		const world = stubHerdrWorld({
+			checkouts: [{ path: rigRef.checkout, cloneUrl: "https://github.com/acme/factory.git" }],
+			agents: [{ name: FIRST.name, kind: "pi", status: "working", paneId: "pane-other" }],
+		});
+		const { dispatch, result: final } = await routeStart(rigRef, world, coreChoice);
+		expect(final).toMatchObject({ ok: false });
+		if (!final.ok) {
+			expect(final.reason).toContain(`the herdr name ${FIRST.name} is held by pane pane-other`);
+			expect(final.reason).toContain("on the herdr");
+			expect(final.reason).toContain("which is no agent of");
+		}
+		const collision = rigRef.state.handoff.nameCollision(FIRST.identity);
+		expect(collision).toMatchObject({
+			heldName: FIRST.name,
+			host: "herdr",
+			holderPaneId: "pane-other",
+		});
+		const commands = world.commands();
+		expect(commands).toContain("herdr agent list");
+		expect(commands.some((c) => c.startsWith("hc run "))).toBe(false);
+		dispatch.stop();
+	});
+
+	test("a herdr-core start writes its labels, and the adoption labels its terminal carries", async () => {
+		const rigRef = await rig([FIRST]);
+		// The run stands in a herdr-core terminal the desktop adopted into a
+		// space: the start copies the adoption labels its terminal carries
+		// (issue #410, ADR 0141), beside its own run labels.
+		const world = stubHerdrWorld({
+			checkouts: [{ path: rigRef.checkout, cloneUrl: "https://github.com/acme/factory.git" }],
+			terminals: [
+				{
+					name: "t-plane",
+					cwd: rigRef.checkout,
+					agent: "pi",
+					labels: { "herdr.space": "space-9" },
+				},
+			],
+		});
+		const {
+			dispatch,
+			result: started,
+			runLine,
+		} = await routeStart(rigRef, world, coreChoice, {
+			agentHost: { host: "herdr-core", fact: "herdr-core-mark" },
+			agentHostMarks: { herdrEnv: undefined, hcTerminalId: "t-plane" },
+		});
+		expect(started).toEqual({ ok: true });
+		expect(runLine).toBeDefined();
+		expect(runLine).toContain("--outlive-parent");
+		expect(runLine).toContain("--no-notify");
+		expect(runLine).toContain(`--name ${FIRST.name}`);
+		expect(runLine).toContain(`--label factory.run=t-plane`);
+		expect(runLine).toContain(`--label factory.ticket=${FIRST.identity}`);
+		expect(runLine).toContain(`--label factory.handoff=${FIRST.name}`);
+		expect(runLine).toContain("--label factory.repository=github.com/acme/factory");
+		expect(runLine).toContain("--label herdr.space=space-9");
+		// The run's host is herdr-core: it reads no herdr roster at all.
+		expect(world.commands().some((c) => c.startsWith("herdr "))).toBe(false);
+		dispatch.stop();
+	});
+
+	test("a terminal that carries no adoption label leaves the start's labels alone", async () => {
+		const rigRef = await rig([FIRST]);
+		const world = stubHerdrWorld({
+			checkouts: [{ path: rigRef.checkout, cloneUrl: "https://github.com/acme/factory.git" }],
+			terminals: [{ name: "t-plane", cwd: rigRef.checkout, agent: "pi" }],
+		});
+		const {
+			dispatch,
+			result: started,
+			runLine,
+		} = await routeStart(rigRef, world, coreChoice, {
+			agentHost: { host: "herdr-core", fact: "herdr-core-mark" },
+			agentHostMarks: { herdrEnv: undefined, hcTerminalId: "t-plane" },
+		});
+		expect(started).toEqual({ ok: true });
+		expect(runLine).toBeDefined();
+		// The run labels still ride the start...
+		expect(runLine).toContain("--label factory.run=t-plane");
+		expect(runLine).toContain(`--label factory.ticket=${FIRST.identity}`);
+		// ...and the adoption labels the terminal does not carry are never
+		// written.
+		expect(runLine).not.toContain("--label herdr.space");
+		expect(runLine).not.toContain("--label herdr.tab");
+		dispatch.stop();
+	});
+
+	test("a herdr-core start on a run outside a herdr terminal writes the standalone run label", async () => {
+		const rigRef = await rig([FIRST]);
+		const world = stubHerdrWorld({
+			checkouts: [{ path: rigRef.checkout, cloneUrl: "https://github.com/acme/factory.git" }],
+		});
+		// The run resolves herdr-core from its own marks, and the plane stands
+		// in no terminal of the host: the run label takes the run's word.
+		const {
+			dispatch,
+			result: started,
+			runLine,
+		} = await routeStart(rigRef, world, coreChoice, {
+			agentHost: { host: "herdr-core", fact: "herdr-core-mark" },
+		});
+		expect(started).toEqual({ ok: true });
+		expect(runLine).toBeDefined();
+		expect(runLine).toContain("--label factory.run=standalone");
+		expect(runLine).not.toContain("--label herdr.space");
+		dispatch.stop();
 	});
 });

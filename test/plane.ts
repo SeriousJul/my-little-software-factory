@@ -1039,7 +1039,6 @@ function seedEmptyCoreRoster(target: FakeRunner): void {
 		target.set("hc", ["ls", "--json"], { stdout: '{"terminals":[]}\n' });
 }
 
-
 function runnerFor(
 	standing: PlaneStanding,
 	fake: FakeRunner,
