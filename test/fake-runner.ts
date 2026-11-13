@@ -186,6 +186,14 @@ export class FakeRunner implements CommandRunner {
 		// double models the block instead of the success. A held command never
 		// settles, so it stays counted as running.
 		if (answer === undefined && command === "herdr" && args[1] === "wait") return never();
+		// The herdr-core roster a test does not model is the empty standing, the
+		// way the stub world answers it (issue #407's closed surface): a
+		// code-zero empty roster reads as an installed herdr-core holding no
+		// terminal, so the merged poll's core half stands empty instead of
+		// reading as a gap on every cycle.
+		if (answer === undefined && command === "hc" && args[0] === "ls") {
+			return { code: 0, stdout: '{"hidden_finished":0,"terminals":[]}', stderr: "" };
+		}
 		this.running -= 1;
 		this.settled.push({ command, args });
 		return answer ?? this.fallback;

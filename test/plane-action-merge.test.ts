@@ -2663,13 +2663,12 @@ describe("the auto top-up merge", () => {
 		) => {
 			if (String(chunk).includes("\u0007")) {
 				bells += 1;
-				if (bells === 1) console.log("BELL-STACK", new Error().stack);
 			}
 			return true;
 		}) as typeof process.stdout.write);
 		try {
 			let held: FactoryState;
-			const { state } = await topUpApp(
+			const { state, runner } = await topUpApp(
 				async (setup) => {
 					// The block's line on the Message line races the rework
 					// handoff's working line, which the converged position asks
@@ -2731,7 +2730,7 @@ describe("the auto top-up merge", () => {
 	test("a blocked merge whose label write failed keeps the merge position, and the hold stands until the source re-reads", async () => {
 		let held: FactoryState;
 		let heldRunner: FakeRunner;
-		const { state, runner } = await topUpApp(
+		const { state } = await topUpApp(
 			async (setup) => {
 				await frameUntil(
 					setup,
