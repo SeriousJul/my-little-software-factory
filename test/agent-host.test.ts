@@ -768,4 +768,25 @@ describe("the herdr-core answer readers", () => {
 		// A record the host did not write with its required fields reads as absent.
 		expect(herdrCoreRecord({ code: 0, stdout: '{"address":"t1"}', stderr: "" })).toBeNull();
 	});
+
+	test("a terminal the desktop created without a name reads with its adoption labels", () => {
+		// The desktop creates its terminals without a name: an `hc get` record
+		// that names null is still the terminal's record, and its labels are
+		// the Adoption labels a herdr-core start copies (ADR 0141).
+		const record = herdrCoreRecord(
+			coreRecord({
+				name: null,
+				labels: { "herdr.space": "sp-1", "herdr.tab": "tb-1", "herdr.seen": "0" },
+			}),
+		);
+		expect(record).toEqual({
+			address: "t1",
+			name: null,
+			state: "live",
+			status: "unknown",
+			turn: 0,
+			cwd: "/repo",
+			labels: { "herdr.space": "sp-1", "herdr.tab": "tb-1", "herdr.seen": "0" },
+		});
+	});
 });

@@ -66,8 +66,12 @@ export interface WorldAgentDescription {
 
 /** One herdr-core terminal the world holds, beside the Agent names it may hold. */
 export interface WorldTerminalDescription {
-	/** The name the terminal holds; a name a live terminal holds is a `run` refusal. */
-	name: string;
+	/**
+	 * The name the terminal holds; a name a live terminal holds is a `run`
+	 * refusal. The desktop creates its terminals without a name, and their
+	 * records name null.
+	 */
+	name: string | null;
 	/** The directory the terminal runs in. */
 	cwd: string;
 	/** The agent the record reports for the terminal, when it names one. */
@@ -213,7 +217,7 @@ interface WorldAgent {
 /** One herdr-core terminal the world holds. */
 interface WorldTerminal {
 	address: string;
-	name: string;
+	name: string | null;
 	cwd: string;
 	agent: string;
 	labels: Record<string, string>;

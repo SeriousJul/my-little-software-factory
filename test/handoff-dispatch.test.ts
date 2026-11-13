@@ -5329,6 +5329,39 @@ describe("the one name across both hosts (issue #410)", () => {
 		dispatch.stop();
 	});
 
+	test("a herdr-core start in a desktop terminal the desktop created without a name copies its adoption labels", async () => {
+		const rigRef = await rig([FIRST]);
+		// The run stands in the desktop's own terminal: the desktop creates its
+		// terminals without a name, and the `hc get` record of such a terminal
+		// names null (issue #410's repro). The start still copies the adoption
+		// labels the terminal carries (ADR 0141).
+		const world = stubHerdrWorld({
+			checkouts: [{ path: rigRef.checkout, cloneUrl: "https://github.com/acme/factory.git" }],
+			terminals: [
+				{
+					name: null,
+					cwd: rigRef.checkout,
+					agent: "pi",
+					labels: { "herdr.space": "space-9", "herdr.tab": "tab-9" },
+				},
+			],
+		});
+		const {
+			dispatch,
+			result: started,
+			runLine,
+		} = await routeStart(rigRef, world, coreChoice, {
+			agentHost: { host: "herdr-core", fact: "herdr-core-mark" },
+			agentHostMarks: { herdrEnv: undefined, hcTerminalId: "t1" },
+		});
+		expect(started).toEqual({ ok: true });
+		expect(runLine).toBeDefined();
+		expect(runLine).toContain(`--label factory.run=t1`);
+		expect(runLine).toContain(`--label herdr.space=space-9`);
+		expect(runLine).toContain(`--label herdr.tab=tab-9`);
+		dispatch.stop();
+	});
+
 	test("a terminal that carries no adoption label leaves the start's labels alone", async () => {
 		const rigRef = await rig([FIRST]);
 		const world = stubHerdrWorld({

@@ -855,7 +855,11 @@ function rosterRowOf(item: Record<string, unknown>): HerdrCoreRosterRow | null {
 /** One terminal's record of an `hc get` answer, read through the host word map. */
 export interface HerdrCoreRecord {
 	address: string;
-	name: string;
+	/**
+	 * The name the terminal holds. The desktop creates its terminals without
+	 * a name, and their records name null (ADR 0141).
+	 */
+	name: string | null;
 	state: "live" | "finished";
 	/** The status in the plane's words: a program that reports no status reads as `unknown`. */
 	status: AgentStatus;
@@ -908,14 +912,14 @@ export function herdrCoreRecord(result: CommandResult): HerdrCoreRecord | null {
 	const item = data as Record<string, unknown>;
 	if (
 		typeof item.address !== "string" ||
-		typeof item.name !== "string" ||
+		(item.name !== null && typeof item.name !== "string") ||
 		typeof item.state !== "string"
 	) {
 		return null;
 	}
 	return {
 		address: item.address,
-		name: item.name,
+		name: item.name === null ? null : item.name,
 		state: item.state === "live" ? "live" : "finished",
 		status: normalizeAgentStatus(recordString(item, "status") ?? ""),
 		turn: recordNumber(item, "turn"),
