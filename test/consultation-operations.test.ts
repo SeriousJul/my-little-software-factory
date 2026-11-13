@@ -15,6 +15,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { AgentHostMarks, AgentHostResolution } from "../src/agent-host.ts";
 import {
 	CHECKOUT_ROW_OVER_BUDGET_FACT,
 	type CheckoutGate,
@@ -307,6 +308,9 @@ function makeHarness(
 		log?: Logger;
 		/** The Shared checkout hold the module's worktree start crosses (issue #315). */
 		checkoutHold?: ConsultationCheckoutHold;
+		/** The Agent host the run resolves, and the marks it resolves from. */
+		agentHost?: AgentHostResolution;
+		agentHostMarks?: AgentHostMarks;
 	} = {},
 ): Harness {
 	const reported: (ConsultationStatus | null)[] = [];
@@ -319,8 +323,8 @@ function makeHarness(
 			runner,
 			config: () => fixture.config,
 			home: options.home ?? fixture.home,
-			agentHost: RUN_AGENT_HOST,
-			agentHostMarks: RUN_AGENT_HOST_MARKS,
+			agentHost: options.agentHost ?? RUN_AGENT_HOST,
+			agentHostMarks: options.agentHostMarks ?? RUN_AGENT_HOST_MARKS,
 			tickets: options.tickets ?? (() => []),
 			seatCount: options.seatCount ?? (() => 0),
 			log: options.log,
@@ -966,6 +970,107 @@ describe("Consultation operations: launch", () => {
 		});
 		expect(harness.conflicts).toHaveLength(0);
 		expect(harness.statuses.some((status) => status.kind === "warning")).toBe(true);
+	});
+});
+
+describe("Consultation operations: the herdr-core launch (issue #409, ADR 0141-0143)", () => {
+	/**
+	 * The standing a herdr-core launch starts from: the launch's standing, plus
+	 * the terminals the host holds, the plane's own among them.
+	 */
+	function coreLaunchStanding(
+		fixture: Fixture,
+		terminals: HerdrWorldDescription["terminals"],
+	): StubHerdrWorld {
+		return stubHerdrWorld({
+			...worktreeLaunchStanding(fixture.repository),
+			terminals,
+		});
+	}
+
+	test("launches the dedicated worktree, names the terminal, and adopts it into the desktop's space", async () => {
+		const fixture = await makeFixture();
+		const id = uid("f");
+		const name = agentOf(id);
+		const branch = consultationBranchName(id, "grill");
+		const worktree = join(
+			fixture.home,
+			".herdr",
+			"worktrees",
+			"factory",
+			branch.replaceAll("/", "-"),
+		);
+		// The run stands in the desktop's own terminal: nameless, adopted into
+		// the desktop's space and tab (the 2026-11-13 live-desktop standing).
+		const world = coreLaunchStanding(fixture, [
+			{
+				name: null,
+				cwd: fixture.checkout,
+				agent: "pi",
+				labels: { "herdr.space": "space-9", "herdr.tab": "tab-9" },
+			},
+		]);
+		const runner = new LifecycleRunner(world);
+		const consultation = seed(fixture.state, fixture, id, { host: "herdr-core" });
+		const harness = makeHarness(fixture, runner, {
+			agentHost: { host: "herdr-core", fact: "herdr-core-mark" },
+			agentHostMarks: { herdrEnv: undefined, hcTerminalId: "t1" },
+		});
+
+		await harness.operations.launch(consultation);
+
+		// The plane owns the worktree lifecycle on the core host (ADR 0143): its
+		// own git checks the repository, then the branch, finds the remote's
+		// default branch, and builds the dedicated checkout. No herdr command
+		// stands in the start.
+		const commands = runner.commands();
+		expect(commands).toEqual([
+			`git -C ${fixture.checkout} rev-parse --git-dir`,
+			`git -C ${fixture.checkout} remote get-url origin`,
+			`git -C ${fixture.checkout} branch --list ${branch}`,
+			`git -C ${fixture.checkout} remote get-url origin`,
+			`git -C ${fixture.checkout} symbolic-ref refs/remotes/origin/HEAD`,
+			`git -C ${fixture.checkout} fetch origin main`,
+			`git -C ${fixture.checkout} worktree add ${worktree} -b ${branch} origin/main`,
+			"hc get --json t1",
+			`hc run --bg --outlive-parent --no-notify --name ${name} --cwd ${worktree} --label factory.run=t1 --label factory.ticket=${id} --label factory.handoff=${name} --label factory.repository=github.com/acme/factory --label herdr.space=space-9 -- pi`,
+			`hc send --json ${name} /grill review auth`,
+		]);
+		// The start writes the space label and no tab label (ADR 0148): with one
+		// the desktop would split it into the plane's own tab beside the plane.
+		const runLine = commands.find((command) => command.startsWith("hc run "));
+		expect(runLine).not.toContain("--label herdr.tab");
+		expect(commands.some((command) => command.startsWith("herdr "))).toBe(false);
+		// The record stands on the terminal the start took: the name is its pane
+		// and tab, and the record owns the terminal and the worktree it runs in.
+		const launched = current(fixture.state, id);
+		expect(launched).toMatchObject({ state: "working", paneId: name });
+		const terminal = launched.resources.find((resource) => resource.kind === "terminal");
+		expect(terminal).toMatchObject({ resourceId: name, owned: true });
+		const worktreeResource = launched.resources.find((resource) => resource.kind === "worktree");
+		expect(worktreeResource).toMatchObject({ resourceId: worktree, owned: true });
+	});
+
+	test("a run outside a host terminal writes the standalone run label and no adoption label", async () => {
+		const fixture = await makeFixture();
+		const id = uid("s");
+		const name = agentOf(id);
+		const world = coreLaunchStanding(fixture, []);
+		const runner = new LifecycleRunner(world);
+		const consultation = seed(fixture.state, fixture, id, { host: "herdr-core" });
+		const harness = makeHarness(fixture, runner, {
+			agentHost: { host: "herdr-core", fact: "herdr-core-mark" },
+			agentHostMarks: { herdrEnv: undefined, hcTerminalId: undefined },
+		});
+
+		await harness.operations.launch(consultation);
+
+		const runLine = runner.commands().find((command) => command.startsWith("hc run ")) ?? "";
+		expect(runLine).toContain(`--name ${name}`);
+		expect(runLine).toContain("--label factory.run=standalone");
+		expect(runLine).not.toContain("--label herdr.space");
+		expect(runLine).not.toContain("--label herdr.tab");
+		expect(current(fixture.state, id)).toMatchObject({ state: "working", paneId: name });
 	});
 });
 

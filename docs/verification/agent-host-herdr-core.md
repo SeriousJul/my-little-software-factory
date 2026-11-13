@@ -254,6 +254,20 @@ is the answer a caller gets.
   probe terminal is then killed and removed. The operator confirmed both on
   2026-11-13: the probe terminal appeared in the desktop window, and a fresh
   herdr-core start from the plane appeared in the desktop app.
+- **The placement walk against the live desktop (2026-11-13)**: after the
+  reader fix landed, a Consultation the plane started from the desktop
+  terminal (terminal `t10`, name `consultation-6520531b`, in its dedicated
+  worktree) carried the space and tab Adoption labels its terminal carried,
+  and the desktop showed it as a split pane in the plane's own tab - beside
+  the plane, not separated from it. The desktop's source (`herdr-app`
+  0.1.15) states the rule it ran: a terminal that carries `herdr.tab=<id>`
+  is split into that tab, and one that carries the space label alone gets its
+  own tab in that space. The plane now copies the space label and no tab
+  label (ADR 0148), so a start from a desktop terminal stands as its own tab
+  in the plane's space. The regression stands in
+  `test/handoff-dispatch.test.ts` and `test/consultation-operations.test.ts`,
+  and the re-walk that confirms a fresh start stands as its own tab in the
+  desktop window stands pending on the operator.
 - **The Consultation close against the live desktop (2026-11-13)**: that day
   the plane closed a herdr-core Consultation it had started (record
   `ad246244`, terminal `t7`) from the desktop. The record closed with the
@@ -314,7 +328,11 @@ it stands below, each one owed by the change that lands it:
   tests stand at both seams. What still stands open: a start of the plane on
   a real herdr-core host from a desktop terminal after the fix, and the
   desktop's side of the rule - a labeled terminal showing in its window -
-  which stands on the probe terminal the operator confirms.
+  which stands on the probe terminal the operator confirms. The placement
+  rule of ADR 0148 ran on the live desktop only before the change, where it
+  showed as a split pane in the plane's tab, and its fixed side - a
+  space-labeled start standing as its own tab in the plane's space - stands
+  pending on the operator's re-walk.
 - The naming-suite check that keeps the plane's names inside herdr-core's
   refused id shape (the derived row above).
 - Two runs of the plane on one machine sharing one herdr-core session: never
@@ -391,7 +409,7 @@ they read is the Stub world's standing for the probe answers above.
 | The Parallel limit's seat count over the merged list: a herdr-core terminal holds the seat the herdr pane holds, a started herdr-core Agent holds inside its startup grace, and the one count sums both hosts' Agents | `test/parallel.test.ts`, the merged-list seat suite |
 | The wake-wait mapping: `hc wait`'s `reason: exit` beside an `exit_code` reads as the settle fact herdr's `done` is, and nothing else - no code, `ended: false`, a killed reason, a failed command, or unreadable output - matches | `test/observation.test.ts`, the merged reader's wait suite, and `test/auto-mode.test.ts`, the full loop over both hosts |
 | One name across both hosts: a herdr start is refused on a name herdr-core holds and vice versa, each failure and the Ticket's standing collision record name the holding host, and the start reads the other host's roster | `test/handoff-dispatch.test.ts`, the one-name-across-both-hosts suite, and `test/handoff-frame.test.ts`, the start's command sequence |
-| The labels written at the start: the run labels on the herdr-core start's `hc run`, beside the adoption labels its own terminal carries - a terminal that carries `herdr.space` and one that does not, and the standalone run identity, beside the nameless desktop terminal whose record names `null` and whose adoption labels the start still copies - with the flags ADR 0141 fixes | `test/handoff-dispatch.test.ts`, the label tests of the same suite |
+| The labels written at the start: the run labels on the herdr-core start's `hc run`, beside the space Adoption label its own terminal carries - a terminal that carries `herdr.space` and one that does not, and the standalone run identity, beside the nameless desktop terminal whose record names `null` and whose space label the start copies and whose tab label it writes not (ADR 0148) - with the flags ADR 0141 fixes | `test/handoff-dispatch.test.ts`, the label tests of the same suite |
 | The poll's command set per frame: the merged read's `herdr agent list` beside `hc ls --json --all` is the only command the observation frame runs | `test/ignored-ticket.test.ts` and `test/muted-source.test.ts`, the frame command assertions |
 | The closed surface over the merged dialect: the Stub world answers `ls` with `--all` and label scopes, the per-terminal `get`, and the refusal kinds, and the argument check walks the builders the module builds | `test/herdr-world.test.ts`, the closed-surface walk, and `test/agent-host.test.ts` |
 

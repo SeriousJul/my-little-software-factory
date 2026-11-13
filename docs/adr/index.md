@@ -156,3 +156,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0145: The renderer adapter owns the repaint policy](./0145-the-renderer-adapter-owns-the-repaint-policy.md)
 - [ADR 0146: The observation cycle sends one report, and its identity carries its change](./0146-the-observation-cycle-sends-one-report-and-its-identity-carries-its-change.md)
 - [ADR 0147: The pane screen's revision changes only when the read differs](./0147-the-pane-screens-revision-changes-only-when-the-read-differs.md)
+- [ADR 0148: On the herdr-core host, the plane adopts its start into the desktop's space, not the plane's tab](./0148-on-the-herdr-core-host-the-plane-adopts-its-start-into-the-space-not-the-tab.md)

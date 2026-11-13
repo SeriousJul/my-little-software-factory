@@ -93,7 +93,6 @@ import {
 	agentHostReachable,
 	agentHostUnreachableLine,
 	CORE_ADOPTION_LABEL_SPACE,
-	CORE_ADOPTION_LABEL_TAB,
 	type CoreStartLabelFacts,
 	type HerdrCoreRosterRow,
 	type HerdrListedAgent,
@@ -3122,14 +3121,15 @@ function recordRefusedName(search: NameSearchState, facts: RefusalFacts): boolea
 }
 
 /**
- * The Adoption labels the plane's own terminal carries, for the terminal a
- * herdr-core start takes (ADR 0141). The plane reads its own terminal's record
- * once per start, and copies the labels that terminal carries: a terminal the
- * desktop adopted into a space or tab is the space's or the tab's, and the
- * start's terminal stands beside it. A run outside a herdr-core terminal - or
- * one whose record the host does not return - carries no adoption label, and
- * the start writes none. The labels are written at the start and never
- * rewritten by a later command.
+ * The Adoption label the plane's own terminal carries, for the terminal a
+ * herdr-core start takes (ADR 0141, ADR 0148). The plane reads its own
+ * terminal's record once per start and copies the space label the desktop
+ * adopted that terminal into. It copies no tab label: with one, the desktop
+ * splits the start's terminal into that tab beside the plane, and with the
+ * space label alone the desktop gives it its own tab in that space. A run
+ * outside a herdr-core terminal - or one whose record the host does not
+ * return - carries no adoption label, and the start writes none. The label is
+ * written at the start and never rewritten by a later command.
  */
 async function coreAdoptionLabels(ctx: HandoffContext): Promise<Record<string, string>> {
 	const terminal = ctx.agentHostMarks.hcTerminalId;
@@ -3138,12 +3138,9 @@ async function coreAdoptionLabels(ctx: HandoffContext): Promise<Record<string, s
 	if (result === null || result.code !== 0) return {};
 	const labels = herdrCoreRecord(result)?.labels;
 	if (labels === undefined) return {};
-	const adoption: Record<string, string> = {};
-	for (const key of [CORE_ADOPTION_LABEL_SPACE, CORE_ADOPTION_LABEL_TAB]) {
-		const value = labels[key];
-		if (value !== undefined) adoption[key] = value;
-	}
-	return adoption;
+	const space = labels[CORE_ADOPTION_LABEL_SPACE];
+	if (space === undefined) return {};
+	return { [CORE_ADOPTION_LABEL_SPACE]: space };
 }
 
 /**
@@ -3201,10 +3198,10 @@ async function startCoreAgentUnderAvailableName(
 	// The merged live-name check runs over both hosts before the first ask
 	// (ADR 0142): the own host's refusal answers about its own host alone.
 	const heldElsewhere = await otherHostNameHolders(ctx);
-	// The plane's own terminal carries the Adoption labels its desktop adopted
-	// it with, and the labels the start writes are stated once for every
-	// candidate it asks: the candidate the host takes is the terminal the
-	// labels name (ADR 0141).
+	// The plane's own terminal carries the space Adoption label its desktop
+	// adopted it with, and the labels the start writes are stated once for
+	// every candidate it asks: the candidate the host takes is the terminal
+	// the labels name (ADR 0141, ADR 0148).
 	const adoption = await coreAdoptionLabels(ctx);
 	const search: NameSearchState = {
 		nameHeld: false,

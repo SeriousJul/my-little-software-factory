@@ -5329,12 +5329,13 @@ describe("the one name across both hosts (issue #410)", () => {
 		dispatch.stop();
 	});
 
-	test("a herdr-core start in a desktop terminal the desktop created without a name copies its adoption labels", async () => {
+	test("a herdr-core start in a desktop terminal the desktop created without a name copies its space label and no tab label", async () => {
 		const rigRef = await rig([FIRST]);
 		// The run stands in the desktop's own terminal: the desktop creates its
 		// terminals without a name, and the `hc get` record of such a terminal
-		// names null (issue #410's repro). The start still copies the adoption
-		// labels the terminal carries (ADR 0141).
+		// names null (issue #410's repro). The start copies the space label the
+		// terminal carries and no tab label: with one, the desktop would split
+		// the start's terminal into that tab beside the plane (ADR 0148).
 		const world = stubHerdrWorld({
 			checkouts: [{ path: rigRef.checkout, cloneUrl: "https://github.com/acme/factory.git" }],
 			terminals: [
@@ -5358,7 +5359,7 @@ describe("the one name across both hosts (issue #410)", () => {
 		expect(runLine).toBeDefined();
 		expect(runLine).toContain(`--label factory.run=t1`);
 		expect(runLine).toContain(`--label herdr.space=space-9`);
-		expect(runLine).toContain(`--label herdr.tab=tab-9`);
+		expect(runLine).not.toContain(`--label herdr.tab`);
 		dispatch.stop();
 	});
 

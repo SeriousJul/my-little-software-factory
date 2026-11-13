@@ -937,15 +937,18 @@ export function herdrCoreRecord(result: CommandResult): HerdrCoreRecord | null {
 
 /**
  * The label namespace the plane writes at the start of every herdr-core
- * terminal it starts (ADR 0141).
+ * terminal it starts (ADR 0141, ADR 0148).
  *
  * The plane's own namespace carries the run, the Ticket, the Handoff, and the
  * repository, which is what scopes the roster read and keeps a dead run's rows
- * readable. Beside those the plane copies the Adoption labels `herdr.space`
- * and `herdr.tab` from its own herdr-core terminal when that terminal carries
- * them, and writes no such label when it does not. The labels are written at
- * the start and never rewritten by a later command, and a roster read is
- * scoped by them only for forensics, never to hide the other host (ADR 0142).
+ * readable. Beside those the plane copies the space Adoption label
+ * `herdr.space` from its own herdr-core terminal when that terminal carries
+ * it, and writes no such label when it does not. It copies no tab label:
+ * with one the desktop splits the terminal into that tab beside the plane,
+ * and with the space label alone the desktop gives the terminal its own tab
+ * in that space (ADR 0148). The labels are written at the start and never
+ * rewritten by a later command, and a roster read is scoped by them only for
+ * forensics, never to hide the other host (ADR 0142).
  */
 export const CORE_START_LABEL_RUN = "factory.run";
 export const CORE_START_LABEL_TICKET = "factory.ticket";
@@ -953,8 +956,6 @@ export const CORE_START_LABEL_HANDOFF = "factory.handoff";
 export const CORE_START_LABEL_REPOSITORY = "factory.repository";
 /** The Adoption label the desktop writes on a terminal it adopts into a space. */
 export const CORE_ADOPTION_LABEL_SPACE = "herdr.space";
-/** The Adoption label the desktop writes on a terminal it adopts into a tab. */
-export const CORE_ADOPTION_LABEL_TAB = "herdr.tab";
 
 /** The run's own identity facts, the ones the start's labels name. */
 export interface CoreStartLabelFacts {
