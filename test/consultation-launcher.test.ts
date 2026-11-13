@@ -16,6 +16,7 @@ import type { StandingFacts } from "../src/components/controls.ts";
 import {
 	frameText,
 	launchConsultationDraft,
+	pressControl,
 	settle,
 	tabUntilSlot,
 	waitFor,
@@ -198,7 +199,10 @@ describe("the Agent host row (issue #409)", () => {
 		});
 		try {
 			await tabUntilSlot(setup, "❯ Agent host");
-			setup.mockInput.pressArrow("right");
+			// The press goes through the rig: it resolves the bar's hint for
+			// the focused row and sends its first key. The row wraps, so the
+			// neighbor the row cycles to from herdr is herdr-core.
+			await pressControl(setup, "cycle-choice", { quiet: true });
 			const frame = await settle(setup);
 			expect(frameText(frame)).toContain("Agent host herdr-core");
 			// Both hosts answer on a herdr run, so the row states no refusal.
@@ -221,7 +225,9 @@ describe("the Agent host row (issue #409)", () => {
 		const { setup, onLaunch } = await launcher(null, undefined, undefined, 220);
 		try {
 			await tabUntilSlot(setup, "❯ Agent host");
-			setup.mockInput.pressArrow("right");
+			// The row wraps, so the neighbor it cycles to from herdr-core is
+			// herdr, and the row states the refusal the run cannot reach.
+			await pressControl(setup, "cycle-choice", { quiet: true });
 			const refused = await waitFor(setup, { shows: HERDR_UNREACHABLE });
 			// The row states the refusal under itself, the way every refused
 			// row does: a terminal that paints no color keeps the words.
