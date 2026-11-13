@@ -1,6 +1,6 @@
 /** The shared catalogue gives each section key one meaning. */
 import { describe, expect, test } from "bun:test";
-
+import { HERDR_CORE_LIVE_VIEW_LINE, herdrCoreGotoLine } from "../src/agent-host.ts";
 import {
 	type AvailabilityFacts,
 	actionBarControls,
@@ -36,7 +36,7 @@ const STANDING: StandingFacts = {
 	consultationTypesConfigured: true,
 	interactionExitKey: "f12",
 	queuePaused: false,
-	agentHost: { host: "herdr-core", fact: "default" },
+	agentHost: { host: "herdr", fact: "default" },
 };
 
 /** The facts a mode's controls read when a test says nothing about them. */
@@ -156,6 +156,7 @@ const queueValues: Partial<OwnFacts<"work-queue-list"> & OwnFacts<"work-queue-de
 			agentType: "claude",
 			environment: "worktree",
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -1213,6 +1214,55 @@ describe("the shared control catalogue", () => {
 		expect(availabilityFor(control, open)).toEqual({
 			available: false,
 			reason: "the Agent's pane is not alive in the last poll",
+		});
+	});
+
+	test("Goto and the Live view stand on the herdr-core host's own lines (issue #409)", () => {
+		// The run resolved herdr-core: the herdr host answers nothing there, and
+		// the controls that need herdr's focus move or styled read state the
+		// host's own line instead of the herdr one.
+		const core = { agentHost: { host: "herdr-core" as const, fact: "default" as const } };
+		const alive = facts("consultation-detail", {
+			selectedConsultation: consultationWithPane,
+			consultationPaneAlive: true,
+			...core,
+		});
+		const consultationGoto = controlForKey({ name: "g" }, alive);
+		expect(consultationGoto?.id).toBe("consultation-goto");
+		if (consultationGoto === undefined) throw new Error("Goto is missing from the catalogue");
+		expect(availabilityFor(consultationGoto, alive)).toEqual({
+			available: false,
+			reason: herdrCoreGotoLine("pane-1"),
+		});
+		// A Consultation without a recorded pane: the line stands without the
+		// terminal's name.
+		const nameless = facts("consultation-detail", core);
+		expect(availabilityFor(consultationGoto, nameless)).toEqual({
+			available: false,
+			reason: herdrCoreGotoLine(null),
+		});
+		const inFlight = facts("ticket-detail", {
+			selectedTicket: runningTicketWithPane,
+			ticketPaneAlive: true,
+			...core,
+		});
+		const ticketGoto = controlForKey({ name: "g" }, inFlight);
+		expect(ticketGoto?.id).toBe("ticket-goto");
+		if (ticketGoto === undefined) throw new Error("Goto is missing from the catalogue");
+		expect(availabilityFor(ticketGoto, inFlight)).toEqual({
+			available: false,
+			reason: herdrCoreGotoLine("pane-1"),
+		});
+		const liveView = facts("live-view", {
+			selectedTicket: runningTicketWithPane,
+			...core,
+		});
+		const live = controlById("live-view");
+		expect(live !== undefined).toBe(true);
+		if (live === undefined) throw new Error("Live view is missing from the catalogue");
+		expect(availabilityFor(live, liveView)).toEqual({
+			available: false,
+			reason: HERDR_CORE_LIVE_VIEW_LINE,
 		});
 	});
 

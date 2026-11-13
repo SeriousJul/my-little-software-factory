@@ -456,6 +456,7 @@ function seedStoredHandoff(
 			agentType: "pi",
 			environment,
 			taskType: detail.taskType ?? "implement",
+			host: "herdr" as const,
 			model: detail.model ?? "",
 			thinking: detail.thinking ?? "",
 			contextWindow: detail.contextWindow ?? "",
@@ -605,6 +606,10 @@ function seededApp(shape: "open" | "in-flight" | "awaiting", fields: SeededField
  */
 async function planeOf(app: SeededApp, runner?: CommandRunner): Promise<Plane> {
 	return plane({
+		// The suite's worlds model a herdr the plane runs inside: the starts
+		// land as herdr agent starts in herdr panes, and the run's host is the
+		// herdr the marks stand (issue #409).
+		agentHostEnv: { herdrEnv: "1" },
 		config: {
 			...app.config,
 			sources: app.pullSrc === undefined ? [issuesSource] : [issuesSource, pullsSource],
@@ -807,6 +812,7 @@ describe("the mode cell and the a key", () => {
 		expect(reopened.handoff.autoHandoffMode()).toBe(true);
 		const src = new FakeSource("issues", "github-issues", success);
 		const restarted = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			config: { ...app.config, sources: [issuesSource] },
 			existing: reopened,
 			runner: () => app.runner,
@@ -948,6 +954,7 @@ describe("the mode cell and the a key", () => {
 			id: "consultation-1",
 			typeName: "grill-with-docs",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			model: "",
 			thinking: "",
@@ -1117,6 +1124,7 @@ describe("the failure markers", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1376,6 +1384,7 @@ describe("the Ticket Close key", () => {
 					agentType: "pi",
 					environment: "live-worktree",
 					taskType: "implement",
+					host: "herdr" as const,
 					model: "",
 					thinking: "",
 					contextWindow: "",
@@ -2297,6 +2306,8 @@ describe("the decision modal", () => {
 
 				// The operator replaces the resolved model for this one handoff.
 				await pressControl(setup, "move-list", { via: "↓", quiet: true });
+				await waitFor(setup, { shows: "❯ Agent host" });
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await waitFor(setup, { shows: "❯ Environment" });
 				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await waitFor(setup, { shows: "❯ Task type" });
@@ -2382,6 +2393,8 @@ describe("the decision modal", () => {
 				expect(opened).toContain("Agent claude");
 				expect(opened).toContain("Model review-model");
 
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
+				await waitFor(setup, { shows: "❯ Agent host" });
 				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await waitFor(setup, { shows: "❯ Environment" });
 				await pressControl(setup, "move-list", { via: "↓", quiet: true });
@@ -3289,6 +3302,7 @@ describe("the leftover environment", () => {
 				agentType: "pi",
 				environment: "worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -3382,6 +3396,7 @@ describe("the leftover environment", () => {
 				agentType: "pi",
 				environment: "worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -4207,6 +4222,7 @@ describe("the auto decision", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -4764,6 +4780,7 @@ describe("the handoff queue", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -4820,6 +4837,7 @@ describe("the handoff queue", () => {
 		);
 		const src = new FakeSource("issues", "github-issues", pairMoved);
 		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			config: { ...config, sources: [issuesSource] },
 			existing: state,
 			groupingAxis: "none",
@@ -5063,6 +5081,7 @@ describe("the handoff queue", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",

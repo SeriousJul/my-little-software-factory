@@ -27,13 +27,16 @@ import {
 import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { withIssueReferences } from "../src/domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "../src/handoff.ts";
-import { createHandoffDispatch, type HandoffDispatchReports } from "../src/handoff-dispatch.ts";
+import {
+	createHandoffDispatch,
+	type HandoffDispatch,
+	type HandoffDispatchReports,
+} from "../src/handoff-dispatch.ts";
 import { CONSULTATION_SEAT_STATES } from "../src/parallel.ts";
 import { planeActionSettingOf } from "../src/plane-action-registry.ts";
 import { runMergePullRequest } from "../src/plane-actions.ts";
-import type { CommandOptions, CommandResult } from "../src/runner.ts";
+import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 import type { FactoryState } from "../src/state.ts";
-
 import { createTicketSource, type FetchOutcome, SEARCH_QUERY } from "../src/ticket-source.ts";
 import { firePlaneActionOutcome } from "../src/workflow.ts";
 import {
@@ -51,6 +54,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { RUN_AGENT_HOST } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -306,6 +310,7 @@ function seed(
 			agentType: "pi",
 			environment: "live-worktree",
 			taskType: "rework",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -478,6 +483,7 @@ describe("the attempt record in the state", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "rework",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -885,6 +891,7 @@ describe("the dispatch's ask and pickup", () => {
 						: { kind: "moved" as const },
 				),
 			home: checkout,
+			agentHost: RUN_AGENT_HOST,
 			...recorder(events),
 		});
 		// One free seat, and three asks for it: the merge takes no seat, the
@@ -894,6 +901,7 @@ describe("the dispatch's ask and pickup", () => {
 			id: "22222222-1111-4111-8111-111111111111",
 			typeName: "grill",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "live-worktree",
 			template: "/grill {input}",
 			initialInput: "review auth",
@@ -911,7 +919,7 @@ describe("the dispatch's ask and pickup", () => {
 			ticketIdentity: issueIdentity,
 			origin: "open",
 			automatic: true,
-			choice: baseChoice("pi", "live-worktree", "implement"),
+			choice: baseChoice("pi", "live-worktree", "implement", { host: "herdr" as const }),
 			previousMessage: "",
 		});
 		if (!enqueued.ok) throw new Error(enqueued.reason);
@@ -948,6 +956,26 @@ describe("the dispatch's ask and pickup", () => {
 	}
 
 	/**
+	 * The dispatch the test's plane runs: the run's host beside the recorder's
+	 * events, on the test home the module's starts resolve their worktrees in.
+	 */
+	function planeDispatch(
+		state: FactoryState,
+		runner: CommandRunner,
+		events: string[],
+	): HandoffDispatch {
+		return createHandoffDispatch({
+			state,
+			runner,
+			config: () => PLANE_CONFIG,
+			seatCount: () => 0,
+			home: home(),
+			agentHost: RUN_AGENT_HOST,
+			...recorder(events),
+		});
+	}
+
+	/**
 	 * One merge ask through the module, with the record's lines kept: the ask's
 	 * `automatic` mark decides whether the start line names the pickup or the
 	 * operator's direct ask (issue #209).
@@ -970,6 +998,7 @@ describe("the dispatch's ask and pickup", () => {
 			// One seat held of the limit two: the reading the start line states.
 			seatCount: () => 1,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			log: recordLogger(lines),
 			...recorder(events),
 		});
@@ -1032,6 +1061,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => ({ ...PLANE_CONFIG, maxParallelAgents: 1 }),
 			seatCount: () => 1,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			log: recordLogger(lines),
 			...recorder(events),
 		});
@@ -1071,14 +1101,7 @@ describe("the dispatch's ask and pickup", () => {
 		const startedSettled = new Promise<void>((resolve) => {
 			resolveStarted = resolve;
 		});
-		const dispatch = createHandoffDispatch({
-			state,
-			runner,
-			config: () => PLANE_CONFIG,
-			seatCount: () => 0,
-			home: home(),
-			...recorder(events),
-		});
+		const dispatch = planeDispatch(state, runner, events);
 
 		const result = await dispatch.dispatchPlaneAction({
 			origin: "open",
@@ -1141,6 +1164,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({
@@ -1237,6 +1261,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			...recorder(events),
 		});
 
@@ -1249,6 +1274,7 @@ describe("the dispatch's ask and pickup", () => {
 				agentType: "pi",
 				environment: "worktree",
 				taskType: "merge",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1290,6 +1316,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			log: recordLogger(lines),
 			...recorder(events),
 		});
@@ -1357,6 +1384,7 @@ describe("the dispatch's ask and pickup", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "rework",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1377,6 +1405,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			log: recordLogger(lines),
 			...recorder(events),
 		});
@@ -1418,6 +1447,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({
@@ -1449,6 +1479,7 @@ describe("the dispatch's ask and pickup", () => {
 			// runs, because the plane action takes no seat.
 			seatCount: () => 1,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({
@@ -1487,6 +1518,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({
@@ -1539,6 +1571,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			log: recordLogger(lines),
 			...recorder(events),
 		});
@@ -1611,6 +1644,7 @@ describe("the dispatch's ask and pickup", () => {
 			// that stands first in the shared order.
 			seatCount: () => 1,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			...recorder(events),
 		});
 		// The seats-bound item stands first, and a full cap holds it the way
@@ -1622,6 +1656,7 @@ describe("the dispatch's ask and pickup", () => {
 			choice: resolveHandoffChoice(
 				{ ...PLANE_CONFIG, sources: [pullsConfig, issuesConfig], maxParallelAgents: 1 },
 				"rework",
+				"herdr",
 			),
 			previousMessage: "",
 		});
@@ -1662,6 +1697,7 @@ describe("the dispatch's ask and pickup", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "rework",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1701,6 +1737,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			...recorder(events),
 		});
 
@@ -1764,6 +1801,7 @@ describe("the dispatch's ask and pickup", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "rework",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1797,6 +1835,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			...recorder(events),
 		});
 		// The operator's ask: no `automatic` word, the way the decision
@@ -1834,6 +1873,7 @@ describe("the dispatch's ask and pickup", () => {
 				agentType: "pi",
 				environment: "worktree",
 				taskType: "review",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1871,6 +1911,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => PLANE_CONFIG,
 			seatCount: () => 0,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			...recorder(events),
 		});
 		const result = await dispatch.dispatchPlaneAction({
@@ -1918,6 +1959,7 @@ describe("the dispatch's ask and pickup", () => {
 				agentType: "pi",
 				environment: "worktree",
 				taskType: "review",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1952,14 +1994,7 @@ describe("the dispatch's ask and pickup", () => {
 		const startedSettled = new Promise<void>((resolve) => {
 			resolveStarted = resolve;
 		});
-		const dispatch = createHandoffDispatch({
-			state,
-			runner,
-			config: () => PLANE_CONFIG,
-			seatCount: () => 0,
-			home: home(),
-			...recorder(events),
-		});
+		const dispatch = planeDispatch(state, runner, events);
 		const result = await dispatch.dispatchPlaneAction({
 			origin: "workflow",
 			automatic: true,
@@ -2004,6 +2039,7 @@ describe("the dispatch's ask and pickup", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "rework",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -2049,6 +2085,7 @@ describe("the dispatch's ask and pickup", () => {
 			config: () => config,
 			seatCount: () => 0,
 			home: home(),
+			agentHost: RUN_AGENT_HOST,
 			...recorder(events),
 		});
 		state.workQueue.setQueuePaused(true);
@@ -2929,6 +2966,7 @@ describe("the auto top-up merge", () => {
 						agentType: "pi",
 						environment: "live-worktree",
 						taskType: "rework",
+						host: "herdr" as const,
 						model: "",
 						thinking: "",
 						contextWindow: "",

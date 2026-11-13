@@ -11,6 +11,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import type { AgentHostResolution } from "../src/agent-host.ts";
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { withHeadBranch } from "../src/domain/ticket.ts";
@@ -18,6 +19,7 @@ import { BYPASS_CONTRIBUTOR_PUSH_HOOK } from "../src/git-push.ts";
 import {
 	checkStart,
 	closeHandoffEnvironment,
+	closeStoredEnvironment,
 	type HandoffChoice,
 	type HandoffOutcome,
 	handOffConsultation,
@@ -45,6 +47,7 @@ import {
 	DEFAULT_TICKET_DESCRIPTION,
 	DEFAULT_TICKET_TITLE,
 	ticket as defaultTicket,
+	RUN_AGENT_HOST,
 } from "./fact-fixtures.ts";
 import {
 	FakeRunner,
@@ -91,6 +94,15 @@ function reasonOf(outcome: HandoffOutcome): string {
 	return outcome.reason;
 }
 
+/** The start's resource rows, recorded and confirmed under the kinds the start wrote. */
+function resourceCallbacks(recorded: string[], confirmed: string[]) {
+	return {
+		onResource: (kind: string, resourceId: string) => recorded.push(`${kind} ${resourceId}`),
+		onResourceRemoved: (kind: string, resourceId: string) =>
+			confirmed.push(`${kind} ${resourceId}`),
+	};
+}
+
 /** The ticket branch the handoff takes, in the words git and herdr hear. */
 const BRANCH = "factory/9-persist-source-facts";
 
@@ -100,15 +112,28 @@ const defaultChoice = {
 	agentType: "pi",
 	environment: "live-worktree" as const,
 	taskType: "implement",
+	host: "herdr" as const,
 	model: "",
 	thinking: "",
 	contextWindow: "",
 };
 const worktreeChoice: HandoffChoice = { ...defaultChoice, environment: "worktree" };
 
+/** The choice the herdr-core cases run: the same task on the core host. */
+const coreChoice: HandoffChoice = { ...defaultChoice, host: "herdr-core" };
+const coreWorktreeChoice: HandoffChoice = { ...coreChoice, environment: "worktree" };
+
+/** The run the herdr-core cases resolve: the default host outside herdr. */
+const CORE_AGENT_HOST: AgentHostResolution = { host: "herdr-core", fact: "default" };
+
 /** The path a herdr worktree checkout of the ticket's branch takes in one home. */
 function worktreePath(home: string): string {
 	return join(home, "worktrees", "factory", BRANCH.replaceAll("/", "-"));
+}
+
+/** The path a herdr-core worktree checkout of the ticket's branch takes (ADR 0143). */
+function coreWorktreePath(home: string): string {
+	return join(home, ".herdr", "worktrees", "factory", BRANCH.replaceAll("/", "-"));
 }
 
 /**
@@ -128,12 +153,14 @@ async function handoffRun(
 		previous?: PreviousHandoffEnvironment;
 		names?: OwnNameKnowledge;
 		onStage?: (stage: string) => void;
+		agentHost?: AgentHostResolution;
 	} = {},
 ): Promise<HandoffOutcome> {
 	return handOffTicket(over.ticket ?? ticket, choice, {
 		config: over.config ?? BASE_CONFIG,
 		runner,
 		home,
+		agentHost: over.agentHost ?? RUN_AGENT_HOST,
 		onStage: over.onStage,
 		names: over.names,
 		claim: over.claim ?? "open",
@@ -304,6 +331,7 @@ function consultationRecord(checkout: string, over: Partial<Consultation> = {}):
 		id: "consultation-1",
 		typeName: "grill-with-docs",
 		agentType: "pi",
+		host: "herdr" as const,
 		environment: "live-worktree",
 		model: "",
 		thinking: "",
@@ -1905,6 +1933,7 @@ describe("handOffTicket: the guard rails", () => {
 				config: BASE_CONFIG,
 				runner,
 				home: p.home,
+				agentHost: RUN_AGENT_HOST,
 			});
 
 			expect(outcome.status).toBe("failed");
@@ -1926,6 +1955,7 @@ describe("handOffTicket: the guard rails", () => {
 				config: BASE_CONFIG,
 				runner,
 				home: p.home,
+				agentHost: RUN_AGENT_HOST,
 			});
 
 			expect(outcome.status).toBe("failed");
@@ -1971,6 +2001,7 @@ describe("handOffTicket: the guard rails", () => {
 					config: item.config,
 					runner,
 					home: p.home,
+					agentHost: RUN_AGENT_HOST,
 				});
 				expect(outcome.status, item.label).toBe("failed");
 				expect(reasonOf(outcome)).toContain(item.text);
@@ -1994,6 +2025,7 @@ describe("handOffTicket: the guard rails", () => {
 				config,
 				runner,
 				home: p.home,
+				agentHost: RUN_AGENT_HOST,
 			});
 			expect(outcome.status).toBe("failed");
 			expect(reasonOf(outcome)).toContain(
@@ -2015,6 +2047,7 @@ describe("handOffTicket: the guard rails", () => {
 				config: BASE_CONFIG,
 				runner,
 				home: p.home,
+				agentHost: RUN_AGENT_HOST,
 			});
 
 			expect(outcome.status).toBe("ok");
@@ -2044,7 +2077,10 @@ describe("handOffTicket: the guard rails", () => {
 			const consultation = consultationRecord(repoPath(p.home), {
 				model: "anthropic/claude-sonnet-4-5",
 			});
-			const startCheck = await checkStart(consultation, BASE_CONFIG, runner);
+			const startCheck = await checkStart(consultation, BASE_CONFIG, runner, {
+				host: "herdr" as const,
+				fact: "default",
+			});
 			expect(startCheck.ok).toBe(true);
 
 			const outcome = await handOffConsultation({
@@ -2052,6 +2088,7 @@ describe("handOffTicket: the guard rails", () => {
 				config: BASE_CONFIG,
 				runner,
 				home: p.home,
+				agentHost: RUN_AGENT_HOST,
 				startCheck,
 			});
 
@@ -2087,9 +2124,14 @@ describe("handOffTicket: the guard rails", () => {
 			},
 		};
 
-		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "implement"), {
-			config: config,
-		});
+		const outcome = await handoffRun(
+			runner,
+			p.home,
+			resolveHandoffChoice(config, "implement", "herdr"),
+			{
+				config: config,
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toBe(
@@ -2113,9 +2155,14 @@ describe("handOffTicket: the guard rails", () => {
 			},
 		};
 
-		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "implement"), {
-			config: config,
-		});
+		const outcome = await handoffRun(
+			runner,
+			p.home,
+			resolveHandoffChoice(config, "implement", "herdr"),
+			{
+				config: config,
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toBe(
@@ -2528,7 +2575,7 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		const outcome = await handoffRun(
 			runner,
 			p.home,
-			resolveHandoffChoice(profileConfig, "implement"),
+			resolveHandoffChoice(profileConfig, "implement", "herdr"),
 			{
 				config: profileConfig,
 			},
@@ -2574,9 +2621,14 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 			},
 		};
 
-		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "implement"), {
-			config: config,
-		});
+		const outcome = await handoffRun(
+			runner,
+			p.home,
+			resolveHandoffChoice(config, "implement", "herdr"),
+			{
+				config: config,
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toBe(
@@ -2632,13 +2684,18 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		};
 		const edge = { from: "implement", to: ["review"], agent: "cursor" };
 
-		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "review", edge), {
-			ticket: { ...ticket, state: "awaiting" },
-			config: config,
-			previousMessage: "settled earlier",
-			claim: "continuation",
-			previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
-		});
+		const outcome = await handoffRun(
+			runner,
+			p.home,
+			resolveHandoffChoice(config, "review", "herdr", edge),
+			{
+				ticket: { ...ticket, state: "awaiting" },
+				config: config,
+				previousMessage: "settled earlier",
+				claim: "continuation",
+				previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain('agent type "cursor" defines no model setting');
@@ -2664,13 +2721,18 @@ describe("handOffTicket: the workflow handoff and the restart", () => {
 		};
 		const edge = { from: "implement", to: ["review"], agent: "zed" };
 
-		const outcome = await handoffRun(runner, p.home, resolveHandoffChoice(config, "review", edge), {
-			ticket: { ...ticket, state: "awaiting" },
-			config: config,
-			previousMessage: "settled earlier",
-			claim: "continuation",
-			previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
-		});
+		const outcome = await handoffRun(
+			runner,
+			p.home,
+			resolveHandoffChoice(config, "review", "herdr", edge),
+			{
+				ticket: { ...ticket, state: "awaiting" },
+				config: config,
+				previousMessage: "settled earlier",
+				claim: "continuation",
+				previous: { workspaceId: "ws-stored", environment: "live-worktree", tabId: "tab-prev" },
+			},
+		);
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain('agent type "zed" offers no thinking level "medium"');
@@ -3387,6 +3449,7 @@ describe("the review verdict of the rework handoff prompt", () => {
 			config,
 			runner,
 			home,
+			agentHost: RUN_AGENT_HOST,
 		});
 	}
 
@@ -4777,6 +4840,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 		expect(reasonOf(onTicket)).toBe("unknown agent type: nope");
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4794,6 +4858,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 		expect(reasonOf(onTicket)).toBe("the container environment is reserved and not yet built");
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4820,6 +4885,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 		const outcome = await handoffRun(runner, p.home, {
 			...defaultChoice,
 			taskType: "refactor",
+			host: "herdr" as const,
 			model: "gpt-4o",
 		});
 		expect(reasonOf(outcome)).toBe("unknown task type: refactor");
@@ -4836,6 +4902,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 		expect(reasonOf(onTicket)).toContain('has no model "gpt-4o"');
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4938,6 +5005,7 @@ describe("the one start: one stage order on both paths", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 			onStage: stageRecorder(stages),
 		});
 
@@ -5064,6 +5132,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5310,8 +5379,8 @@ describe("the one start: a command that raises", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
-			onResource: (kind, resourceId) => recorded.push(`${kind} ${resourceId}`),
-			onResourceRemoved: (kind, resourceId) => confirmed.push(`${kind} ${resourceId}`),
+			agentHost: RUN_AGENT_HOST,
+			...resourceCallbacks(recorded, confirmed),
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5346,8 +5415,8 @@ describe("the one start: a command that raises", () => {
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
-			onResource: (kind, resourceId) => recorded.push(`${kind} ${resourceId}`),
-			onResourceRemoved: (kind, resourceId) => confirmed.push(`${kind} ${resourceId}`),
+			agentHost: RUN_AGENT_HOST,
+			...resourceCallbacks(recorded, confirmed),
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5397,6 +5466,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 			onResource: recorder(resources),
 		});
 
@@ -5431,6 +5501,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 			onResource: recorder(resources),
 		});
 
@@ -5472,6 +5543,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 			onResource: recorder(resources),
 		});
 
@@ -5505,6 +5577,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5542,6 +5615,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			config: BASE_CONFIG,
 			runner,
 			home: p.home,
+			agentHost: RUN_AGENT_HOST,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5863,5 +5937,248 @@ describe("handOffTicket: the pull request ticket's branch (ADR 0112)", () => {
 		// The live environment works the checkout: no branch read of the head,
 		// and none of the ticket's own branch.
 		expectNoCommand(runner.commands(), "branch --list");
+	});
+});
+
+describe("the herdr-core host: start, Close, and residue (issue #409)", () => {
+	test("a live-worktree start runs the core's dialect: one run, one send, the terminal's handles", async () => {
+		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
+
+		const outcome = await handoffRun(runner, p.home, coreChoice, {
+			agentHost: CORE_AGENT_HOST,
+		});
+
+		expect(outcome).toEqual({
+			status: "ok",
+			agent: {
+				name: AGENT,
+				paneId: AGENT,
+				tabId: AGENT,
+				workspaceId: AGENT,
+			},
+		});
+		// The core dialect is literal: the terminal's name is its pane, tab,
+		// and workspace handle alike, and the prompt goes out on the same line
+		// the run used.
+		expect(
+			runner.calls.find((call) => call.command === "hc" && call.args[0] === "send")?.args,
+		).toEqual(["send", "--json", AGENT, EXPECTED_IMPLEMENT_PROMPT]);
+		expect(runner.commands()).toEqual([
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
+			`hc run --bg --outlive-parent --no-notify --name ${AGENT} --cwd ${repoPath(p.home)} -- pi`,
+			`hc send --json ${AGENT} ${PROMPT}`,
+		]);
+		// The run never speaks to herdr: the host that answers is the one the
+		// choice names.
+		expectNoCommand(runner.commands(), "herdr ");
+	});
+
+	test("a worktree start builds the checkout with git, then runs the core's dialect", async () => {
+		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), BRANCH, "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+
+		const outcome = await handoffRun(runner, p.home, coreWorktreeChoice, {
+			agentHost: CORE_AGENT_HOST,
+		});
+
+		const coreWt = coreWorktreePath(p.home);
+		expect(outcome.status).toBe("ok");
+		expect(outcome.notes).toBeUndefined();
+		// The branch read is the herdr host's own sequence: the branch the
+		// checkout does not carry is checked on origin, and the base is the
+		// fetched remote default branch. The host that builds the checkout
+		// differs: it is git at the path the naming rule gives the branch.
+		expect(runner.commands()).toEqual([
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
+			`git -C ${repoPath(p.home)} branch --list ${BRANCH}`,
+			`git -C ${repoPath(p.home)} ls-remote --heads origin ${BRANCH}`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
+			`git -C ${repoPath(p.home)} symbolic-ref refs/remotes/origin/HEAD`,
+			`git -C ${repoPath(p.home)} fetch origin main`,
+			`git -C ${repoPath(p.home)} worktree add ${coreWt} -b ${BRANCH} origin/main`,
+			`hc run --bg --outlive-parent --no-notify --name ${AGENT} --cwd ${coreWt} -- pi`,
+			`hc send --json ${AGENT} ${PROMPT}`,
+		]);
+		expectNoCommand(runner.commands(), "herdr ");
+	});
+
+	test("a start the core host refuses removes the checkout and the branch it created", async () => {
+		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
+		const coreWt = coreWorktreePath(p.home);
+		stubBranchList(runner, repoPath(p.home), BRANCH, "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		runner.set(
+			"hc",
+			[
+				"run",
+				"--bg",
+				"--outlive-parent",
+				"--no-notify",
+				"--name",
+				AGENT,
+				"--cwd",
+				coreWt,
+				"--",
+				"pi",
+			],
+			{
+				code: 1,
+				stderr: '{"error":{"kind":"run_failed","message":"the terminal could not start"}}\n',
+			},
+		);
+
+		const outcome = await handoffRun(runner, p.home, coreWorktreeChoice, {
+			agentHost: CORE_AGENT_HOST,
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toBe("the terminal could not start (run_failed)");
+		// One start, one cleanup: the checkout the start built goes down with
+		// git, and the branch the start created goes down beside it.
+		expect(runner.commands()).toContain(`git -C ${repoPath(p.home)} worktree remove ${coreWt}`);
+		expect(runner.commands()).toContain(`git -C ${repoPath(p.home)} branch -D ${BRANCH}`);
+		// The Agent never started, so no terminal was ever reached: no kill,
+		// no send, and no herdr command the run's host never took.
+		expectNoCommand(runner.commands(), "hc kill");
+		expectNoCommand(runner.commands(), "hc send");
+		expectNoCommand(runner.commands(), "herdr ");
+	});
+
+	test("a start the run cannot reach is refused before any command runs", async () => {
+		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
+
+		const outcome = await handoffRun(runner, p.home, defaultChoice, {
+			agentHost: CORE_AGENT_HOST,
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toBe(
+			"host herdr is unreachable from this run: the plane runs outside herdr, and no herdr server answers there",
+		);
+		// The refusal is the pre-flight's: nothing external ran.
+		expect(runner.commands()).toEqual([]);
+	});
+
+	test("a live-worktree close kills and removes the terminal, and nothing else", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "live-worktree", tabId: "term-1", workspaceId: null, host: "herdr-core" },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		// The terminal was the environment: it goes down by its recorded name,
+		// and the operator's checkout stands untouched beside it.
+		expect(runner.commands()).toEqual(["hc kill --json term-1", "hc rm --json term-1"]);
+	});
+
+	test("a worktree close takes the checkout down with its terminal", async () => {
+		const runner = new FakeRunner();
+		const checkout = "/home/operator/.herdr/worktrees/factory/factory-9-persist-source-facts";
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: "term-1", workspaceId: checkout, host: "herdr-core" },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([
+			"hc kill --json term-1",
+			"hc rm --json term-1",
+			`git -C ${checkout} worktree remove ${checkout}`,
+		]);
+		// The branch the checkout holds never goes, the way herdr's Close never
+		// deletes one.
+		const joined = runner.commands().join("\n");
+		expect(joined).not.toContain("branch -D");
+	});
+
+	test("a close whose terminal is already gone is a clean close", async () => {
+		const runner = new FakeRunner();
+		runner.set("hc", ["kill", "--json", "term-1"], {
+			code: 1,
+			stderr: '{"error":{"kind":"not_found","message":"terminal term-1 not found"}}\n',
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "live-worktree", tabId: "term-1", workspaceId: null, host: "herdr-core" },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual(["hc kill --json term-1", "hc rm --json term-1"]);
+	});
+
+	test("a close whose kill the host refuses reports the refusal", async () => {
+		const runner = new FakeRunner();
+		runner.set("hc", ["kill", "--json", "term-1"], {
+			code: 1,
+			stderr: '{"error":{"kind":"kill_failed","message":"the terminal is gone"}}\n',
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "live-worktree", tabId: "term-1", workspaceId: null, host: "herdr-core" },
+			runner,
+		);
+
+		expect(failure).toBe("the terminal is gone (kill_failed)");
+		expect(runner.commands()).toEqual(["hc kill --json term-1"]);
+	});
+
+	test("a worktree close whose checkout git no longer records is a clean close", async () => {
+		const runner = new FakeRunner();
+		const checkout = "/home/operator/.herdr/worktrees/factory/factory-9-persist-source-facts";
+		runner.set("git", ["-C", checkout, "worktree", "remove", checkout], {
+			code: 1,
+			stderr:
+				"fatal: /home/operator/.herdr/worktrees/factory/factory-9-persist-source-facts is not a working tree\n",
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: "term-1", workspaceId: checkout, host: "herdr-core" },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([
+			"hc kill --json term-1",
+			"hc rm --json term-1",
+			`git -C ${checkout} worktree remove ${checkout}`,
+		]);
+	});
+
+	test("a stored handoff without a terminal runs nothing", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: null, workspaceId: "/elsewhere", host: "herdr-core" },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([]);
+	});
+
+	test("the stored close of a herdr-core worktree takes only the terminal", async () => {
+		const runner = new FakeRunner();
+		const checkout = "/home/operator/.herdr/worktrees/factory/factory-9-persist-source-facts";
+
+		const failure = await closeStoredEnvironment(
+			{ environment: "worktree", tabId: "term-1", workspaceId: checkout, host: "herdr-core" },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		// The handoff that follows reopens the checkout in its own terminal:
+		// the stored close never removes the checkout, and the branch stays.
+		expect(runner.commands()).toEqual(["hc kill --json term-1", "hc rm --json term-1"]);
 	});
 });

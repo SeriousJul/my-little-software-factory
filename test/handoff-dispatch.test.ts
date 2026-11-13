@@ -36,7 +36,7 @@ import { workQueueIdentityOf } from "../src/state/work-queue.ts";
 import type { FactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
-import { DEFAULT_TICKET_TITLE } from "./fact-fixtures.ts";
+import { DEFAULT_TICKET_TITLE, RUN_AGENT_HOST } from "./fact-fixtures.ts";
 import {
 	FakeRunner,
 	herdrFocusCommands,
@@ -48,6 +48,7 @@ import {
 	worktreeOpenJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
+import { stubHerdrWorld } from "./herdr-world.ts";
 import { type Plane, plane, planeIssuesSource } from "./plane.ts";
 import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
 
@@ -199,8 +200,12 @@ function routeDispatch(
  * refuses a task type no matching state offers, and these tests test the
  * dispatch's claims, settles, and queues, not the refusal.
  */
-const liveChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement");
-const worktreeChoice: HandoffChoice = baseChoice("pi", "worktree", "implement");
+const liveChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement", {
+	host: "herdr" as const,
+});
+const worktreeChoice: HandoffChoice = baseChoice("pi", "worktree", "implement", {
+	host: "herdr" as const,
+});
 
 function issueTicket(seed: Seed): FetchedTicket {
 	return {
@@ -340,6 +345,7 @@ async function rig(
 		// queue counts its seats on its own facts.
 		seatCount: () => 0,
 		home,
+		agentHost: RUN_AGENT_HOST,
 		...recorder(events),
 	});
 	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
@@ -387,6 +393,7 @@ function withRunner(
 		config: () => rig.config,
 		seatCount: () => 0,
 		home: rig.home,
+		agentHost: RUN_AGENT_HOST,
 		...recorder(rig.events),
 		...overrides,
 	});
@@ -465,6 +472,7 @@ function seedHandoff(
 	});
 	return {
 		handoffId: claim.claim.attemptId,
+		host: choice.host,
 		environment: handles.environment,
 		tabId: handles.tabId,
 		workspaceId: handles.workspaceId,
@@ -952,6 +960,7 @@ describe("the starting report", () => {
 			runner: rigRef.runner,
 			config: () => rigRef.config,
 			home: rigRef.home,
+			agentHost: RUN_AGENT_HOST,
 			seatCount: () => 0,
 			...recorder(events),
 		});
@@ -3540,6 +3549,7 @@ describe("the Work queue's Consultation pickup (ADR 0034, issue #90)", () => {
 			id,
 			typeName: "grill",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			template: "/grill {input}",
 			initialInput: "review auth",
@@ -3681,6 +3691,7 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 			id,
 			typeName: "grill",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			template: "/grill {input}",
 			initialInput: "review auth",
@@ -4856,6 +4867,7 @@ describe("the seat a missing Agent left (ADR 0108)", () => {
 			id,
 			typeName: "grill",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			template: "/grill {input}",
 			initialInput: "review auth",
@@ -4987,5 +4999,126 @@ describe("the seat a missing Agent left (ADR 0108)", () => {
 			'faultWarning:the merge of "Close the stale deploy branch" was not run: task type merge carries no plane action',
 		);
 		mod.stop();
+	});
+});
+
+/**
+ * The host each route takes (issue #409): a restart re-runs the dialect of
+ * the host the handoff recorded, whatever the run resolves now, and a host
+ * the run cannot reach is refused at the pre-flight, before the start spends
+ * a command on the dialect. The automatic routes ask nothing: a queue pickup
+ * starts the host its item recorded - the run's host the automatic add put
+ * there - and never the host the ticket's handoff recorded earlier.
+ */
+describe("the host each route takes (issue #409)", () => {
+	/** A clean live-worktree handoff on the herdr-core host. */
+	const coreChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement", {
+		host: "herdr-core" as const,
+	});
+
+	/** Pump the microtasks and timers until the queue holds nothing again. */
+	async function untilQueueDrains(rigRef: Rig): Promise<void> {
+		for (let turn = 0; turn < 200 && rigRef.state.workQueue.items().length > 0; turn += 1)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+
+	test("a restart of a herdr-core handoff runs the core's dialect on a run that resolves herdr", async () => {
+		const rigRef = await rig([FIRST]);
+		// The handoff the ticket holds records the herdr-core host: the
+		// terminal name is the handle it stands on, beside the live checkout
+		// its terminal ran in.
+		const stored = seedHandoff(rigRef, FIRST, coreChoice, { workspaceId: rigRef.checkout });
+		const world = stubHerdrWorld({
+			checkouts: [{ path: rigRef.checkout, cloneUrl: "https://github.com/acme/factory.git" }],
+			terminals: [{ name: stored.tabId as string, cwd: rigRef.checkout, agent: "pi" }],
+		});
+		const dispatch = withRunner(rigRef, world, {
+			// The run resolves herdr: the restart takes the host the handoff
+			// recorded, not the host the run resolves.
+			agentHost: { host: "herdr", fact: "config" },
+		});
+		await dispatch.dispatch({
+			origin: "restart",
+			ticketIdentity: FIRST.identity,
+			choice: coreChoice,
+			previousMessage: "the last message",
+			onStarted: (result) => {
+				rigRef.reportStarted(FIRST.identity, result);
+			},
+		});
+		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({ ok: true });
+		// The core's dialect end to end: the start runs `hc run` for the new
+		// terminal and `hc send` for the prompt, and the run resolves herdr,
+		// and no herdr command runs.
+		const commands = world.commands();
+		expect(commands.some((c) => c.startsWith("hc run "))).toBe(true);
+		expect(commands.some((c) => c.startsWith("hc send "))).toBe(true);
+		expect(commands.some((c) => c.startsWith("herdr "))).toBe(false);
+		// The record the restart wrote stands on the recorded host, beside the
+		// terminal name the new start took.
+		const now = rigRef.state.handoff.latestHandoff(FIRST.identity);
+		expect(now?.host).toBe("herdr-core");
+		expect(now?.tabId).not.toBe(stored.tabId);
+		dispatch.stop();
+	});
+
+	test("a restart of a herdr handoff is refused at the pre-flight on a herdr-core run", async () => {
+		const rigRef = await rig([FIRST]);
+		seedHandoff(rigRef, FIRST);
+		const world = stubHerdrWorld({
+			checkouts: [{ path: rigRef.checkout, cloneUrl: "https://github.com/acme/factory.git" }],
+		});
+		const dispatch = withRunner(rigRef, world, {
+			// The run stands on the herdr-core host: herdr answers nothing
+			// there, and the recorded host is herdr.
+			agentHost: { host: "herdr-core", fact: "default" },
+		});
+		await dispatch.dispatch({
+			origin: "restart",
+			ticketIdentity: FIRST.identity,
+			choice: liveChoice,
+			previousMessage: "the last message",
+			onStarted: (result) => {
+				rigRef.reportStarted(FIRST.identity, result);
+			},
+		});
+		const final = await rigRef.waitForStarted(FIRST.identity);
+		expect(final).toMatchObject({ ok: false });
+		if (!final.ok) expect(final.reason).toContain("host herdr is unreachable from this run");
+		// The refusal stands before the start spends a command on the dialect:
+		// the core's first command never runs.
+		expect(world.commands().some((c) => c.startsWith("hc "))).toBe(false);
+		dispatch.stop();
+	});
+
+	test("a pickup starts the run's host, never the host the ticket's handoff recorded", async () => {
+		const rigRef = await rig([FIRST]);
+		// The ticket's handoff records the herdr-core host: a manual start on
+		// the core left its override on the record.
+		const stored = seedHandoff(rigRef, FIRST, coreChoice, { workspaceId: rigRef.checkout });
+		closeCycle(rigRef, FIRST, stored.handoffId);
+		// The queue item records the run's host, the way the automatic routes
+		// record their choice, beside a ticket whose own record names the core.
+		expect(
+			rigRef.state.workQueue.enqueueWork({
+				ticketIdentity: FIRST.identity,
+				origin: "open",
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		// One seat frees: the pickup claims the item and starts it.
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(1);
+		await untilQueueDrains(rigRef);
+		// The start ran the run's dialect on the host the item recorded...
+		expect(rigRef.commands()).toContain(agentStart(FIRST.name));
+		expect(rigRef.state.handoff.latestHandoff(FIRST.identity)?.host).toBe("herdr");
+		// ...and never the dialect of the host the ticket's handoff recorded:
+		// the core's first command did not run.
+		expect(rigRef.commands().some((c) => c.startsWith("hc run "))).toBe(false);
+		expect(rigRef.events).toContain(`notice:"${FIRST.title}" started from the Work queue`);
 	});
 });

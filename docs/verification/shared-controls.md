@@ -2495,3 +2495,39 @@ record's #398 line states: the loaded-runner evidence it names is
 unmeasured here, and no loaded runner of this rework's own stands on file.
 The screen-reader path and the terminal walks stand as for the rest of the
 record: not walked, not verified.
+
+## The Agent host row in the launcher and the override panel (issue #409, ADR 0141, ADR 0142)
+
+The Consultation launcher and the override panel carry the Agent host row
+beside their other rows, built on the shared selector from
+`src/components/shared/choices.ts`, and no screen-specific selector stands
+beside it. The launcher's row defaults to the run's resolved host, the
+replacement launcher takes the host the replaced record holds, and the
+override panel's row sits in the row order the frame pins. On a run that
+resolves herdr-core the herdr host cannot run, and the one line that names
+the host and the reason - the plane runs outside herdr, and no herdr server
+answers there - stands on the launcher's Launch row, on the panel's row, on
+the start's pre-flight refusal, and in the Key guide, and the Action bar and
+Key guide omit the control the host cannot reach. The row is a list row and a
+form field of the shared form, dispatches from the shared Control catalogue
+like the panel's other rows, and no key switches the host mid-run: the
+choice the start takes is the one the operator left on the row, and a
+Restart repeats the host the handoff recorded, whatever the run resolves
+now.
+
+What was measured: the frame suites pin both rows per host - the herdr
+standing and the herdr-core standing, with the unreachable line on the
+launcher's Launch row and the panel's row - in
+`test/consultation-launcher.test.ts` and `test/override-panel.test.ts`,
+beside the seam and automatic-route suites the
+[Agent host verification](./agent-host-herdr-core.md) names. The gallery's
+`agent-host-row` example paints the row's refused face on a run that resolves
+outside herdr - the row wears the line in its warning tone, and the launcher's
+Launch action carries the same line - and the example is driven by
+`test/shared-gallery.test.ts`, so the preview cannot drift from the row.
+
+What was not measured: no terminal walk of the rows was run in Ghostty or
+foot, the screen-reader path is not verified for either host, and no plane
+command ever reached a real herdr-core host - the rows' herdr-core frames
+stand on the run's resolution beside the Stub world's answers, as
+[that record](./agent-host-herdr-core.md) states.

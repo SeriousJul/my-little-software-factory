@@ -10,10 +10,17 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-
+import { type AgentHost, agentHostUnreachableLine } from "../src/agent-host.ts";
 import { ConsultationLauncher } from "../src/components/consultation-launcher.ts";
 import type { StandingFacts } from "../src/components/controls.ts";
-import { frameText, launchConsultationDraft, waitFor } from "./app-harness.ts";
+import {
+	frameText,
+	launchConsultationDraft,
+	pressControl,
+	settle,
+	tabUntilSlot,
+	waitFor,
+} from "./app-harness.ts";
 
 const types = {
 	grill: { agent: "pi", environment: "worktree" as const, template: "/grill {input}" },
@@ -40,8 +47,10 @@ const BASE_STANDING: StandingFacts = {
 };
 
 async function launcher(
-	draft?: { typeName: string; repositoryIdentity: string; input: string } | null,
+	draft?: { typeName: string; repositoryIdentity: string; input: string; host: AgentHost } | null,
 	repositoriesOverride?: typeof repositories,
+	over?: Partial<Pick<StandingFacts, "agentHost">>,
+	width = 100,
 ) {
 	const onLaunch = mock();
 	const setup = await testRender(
@@ -49,7 +58,7 @@ async function launcher(
 			types,
 			repositories: repositoriesOverride ?? repositories,
 			draft,
-			standing: BASE_STANDING,
+			standing: { ...BASE_STANDING, ...over },
 			message: null,
 			onCopy: () => undefined,
 			onLaunch,
@@ -61,7 +70,7 @@ async function launcher(
 			onQueuePause: () => undefined,
 			onAutoHandoff: () => undefined,
 		}),
-		{ width: 100, height: 24 },
+		{ width, height: 24 },
 	);
 	await setup.flush();
 	return { setup, onLaunch };
@@ -91,6 +100,9 @@ describe("Consultation launcher Repository choice", () => {
 				typeName: "grill",
 				repositoryIdentity: "github.com/Acme/Factory",
 				input: "review the design",
+				// The run stands on the herdr-core host (ADR 0141), so the host
+				// row starts on it and the launch carries it.
+				host: "herdr-core",
 			},
 			options,
 		);
@@ -99,7 +111,7 @@ describe("Consultation launcher Repository choice", () => {
 			// The draft holds the input, so the typed input is the empty text: the
 			// route stands on the draft's own value.
 			await launchConsultationDraft(setup, "");
-			expect(onLaunch).toHaveBeenCalledWith("grill", options[1], "review the design");
+			expect(onLaunch).toHaveBeenCalledWith("grill", options[1], "review the design", "herdr-core");
 		} finally {
 			await setup.renderer.destroy();
 		}
@@ -114,7 +126,12 @@ describe("Consultation launcher input", () => {
 			expect(frame).toContain("Type grill");
 			expect(frame).toContain("Repository acme/factory");
 			await launchConsultationDraft(setup, "review the design");
-			expect(onLaunch).toHaveBeenCalledWith("grill", repositories[0], "review the design");
+			expect(onLaunch).toHaveBeenCalledWith(
+				"grill",
+				repositories[0],
+				"review the design",
+				"herdr-core",
+			);
 		} finally {
 			await setup.renderer.destroy();
 		}
@@ -141,6 +158,7 @@ describe("Consultation launcher input", () => {
 			typeName: "grill",
 			repositoryIdentity: repositories[0].identity,
 			input: "a".repeat(bytes),
+			host: "herdr-core",
 		});
 		try {
 			// The draft holds the oversized input, so the route types nothing
@@ -149,6 +167,147 @@ describe("Consultation launcher input", () => {
 			const frame = await waitFor(setup, { shows: `initial input is ${bytes} UTF-8 bytes` });
 			expect(frameText(frame)).toContain(`UTF-8 bytes: ${bytes}/65536`);
 			expect(onLaunch).not.toHaveBeenCalled();
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+});
+
+// The one line the host that the run cannot reach states, whatever surface
+// asks it (issue #409, ADR 0142), read from its owner so a wording change
+// moves one place.
+const HERDR_UNREACHABLE = agentHostUnreachableLine("herdr");
+
+describe("the Agent host row (issue #409)", () => {
+	test("on a herdr run the row defaults to the run's host, and the launch reaches start on it", async () => {
+		const { setup, onLaunch } = await launcher(null, undefined, {
+			agentHost: { host: "herdr", fact: "default" },
+		});
+		try {
+			const frame = frameText(setup.captureCharFrame());
+			expect(frame).toContain("Agent host herdr");
+			await launchConsultationDraft(setup, "review the design");
+			expect(onLaunch).toHaveBeenCalledWith("grill", repositories[0], "review the design", "herdr");
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+
+	test("on a herdr run the row cycles to herdr-core, and the launch reaches start on the cycled host", async () => {
+		const { setup, onLaunch } = await launcher(null, undefined, {
+			agentHost: { host: "herdr", fact: "default" },
+		});
+		try {
+			await tabUntilSlot(setup, "❯ Agent host");
+			// The press goes through the rig: it resolves the bar's hint for
+			// the focused row and sends its first key. The row wraps, so the
+			// neighbor the row cycles to from herdr is herdr-core.
+			await pressControl(setup, "cycle-choice", { quiet: true });
+			const frame = await settle(setup);
+			expect(frameText(frame)).toContain("Agent host herdr-core");
+			// Both hosts answer on a herdr run, so the row states no refusal.
+			expect(frameText(frame)).not.toContain("Error: Agent host:");
+			await launchConsultationDraft(setup, "review the design");
+			expect(onLaunch).toHaveBeenCalledWith(
+				"grill",
+				repositories[0],
+				"review the design",
+				"herdr-core",
+			);
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+
+	test("on a herdr-core run the herdr host is refused on the row, and the launch states the same line", async () => {
+		// The width stands wide enough for the host's one line to appear whole:
+		// the row's note and the launch's action state the same words.
+		const { setup, onLaunch } = await launcher(null, undefined, undefined, 220);
+		try {
+			await tabUntilSlot(setup, "❯ Agent host");
+			// The row wraps, so the neighbor it cycles to from herdr-core is
+			// herdr, and the row states the refusal the run cannot reach.
+			await pressControl(setup, "cycle-choice", { quiet: true });
+			const refused = await waitFor(setup, { shows: HERDR_UNREACHABLE });
+			// The row states the refusal under itself, the way every refused
+			// row does: a terminal that paints no color keeps the words.
+			const text = frameText(refused);
+			expect(text).toContain(`Error: Agent host: ${HERDR_UNREACHABLE}`);
+			// The refusal stands on the visible action: the launch that the
+			// operator tabs to states the line, and it launches nothing.
+			await launchConsultationDraft(setup, "review the design");
+			const frame = frameText(setup.captureCharFrame());
+			expect(frame).toContain(`Unavailable: Launch Consultation: ${HERDR_UNREACHABLE}`);
+			expect(onLaunch).not.toHaveBeenCalled();
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+
+	test("on a herdr-core run the row defaults to the run's host, and the launch reaches start on it", async () => {
+		const { setup, onLaunch } = await launcher();
+		try {
+			const frame = frameText(setup.captureCharFrame());
+			expect(frame).toContain("Agent host herdr-core");
+			await launchConsultationDraft(setup, "review the design");
+			expect(onLaunch).toHaveBeenCalledWith(
+				"grill",
+				repositories[0],
+				"review the design",
+				"herdr-core",
+			);
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+
+	test("a launcher seeded from a record takes the record's host, and states the refusal when the run cannot reach it", async () => {
+		// The record the launcher replaces started on the herdr host. The run
+		// resolves herdr-core, so the row stands on the record's host, states
+		// the one line, and launches nothing.
+		const { setup, onLaunch } = await launcher(
+			{
+				typeName: "grill",
+				repositoryIdentity: repositories[0].identity,
+				input: "review the design",
+				host: "herdr",
+			},
+			undefined,
+			undefined,
+			220,
+		);
+		try {
+			const frame = await waitFor(setup, { shows: HERDR_UNREACHABLE });
+			const text = frameText(frame);
+			expect(text).toContain("Agent host herdr");
+			expect(text).toContain(`Error: Agent host: ${HERDR_UNREACHABLE}`);
+			await launchConsultationDraft(setup, "");
+			expect(onLaunch).not.toHaveBeenCalled();
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+
+	test("on a herdr run a record's herdr-core host launches on the core", async () => {
+		// The record the launcher replaces started on the core. The run stands
+		// inside herdr, where both hosts answer, so the launch carries the
+		// record's host to start.
+		const { setup, onLaunch } = await launcher({
+			typeName: "grill",
+			repositoryIdentity: repositories[0].identity,
+			input: "review the design",
+			host: "herdr-core",
+		});
+		try {
+			const frame = frameText(setup.captureCharFrame());
+			expect(frame).toContain("Agent host herdr-core");
+			await launchConsultationDraft(setup, "");
+			expect(onLaunch).toHaveBeenCalledWith(
+				"grill",
+				repositories[0],
+				"review the design",
+				"herdr-core",
+			);
 		} finally {
 			await setup.renderer.destroy();
 		}

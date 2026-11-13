@@ -20,6 +20,7 @@ import type { Setup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
 	detailFocused,
+	frameText,
 	frameUntil,
 	guideKey,
 	HEIGHT,
@@ -56,6 +57,21 @@ function stubCheckout(runner: FakeRunner, home: string): void {
 /** Press a guide scroll key and wait for the new range in the guide's bar. */
 async function scrollGuide(setup: Setup, key: "j" | "k", range: string): Promise<string> {
 	return guideKey(setup, "guide-scroll", key, { shows: range });
+}
+
+/**
+ * The open ticket's panel on the Model row: the selection walks down the
+ * list to the open row, the panel opens on the Agent row, and the walk
+ * crosses the Agent host, Environment, and Task type rows (issue #409).
+ */
+async function panelToModelRow(setup: Setup): Promise<void> {
+	await pressControl(setup, "move-list", { via: "j", moved: "Fix pan drift" });
+	await pressControl(setup, "move-list", { via: "j", moved: "Retry policy" });
+	await pressControl(setup, "override", { opens: "Override" });
+	await pressControl(setup, "move-list", { via: "j", moved: "Agent host" });
+	await pressControl(setup, "move-list", { via: "j", moved: "Environment" });
+	await pressControl(setup, "move-list", { via: "j", moved: "Task type" });
+	await pressControl(setup, "move-list", { via: "j", moved: "Model" });
 }
 
 /**
@@ -162,7 +178,7 @@ async function allGuideRows(setup: Setup): Promise<string[]> {
 describe("the in-app Key guide", () => {
 	test("does not open by itself; ? and F1 open and close it from the Ticket list", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				expect(await settle(setup)).not.toContain("Key guide");
@@ -188,7 +204,7 @@ describe("the in-app Key guide", () => {
 
 	test("names the mode it was opened from, in every mode", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				// The handoff and the override stand on actionable Tickets, so
@@ -214,6 +230,7 @@ describe("the in-app Key guide", () => {
 				await pressControl(setup, "help", { via: "F1", opens: "Key guide - Override list row" });
 				await pressControl(setup, "guide-close", { closes: "Key guide - Override list row" });
 				// Override text row.
+				await pressControl(setup, "move-list", { via: "j", moved: "Agent host" });
 				await pressControl(setup, "move-list", { via: "j", moved: "Environment" });
 				await pressControl(setup, "move-list", { via: "j", moved: "Task type" });
 				await pressControl(setup, "move-list", { via: "j", moved: "Model" });
@@ -263,6 +280,7 @@ describe("the in-app Key guide", () => {
 						agentType: "pi",
 						environment: "live-worktree",
 						taskType: "implement",
+						host: "herdr" as const,
 						model: "",
 						thinking: "",
 						contextWindow: "",
@@ -281,6 +299,7 @@ describe("the in-app Key guide", () => {
 					config: issuesConfig,
 					settledReads: false,
 					runner: () => missingRunner,
+					agentHostEnv: { herdrEnv: "1" },
 				});
 
 				await withApp(
@@ -337,7 +356,7 @@ describe("the in-app Key guide", () => {
 			const enqueued = state.workQueue.enqueueWork({
 				ticketIdentity: "github:github.com:I_5",
 				origin: "open",
-				choice: baseChoice("pi", "live-worktree", "implement"),
+				choice: baseChoice("pi", "live-worktree", "implement", { host: "herdr" as const }),
 				previousMessage: "",
 			});
 			if (!enqueued.ok) throw new Error(enqueued.reason);
@@ -359,6 +378,7 @@ describe("the in-app Key guide", () => {
 				config: zeroSeatConfig,
 				settledReads: false,
 				runner: () => runner,
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -507,7 +527,7 @@ describe("the in-app Key guide", () => {
 
 	test("lists the sections in order, with every control once and all valid aliases", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
@@ -705,7 +725,7 @@ describe("the in-app Key guide", () => {
 	] as const) {
 		test(`keeps every reason in full at ${width} columns`, async () => {
 			const runner = new FakeRunner();
-			const planeRecord = await plane({ runner: () => runner });
+			const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 			await withApp(
 				async (setup) => {
 					setup.resize(width, height);
@@ -773,7 +793,7 @@ describe("the in-app Key guide", () => {
 
 	test("catalogs the three meanings of Enter, and runs only one", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				const rowOf = (rows: string[], needle: string) =>
@@ -868,9 +888,68 @@ describe("the in-app Key guide", () => {
 		);
 	});
 
+	test("on a herdr-core run the guide states the host's line on Goto and the Live view", async () => {
+		const runner = new FakeRunner();
+		// No herdr environment: the run resolves herdr-core by default, and
+		// the focus move and the styled read are lines that host does not
+		// answer (issue #409).
+		const planeRecord = await plane({ runner: () => runner });
+		await withApp(
+			async (setup) => {
+				// Walk from the awaiting Ticket the selection boots on to the
+				// in-flight one, whose handoff stands on a terminal the host
+				// cannot focus.
+				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
+				const frame = await settle(setup);
+				const rows = rowsOf(frame);
+				// The host's lines flow onto continuation rows at the guide's
+				// capped width, so the frame as one string is what the test reads.
+				const body = frameText(frame);
+				expect(body).toContain(
+					"the herdr-core host answers no focus move: type hc attach pane-fix",
+				);
+				expect(body).toContain(
+					"the herdr-core host answers no styled read: the Live view is not offered",
+				);
+				// The lines the host states paint dim, the way every unavailable
+				// line does: a terminal that paints no color keeps the words.
+				expect(
+					spanColorAt(
+						setup,
+						rows.findIndex((r) => norm(r).includes("g Goto")),
+						"Goto",
+					),
+				).toEqual(rgb(roleColor("subtext0")));
+				expect(
+					spanColorAt(
+						setup,
+						rows.findIndex((r) => norm(r).includes("Enter Live view")),
+						"Live view",
+					),
+				).toEqual(rgb(roleColor("subtext0")));
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
+				// The bar keeps the key the host cannot run: Goto and Hand off
+				// still own their keys and state their refusal, while the two
+				// other meanings of Enter hide behind the first one.
+				const bar = actionBarRowOf(setup.captureCharFrame());
+				expect(bar).toContain("g Goto");
+				expect(bar).toContain("Enter Hand off");
+				expect(bar).not.toContain("Live view");
+				expect(bar).not.toContain("Decide");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
+		);
+	});
+
 	test("puts decision-modal controls in the current interaction mode", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				// The selection stands on the awaiting Ticket at boot: the
@@ -902,7 +981,7 @@ describe("the in-app Key guide", () => {
 
 	test("marks this mode's unavailability on the current rows only, with the recovery note on Emergency exit", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
@@ -950,7 +1029,7 @@ describe("the in-app Key guide", () => {
 
 	test("paints availability on the guide rows", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
@@ -1005,6 +1084,7 @@ describe("the in-app Key guide", () => {
 				sources: [{ config: issuesSourceConfig, tickets: [] }],
 				config: issuesConfig,
 				settledReads: false,
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -1057,7 +1137,7 @@ describe("the in-app Key guide", () => {
 
 	test("scrolls with a range and no-ops at the boundaries", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
@@ -1090,7 +1170,7 @@ describe("the in-app Key guide", () => {
 
 	test("restores the exact base state on close", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				// The override stands on an actionable Ticket, so the boot
@@ -1137,12 +1217,7 @@ describe("the in-app Key guide", () => {
 				// selection sits on the running ticket, which refuses an
 				// override: walk to the open one.
 				await pressControl(setup, "tickets", { via: "h", moved: "tickets" });
-				await pressControl(setup, "move-list", { via: "j", moved: "Fix pan drift" });
-				await pressControl(setup, "move-list", { via: "j", moved: "Retry policy" });
-				await pressControl(setup, "override", { opens: "Override" });
-				await pressControl(setup, "move-list", { via: "j", moved: "Environment" });
-				await pressControl(setup, "move-list", { via: "j", moved: "Task type" });
-				await pressControl(setup, "move-list", { via: "j", moved: "Model" });
+				await panelToModelRow(setup);
 				await typeText(setup, "a");
 				expect(modelValueOf(await waitFor(setup, { quiet: true }))).toBe("a");
 				await typeText(setup, "b");
@@ -1166,7 +1241,7 @@ describe("the in-app Key guide", () => {
 
 	test("closes on Esc, F1, and ?", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
@@ -1194,7 +1269,7 @@ describe("the in-app Key guide", () => {
 
 				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				// j scrolls the guide, not the list.
-				await guideKey(setup, "guide-scroll", "j", { shows: "2-20/68" });
+				await guideKey(setup, "guide-scroll", "j", { shows: "2-20/70" });
 				// e opens no panel, r warns no refresh, q quits nothing,
 				// Enter starts no handoff. The guide stays the owner of the
 				// keys through all of it: the rig sends every key as a press of
@@ -1228,7 +1303,7 @@ describe("the in-app Key guide", () => {
 
 	test("types ? and q into the override text row, and F1 opens the guide there", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				// The override stands on an actionable open ticket: the boot
@@ -1236,12 +1311,7 @@ describe("the in-app Key guide", () => {
 				// one that boots.
 				planeRecord.settleFirstFetch();
 				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
-				await pressControl(setup, "move-list", { via: "j", moved: "Fix pan drift" });
-				await pressControl(setup, "move-list", { via: "j", moved: "Retry policy" });
-				await pressControl(setup, "override", { opens: "Override" });
-				await pressControl(setup, "move-list", { via: "j", moved: "Environment" });
-				await pressControl(setup, "move-list", { via: "j", moved: "Task type" });
-				await pressControl(setup, "move-list", { via: "j", moved: "Model" });
+				await panelToModelRow(setup);
 				// ? is a printable character here: it types, it does not help.
 				await typeText(setup, "?");
 				expect(modelValueOf(await waitFor(setup, { quiet: true }))).toBe("?");
@@ -1277,6 +1347,7 @@ describe("the in-app Key guide", () => {
 			// tickets); the test wants the attempt to run, so a seat stands
 			// free.
 			config: { maxParallelAgents: 3 },
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		stubCheckout(runner, planeRecord.home);
 		runner.set("herdr", ["workspace", "list"], {
@@ -1332,7 +1403,7 @@ describe("the in-app Key guide", () => {
 
 	test("shows only reachable hints in its Action bar", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				// The message fits: the bar names Scroll and Close only. F1
@@ -1356,7 +1427,7 @@ describe("the in-app Key guide", () => {
 
 	test("shrinks with the terminal and keeps its scroll", async () => {
 		const runner = new FakeRunner();
-		const planeRecord = await plane({ runner: () => runner });
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" }, runner: () => runner });
 		await withApp(
 			async (setup) => {
 				await pressControl(setup, "help", { via: "?", opens: "Key guide" });

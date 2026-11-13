@@ -92,6 +92,7 @@ describe("shared fields, real terminal input", () => {
 				// paints in front of it (issue #321).
 				opened.write(TAB);
 				opened.write(TAB);
+				opened.write(TAB);
 				await opened.waitFor(
 					(out) => rowHoldsFocus(out, "Initial input"),
 					"the focus to reach the Initial input row",
@@ -146,6 +147,7 @@ describe("shared fields, real terminal input", () => {
 				// arrives as text and never as a command.
 				opened.write(LAUNCH_KEY);
 				await opened.waitFor((out) => out.includes("Consultation launcher"), "the launcher");
+				opened.write(TAB);
 				opened.write(TAB);
 				opened.write(TAB);
 				await opened.waitFor(
@@ -232,6 +234,7 @@ describe("shared fields, real terminal input", () => {
 			try {
 				opened.write(LAUNCH_KEY);
 				await opened.waitFor((out) => out.includes("Consultation launcher"), "the launcher");
+				opened.write(TAB);
 				opened.write(TAB);
 				opened.write(TAB);
 				await opened.waitFor(
@@ -377,5 +380,6 @@ function isolatedEnv(dir: string): Record<string, string> {
 		XDG_DATA_HOME: join(dir, ".data"),
 		XDG_CACHE_HOME: join(dir, ".cache"),
 		PATH: emptyBin,
+		HERDR_ENV: "1",
 	};
 }

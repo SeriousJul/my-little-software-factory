@@ -39,7 +39,7 @@ import { planeActionCheckoutWord } from "../src/plane-action-registry.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { DEFAULT_TICKET_TITLE } from "./fact-fixtures.ts";
+import { DEFAULT_TICKET_TITLE, RUN_AGENT_HOST } from "./fact-fixtures.ts";
 import { FakeRunner } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
 import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
@@ -357,6 +357,7 @@ function rig(options: RigOptions = {}): Rig {
 			// its seats on its own facts.
 			seatCount,
 			home,
+			agentHost: RUN_AGENT_HOST,
 			log: recordLogger(lines),
 			...reports,
 			...overrides,
@@ -414,7 +415,7 @@ function rig(options: RigOptions = {}): Rig {
 
 /** The worktree Handoff choice: the Environment that creates its worktree. */
 function worktreeChoice(): HandoffChoice {
-	return baseChoice("pi", "worktree", "implement");
+	return baseChoice("pi", "worktree", "implement", { host: "herdr" as const });
 }
 
 /** Ask the merge of one pull request, and wait until its command stands held. */
@@ -1050,7 +1051,11 @@ describe("the shared checkout of one Repository (issue #297, ADR 0109)", () => {
 		// A live-worktree Handoff works a checkout the operator chose and already
 		// owns, so the merge's hold does not reach it: the row crosses the gate and
 		// its start runs (issue #297, ADR 0109).
-		await handoffAsked(r, ISSUE, baseChoice("pi", "live-worktree", "implement"));
+		await handoffAsked(
+			r,
+			ISSUE,
+			baseChoice("pi", "live-worktree", "implement", { host: "herdr" as const }),
+		);
 		await r.dispatch.pickupWorkQueue();
 		await r.settle();
 		expect(r.state.workQueue.hasWorkItem(ISSUE.identity)).toBe(false);
@@ -1069,6 +1074,7 @@ describe("the Consultation side of the shared checkout (issue #315, ADR 0109)", 
 		return r.state.consultationRecord.createConsultation({
 			typeName: "grill",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			template: "/grill {input}",
 			initialInput: "the checkout gate",

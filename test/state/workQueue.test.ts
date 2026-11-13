@@ -346,6 +346,7 @@ describe("the workQueue aggregate", () => {
 			id: uid("o"),
 			typeName: "grill",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			template: "/grill {input}",
 			initialInput: "review auth",

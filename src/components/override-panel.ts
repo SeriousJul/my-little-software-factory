@@ -87,6 +87,8 @@
 
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import { type ReactElement, type RefObject, useEffect, useRef, useState } from "react";
+import type { AgentHostResolution } from "../agent-host.ts";
+import { AGENT_HOSTS, agentHostReachable, agentHostUnreachableLine } from "../agent-host.ts";
 import type { AgentTypeConfig } from "../config.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
@@ -147,8 +149,13 @@ type RowKey = keyof HandoffChoice;
 type ClearKey = "model" | "thinking";
 /** The rows whose value a text field edits. */
 type TextKey = "model" | "thinking" | "contextWindow";
-/** The rows a task type switch re-derives from its profile: every setting with a value. */
-type DerivedKey = Exclude<RowKey, "environment" | "taskType">;
+/**
+ * The rows a task type switch re-derives from its profile: every setting with
+ * a value. The host row is excluded: a Task profile names no host, and the
+ * row the operator left - or the run's host the panel opened on - stands
+ * through the switch (issue #409).
+ */
+type DerivedKey = Exclude<RowKey, "environment" | "taskType" | "host">;
 
 /**
  * The fact a row wears while it carries a value the handoff cannot stand on:
@@ -160,8 +167,16 @@ type DerivedKey = Exclude<RowKey, "environment" | "taskType">;
  */
 type RowRefusal =
 	| UnfitVerdict
-	| { ok: false; reason: string; placement: true }
-	| { ok: false; reason: string; plane: true };
+	| {
+			ok: false;
+			reason: string;
+			/** The Task row's placement infeasibility (ADR 0045). */
+			placement?: true;
+			/** A start on a plane action's task type (ADR 0068). */
+			plane?: true;
+			/** The host the run cannot reach (issue #409). */
+			host?: true;
+	  };
 
 interface PanelRow {
 	label: string;
@@ -169,7 +184,6 @@ interface PanelRow {
 	/** "list" cycles, "text" edits, "type-ahead" searches, "pending" waits. */
 	kind: "list" | "text" | "type-ahead" | "pending";
 	options?: readonly string[];
-	/** The dim marker a row holds while it has no value to show. */
 	placeholder?: string;
 	/**
 	 * The cause a Model row has no list to offer, for its guide line. Only a
@@ -446,6 +460,7 @@ function overrideSurface(props: OverridePanelProps, value: HandoffChoice): Panel
 		modelStatus: listFor(value, props.modelList),
 		taskPlacements: props.taskPlacements,
 		planeActionTaskTypes: props.planeActionTaskTypes,
+		agentHost: props.standing.agentHost,
 	};
 }
 
@@ -616,7 +631,10 @@ function useOverrideEdits(
 		if (target.kind !== "list" || target.options === undefined) return;
 		const next = cycleChoice(target.options, choiceState.choiceRef.current[target.key], delta);
 		if (next === undefined) return;
-		if (target.key !== "environment" && target.key !== "taskType") touch(target.key);
+		// The host row keeps its value through a task type switch, so it
+		// records no touch (issue #409).
+		if (target.key !== "environment" && target.key !== "taskType" && target.key !== "host")
+			touch(target.key);
 		commit((current) =>
 			target.key === "taskType" ? reDerive(current, next) : { ...current, [target.key]: next },
 		);
@@ -774,6 +792,8 @@ type PanelSurface = {
 	modelStatus: ModelListStatus;
 	taskPlacements: Record<string, PlacementEvaluation> | undefined;
 	planeActionTaskTypes: readonly string[] | undefined;
+	/** The host the run resolved: the host row's unavailable line reads it. */
+	agentHost: AgentHostResolution;
 };
 
 /** The rows the panel offers for the current choice, in order. */
@@ -807,8 +827,22 @@ function rowsFor(choice: HandoffChoice, surface: PanelSurface): PanelRow[] {
 	};
 	const taskPlacement = surface.taskPlacements?.[choice.taskType];
 	taskPlacementNote(taskRow, taskPlacement);
+	// The host row stands beside the Agent it runs under (issue #409). A host
+	// the run cannot reach is a start the plane cannot make: the row keeps its
+	// value, stays cycle-able back to a host the run can reach, and wears the
+	// one line the plane states for the host, in the plane's own words (ADR
+	// 0141).
+	const hostRow: PanelRow = {
+		label: "Agent host",
+		key: "host",
+		kind: "list",
+		options: AGENT_HOSTS,
+	};
+	if (!agentHostReachable(surface.agentHost, choice.host))
+		hostRow.unfit = { ok: false, reason: agentHostUnreachableLine(choice.host), host: true };
 	const rows: PanelRow[] = [
 		{ label: "Agent", key: "agentType", kind: "list", options: Object.keys(surface.agents) },
+		hostRow,
 		{ label: "Environment", key: "environment", kind: "list", options: surface.environments },
 		taskRow,
 	];

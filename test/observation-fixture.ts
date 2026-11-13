@@ -30,7 +30,7 @@ import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { SessionTurnRead } from "../src/turn-log.ts";
 import { fireTransition, type RefiredSkip, refireRecordedSkips } from "../src/workflow.ts";
-import { fetchedTicket, fetchSuccess } from "./fact-fixtures.ts";
+import { fetchedTicket, fetchSuccess, RUN_AGENT_HOST } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -254,6 +254,7 @@ export function rig(options: RigOptions, baseConfig: FactoryConfig): Rig {
 		config: () => config,
 		seatCount: options.seatCount ?? (() => config.maxParallelAgents),
 		home,
+		agentHost: RUN_AGENT_HOST,
 		working: () => undefined,
 		warning: report("warning"),
 		error: report("error"),
@@ -274,6 +275,7 @@ export function rig(options: RigOptions, baseConfig: FactoryConfig): Rig {
 		state,
 		herdr: reader,
 		config: () => config,
+		agentHost: RUN_AGENT_HOST,
 		// The cycle crosses the module through the shared port; the fixture
 		// records the asks it crosses, then lets the module run them.
 		dispatch: {

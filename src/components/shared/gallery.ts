@@ -15,6 +15,11 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { type RefObject, useRef, useState } from "react";
+import {
+	type AgentHostResolution,
+	agentHostReachable,
+	agentHostUnreachableLine,
+} from "../../agent-host.ts";
 import { CONSULTATION_INPUT_LIMIT, responseOversize } from "../../consultation/response-draft.ts";
 import { agentPoll } from "../../domain/agent.ts";
 import type { AutoHandoffCell, AutoHandoffMode } from "../../domain/section-facts.ts";
@@ -154,10 +159,10 @@ export interface GalleryColumns {
 const FOCUSED_CONTROL: Record<string, string> = {
 	fields: "context",
 	states: "launch",
+	"agent-host-row": "host",
 	"response-over-limit": "draft",
 	search: "type-ahead",
 	notes: "reason",
-	queueOrder: "promote",
 	narrow: "draft",
 	"no-color": "no-color-repository",
 	"theme-light": "light-model",
@@ -276,6 +281,7 @@ function sampleConsultation(
 		id: "c1c1c1c1-1111-4111-8111-111111111111",
 		typeName: "Review",
 		agentType: "consultation",
+		host: "herdr" as const,
 		environment: "worktree",
 		model: "openai/gpt-5.1",
 		thinking: "",
@@ -555,6 +561,7 @@ function queueItem(ticketIdentity: string, origin: WorkQueueHandoffItem["origin"
 			agentType: "pi",
 			environment: "worktree",
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -636,6 +643,7 @@ function sampleHandoff(environment: "worktree" | "live-worktree"): NonNullable<T
 		agentType: "pi",
 		environment,
 		taskType: "implement",
+		host: "herdr" as const,
 		model: "",
 		thinking: "",
 		contextWindow: "",
@@ -726,6 +734,7 @@ function sampleQueueItem(): WorkQueueItem {
 			agentType: "pi",
 			environment: "worktree",
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -941,6 +950,7 @@ function deleteWaitingItem(): WorkQueueItem {
 			agentType: "pi",
 			environment: "worktree",
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -1071,6 +1081,7 @@ function workQueueListItems(): WorkQueueItem[] {
 				agentType: "pi",
 				environment: "worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1089,6 +1100,7 @@ function workQueueListItems(): WorkQueueItem[] {
 				agentType: "pi",
 				environment: "worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1378,7 +1390,19 @@ const GALLERY_STANDING: StandingFacts = {
 	refreshingSourceCount: 0,
 	interactionExitKey: "f12",
 	queuePaused: false,
-	agentHost: { host: "herdr", fact: "herdr-mark" },
+	agentHost: { host: "herdr" as const, fact: "herdr-mark" },
+};
+/**
+ * The standing the Agent host example shows (issue #409, ADR 0142): a
+ * herdr-core run, which resolves outside herdr. The other examples all take
+ * GALLERY_STANDING, whose run resolves inside herdr, so every host that row
+ * names stays reachable and the row's refused face never paints. This
+ * standing is the run that stands outside herdr, and it is the one the row
+ * asks about the herdr host.
+ */
+const HOST_ROW_STANDING: AgentHostResolution = {
+	host: "herdr-core",
+	fact: "default",
 };
 /** A list the grouping axis leaves flat, so no Group header stands under the cursor. */
 const NO_GROUP: GroupCursorFacts = {
@@ -1883,6 +1907,49 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				}),
 			),
 		],
+	},
+	{
+		// The Agent host row's refused face (issue #409, ADR 0142): the state the
+		// standard says a reviewer must see, and the one neither surface's frame
+		// test can show on a herdr run. The standing's run resolves outside herdr,
+		// the row stands on the herdr host the run cannot reach, and both the row
+		// and the launcher's Launch action wear the one line the plane states for
+		// that host. The override panel's row is the same shared row, so one
+		// paint covers both surfaces. The line is read from its owner, not
+		// restated.
+		id: "agent-host-row",
+		state: "Agent host: refused when the run resolves outside the host it stands on",
+		render: (columns, holds, _inputActive, _wiring) => {
+			// The row's host and the standing's resolved host, and the reach the
+			// plane computes from them - the same check the launcher and the panel
+			// run, so the example stops painting the line the day the reach rule
+			// changes.
+			const host = "herdr" as const;
+			const refused = agentHostReachable(HOST_ROW_STANDING, host) === false;
+			return [
+				createElement(ChoiceRow, {
+					key: "host",
+					label: "Agent host",
+					value: host,
+					focused: holds === "host",
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+					warning: refused,
+					error: refused ? agentHostUnreachableLine(host) : null,
+					noteWidth: columns.contentWidth,
+				}),
+				createElement(
+					"box",
+					{ key: "actions", style: { flexDirection: "column" } },
+					createElement(ActionItem, {
+						row: { key: "launch", label: "Launch Consultation" } satisfies ActionRow,
+						focused: holds === "launch",
+						width: columns.contentWidth,
+						refusal: refused ? agentHostUnreachableLine(host) : null,
+					}),
+				),
+			];
+		},
 	},
 	{
 		// The Response field over its limit: the state the standard says a reviewer
@@ -2933,6 +3000,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					agentType: "pi",
 					environment: "worktree",
 					taskType: "implement",
+					host: "herdr" as const,
 					model: "",
 					thinking: "",
 					contextWindow: "",

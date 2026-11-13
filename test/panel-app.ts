@@ -21,7 +21,16 @@ export async function appOn(
 	options?: (planeRecord: Plane) => AppBootFields,
 	preBoot?: (planeRecord: Plane) => void | Promise<void>,
 ): Promise<void> {
-	const planeRecord = await plane(standing);
+	// The suites' planes stand the herdr mark by default: their worlds model a
+	// herdr the plane runs inside, and the run's host is the world they stand
+	// beside (issue #409). A case that stands the herdr-core world names it on
+	// its own standing, the way it names its sources.
+	const planeRecord = await plane({
+		...standing,
+		...(standing.agentHostEnv === undefined && standing.config?.agentHost === undefined
+			? { agentHostEnv: { herdrEnv: "1" } }
+			: {}),
+	});
 	if (preBoot !== undefined) await preBoot(planeRecord);
 	await withApp(async (setup) => {
 		await fn(setup, planeRecord);

@@ -108,6 +108,7 @@ async function rig(
 	over: { autoMode?: boolean; config?: Partial<FactoryConfig>; pollIntervalMs?: number } = {},
 ): Promise<Rig> {
 	const planeRecord = await plane({
+		agentHostEnv: { herdrEnv: "1" },
 		sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(fetchSuccess(twoTickets())) }],
 		repos: { [repoIdentity]: "src/factory" },
 		config: over.config ?? {},
@@ -218,6 +219,109 @@ async function refreshed(
 	await frameUntil(setup, "the refresh to reach the source", () => src.calls > before);
 	src.settle(outcome);
 	await frameUntil(setup, "the refresh to land", (f) => !messageRowOf(f).includes("refreshing"));
+}
+
+/**
+ * A failed turn on the first Ticket and the second Ticket judged out of the
+ * list: the two facts the header carries beside the steady counts. The plane
+ * stands on the herdr host the suite's worlds model (issue #409).
+ */
+async function ignoreWorld(): Promise<{
+	state: FactoryState;
+	outcome: FetchOutcome;
+	runner: FakeRunner;
+	planeRecord: Plane;
+	src: FakeSource;
+}> {
+	const state = reopenState(statePath());
+	const outcome = fetchSuccess(twoTickets());
+	state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+	state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+	const attempt = seedInFlightTurn(state, outcome, FIRST);
+	state.ticketWorkCycle.settleTurn({
+		ticketIdentity: FIRST,
+		handoffId: attempt,
+		taskType: "implement",
+		agentType: "pi",
+		message: "the turn failed",
+		turnLog: [{ kind: "text", text: "the turn failed" }],
+		completedAt: "2026-08-31T11:00:00Z",
+		cause: "failed",
+	});
+	expect(state.ticketWorkCycle.setTicketIgnored(SECOND, true, null).ok).toBe(true);
+	const runner = emptyAgentRunner();
+	const planeRecord = await plane({
+		agentHostEnv: { herdrEnv: "1" },
+		existing: state,
+		groupingAxis: "none",
+		runner: () => runner,
+		sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+		repos: { [repoIdentity]: "src/factory" },
+	});
+	return { state, outcome, runner, planeRecord, src: planeRecord.sources[0] as FakeSource };
+}
+
+/**
+ * The plane the seat tests read their badges from: herdr lists the seat's
+ * working Agent, and the source holds the ticket's rows. The plane stands
+ * on the herdr host the suite's worlds model (issue #409).
+ */
+async function workingSeatPlane(
+	state: FactoryState,
+	outcome: FetchOutcome,
+): Promise<{ runner: FakeRunner; planeRecord: Plane; src: FakeSource }> {
+	const runner = emptyAgentRunner();
+	runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
+	const planeRecord = await plane({
+		agentHostEnv: { herdrEnv: "1" },
+		existing: state,
+		groupingAxis: "none",
+		runner: () => runner,
+		sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+		repos: { [repoIdentity]: "src/factory" },
+	});
+	return { runner, planeRecord, src: planeRecord.sources[0] as FakeSource };
+}
+
+/**
+ * One seat, held by the second Ticket's own Agent: the ignored Ticket's
+ * asked-for start stays in the queue. The plane stands on the herdr host
+ * the suite's worlds model (issue #409).
+ */
+async function queuedStartWorld(): Promise<{
+	state: FactoryState;
+	runner: FakeRunner;
+	planeRecord: Plane;
+	src: FakeSource;
+}> {
+	const state = reopenState(statePath());
+	const outcome = fetchSuccess(twoTickets());
+	state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
+	state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+	seedInFlightTurn(state, outcome, SECOND);
+	const runner = emptyAgentRunner();
+	runner.set("herdr", ["agent", "list"], {
+		stdout: agentListJson([
+			{
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				agent: "pi",
+				status: "working",
+				name: agentNameFor({ identity: SECOND, title: secondTitle }),
+			},
+		]),
+	});
+	const planeRecord = await plane({
+		agentHostEnv: { herdrEnv: "1" },
+		existing: state,
+		groupingAxis: "none",
+		runner: () => runner,
+		sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
+		repos: { [repoIdentity]: "src/factory" },
+		config: { maxParallelAgents: 1 },
+	});
+	return { state, runner, planeRecord, src: planeRecord.sources[0] as FakeSource };
 }
 
 describe("the ignore key", () => {
@@ -394,32 +498,7 @@ describe("the ignore key", () => {
 	 * nothing, in every filter state.
 	 */
 	test("cycling the filter moves no count and rings no bell", async () => {
-		const state = reopenState(statePath());
-		const outcome = fetchSuccess(twoTickets());
-		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
-		// One held turn rests on the operator's decision, and one open Ticket is
-		// judged out: the two facts the header carries beside the steady counts.
-		const attempt = seedInFlightTurn(state, outcome, FIRST);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: FIRST,
-			handoffId: attempt,
-			taskType: "implement",
-			agentType: "pi",
-			message: "the turn failed",
-			turnLog: [{ kind: "text", text: "the turn failed" }],
-			completedAt: "2026-08-31T11:00:00Z",
-			cause: "failed",
-		});
-		expect(state.ticketWorkCycle.setTicketIgnored(SECOND, true, null).ok).toBe(true);
-		const runner = emptyAgentRunner();
-		const planeRecord = await plane({
-			existing: state,
-			groupingAxis: "none",
-			runner: () => runner,
-			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
-			repos: { [repoIdentity]: "src/factory" },
-		});
+		const { planeRecord } = await ignoreWorld();
 		const bells = countBells();
 		try {
 			await withApp(
@@ -698,6 +777,7 @@ describe("the obligation gate", () => {
 		});
 		const runner = emptyAgentRunner();
 		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			existing: state,
 			groupingAxis: "none",
 			runner: () => runner,
@@ -740,6 +820,7 @@ describe("the obligation gate", () => {
 		seedInFlightTurn(state, outcome);
 		const runner = emptyAgentRunner();
 		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			existing: state,
 			groupingAxis: "none",
 			runner: () => runner,
@@ -779,16 +860,7 @@ describe("the ignore and the machine", () => {
 		const state = reopenState(statePath());
 		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		seedInFlightTurn(state, outcome);
-		const runner = emptyAgentRunner();
-		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
-		const planeRecord = await plane({
-			existing: state,
-			groupingAxis: "none",
-			runner: () => runner,
-			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
-			repos: { [repoIdentity]: "src/factory" },
-		});
-		const src = planeRecord.sources[0] as FakeSource;
+		const { planeRecord, src } = await workingSeatPlane(state, outcome);
 		await withApp(
 			async (setup) => {
 				src.settle(outcome);
@@ -846,6 +918,7 @@ describe("the ignore and the machine", () => {
 		const runner = emptyAgentRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
 		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			existing: state,
 			groupingAxis: "none",
 			runner: () => runner,
@@ -929,33 +1002,7 @@ describe("the ignore and the machine", () => {
 		// One seat, held by the second Ticket's own Agent, so the ignored
 		// Ticket's asked-for start stays in the queue: the row must name its
 		// ticket by title, not by the raw identity the list rule left behind.
-		const state = reopenState(statePath());
-		const outcome = fetchSuccess(twoTickets());
-		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
-		seedInFlightTurn(state, outcome, SECOND);
-		const runner = emptyAgentRunner();
-		runner.set("herdr", ["agent", "list"], {
-			stdout: agentListJson([
-				{
-					paneId: "pane-1",
-					tabId: "tab-1",
-					workspaceId: "ws-1",
-					agent: "pi",
-					status: "working",
-					name: agentNameFor({ identity: SECOND, title: secondTitle }),
-				},
-			]),
-		});
-		const planeRecord = await plane({
-			existing: state,
-			groupingAxis: "none",
-			runner: () => runner,
-			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
-			repos: { [repoIdentity]: "src/factory" },
-			config: { maxParallelAgents: 1 },
-		});
-		const src = planeRecord.sources[0] as FakeSource;
+		const { planeRecord, src } = await queuedStartWorld();
 		await withApp(
 			async (setup) => {
 				await listed(setup, src, SECOND_LEAD);
@@ -1017,33 +1064,7 @@ describe("the ignore and the machine", () => {
 	test("the queue's cancel line names an ignored Ticket by title", async () => {
 		// One seat, held by the second Ticket's own Agent: the ignored Ticket's
 		// asked-for start waits in the queue, and its row is nowhere in the list.
-		const state = reopenState(statePath());
-		const outcome = fetchSuccess(twoTickets());
-		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
-		seedInFlightTurn(state, outcome, SECOND);
-		const runner = emptyAgentRunner();
-		runner.set("herdr", ["agent", "list"], {
-			stdout: agentListJson([
-				{
-					paneId: "pane-1",
-					tabId: "tab-1",
-					workspaceId: "ws-1",
-					agent: "pi",
-					status: "working",
-					name: agentNameFor({ identity: SECOND, title: secondTitle }),
-				},
-			]),
-		});
-		const planeRecord = await plane({
-			existing: state,
-			groupingAxis: "none",
-			runner: () => runner,
-			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
-			repos: { [repoIdentity]: "src/factory" },
-			config: { maxParallelAgents: 1 },
-		});
-		const src = planeRecord.sources[0] as FakeSource;
+		const { planeRecord, src } = await queuedStartWorld();
 		await withApp(
 			async (setup) => {
 				await listed(setup, src, SECOND_LEAD);
@@ -1171,6 +1192,7 @@ describe("the ignore and the machine", () => {
 		// never disagree about one Ticket.
 		const reopened = reopenState(path);
 		const secondPlane = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			existing: reopened,
 			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(fetchSuccess(twoTickets())) }],
 			repos: { [repoIdentity]: "src/factory" },
@@ -1213,18 +1235,7 @@ describe("the ignore and the machine", () => {
 		// Auto mode from the boot: the Restart is the machine's own move, and the
 		// flag is what has to hold it out, cycle after cycle.
 		state.handoff.setAutoHandoffMode(true);
-		const runner = emptyAgentRunner();
-		// The Agent lives while the operator puts the running Ticket away, and
-		// herdr stops listing it after.
-		runner.set("herdr", ["agent", "list"], { stdout: workingAgent() });
-		const planeRecord = await plane({
-			existing: state,
-			groupingAxis: "none",
-			runner: () => runner,
-			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
-			repos: { [repoIdentity]: "src/factory" },
-		});
-		const src = planeRecord.sources[0] as FakeSource;
+		const { runner, planeRecord, src } = await workingSeatPlane(state, outcome);
 		// A frame wide enough for the row keys beside the Message hint: the
 		// ignore's outcome is a recorded fact (ADR 0119), so the bar carries
 		// `m Message` with it.
@@ -1367,6 +1378,7 @@ describe("the ignored marker's frame", () => {
 		expect(state.ticketWorkCycle.setTicketIgnored(FIRST, true, null).ok).toBe(true);
 		const runner = emptyAgentRunner();
 		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			existing: state,
 			groupingAxis: "none",
 			runner: () => runner,
@@ -1453,33 +1465,7 @@ describe("the ignored marker's frame", () => {
 	 * cell is a steady fact, and this measures it where the operator reads it.
 	 */
 	test("a narrow frame cuts the ignored cell before the held count", async () => {
-		const state = reopenState(statePath());
-		const outcome = fetchSuccess(twoTickets());
-		state.sourceFact.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.sourceFact.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
-		// One held turn rests on the operator's decision, and one open Ticket is
-		// judged out of the list: the two conditional cells, side by side.
-		const attempt = seedInFlightTurn(state, outcome, FIRST);
-		state.ticketWorkCycle.settleTurn({
-			ticketIdentity: FIRST,
-			handoffId: attempt,
-			taskType: "implement",
-			agentType: "pi",
-			message: "the turn failed",
-			turnLog: [{ kind: "text", text: "the turn failed" }],
-			completedAt: "2026-08-31T11:00:00Z",
-			cause: "failed",
-		});
-		expect(state.ticketWorkCycle.setTicketIgnored(SECOND, true, null).ok).toBe(true);
-		const runner = emptyAgentRunner();
-		const planeRecord = await plane({
-			existing: state,
-			groupingAxis: "none",
-			runner: () => runner,
-			sources: [{ config: issuesSourceConfig, tickets: twoTicketRows(outcome) }],
-			repos: { [repoIdentity]: "src/factory" },
-		});
-		const src = planeRecord.sources[0] as FakeSource;
+		const { outcome, planeRecord, src } = await ignoreWorld();
 		await withApp(
 			async (setup) => {
 				// 87 columns is the narrowest row that names the held turn and the

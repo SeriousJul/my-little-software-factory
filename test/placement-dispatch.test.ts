@@ -27,6 +27,7 @@ import { agentNameFor } from "../src/naming.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { RUN_AGENT_HOST } from "./fact-fixtures.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -198,6 +199,7 @@ function rig(listings: Listing[], machine: WorkflowState[] = BASE_CONFIG.workflo
 		// queue counts its seats on its own facts.
 		seatCount: () => 0,
 		home,
+		agentHost: RUN_AGENT_HOST,
 		...recorder(events),
 	});
 	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
@@ -236,6 +238,7 @@ function withSeats(rig: Rig, seatCount: () => number): HandoffDispatch {
 		config: () => rig.config,
 		seatCount,
 		home: rig.home,
+		agentHost: RUN_AGENT_HOST,
 		...recorder(rig.events),
 	});
 }
@@ -275,8 +278,12 @@ async function awaitEvent(
 	throw new Error(`no event stands for ${label}`);
 }
 
-const reviewChoice: HandoffChoice = baseChoice("pi", "live-worktree", "review");
-const implementChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement");
+const reviewChoice: HandoffChoice = baseChoice("pi", "live-worktree", "review", {
+	host: "herdr" as const,
+});
+const implementChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement", {
+	host: "herdr" as const,
+});
 
 const PULL_WRITE =
 	"gh pr edit #5 --repo github.com/acme/factory --add-label ready-for-review --remove-label needs-work";

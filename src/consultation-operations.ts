@@ -9,6 +9,8 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+	type AgentHost,
+	type AgentHostResolution,
 	type HostInvocation,
 	herdrAgentPrompt,
 	herdrPaneClose,
@@ -139,6 +141,12 @@ export interface ConsultationOperationsOptions {
 	state: ConsultationOperationsAggregates;
 	runner: CommandRunner;
 	config: () => FactoryConfig;
+	/**
+	 * The host the run resolved at boot (issue #409): the Consultation's
+	 * pre-flights refuse a host the run cannot reach, and the start runs the
+	 * record's own host beside that check.
+	 */
+	agentHost: AgentHostResolution;
 	home: string;
 	/** The live Ticket projection used by the checkout safety check. */
 	tickets: () => readonly Ticket[];
@@ -184,6 +192,11 @@ export interface ConsultationCreateInput {
 	repository: ConsultationRepositoryOption;
 	initialInput: string;
 	replacementOf?: string | null;
+	/**
+	 * The Agent host the start runs on (issue #409, ADR 0142): the record
+	 * carries the host beside its handles, and the start takes it.
+	 */
+	host: AgentHost;
 	/**
 	 * Whether the submit could not take a Parallel limit seat (ADR 0034,
 	 * issue #90). A `true` submit creates the record in `queued` state with
@@ -258,6 +271,7 @@ export class ConsultationOperations {
 	private readonly state: ConsultationOperationsAggregates;
 	private readonly runner: CommandRunner;
 	private readonly config: () => FactoryConfig;
+	private readonly agentHost: AgentHostResolution;
 	private readonly home: string;
 	private readonly tickets: () => readonly Ticket[];
 	private readonly callbacks: ConsultationOperationCallbacks;
@@ -291,6 +305,7 @@ export class ConsultationOperations {
 		this.state = options.state;
 		this.runner = options.runner;
 		this.config = options.config;
+		this.agentHost = options.agentHost;
 		this.home = options.home;
 		this.tickets = options.tickets;
 		this.callbacks = options.callbacks;
@@ -326,7 +341,7 @@ export class ConsultationOperations {
 	 * leaves the `failed` record story 6 asks for when the config moved while
 	 * the item waited. A refuse returns the reason; a pass returns nothing.
 	 */
-	async checkEnqueue(typeName: string): Promise<string | undefined> {
+	async checkEnqueue(typeName: string, host: AgentHost): Promise<string | undefined> {
 		const config = this.config();
 		const type = config.consultationTypes[typeName];
 		if (type === undefined) return `unknown Consultation type ${typeName}`;
@@ -334,12 +349,17 @@ export class ConsultationOperations {
 			{
 				agentType: type.agent,
 				environment: type.environment,
+				// The type holds no host of its own: the enqueue check runs the
+				// pre-flight on the host the submit names (issue #409), and the
+				// start re-checks the record's own host when it runs.
+				host,
 				model: type.model ?? "",
 				thinking: type.thinking ?? "",
 				contextWindow: type.contextWindow ?? "",
 			},
 			config,
 			this.runner,
+			this.agentHost,
 		);
 		return check.ok ? undefined : check.reason;
 	}
@@ -361,6 +381,9 @@ export class ConsultationOperations {
 			typeName: input.typeName,
 			agentType: type.agent,
 			environment: type.environment,
+			// The host the operator picked at the submit (issue #409): the record
+			// carries it beside the handles the opening stands on.
+			host: input.host,
 			model: type.model,
 			thinking: type.thinking,
 			contextWindow: type.contextWindow,
@@ -462,7 +485,12 @@ export class ConsultationOperations {
 				// Recovery is another Consultation start. Re-check the stored
 				// settings before reading Herdr, so a config change cannot let a
 				// stale opening start trimmed.
-				const fit = await checkStart(consultationStartFacts(current), this.config(), this.runner);
+				const fit = await checkStart(
+					consultationStartFacts(current),
+					this.config(),
+					this.runner,
+					this.agentHost,
+				);
 				if (!fit.ok) return { kind: "fit-failed" as const, reason: fit.reason };
 				const probe = await new HerdrAgentReader(this.runner).listAgents();
 				if (probe.kind === "error") return { kind: "error" as const, reason: probe.reason };
@@ -1346,6 +1374,7 @@ export class ConsultationOperations {
 			consultationStartFacts(current),
 			this.config(),
 			this.runner,
+			this.agentHost,
 		);
 		if (!startCheck.ok) return { status: "failed", reason: startCheck.reason };
 		let resolvedRepository: ResolvedRepository | undefined;
@@ -1425,6 +1454,7 @@ export class ConsultationOperations {
 		return handOffConsultation({
 			consultation: current,
 			config: this.config(),
+			agentHost: this.agentHost,
 			runner: this.runner,
 			home: this.home,
 			onStage,

@@ -93,6 +93,10 @@ export function jsonChoice(value: string): HandoffChoice | undefined {
 					// none: an empty value leaves the room to the agent, the same
 					// meaning it has everywhere else.
 					contextWindow: typeof parsed.contextWindow === "string" ? parsed.contextWindow : "",
+					// A choice stored before the host existed ran on herdr, the
+					// plane's only Agent host then: the backfill is that fact, and
+					// a row that stored a host keeps it (issue #409).
+					host: parsed.host === "herdr" || parsed.host === "herdr-core" ? parsed.host : "herdr",
 				}
 			: undefined;
 	} catch {

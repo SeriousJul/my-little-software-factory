@@ -118,6 +118,7 @@ describe("the control plane", () => {
 			groupingAxis: "none",
 			sources: [],
 			config: BASE_CONFIG,
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {
@@ -158,6 +159,7 @@ describe("the control plane", () => {
 					agentType: "pi",
 					environment: "worktree",
 					taskType: "implement",
+					host: "herdr" as const,
 					model: "",
 					thinking: "",
 					contextWindow: "",
@@ -194,6 +196,7 @@ describe("the control plane", () => {
 				config: { ...BASE_CONFIG, sources: [sourceConfig] },
 				settledReads: false,
 				runner: () => runner,
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -260,6 +263,7 @@ describe("the control plane", () => {
 					agentType: "pi",
 					environment: "worktree",
 					taskType: "implement",
+					host: "herdr" as const,
 					model: "",
 					thinking: "",
 					contextWindow: "",
@@ -305,6 +309,7 @@ describe("the control plane", () => {
 				config: { ...BASE_CONFIG, sources: [sourceConfig] },
 				settledReads: false,
 				runner: () => runner,
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -402,6 +407,7 @@ describe("the control plane", () => {
 					agentType: "pi",
 					environment: "worktree",
 					taskType: "implement",
+					host: "herdr" as const,
 					model: "",
 					thinking: "",
 					contextWindow: "",
@@ -432,6 +438,7 @@ describe("the control plane", () => {
 				config,
 				settledReads: false,
 				runner: () => runner,
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -528,6 +535,7 @@ describe("the control plane", () => {
 					agentType: "pi",
 					environment: "worktree",
 					taskType: "implement",
+					host: "herdr" as const,
 					model: "",
 					thinking: "",
 					contextWindow: "",
@@ -551,6 +559,7 @@ describe("the control plane", () => {
 				config,
 				settledReads: false,
 				runner: () => runner,
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -651,6 +660,7 @@ describe("the control plane", () => {
 		const planeRecord = await plane({
 			sources: [{ config: sourceConfig, tickets: [parked] }],
 			config: parkingConfig,
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {
@@ -1197,6 +1207,7 @@ describe("the control plane", () => {
 					agentType: "pi",
 					environment: "worktree",
 					taskType: "review",
+					host: "herdr" as const,
 					model: "",
 					thinking: "",
 					contextWindow: "",
@@ -1213,6 +1224,7 @@ describe("the control plane", () => {
 		const planeRecord = await plane({
 			sources: [{ config: portalSourceConfig, tickets: [stale] }],
 			config: { ...BASE_CONFIG, sources: [portalSourceConfig] },
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {
@@ -1290,6 +1302,7 @@ describe("the control plane", () => {
 				agentType: "pi",
 				environment: "worktree",
 				taskType: "review",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1305,6 +1318,7 @@ describe("the control plane", () => {
 			config: { ...BASE_CONFIG, sources: [sourceConfig] },
 			groupingAxis: "none",
 			settledReads: false,
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {
@@ -1387,8 +1401,11 @@ describe("the control plane", () => {
 				const faceOnMarkerRow = (f: string) =>
 					startingFaceOf(listHalfOf(rowsOf(f).find((r) => r.startsWith("│ ❯")) as string)) !== null;
 				await pressControl(setup, "move-list", { via: "↓", quiet: true });
+				// The selection's row stands the [running] badge of the ticket it
+				// holds: the detail pane beside it may fold the ticket's words at
+				// this width, so the selection is read off the list's own row.
 				await frameUntil(setup, "the selection to pass the running ticket", (f) =>
-					showsTicket(f, SAMPLE_TICKETS[2]),
+					rowsOf(f).some((r) => r.startsWith("│ ❯") && r.includes("[running]")),
 				);
 				await pressControl(setup, "move-list", { via: "↓", quiet: true });
 				await frameUntil(setup, "the selection to reach the Starting window", faceOnMarkerRow);
@@ -1447,6 +1464,7 @@ describe("the control plane", () => {
 		const planeRecord = await plane({
 			sources: [{ config: sourceConfig, tickets: [wide] }],
 			config: longConfig,
+			agentHostEnv: { herdrEnv: "1" },
 		});
 
 		await withApp(
@@ -1814,6 +1832,7 @@ describe("the control plane", () => {
 			groupingAxis: "none",
 			sources: [],
 			config: BASE_CONFIG,
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		try {
 			await withApp(

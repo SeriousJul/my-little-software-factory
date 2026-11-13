@@ -144,6 +144,7 @@ function awaitingRow(
 			agentType: "pi",
 			environment,
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -184,6 +185,7 @@ function inFlightRow(
 			agentType: "pi",
 			environment,
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -201,6 +203,7 @@ function inFlightRow(
 describe("the route close moves no view", () => {
 	test("the Decision screen's route closes the settled workspace and sends no focus", async () => {
 		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			groupingAxis: "none",
 			sources: [
 				{
@@ -268,6 +271,7 @@ describe("the route close moves no view", () => {
 		// handoff is aged past the Startup grace, so the seat is the agent's own:
 		// when herdr stops listing it, the seat frees and the queue drains.
 		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			groupingAxis: "none",
 			now: () => Date.now() - 600_000,
 			sources: [
@@ -287,6 +291,7 @@ describe("the route close moves no view", () => {
 									agentType: "pi",
 									environment: "live-worktree",
 									taskType: "implement",
+									host: "herdr" as const,
 									model: "",
 									thinking: "",
 									contextWindow: "",
@@ -369,10 +374,16 @@ describe("the route close moves no view", () => {
 });
 
 describe("the Close cleanup moves no view", () => {
-	test("the Close action on a worktree cycle removes the checkout and sends no focus", async () => {
-		const planeRecord = await plane({
+	/**
+	 * The Close cleanup's world: the in-flight ticket's worktree, the clock
+	 * past the startup grace so the start is old, not a boot, and the herdr
+	 * command set the test records. The plane stands on the herdr host the
+	 * suite's worlds model (issue #409).
+	 */
+	async function closeCleanupPlane(commands?: (fake: FakeRunner) => void) {
+		return await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			groupingAxis: "none",
-			// The clock sits past the startup grace: the start is old, not a boot.
 			now: () => Date.now() - 60_000,
 			sources: [
 				{
@@ -381,11 +392,15 @@ describe("the Close cleanup moves no view", () => {
 				},
 			],
 			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake) => {
-				// No Agent in the recorded pane: the close is the way out of the cycle,
-				// and the cleanup is the work ADR 0061 is about.
-				fake.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-			},
+			commands,
+		});
+	}
+
+	test("the Close action on a worktree cycle removes the checkout and sends no focus", async () => {
+		const planeRecord = await closeCleanupPlane((fake) => {
+			// No Agent in the recorded pane: the close is the way out of the cycle,
+			// and the cleanup is the work ADR 0061 is about.
+			fake.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		});
 		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		const _state = planeRecord.state;
@@ -420,24 +435,13 @@ describe("the Close cleanup moves no view", () => {
 		// still one line on the Message line and a surviving environment on the
 		// ticket's facts. The clock sits past the startup grace: the start is
 		// old, not a boot.
-		const planeRecord = await plane({
-			groupingAxis: "none",
-			now: () => Date.now() - 60_000,
-			sources: [
-				{
-					config: issuesSourceConfig,
-					tickets: [inFlightRow(issueTicket(FIRST), "worktree")],
-				},
-			],
-			repos: { "github.com/acme/factory": "src/factory" },
-			commands: (fake) => {
-				fake.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
-				fake.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
-					code: 1,
-					stderr:
-						'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}\n',
-				});
-			},
+		const planeRecord = await closeCleanupPlane((fake) => {
+			fake.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+			fake.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
+				code: 1,
+				stderr:
+					'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}\n',
+			});
 		});
 		const outcome = fetchSuccess([issueTicket(FIRST)]);
 		const state = planeRecord.state;
@@ -483,6 +487,7 @@ describe("Goto stays the one focus move", () => {
 		// ADR 0061): the Goto is the plane's only focus command, and its
 		// confirmation still names the workspace it moved the view into.
 		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			groupingAxis: "none",
 			sources: [
 				{
@@ -549,6 +554,7 @@ describe("the environment a handoff builds stays out of the view", () => {
 		// herdr's changelog records the create-focus default regressing once
 		// (#3766, v0.9.1), so the flag is a contract, not noise (story 13).
 		const planeRecord = await plane({
+			agentHostEnv: { herdrEnv: "1" },
 			groupingAxis: "none",
 			sources: [
 				{

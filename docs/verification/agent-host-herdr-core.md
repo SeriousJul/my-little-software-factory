@@ -1,6 +1,6 @@
 # The Agent host verification
 
-Status: **the decision records stand, and steps 1 and 2 of the change are in
+Status: **the decision records stand, and steps 1, 2, and 3 of the change are in
 the tree.** ADR 0141, ADR 0142, ADR 0143, and ADR 0144 and the glossary's
 **Agent host**, **Host resolution**, and **Adoption label** entries landed on
 2026-11-12, and the first step of the change landed beside them (pull request
@@ -16,12 +16,24 @@ operator's key first, then the environment mark it reads once, then the
 default - and states the host and the fact that resolved it on the Message
 line and in the Plane boot record, and a herdr-core host below 0.1.20 wears
 one Warning line at the boot from its own version read, the one host command
-the boot runs. The plane still sends no herdr-core host command beyond that
-version read, no launcher or override-panel row exists, and every plane-side
-flow on that host is recorded as not run below. Nothing in this file is a
-claim about the plane: every herdr-core fact below is a hand probe of the host
-program. A check that could not run is recorded as incomplete; it is not a
-pass.
+the boot runs. Step 3 (issue #409) landed on the same branch (pull request
+#416): the Consultation launcher and the override panel carry the Agent host
+row beside their other rows, built on the shared control library; the Handoff
+records the start's final host beside its handles, in its own column of the
+handoff and Consultation tables (schema V31, no migration guess: the old rows
+take `herdr`, the only host their runs resolved); the Handoff detail and the
+Work queue name the host beside the handles; a Restart repeats the recorded
+host's dialect - the seam test runs it on a run that resolves the other host
+- and the automatic routes, the top-up's open add, the route, and the queue
+pickup, take the run's resolved host and never the per-handoff record; on a
+herdr-core run the herdr host is unreachable, and the launcher's Launch row,
+the panel's row, the start's pre-flight, and the Key guide all state the one
+line that names the host and the reason. Everything on the plane's side of the
+herdr-core dialect now runs against the Stub herdr world in the suite. What
+has not run is the same thing it was before, and it stands below: no plane
+command has ever gone to a real herdr-core host, and the herdr-core facts the
+plane reads on that host are the probe answers above, not a live run. A check
+that could not run is recorded as incomplete; it is not a pass.
 
 See [ADR 0141](../adr/0141-the-plane-resolves-its-agent-host-herdr-or-herdr-core.md),
 [ADR 0142](../adr/0142-one-run-holds-agents-on-both-hosts-and-the-host-stands-on-the-handoff.md),
@@ -105,36 +117,51 @@ is the answer a caller gets.
 
 ## What has not run
 
-Everything on the plane's side of this design. Recorded as incomplete, each one
-owed by the change that lands it:
+The plane's side of this design has run in the suite against the Stub herdr
+world since step 3 (issue #409): the start's dialect, the prompt, the Close
+and the residue cleanup, the Restart seam that repeats the recorded host's
+dialect, and the launcher, panel, and Key guide frames per host all stand in
+the suites named in the table below, beside the shared controls' own suites.
+What has not run is the same boundary it was before, and
+it stands below, each one owed by the change that lands it:
 
-- No plane command has ever gone to herdr-core as a host command: no start,
-  prompt, roster, wait, read, kill, or removal, and no Observation cycle over
-  a herdr-core roster. The version read the boot runs is the one host command
-  the plane sends, and it is a read that starts no core.
-- The launcher's and the override panel's Agent host row do not exist, so no
-  frame test, no refusal wording, and no Key guide row stands.
-- The Goto refusal that states `hc attach <name>` is unwritten and untested.
-- The Live view's absence on this host is unwritten; the ANSI stream has never
-  been attempted against herdr-core, which answers no styled read.
-- The worktree flows of ADR 0143 on this host: `git worktree add` and `remove` in
-  the Handoff's path, the reopen-by-branch and reopen-by-path lookups over git's
-  record, the Leftover worktree directory move-aside, and the Close cleanup.
-- The session-record derivation of ADR 0144, including its ambiguous-match answer,
-  against any real runtime directory.
-- The Adoption labels of ADR 0141: the Herdr desktop was not running during the
-  probes, so no terminal was ever seen in a desktop window through those labels.
-  The adoption rule itself is quoted from the desktop app's own generated
-  instructions, and the walk is unverified.
-- The naming-suite check that keeps the plane's names inside herdr-core's refused
-  id shape (the derived row above).
+- No plane command has ever gone to a real herdr-core host: no start, prompt,
+  roster, wait, read, kill, or removal, and no Observation cycle over a real
+  herdr-core roster. Every herdr-core command the plane runs in the suite runs
+  against the Stub herdr world, and the version read the boot runs is the one
+  host command a real boot sends, a read that starts no core.
+- The session-record derivation of ADR 0144, including its ambiguous-match
+  answer, against any real runtime directory. The plane derives the path from
+  the run's own environment in the tree, and the derivation's test runs the
+  rule on a fixture directory.
+- The Adoption labels of ADR 0141: the Herdr desktop was not running during
+  the probes, so no terminal was ever seen in a desktop window through those
+  labels. The adoption rule itself is quoted from the desktop app's own
+  generated instructions, and the walk is unverified.
+- The naming-suite check that keeps the plane's names inside herdr-core's
+  refused id shape (the derived row above).
 - Two runs of the plane on one machine sharing one herdr-core session: never
   attempted, so the cross-process name-collision case ADR 0142 leans on stands
   unverified.
 - The screen-reader path stays unverified for both hosts, exactly as
-  [the shared-controls verification record](./shared-controls.md) states, and the
-  terminal walks on the theme-inherited paint stay open there. This change makes
-  no accessibility claim.
+  [the shared-controls verification record](./shared-controls.md) states, and
+  the terminal walks on the theme-inherited paint stay open there. This change
+  makes no accessibility claim.
+
+## What step 3 stands on, in the suite
+
+The plane's herdr-core flow runs against the Stub herdr world in these suites;
+one entry per behavior, each beside the behavior's home module.
+
+| Behavior the change lands | Where it stands in the suite |
+| --- | --- |
+| The launcher's host row, per host: the row, its default on the run's resolved host, the replacement launcher's host from the replaced record, and the Launch row's refusal line on a host the run cannot reach | `test/consultation-launcher.test.ts`, the frame tests per host |
+| The override panel's host row, per host, beside the panel's other rows; the row's one refusal line and the Key guide's statement of it on a herdr-core run | `test/override-panel.test.ts`, the frame tests per host, and `test/key-guide.test.ts`, the guide's statement of the host's line |
+| The start's dialect on the recorded host: a herdr-core start issues `hc run`, `hc send`, and the terminal's handles beside them; the Handoff detail and the Work queue name the host | `test/handoff.test.ts`, the herdr-core start, Close, and residue suites |
+| The Restart seam: a restart of a herdr-core handoff runs the core's dialect on a run that resolves herdr, and a restart of a herdr handoff is refused at the pre-flight on a herdr-core run, before the core's first command | `test/handoff-dispatch.test.ts`, the describe block the issue names |
+| The automatic routes take the run's host, not the record's: the top-up's open add resolves the run's host beside a ticket whose last handoff recorded the other host, and the Work queue's pickup starts the run's host, never the host the ticket's handoff recorded | `test/observation.test.ts`, the open-dispatch suite, and `test/handoff-dispatch.test.ts`, the route's host block |
+| The V31 migration: the handoff and Consultation tables gain one host column each, and the old rows take the host their runs resolved, stated, not guessed | `test/state/consultationRecord.test.ts`, the V30-to-V31 walk |
+| The closed surface: no `herdr` or `hc` argument outside the module, and the Stub world answers the dialects the module builds | `test/agent-host.test.ts` and the closed-surface walk in `test/herdr-world.test.ts` |
 
 ## Issue and version pins
 

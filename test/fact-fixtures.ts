@@ -8,6 +8,7 @@
  * other reader builds, because every reader builds the same record.
  */
 
+import type { AgentHostResolution } from "../src/agent-host.ts";
 import type { WorkflowState } from "../src/config.ts";
 import type {
 	Completion,
@@ -30,6 +31,9 @@ import type { FetchOutcome } from "../src/ticket-source.ts";
 
 /** The default Ticket's identity. */
 export const DEFAULT_IDENTITY = "github:github.com:I_9";
+
+/** The host the test's run resolves: the default, on the herdr host. */
+export const RUN_AGENT_HOST: AgentHostResolution = { host: "herdr", fact: "default" };
 
 /** The default Ticket's title. */
 export const DEFAULT_TICKET_TITLE = "Persist source facts";
@@ -187,6 +191,7 @@ export function handoffChoice(over: Partial<HandoffChoice> = {}): HandoffChoice 
 		agentType: "pi",
 		environment: "live-worktree",
 		taskType: "implement",
+		host: "herdr" as const,
 		model: "",
 		thinking: "",
 		contextWindow: "",
@@ -243,6 +248,7 @@ export function handoff(over: Partial<Handoff> = {}): Handoff {
 		agentType: "pi",
 		environment: "worktree",
 		taskType: "implement",
+		host: "herdr" as const,
 		model: "",
 		thinking: "",
 		contextWindow: "",
@@ -375,6 +381,7 @@ function sampleHandoff(
 		agentType,
 		environment,
 		taskType,
+		host: "herdr" as const,
 		model: "",
 		thinking: "",
 		contextWindow: "",

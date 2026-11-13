@@ -18,6 +18,7 @@ function consultation(state: "working" | "closed"): Consultation {
 		id: "c1c1c1c1-1111-4111-8111-111111111111",
 		typeName: "Review",
 		agentType: "consultation",
+		host: "herdr" as const,
 		environment: "worktree",
 		model: "openai/gpt-5.1",
 		thinking: "",

@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type { AgentHost } from "../agent-host.ts";
 import {
 	boundedReplacementInput,
 	CONSULTATION_INPUT_LIMIT,
@@ -52,6 +53,11 @@ export interface Consultation {
 	typeName: string;
 	agentType: string;
 	environment: EnvironmentKind;
+	/**
+	 * The Agent host the consultation's Agent runs on (issue #409, ADR 0142):
+	 * the start's final host beside its handles, recorded at the start.
+	 */
+	host: AgentHost;
 	model: string;
 	thinking: string;
 	/** The context window in digits; empty leaves the room to the agent. */
@@ -122,6 +128,8 @@ export interface CreateConsultationInput {
 	typeName: string;
 	agentType: string;
 	environment: EnvironmentKind;
+	/** The Agent host the start runs on (issue #409, ADR 0142). */
+	host: AgentHost;
 	model?: string;
 	thinking?: string;
 	/** The context window in digits; empty leaves the room to the agent. */
@@ -170,6 +178,7 @@ interface ConsultationRow {
 	tab_id: string | null;
 	workspace_id: string | null;
 	session_id: string | null;
+	host: string;
 	latest_sequence: number | null;
 	draft: string;
 	draft_updated_at: string | null;
@@ -405,18 +414,19 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			this.db
 				.prepare(
 					`INSERT INTO consultations(
-						id, type_name, agent_type, environment, model, thinking, context_window, template,
+						id, type_name, agent_type, environment, host, model, thinking, context_window, template,
 						initial_input, rendered_opening_prompt, repository_identity,
 						repository_display_name, repository_clone_url, repository_path,
 						state, created_at, updated_at, agent_name, draft, replacement_of,
 						attention_at
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, NULL)`,
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, NULL)`,
 				)
 				.run(
 					id,
 					input.typeName,
 					input.agentType,
 					input.environment,
+					input.host,
 					input.model ?? "",
 					input.thinking ?? "",
 					input.contextWindow ?? "",
@@ -1143,6 +1153,10 @@ export class ConsultationRecordModule implements ConsultationRecordAggregate {
 			tabId: row.tab_id,
 			workspaceId: row.workspace_id,
 			sessionId: row.session_id,
+			// A record created before the host existed ran on herdr, the
+			// plane's only Agent host then: the column's default is that
+			// fact (issue #409).
+			host: row.host === "herdr-core" ? "herdr-core" : "herdr",
 			latestSequence: row.latest_sequence,
 			draft: row.draft,
 			draftUpdatedAt: row.draft_updated_at,

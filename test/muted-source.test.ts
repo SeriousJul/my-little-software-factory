@@ -72,6 +72,7 @@ function restingRows(liveFirst: boolean): readonly Ticket[] {
 						agentType: "pi",
 						environment: "live-worktree",
 						taskType: "implement",
+						host: "herdr" as const,
 						model: "",
 						thinking: "",
 						contextWindow: "",

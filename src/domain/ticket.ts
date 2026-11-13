@@ -1,5 +1,6 @@
 /** Provider-neutral factory ticket types and state transitions. */
 
+import type { AgentHost } from "../agent-host.ts";
 import type { TaskTypeConfig, TransitionOutcome } from "../config.ts";
 import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
 
@@ -224,6 +225,12 @@ export interface Handoff {
 	agentType: string;
 	environment: EnvironmentKind;
 	taskType: string;
+	/**
+	 * The Agent host the handoff ran on (issue #409, ADR 0142): the start's
+	 * final host beside its handles, the host a Restart repeats whatever the
+	 * config names now.
+	 */
+	host: AgentHost;
 	model: string;
 	thinking: string;
 	/** The maximum context window in digits, empty when left to the Agent. */

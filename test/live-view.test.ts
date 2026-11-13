@@ -185,6 +185,7 @@ async function seededPlane(extra: Partial<FactoryConfig> = {}): Promise<Plane> {
 			agentType: "pi",
 			environment: "live-worktree",
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -220,6 +221,7 @@ async function seededPlane(extra: Partial<FactoryConfig> = {}): Promise<Plane> {
 			},
 			...extra,
 		},
+		agentHostEnv: { herdrEnv: "1" },
 	});
 }
 
@@ -606,6 +608,7 @@ describe("the Live view on the ticket list", () => {
 		const planeRecord = await plane({
 			groupingAxis: "none",
 			sources: [{ config: sourceConfig, tickets: [ticketOf(fetched())] }],
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		// The handoff is claimed and settled with no herdr handles: the ticket
 		// rests in flight with no pane to read.
@@ -615,6 +618,7 @@ describe("the Live view on the ticket list", () => {
 				agentType: "pi",
 				environment: "live-worktree",
 				taskType: "implement",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1249,6 +1253,7 @@ describe("the Live view against a running factory", () => {
 						agentType: "pi",
 						environment: "live-worktree",
 						taskType: "review",
+						host: "herdr" as const,
 						model: "",
 						thinking: "",
 						contextWindow: "",

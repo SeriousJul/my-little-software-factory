@@ -604,6 +604,7 @@ const SEED_CLAIM_CHOICE = {
 	agentType: "pi",
 	environment: "live-worktree",
 	taskType: "implement",
+	host: "herdr" as const,
 	model: "anthropic/claude-sonnet-4-5",
 	thinking: "medium",
 	contextWindow: "",
@@ -631,6 +632,7 @@ function seedRetryConsultation(state: FactoryState): void {
 	const retryConsultation = state.consultationRecord.createConsultation({
 		typeName: "grill-with-docs",
 		agentType: "codex",
+		host: "herdr" as const,
 		environment: "live-worktree",
 		template: "/skill:grill-with-docs {input}",
 		initialInput: "The webhook retry policy: who owns the retry budget across an agent restart?",
@@ -659,6 +661,7 @@ function seedIndexConsultation(state: FactoryState): void {
 	const indexConsultation = state.consultationRecord.createConsultation({
 		typeName: "grill-with-docs",
 		agentType: "codex",
+		host: "herdr" as const,
 		environment: "live-worktree",
 		template: "/skill:grill-with-docs {input}",
 		initialInput:

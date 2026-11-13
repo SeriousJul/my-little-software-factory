@@ -27,7 +27,12 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
-
+import {
+	AGENT_HOSTS,
+	type AgentHost,
+	agentHostReachable,
+	agentHostUnreachableLine,
+} from "../agent-host.ts";
 import type { ConsultationTypeConfig } from "../config.ts";
 import type { ConsultationRepositoryOption } from "../consultation/checkout-safety.ts";
 import {
@@ -51,6 +56,11 @@ export interface LauncherDraft {
 	typeName: string;
 	repositoryIdentity: string;
 	input: string;
+	/**
+	 * The Agent host the launch will run on (issue #409): the row the operator
+	 * left, or the host the run resolved when the form is fresh.
+	 */
+	host: AgentHost;
 }
 
 interface ConsultationLauncherProps {
@@ -59,7 +69,12 @@ interface ConsultationLauncherProps {
 	/** The form the operator left when the launcher last closed, if any. */
 	draft?: LauncherDraft | null;
 	title?: string;
-	onLaunch: (typeName: string, repository: ConsultationRepositoryOption, input: string) => void;
+	onLaunch: (
+		typeName: string,
+		repository: ConsultationRepositoryOption,
+		input: string,
+		host: AgentHost,
+	) => void;
 	/** Close the launcher and keep the unfinished form for this application run. */
 	onClose: (kept: LauncherDraft) => void;
 	/** Delete the unfinished form. Closing never does this on its own. */
@@ -98,6 +113,7 @@ interface ConsultationLauncherProps {
 const SLOTS = [
 	{ id: "type", kind: "selector", label: "Type" },
 	{ id: "repository", kind: "selector", label: "Repository" },
+	{ id: "host", kind: "selector", label: "Agent host" },
 	{ id: "input", kind: "field", label: "Initial input" },
 	{ id: "launch", kind: "action", label: "Launch Consultation" },
 	{ id: "discard", kind: "action", label: "Discard draft text" },
@@ -107,15 +123,15 @@ const SLOTS = [
 const RETENTION_NOTE = `Closing keeps this form for this run only: it is ${STATE_WORDS.notSaved}`;
 
 /**
- * The rows a launcher draws around its Draft field: two selectors, the field's
- * own label and hint lines, two actions, and the retention note.
+ * The rows a launcher draws around its Draft field: three selectors, the
+ * field's own label and hint lines, two actions, and the retention note.
  *
  * The count is what keeps the box honest: a surface is handed no more rows than
  * it holds, so a row left out of this total would paint through the row below
  * it. The two written reasons a launcher can add - the field's size line and an
  * action's refusal - are counted where they are produced.
  */
-const FIXED_ROWS = 7;
+const FIXED_ROWS = 8;
 /** The rows the Draft field wants, and the fewest it may be drawn with. */
 const PREFERRED_DRAFT_ROWS = 3;
 const MINIMUM_DRAFT_ROWS = 2;
@@ -128,7 +144,7 @@ function launcherColumns(contentWidth: number): { labelWidth: number; valueWidth
 
 export function ConsultationLauncher(props: ConsultationLauncherProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const choices = useLauncherChoices(props.types, props.repositories, props.draft);
+	const choices = useLauncherChoices(props.types, props.repositories, props.draft, props.standing);
 	const form = useLauncherForm(props, choices);
 	const formFacts = launcherFormFacts(props, form);
 	const modeFacts = formFacts();
@@ -175,11 +191,12 @@ export function ConsultationLauncher(props: ConsultationLauncherProps) {
 	});
 }
 
-/** The launcher's two choices: the Consultation type, the Repository. */
+/** The launcher's three choices: the Consultation type, the Repository, and the Agent host it offers. */
 function useLauncherChoices(
 	types: Readonly<Record<string, ConsultationTypeConfig>>,
 	repositories: readonly ConsultationRepositoryOption[],
 	draft: LauncherDraft | null | undefined,
+	standing: StandingFacts,
 ) {
 	const names = Object.keys(types);
 	const typeChoice = useChoice(names, draft?.typeName);
@@ -191,7 +208,11 @@ function useLauncherChoices(
 			(item) => item.identity.toLowerCase() === (draft?.repositoryIdentity ?? "").toLowerCase(),
 		),
 	);
-	return { names, typeChoice, repositoryChoice };
+	// The host row starts on the host the form kept, and on the host the run
+	// resolved while the form is fresh (issue #409): a fresh launch runs the
+	// run's dialect, the way every automatic start does.
+	const hostChoice = useChoice(AGENT_HOSTS, draft?.host ?? standing.agentHost.host);
+	return { names, typeChoice, repositoryChoice, hostChoice };
 }
 
 /** The launcher's form: the slots, the draft's bytes, the send rules. */
@@ -199,7 +220,7 @@ function useLauncherForm(
 	props: ConsultationLauncherProps,
 	choices: ReturnType<typeof useLauncherChoices>,
 ) {
-	const { names, typeChoice, repositoryChoice } = choices;
+	const { names, typeChoice, repositoryChoice, hostChoice } = choices;
 	const { repositories, draft, onLaunch } = props;
 	const inputRef = useRef(draft?.input ?? "");
 	const selectionRef = useRef(false);
@@ -209,20 +230,28 @@ function useLauncherForm(
 
 	const currentType = () => typeChoice.value();
 	const currentRepository = () => repositoryChoice.value();
+	const currentHost = () => hostChoice.value() ?? AGENT_HOSTS[0];
 	/** The whole form as it stands, for closing and for launching. */
 	const formOf = (): LauncherDraft => ({
 		typeName: currentType() ?? "",
 		repositoryIdentity: currentRepository()?.identity ?? "",
 		input: field.current?.value() ?? inputRef.current,
+		host: currentHost(),
 	});
 	const cycle = (delta: number) => {
 		const slot = focus.current();
 		if (slot?.id === "type") typeChoice.cycle(delta);
 		else if (slot?.id === "repository") repositoryChoice.cycle(delta);
+		else if (slot?.id === "host") hostChoice.cycle(delta);
 	};
 	// The launcher's own domain rule decides what it can send: the count and
-	// emptiness rules belong to the Consultation, not to a field.
+	// emptiness rules belong to the Consultation, not to a field. The host the
+	// form stands on is checked first: a host the run cannot reach makes the
+	// launch the start that cannot run, and the line is the host's own line, in
+	// the one wording the plane uses for it (issue #409, ADR 0141).
 	const refusal = (): string | undefined => {
+		const host = currentHost();
+		if (!agentHostReachable(props.standing.agentHost, host)) return agentHostUnreachableLine(host);
 		if (names.length === 0) {
 			return "no Consultation types configured; add [consultation-types.<name>] to the config file";
 		}
@@ -234,7 +263,7 @@ function useLauncherForm(
 		const typeName = currentType();
 		const repository = currentRepository();
 		if (typeName === undefined || repository === undefined) return;
-		onLaunch(typeName, repository, formOf().input);
+		onLaunch(typeName, repository, formOf().input, currentHost());
 	};
 	return {
 		names,
@@ -247,6 +276,7 @@ function useLauncherForm(
 		focus,
 		currentType,
 		currentRepository,
+		currentHost,
 		formOf,
 		cycle,
 		refusal,
@@ -266,7 +296,9 @@ function launcherFormFacts(
 				? form.names.length
 				: form.focus.holds("repository")
 					? form.repositories.length
-					: undefined,
+					: form.focus.holds("host")
+						? AGENT_HOSTS.length
+						: undefined,
 			formRefusal: form.focus.holds("launch") ? form.refusal() : undefined,
 		});
 }
@@ -351,18 +383,25 @@ function launcherRows(
 	const { frame, columns, draftHeight, draftError, actionError } = frameFacts;
 	const inputActive = props.inputActive ?? true;
 	return [
-		...launcherChoiceRows(form, columns, inputActive),
+		...launcherChoiceRows(props, form, columns, inputActive),
 		launcherDraftRow({ props, form, columns, draftHeight, draftError, inputActive }),
 		launcherActionRows(form, frame, actionError, inputActive),
 	];
 }
 
-/** The two selector rows: the Consultation type, the Repository. */
+/** The three selector rows: the Consultation type, the Repository, the Agent host. */
 function launcherChoiceRows(
+	props: ConsultationLauncherProps,
 	form: ReturnType<typeof useLauncherForm>,
 	columns: ReturnType<typeof launcherColumns>,
 	inputActive: boolean,
 ): ReactElement[] {
+	const host = form.currentHost();
+	// The host the run resolved is reachable; any other host is the one the
+	// run stands outside of, and the row says so in the plane's own line
+	// (issue #409, ADR 0141). The row stays cycle-able: the operator can
+	// still move it back to a host the run can reach.
+	const hostReachable = agentHostReachable(props.standing.agentHost, host);
 	return [
 		createElement(ChoiceRow, {
 			key: "type",
@@ -381,6 +420,16 @@ function launcherChoiceRows(
 			width: columns.valueWidth,
 			labelWidth: columns.labelWidth,
 			placeholder: STATE_WORDS.unavailable,
+		}),
+		createElement(ChoiceRow, {
+			key: "host",
+			label: "Agent host",
+			value: host,
+			focused: form.focus.paints("host") && inputActive,
+			width: columns.valueWidth,
+			labelWidth: columns.labelWidth,
+			warning: !hostReachable,
+			error: hostReachable ? null : agentHostUnreachableLine(host),
 		}),
 	];
 }

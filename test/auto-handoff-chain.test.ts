@@ -28,7 +28,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import {
 	type EnvironmentKind,
@@ -54,6 +53,7 @@ import type { PlaneActionAggregate } from "../src/state/plane-action.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import { fireTransition, isCoveredByFixingPullRequest } from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { RUN_AGENT_HOST } from "./fact-fixtures.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -443,6 +443,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 					})()
 				: config.maxParallelAgents,
 		home: dir,
+		agentHost: RUN_AGENT_HOST,
 		working: () => undefined,
 		warning: () => undefined,
 		faultWarning: () => undefined,
@@ -473,6 +474,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 			readPane: async () => null,
 		},
 		config: () => config,
+		agentHost: RUN_AGENT_HOST,
 		// The observation cycle crosses the module through the shared port, and
 		// the rig records the asks it crosses: the claim checks run at the
 		// enqueue, and the pickup is the only starter.
@@ -537,6 +539,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 		agentType: "pi" as const,
 		environment: "worktree" as const,
 		taskType,
+		host: "herdr" as const,
 		model: "",
 		thinking: "",
 		contextWindow: "",
@@ -1054,6 +1057,7 @@ describe("the merge row that stands in the queue (issue #352, ADR 0133)", () => 
 				agentType: "pi",
 				environment: "worktree",
 				taskType: "rework",
+				host: "herdr" as const,
 				model: "",
 				thinking: "",
 				contextWindow: "",
@@ -1214,6 +1218,7 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 					agentType: "pi",
 					environment: "worktree",
 					taskType: "rework",
+					host: "herdr" as const,
 					model: "",
 					thinking: "",
 					contextWindow: "",
@@ -1713,6 +1718,7 @@ describe("the bug position runs the diagnosis machine (issue #330, ADR 0116)", (
 						agentType: "pi",
 						environment: "worktree",
 						taskType: "diagnose",
+						host: "herdr" as const,
 						model: "",
 						thinking: "xhigh",
 						contextWindow: "",

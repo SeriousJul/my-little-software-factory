@@ -6,7 +6,7 @@
 
 import type { Database } from "bun:sqlite";
 import { StateError } from "./store.ts";
-export const SCHEMA_VERSION = 30;
+export const SCHEMA_VERSION = 31;
 export const SCHEMA_V1 = `
 	CREATE TABLE tickets (
 		identity TEXT PRIMARY KEY, state TEXT NOT NULL, work_cycle INTEGER NOT NULL,
@@ -323,6 +323,21 @@ CREATE TABLE IF NOT EXISTS name_collisions (
 	FOREIGN KEY (ticket_identity) REFERENCES tickets(identity) ON DELETE CASCADE
 );
 `;
+/**
+ * The Agent host the Handoff and the Consultation ran on (issue #409,
+ * ADR 0142): the start's final host beside its handles, one column per
+ * table.
+ *
+ * Every row a plane before the host existed wrote ran on herdr: the herdr
+ * host was the plane's only Agent host, and the first herdr-core start is
+ * the first row that can name anything else. The default is that fact, not
+ * a guess: an old row takes the host its run resolved, and the migration
+ * reads nothing it cannot know.
+ */
+export const MIGRATION_V30_TO_V31_HANDOFF_HOST =
+	"ALTER TABLE handoffs ADD COLUMN host TEXT NOT NULL DEFAULT 'herdr';";
+export const MIGRATION_V30_TO_V31_CONSULTATION_HOST =
+	"ALTER TABLE consultations ADD COLUMN host TEXT NOT NULL DEFAULT 'herdr';";
 export function hasTable(db: Database, name: string): boolean {
 	return (
 		db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null
@@ -386,6 +401,7 @@ export function migrate(db: Database, path: string): void {
 		migrateV17ToV21(db);
 		migrateV21ToV24(db);
 		migrateV24ToV30(db);
+		migrateV30ToV31(db);
 		// The `queued` state the retired route wait stood in (ADR 0072): a
 		// file that still carries it ends those cycles the way a close does -
 		// the ticket rests open with the cycle counted once - in one state
@@ -487,4 +503,13 @@ function migrateV24ToV30(db: Database) {
 	// standing collision, which is the honest answer for a run that never met a
 	// name refusal (issue #299, ADR 0107).
 	if (!hasTable(db, "name_collisions")) db.exec(MIGRATION_V29_TO_V30_NAME_COLLISIONS);
+}
+
+function migrateV30ToV31(db: Database) {
+	// Each host column is asked for by name, the way the queue's action cell
+	// is: a file the step already ran keeps the column and its stored hosts,
+	// and an older file gains the column beside the rows it already holds,
+	// which read back the default, the host their runs resolved (issue #409).
+	if (!hasColumn(db, "handoffs", "host")) db.exec(MIGRATION_V30_TO_V31_HANDOFF_HOST);
+	if (!hasColumn(db, "consultations", "host")) db.exec(MIGRATION_V30_TO_V31_CONSULTATION_HOST);
 }

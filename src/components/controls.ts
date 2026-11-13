@@ -15,7 +15,11 @@
  * rows may name.
  */
 
-import type { AgentHostResolution } from "../agent-host.ts";
+import {
+	type AgentHostResolution,
+	HERDR_CORE_LIVE_VIEW_LINE,
+	herdrCoreGotoLine,
+} from "../agent-host.ts";
 import type { GroupingAxis } from "../domain/grouping.ts";
 import type { Ticket, TicketListFilter, TicketMarker } from "../domain/ticket.ts";
 import { ignoreRefusal, nextTicketListFilter, obligationOf } from "../domain/ticket.ts";
@@ -832,6 +836,10 @@ const completionEligibility = (facts: TicketBaseFacts): ControlAvailability => {
 const liveViewEligibility = (facts: TicketBaseFacts): ControlAvailability => {
 	const ticket = facts.selectedTicket;
 	if (ticket === undefined) return unavailable("no Ticket is selected");
+	// The herdr-core host answers no styled read: the Live view is the one
+	// surface that would need it, so the host the run resolved closes it
+	// before any state rule is even asked (issue #409, ADR 0141).
+	if (facts.agentHost.host === "herdr-core") return unavailable(HERDR_CORE_LIVE_VIEW_LINE);
 	if (inFlight(ticket)) return available();
 	return unavailable("only an in-flight Ticket has a Live view");
 };
@@ -1112,12 +1120,18 @@ const consultationInteraction = (facts: ConsultationBaseFacts): ControlAvailabil
  * navigation: it focuses the pane and leaves the Consultation record
  * untouched.
  */
-const consultationGoto = (facts: ConsultationBaseFacts): ControlAvailability =>
-	facts.selectedConsultation?.paneId !== null &&
-	facts.selectedConsultation?.paneId !== undefined &&
-	facts.consultationPaneAlive
+const consultationGoto = (facts: ConsultationBaseFacts): ControlAvailability => {
+	// The herdr-core host answers no focus move: the line names the terminal
+	// the record stands on, so the operator can attach to it by hand (issue
+	// #409, ADR 0141).
+	if (facts.agentHost.host === "herdr-core")
+		return unavailable(herdrCoreGotoLine(facts.selectedConsultation?.paneId ?? null));
+	return facts.selectedConsultation?.paneId !== null &&
+		facts.selectedConsultation?.paneId !== undefined &&
+		facts.consultationPaneAlive
 		? available()
 		: unavailable("the Agent's pane is not alive in the last poll");
+};
 /**
  * Why Goto answers nothing on a Ticket (ADR 0033): the Ticket needs a
  * selected row with a handoff pane, an in-flight Ticket needs the Agent's
@@ -1128,6 +1142,11 @@ const consultationGoto = (facts: ConsultationBaseFacts): ControlAvailability =>
 const ticketGoto = (facts: TicketGotoFacts): ControlAvailability => {
 	const ticket = facts.selectedTicket;
 	if (ticket === undefined) return unavailable("no Ticket is selected");
+	// The herdr-core host answers no focus move: the line names the terminal
+	// the handoff recorded, so the operator can attach to it by hand (issue
+	// #409, ADR 0141).
+	if (facts.agentHost.host === "herdr-core")
+		return unavailable(herdrCoreGotoLine(ticket.handoff?.paneId ?? null));
 	const paneId = ticket.handoff?.paneId;
 	if (paneId === null || paneId === undefined)
 		return unavailable("the Agent's pane is not alive in the last poll");

@@ -105,6 +105,7 @@ function inFlightRow(fetched: FetchedTicket, environment: EnvironmentKind): Tick
 			agentType: "pi",
 			environment,
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",
@@ -156,7 +157,7 @@ const destroyed = (setup: AppSetup) =>
 
 describe("the contextual Action bar", () => {
 	test("shows the base hints with Help right-aligned, and colors availability", async () => {
-		const planeRecord = await plane({});
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
@@ -207,7 +208,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("the detail pane swaps navigation for Scroll and Tickets", async () => {
-		const planeRecord = await plane({});
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 		await withApp(
 			async (setup) => {
 				await walkToOpenTicket(setup);
@@ -231,7 +232,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("the override bars show F1 Help, and the text row shows Type and Backspace", async () => {
-		const planeRecord = await plane({});
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
@@ -246,6 +247,7 @@ describe("the contextual Action bar", () => {
 				expect(listBar).toContain("F1 Help");
 				expect(listBar).not.toContain("? Help");
 
+				await pressControl(setup, "move-list", { via: "j", moved: "Agent host" });
 				await pressControl(setup, "move-list", { via: "j", moved: "Environment" });
 				await pressControl(setup, "move-list", { via: "j", moved: "Task type" });
 				await pressControl(setup, "move-list", { via: "j", moved: "Model" });
@@ -266,7 +268,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("the override panel reports refused controls", async () => {
-		const planeRecord = await plane({});
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 		await withApp(
 			async (setup) => {
 				planeRecord.settleFirstFetch();
@@ -295,7 +297,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("the decision modal states a refusal on its own Message line", async () => {
-		const planeRecord = await plane({});
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 		await withApp(
 			async (setup) => {
 				// The selection stands on the awaiting Ticket that boots: Enter
@@ -325,7 +327,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("the decision panel uses the shared Action bar and reports refused controls", async () => {
-		const planeRecord = await plane({});
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 		await withApp(
 			async (setup) => {
 				// The selection stands on the awaiting Ticket that boots: the bar
@@ -376,6 +378,7 @@ describe("the contextual Action bar", () => {
 			now: () => Date.now() - 60_000,
 			sources: [{ config: issueSource, tickets: [inFlightRow(issueTicket(), "live-worktree")] }],
 			repos: { "github.com/acme/factory": "src/factory" },
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -441,7 +444,7 @@ describe("the contextual Action bar", () => {
 	}
 
 	test("narrow widths remove complete low-priority hints, and Help is the last kept", async () => {
-		const planeRecord = await plane({});
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 		await withApp(
 			async (setup) => {
 				// The open Ticket stands the bar the ladder measures: every hint
@@ -531,7 +534,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("a utility bar keeps naming its Close down to one column", async () => {
-		const planeRecord = await plane({});
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 		await withApp(
 			async (setup) => {
 				// The Key guide's own bar holds the row's end cells for Close, so
@@ -569,7 +572,7 @@ describe("the contextual Action bar", () => {
 		// No Consultation types: c refuses on the Message line, and the
 		// launcher never opens.
 		{
-			const planeRecord = await plane({});
+			const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 			await withApp(
 				async (setup) => {
 					await crossCursor(setup, "consultations");
@@ -596,6 +599,7 @@ describe("the contextual Action bar", () => {
 						grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
 					},
 				},
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -624,6 +628,7 @@ describe("the contextual Action bar", () => {
 					stderr: `error: 无法连接 herdr 守护进程，请检查会话状态。${"重".repeat(80)}\n`,
 				});
 			},
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
@@ -653,6 +658,7 @@ describe("the contextual Action bar", () => {
 				stubCheckoutInto(fake, path, "github.com/acme/billing");
 				stubLiveHandoffInto(fake, path);
 			},
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {
@@ -732,7 +738,7 @@ describe("the contextual Action bar", () => {
 	test("q quits from both base panes, and refuses while a Handoff is active", async () => {
 		// Ticket list.
 		{
-			const planeRecord = await plane({});
+			const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 			await withApp(
 				async (setup) => {
 					await settle(setup);
@@ -745,7 +751,7 @@ describe("the contextual Action bar", () => {
 
 		// Ticket detail.
 		{
-			const planeRecord = await plane({});
+			const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 			await withApp(
 				async (setup) => {
 					await pressControl(setup, "detail", { via: "l", moved: "detail" });
@@ -770,6 +776,7 @@ describe("the contextual Action bar", () => {
 						stderr: "error: the daemon is down\n",
 					});
 				},
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -800,7 +807,7 @@ describe("the contextual Action bar", () => {
 
 		// On the override list row: q is inert - no panel, no quit.
 		{
-			const planeRecord = await plane({});
+			const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 			await withApp(
 				async (setup) => {
 					planeRecord.settleFirstFetch();
@@ -818,7 +825,7 @@ describe("the contextual Action bar", () => {
 	test("Ctrl+C destroys the renderer from every interaction mode", async () => {
 		// Ticket list.
 		{
-			const planeRecord = await plane({});
+			const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 			await withApp(
 				async (setup) => {
 					await settle(setup);
@@ -830,7 +837,7 @@ describe("the contextual Action bar", () => {
 		}
 		// Ticket detail.
 		{
-			const planeRecord = await plane({});
+			const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 			await withApp(
 				async (setup) => {
 					await pressControl(setup, "detail", { via: "l", moved: "detail" });
@@ -842,7 +849,7 @@ describe("the contextual Action bar", () => {
 		}
 		// Override list row.
 		{
-			const planeRecord = await plane({});
+			const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 			await withApp(
 				async (setup) => {
 					planeRecord.settleFirstFetch();
@@ -857,13 +864,14 @@ describe("the contextual Action bar", () => {
 		}
 		// Override text row.
 		{
-			const planeRecord = await plane({});
+			const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 			await withApp(
 				async (setup) => {
 					planeRecord.settleFirstFetch();
 					await waitSourceHealthy(planeRecord.state);
 					await walkToOpenTicket(setup);
 					await pressControl(setup, "override", { opens: "Override" });
+					await pressControl(setup, "move-list", { via: "j", moved: "Agent host" });
 					await pressControl(setup, "move-list", { via: "j", moved: "Environment" });
 					await pressControl(setup, "move-list", { via: "j", moved: "Task type" });
 					await pressControl(setup, "move-list", { via: "j", moved: "Model" });
@@ -875,7 +883,7 @@ describe("the contextual Action bar", () => {
 		}
 		// Key guide.
 		{
-			const planeRecord = await plane({});
+			const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 			await withApp(
 				async (setup) => {
 					await pressControl(setup, "help", { via: "?", opens: "Key guide - Ticket list" });
@@ -898,6 +906,7 @@ describe("the contextual Action bar", () => {
 						stderr: `error: the daemon refused the request: ${"x".repeat(150)}\n`,
 					});
 				},
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -936,6 +945,7 @@ describe("the contextual Action bar", () => {
 				id,
 				typeName: "grill",
 				agentType: "pi",
+				host: "herdr" as const,
 				environment: "worktree",
 				template: "/grill {input}",
 				initialInput: "review auth",
@@ -974,6 +984,7 @@ describe("the contextual Action bar", () => {
 				groupingAxis: "none",
 				config: { consultationTypes },
 				repos: { "github.com/acme/factory": "src/factory" },
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -992,6 +1003,7 @@ describe("the contextual Action bar", () => {
 				groupingAxis: "none",
 				config: { consultationTypes },
 				repos: { "github.com/acme/factory": "src/factory" },
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -1015,6 +1027,7 @@ describe("the contextual Action bar", () => {
 				groupingAxis: "none",
 				config: { consultationTypes },
 				repos: { "github.com/acme/factory": "src/factory" },
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
@@ -1060,6 +1073,7 @@ describe("the contextual Action bar", () => {
 					);
 					return fake;
 				},
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			const id = "bbbbbbbb-1111-4111-8111-111111111111";
 			seed(state, id, true, planeRecord.home);
@@ -1132,6 +1146,7 @@ describe("the contextual Action bar", () => {
 					);
 					return fake;
 				},
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			seed(state, id, true, planeRecord.home);
 			state.consultationRecord.settleConsultationTurn(id, null, "first answer", {
@@ -1178,6 +1193,7 @@ describe("the contextual Action bar", () => {
 					fake.set("herdr", ["agent", "list"], { stdout: "{}" });
 					return fake;
 				},
+				agentHostEnv: { herdrEnv: "1" },
 			});
 			seed(state, id, false, planeRecord.home);
 			try {
@@ -1209,6 +1225,7 @@ describe("the contextual Action bar", () => {
 		const planeRecord = await plane({
 			sources: [],
 			groupingAxis: "none",
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {
@@ -1248,6 +1265,7 @@ describe("the contextual Action bar", () => {
 		const planeRecord = await plane({
 			sources: [],
 			groupingAxis: "none",
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {
@@ -1263,7 +1281,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("a handed-off ticket swaps Hand off for the Live view and dims Override", async () => {
-		const planeRecord = await plane({});
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 		await withApp(
 			async (setup) => {
 				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
@@ -1296,7 +1314,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("a stale source dims Hand off with the actionable reason", async () => {
-		const planeRecord = await plane({});
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 		const source = planeRecord.sources[0] as FakeSource;
 		await withApp(
 			async (setup) => {
@@ -1337,6 +1355,7 @@ describe("the contextual Action bar", () => {
 				stubCheckoutInto(fake, path, "github.com/acme/billing");
 				stubLiveHandoffInto(fake, path);
 			},
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {
@@ -1377,7 +1396,7 @@ describe("the contextual Action bar", () => {
 	});
 
 	test("the bar does not change on a boundary move", async () => {
-		const planeRecord = await plane({});
+		const planeRecord = await plane({ agentHostEnv: { herdrEnv: "1" } });
 		await withApp(
 			async (setup) => {
 				const before = actionBarRowOf(await settle(setup));

@@ -54,6 +54,7 @@ function ticketAt(
 			agentType: "pi",
 			environment,
 			taskType: "implement",
+			host: "herdr" as const,
 			model: "",
 			thinking: "",
 			contextWindow: "",

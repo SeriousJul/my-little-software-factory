@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type { AgentHost } from "../agent-host.ts";
 import { blockedUnrefreshedHold } from "../domain/attempt-hold.ts";
 import type {
 	AgentNameCollision,
@@ -78,6 +79,11 @@ export interface HandoffTicket {
 	taskType: string;
 	agentType: string;
 	environment: EnvironmentKind;
+	/**
+	 * The Agent host the handoff ran on (issue #409, ADR 0142): a Restart
+	 * takes the recorded host whatever the config names now.
+	 */
+	host: AgentHost;
 	/** The model the latest handoff chose; empty leaves it to the agent. */
 	model: string;
 	/** The thinking level the latest handoff chose; empty leaves it to the agent. */
@@ -109,6 +115,12 @@ export interface StoredHandoff {
 	tabId: string | null;
 	workspaceId: string | null;
 	herdrName: string | null;
+	/**
+	 * The Agent host the start ran on (issue #409, ADR 0142): the column is
+	 * the start's final host beside its handles, and a Handoff without a live
+	 * Agent keeps its recorded handles and its host as recorded.
+	 */
+	host: AgentHost;
 }
 
 export interface HandoffAggregate {
@@ -149,6 +161,7 @@ export interface HandoffAggregate {
 		paneId: string | null;
 		tabId: string | null;
 		workspaceId: string | null;
+		host: AgentHost;
 	} | null;
 	handoffHandles(identity: string): { paneIds: string[]; workspaceIds: string[] };
 	openAttemptTickets(): string[];
@@ -247,6 +260,7 @@ interface HandoffFactRow {
 	tab_id: string | null;
 	workspace_id: string | null;
 	herdr_name: string | null;
+	host: string | null;
 }
 
 function storedHandoff(row: HandoffFactRow): StoredHandoff {
@@ -259,6 +273,10 @@ function storedHandoff(row: HandoffFactRow): StoredHandoff {
 		tabId: row.tab_id,
 		workspaceId: row.workspace_id,
 		herdrName: row.herdr_name,
+		// The column is the start's final host beside its handles: a row the
+		// migration gained the column for reads back the default, the host its
+		// run resolved (issue #409).
+		host: row.host === "herdr-core" ? "herdr-core" : "herdr",
 	};
 }
 
@@ -273,6 +291,9 @@ export function ticketHandoffFact(handoff: StoredHandoff | null): Ticket["handof
 		agentType: handoff.choice.agentType,
 		environment: handoff.choice.environment,
 		taskType: handoff.choice.taskType,
+		// The column is the host the start ran on: the read takes it from the
+		// record beside the handles, never from a choice that pre-dates it.
+		host: handoff.host,
 		model: handoff.choice.model,
 		thinking: handoff.choice.thinking,
 		contextWindow: handoff.choice.contextWindow,
@@ -452,10 +473,11 @@ export class HandoffModule implements HandoffAggregate {
 		paneId: string | null;
 		tabId: string | null;
 		workspaceId: string | null;
+		host: AgentHost;
 	} | null {
 		const row = this.db
 			.prepare(
-				"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+				"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id, host FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as
 			| {
@@ -464,6 +486,7 @@ export class HandoffModule implements HandoffAggregate {
 					pane_id: string | null;
 					tab_id: string | null;
 					workspace_id: string | null;
+					host: string | null;
 			  }
 			| undefined;
 		if (row == null) return null;
@@ -474,6 +497,7 @@ export class HandoffModule implements HandoffAggregate {
 			paneId: row.pane_id,
 			tabId: row.tab_id,
 			workspaceId: row.workspace_id,
+			host: row.host === "herdr-core" ? "herdr-core" : "herdr",
 		};
 	}
 	handoffHandles(identity: string): { paneIds: string[]; workspaceIds: string[] } {
@@ -525,7 +549,7 @@ export class HandoffModule implements HandoffAggregate {
 				.run(attemptId, identity, ticket.workCycle, JSON.stringify(previous.choice), now, now);
 			this.db
 				.prepare(
-					"INSERT INTO handoffs(attempt_id, ticket_identity, work_cycle, choice_json, started_at, pane_id, tab_id, workspace_id, herdr_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"INSERT INTO handoffs(attempt_id, ticket_identity, work_cycle, choice_json, started_at, pane_id, tab_id, workspace_id, herdr_name, host) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				)
 				.run(
 					attemptId,
@@ -537,6 +561,10 @@ export class HandoffModule implements HandoffAggregate {
 					details.tabId,
 					details.workspaceId,
 					details.agentName,
+					// The reclaimed Agent stood in the previous handoff's
+					// environment: the host it ran on is the previous choice's
+					// host (issue #409).
+					previous.choice.host ?? "herdr",
 				);
 			return { attemptId };
 		});
@@ -658,7 +686,7 @@ export class HandoffModule implements HandoffAggregate {
 				// behind the wait, and the wait is the item's, not a ticket state.
 				this.db
 					.prepare(
-						"INSERT OR REPLACE INTO handoffs(attempt_id, ticket_identity, work_cycle, choice_json, started_at, pane_id, tab_id, workspace_id, herdr_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+						"INSERT OR REPLACE INTO handoffs(attempt_id, ticket_identity, work_cycle, choice_json, started_at, pane_id, tab_id, workspace_id, herdr_name, host) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 					)
 					.run(
 						attemptId,
@@ -670,6 +698,10 @@ export class HandoffModule implements HandoffAggregate {
 						details?.tabId ?? null,
 						details?.workspaceId ?? null,
 						details?.agentName ?? null,
+						// The column stores the host the start ran on, read from the
+						// attempt's own choice: a choice that pre-dates the host
+						// field ran on herdr, the host its run resolved (issue #409).
+						jsonChoice(attempt.choice_json)?.host ?? "herdr",
 					);
 			}
 			// The write answers its own row, so the record line a failed start leaves
@@ -729,7 +761,7 @@ export class HandoffModule implements HandoffAggregate {
 	newestHandoff(identity: string): StoredHandoff | null {
 		const row = this.db
 			.prepare(
-				"SELECT attempt_id, work_cycle, started_at, choice_json, pane_id, tab_id, workspace_id, herdr_name FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+				"SELECT attempt_id, work_cycle, started_at, choice_json, pane_id, tab_id, workspace_id, herdr_name, host FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as HandoffFactRow | undefined;
 		return row == null ? null : storedHandoff(row);
@@ -745,7 +777,7 @@ export class HandoffModule implements HandoffAggregate {
 		for (const chunk of identityChunks(identities)) {
 			const rows = this.db
 				.prepare(
-					`SELECT ticket_identity, attempt_id, work_cycle, started_at, choice_json, pane_id, tab_id, workspace_id, herdr_name FROM handoffs WHERE ticket_identity IN (${placeholders(chunk.length)}) ORDER BY ticket_identity, started_at DESC, rowid DESC`,
+					`SELECT ticket_identity, attempt_id, work_cycle, started_at, choice_json, pane_id, tab_id, workspace_id, herdr_name, host FROM handoffs WHERE ticket_identity IN (${placeholders(chunk.length)}) ORDER BY ticket_identity, started_at DESC, rowid DESC`,
 				)
 				.all(...chunk) as unknown as Array<HandoffFactRow & { ticket_identity: string }>;
 			for (const row of rows) {
@@ -762,7 +794,7 @@ export class HandoffModule implements HandoffAggregate {
 	handoffRecord(handoffId: string): StoredHandoff | null {
 		const row = this.db
 			.prepare(
-				"SELECT attempt_id, work_cycle, choice_json, pane_id, tab_id, workspace_id, herdr_name FROM handoffs WHERE attempt_id = ?",
+				"SELECT attempt_id, work_cycle, choice_json, pane_id, tab_id, workspace_id, herdr_name, host FROM handoffs WHERE attempt_id = ?",
 			)
 			.get(handoffId) as HandoffFactRow | undefined;
 		return row == null ? null : storedHandoff(row);

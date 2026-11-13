@@ -35,6 +35,7 @@ import {
 	useState,
 } from "react";
 import {
+	type AgentHost,
 	type AgentHostResolution,
 	type AgentStatus,
 	agentHostBootLine,
@@ -842,6 +843,7 @@ type AppOpsRefsStage = ReturnType<typeof useAppOpsRefs>;
 function useAppOpsFields(props: AppProps, prev: AppRepoInitShellStage) {
 	const opsFields: AppOpsFields = {
 		state: props.state,
+		agentHost: props.agentHostResolution,
 		configRef: prev.configRef,
 		setConfig: prev.setConfig,
 		commandRunner: prev.commandRunner,
@@ -1135,11 +1137,8 @@ type AppConsultationOpsFieldsStage = ReturnType<typeof useAppConsultationOpsFiel
 /** The Consultation records' operations: the submit, the recovery, and the close branches. */
 function useAppConsultationCrud(prev: AppConsultationOpsFieldsStage) {
 	const { consultationOpsFields } = prev;
-	const submitConsultation = (
-		typeName: string,
-		repository: ConsultationRepositoryOption,
-		input: string,
-	) => appSubmitConsultation(consultationOpsFields, typeName, repository, input);
+	const submitConsultation = (input: ConsultationLaunchInput) =>
+		appSubmitConsultation(consultationOpsFields, input);
 	const recoverConsultationOpening = (consultation: Consultation) =>
 		appRecoverConsultationOpening(consultationOpsFields, consultation);
 	const consultationHasNoAgent = (consultation: Consultation) =>
@@ -1561,9 +1560,17 @@ function useAppObservationFields(props: AppProps, prev: AppSessionRefreshStage) 
 }
 type AppObservationFieldsStage = ReturnType<typeof useAppObservationFields>;
 
-/** The observation loop: the poll, the seats, and the dispatch's tick (ADR 0034). */
-function useAppObservation(prev: AppObservationFieldsStage) {
-	useEffect(() => appObservationCoordinator(prev.observationFields), [prev.observationFields]);
+/**
+ * The observation loop: the poll, the seats, and the dispatch's tick (ADR
+ * 0034). The run's host rides beside the stage, not inside its memo, the way
+ * the fields stand: the cycle asks for starts on the run's host, never on a
+ * host a previous handoff recorded (issue #409).
+ */
+function useAppObservation(prev: AppObservationFieldsStage, agentHost: AgentHostResolution) {
+	useEffect(
+		() => appObservationCoordinator(prev.observationFields, agentHost),
+		[prev.observationFields, agentHost],
+	);
 	return prev;
 }
 type AppObservationStage = ReturnType<typeof useAppObservation>;
@@ -2057,12 +2064,18 @@ function useAppRenderLaunch(props: AppProps, prev: AppRenderMessagesStage) {
 						typeName: replacementConsultation.typeName,
 						repositoryIdentity: replacementConsultation.repository.identity,
 						input: state.consultationRecord.replacementInput(replacementConsultation.id),
+						// The host the record carries (issue #409): the launcher reopens
+						// on the host the replacement records, the way it records its
+						// type and repository.
+						host: replacementConsultation.host,
 					}
 				: // A fresh launcher starts on the Repository the operator was looking at.
 					{
 						typeName: Object.keys(config.consultationTypes)[0] ?? "",
 						repositoryIdentity: selectedTicket?.repositoryRef.identity ?? "",
 						input: "",
+						// The run's resolved host is the fresh launch's default (issue #409).
+						host: props.agentHostResolution.host,
 					};
 	return { ...prev, replacementConsultation, launcherOwner, launcherDraft };
 }
@@ -2192,7 +2205,7 @@ function useAppOpsStages(
 	const o27 = useAppKeyHandlers(props, o26);
 	const o28 = useAppSessionRefresh(props, o27);
 	const o29a = useAppObservationFields(props, o28);
-	const o29 = useAppObservation(o29a);
+	const o29 = useAppObservation(o29a, props.agentHostResolution);
 	const o30 = useAppInitBoot(props, o29);
 	const o31 = useAppInitNote(props, o30);
 	const o32 = useAppCatalog(o31);
@@ -2644,10 +2657,15 @@ function appLauncherProps(o: AppRenderModesStage) {
 			o.replacementConsultation === undefined
 				? "Consultation launcher"
 				: "Replacement Consultation",
-		onLaunch: (typeName: string, repository: ConsultationRepositoryOption, text: string) => {
+		onLaunch: (
+			typeName: string,
+			repository: ConsultationRepositoryOption,
+			text: string,
+			host: AgentHost,
+		) => {
 			// The form is with the Agent now, so nothing is left to keep.
 			o.setLauncherForm(null);
-			o.submitConsultation(typeName, repository, text);
+			o.submitConsultation({ typeName, repository, input: text, host });
 		},
 		onClose: (kept: LauncherDraft) => {
 			o.setLauncherForm({ owner: o.launcherOwner, draft: kept });
@@ -5193,7 +5211,10 @@ function appKeyConsultationOpsHandlers(f: AppKeyHandlerFields): Record<string, C
 				f.setWarningMessage("Consultations require SQLite state");
 				return;
 			}
-			void operations.checkEnqueue(selected.typeName).then((refusal) => {
+			// The host the record carries (issue #409): the schedule runs the
+			// record's own hard check on the host it records, the way the
+			// launcher's submit does.
+			void operations.checkEnqueue(selected.typeName, selected.host).then((refusal) => {
 				if (refusal !== undefined) {
 					f.setWarningMessage(`consultation not scheduled: ${refusal}`);
 					return;
@@ -5561,11 +5582,16 @@ function observationCoordinatorBase(
 	f: AppObservationFields,
 	state: AppAggregates,
 	dispatch: HandoffDispatch,
+	agentHost: AgentHostResolution,
 ): Omit<AppObservationOptions, "fireCompleted" | "refireRecordedSkips"> {
 	return {
 		state,
 		herdr: new HerdrAgentReader(f.commandRunner),
 		config: () => f.configRef.current,
+		// The host the run resolved (issue #409): the automatic starts the cycle
+		// asks for run on the run's host, never on a host a previous handoff
+		// recorded.
+		agentHost,
 		// The Handoff dispatch module the cycle runs: the claim and its hard
 		// start checks, the Work queue's pickup, the plane action's ask, and
 		// the Close cleanup, through the narrow port the cycle may cross.
@@ -5676,7 +5702,10 @@ function observationCoordinatorFlows(
  * and a stop that runs where no loop started changes nothing. The handle
  * lands once per mount, and the owner's second boot replaces it.
  */
-function appObservationCoordinator(f: AppObservationFields): (() => void) | undefined {
+function appObservationCoordinator(
+	f: AppObservationFields,
+	agentHost: AgentHostResolution,
+): (() => void) | undefined {
 	f.onReady({
 		stop: () => {
 			f.coordinatorRef.current?.stop();
@@ -5696,7 +5725,7 @@ function appObservationCoordinator(f: AppObservationFields): (() => void) | unde
 	const dispatch = f.handoffDispatch;
 	const state = f.state;
 	const coordinator = new ObservationCoordinator({
-		...observationCoordinatorBase(f, state, dispatch),
+		...observationCoordinatorBase(f, state, dispatch, agentHost),
 		...observationCoordinatorFlows(f, state),
 	});
 	f.observationRef.current = coordinator;
@@ -5713,6 +5742,12 @@ function appObservationCoordinator(f: AppObservationFields): (() => void) | unde
 /** The fields the App's operations read and write. */
 interface AppOpsFields {
 	state: AppAggregates;
+	/**
+	 * The host the run resolved at boot (issue #409, ADR 0141): the panel's
+	 * host row defaults to it, the automatic routes take it, and the start's
+	 * pre-flight reads it beside the choice's host.
+	 */
+	agentHost: AgentHostResolution;
 	configRef: RefObject<FactoryConfig>;
 	setConfig: (config: FactoryConfig) => void;
 	commandRunner: CommandRunner;
@@ -5792,9 +5827,13 @@ function appRequestModelList(f: AppOpsFields, agentType: string): void {
  * so it prefills the default task type (ADR 0027).
  */
 function appChoiceFor(f: AppOpsFields, ticket: Ticket): HandoffChoice {
+	// A ticket with a handoff repeats the host that handoff recorded (issue
+	// #409, ADR 0142); a first start takes the host the run resolved.
+	const host = ticket.handoff?.host ?? f.agentHost.host;
 	return resolveHandoffChoice(
 		f.configRef.current,
 		ticket.suggestedTaskType ?? f.configRef.current.defaultTaskType,
+		host,
 	);
 }
 
@@ -5848,6 +5887,9 @@ function appHandoffDispatchOptions(f: AppOpsFields, state: AppAggregates): Hando
 		state,
 		runner: f.commandRunner,
 		config: () => f.configRef.current,
+		// The host the run resolved (issue #409): the start's pre-flight
+		// refuses a host the run cannot reach before any external step.
+		agentHost: f.agentHost,
 		seatCount: f.currentSeatCount,
 		// The seats a Missing Agent left, each one reserved for its own
 		// restart row (ADR 0108): the pickup hands them to no other start.
@@ -5912,6 +5954,7 @@ function appConsultationOperations(f: AppOpsFields): void {
 		state,
 		runner: f.commandRunner,
 		config: () => f.configRef.current,
+		agentHost: f.agentHost,
 		home: f.homeDir,
 		// The rows the machine reads, never the operator's List filter (ADR 0060):
 		// the live-checkout conflict read names the in-flight Ticket whose Agent
@@ -6321,7 +6364,7 @@ function appDecisionFor(
 
 /** The transition row states the Agent that will receive its handoff. */
 function appRouteDetail(f: AppTicketOpsFields, outcome: TransitionOutcome, target: string): string {
-	const choice = resolveHandoffChoice(f.configRef.current, target, {
+	const choice = resolveHandoffChoice(f.configRef.current, target, f.agentHost.host, {
 		...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
 		...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
 	});
@@ -6684,7 +6727,7 @@ function appRouteChoiceOf(
 	}
 	// A transition Handoff resolves a fresh target profile and never
 	// inherits the previous handoff's choice.
-	return resolveHandoffChoice(f.configRef.current, outcome.positionTaskType, {
+	return resolveHandoffChoice(f.configRef.current, outcome.positionTaskType, f.agentHost.host, {
 		...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
 		...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
 	});
@@ -6865,9 +6908,7 @@ interface AppConsultationOpsFields extends AppTicketOpsFields {
 /** The async enqueue of a Consultation submit: the create or the replace. */
 async function appConsultationEnqueue(
 	f: AppConsultationOpsFields,
-	typeName: string,
-	repository: ConsultationRepositoryOption,
-	input: string,
+	input: ConsultationLaunchInput,
 ): Promise<void> {
 	const state = f.state;
 	const replaced =
@@ -6877,17 +6918,21 @@ async function appConsultationEnqueue(
 	const consultation =
 		replaced === undefined
 			? f.consultationOperations?.create({
-					typeName,
-					repository,
-					initialInput: input,
+					typeName: input.typeName,
+					repository: input.repository,
+					initialInput: input.input,
 					replacementOf: f.replacementConsultationId,
 					queued: true,
+					// The host the operator picked at the submit (issue #409): the
+					// record carries it beside the handles the opening stands on.
+					host: input.host,
 				})
 			: f.consultationOperations?.replace(replaced, {
-					typeName,
-					repository,
-					initialInput: input,
+					typeName: input.typeName,
+					repository: input.repository,
+					initialInput: input.input,
 					queued: true,
+					host: input.host,
 				});
 	if (consultation === undefined) return;
 	f.setLauncher(false);
@@ -6928,23 +6973,27 @@ async function appConsultationEnqueue(
  * list - so the whole submit runs behind it, the way every other start's
  * ask does.
  */
-function appSubmitConsultation(
-	f: AppConsultationOpsFields,
-	typeName: string,
-	repository: ConsultationRepositoryOption,
-	input: string,
-): void {
+/** The Consultation launch the launcher's submit hands the operations. */
+interface ConsultationLaunchInput {
+	typeName: string;
+	repository: ConsultationRepositoryOption;
+	input: string;
+	/** The host the launch runs on, the way the launcher's host row picked it. */
+	host: AgentHost;
+}
+
+function appSubmitConsultation(f: AppConsultationOpsFields, input: ConsultationLaunchInput): void {
 	if (f.consultationOperations === undefined) {
 		f.setWarningMessage("Consultations require durable SQLite state");
 		return;
 	}
 	const operations = f.consultationOperations;
-	void operations.checkEnqueue(typeName).then(async (refusal) => {
+	void operations.checkEnqueue(input.typeName, input.host).then(async (refusal) => {
 		if (refusal !== undefined) {
 			f.setWarningMessage(`consultation not queued: ${refusal}`);
 			return;
 		}
-		await appConsultationEnqueue(f, typeName, repository, input);
+		await appConsultationEnqueue(f, input);
 	});
 }
 
@@ -7344,6 +7393,10 @@ function appRunMissingAction(f: AppConsultationOpsFields, ticket: Ticket, key: s
 		stored === null
 			? f.choiceFor(ticket)
 			: baseChoice(stored.agentType, stored.environment, stored.taskType, {
+					// A Restart repeats the host the handoff recorded (issue #409,
+					// ADR 0142): the start re-runs that host's dialect whatever the
+					// config names now.
+					host: stored.host,
 					model: stored.model,
 					thinking: stored.thinking,
 					contextWindow: stored.contextWindow,

@@ -474,7 +474,11 @@ export interface AppBootFields {
 
 export async function bootApp(fields: AppBootFields = {}): Promise<AppSetup> {
 	const { loopPolicy, logger, width = WIDTH, height = HEIGHT, rendererOptions = {} } = fields;
-	const planeRecord = fields.plane ?? (await plane({}));
+	// The suites' planes stand the herdr mark by default: their worlds model a
+	// herdr the plane runs inside, and the run's host is the world they stand
+	// beside (issue #409). A case that stands the herdr-core world names it on
+	// its own plane, the way it named its sources.
+	const planeRecord = fields.plane ?? (await plane({ agentHostEnv: { herdrEnv: "1" } }));
 	// The app boots from the plane's own props: the standing the plane opened
 	// on stands the app's fields, its poll interval among them, and a field
 	// the case names here stands over the plane's.

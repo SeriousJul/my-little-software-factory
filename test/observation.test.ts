@@ -22,7 +22,7 @@ import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { fetchedTicket } from "./fact-fixtures.ts";
+import { fetchedTicket, RUN_AGENT_HOST } from "./fact-fixtures.ts";
 import { FakeRunner, tabCreateJson, worktreeOpenJson } from "./fake-runner.ts";
 import {
 	type RigOptions,
@@ -36,6 +36,7 @@ const choice = {
 	agentType: "pi",
 	environment: "worktree" as const,
 	taskType: "implement",
+	host: "herdr" as const,
 	model: "",
 	thinking: "",
 	contextWindow: "",
@@ -932,6 +933,7 @@ describe("the observation cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
+			agentHost: RUN_AGENT_HOST,
 			dispatch: {
 				dispatch: mock().mockResolvedValue({ ok: true }),
 				dispatchPlaneAction: mock().mockResolvedValue({ ok: true }),
@@ -1190,6 +1192,7 @@ describe("missing agents", () => {
 					agentType: "pi",
 					environment: "worktree",
 					taskType: "implement",
+					host: "herdr" as const,
 					model: "opus-4",
 					thinking: "high",
 					// Recovery repeats the interrupted handoff: every setting it
@@ -1358,6 +1361,7 @@ describe("missing agents", () => {
 			id: "22222222-1111-4111-8111-111111111111",
 			typeName: "grill",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			template: "/grill {input}",
 			initialInput: "review auth",
@@ -3020,6 +3024,7 @@ describe("the awaiting rule", () => {
 					model: "profile-model",
 					thinking: "high",
 					contextWindow: "",
+					host: "herdr",
 				},
 			}),
 		]);
@@ -3276,6 +3281,61 @@ describe("the open dispatch", () => {
 				ticketIdentity: "github:github.com:I_6",
 			}),
 		);
+		state.close();
+	});
+
+	test("the top-up add takes the run's host, not the host the ticket's handoff recorded (issue #409)", async () => {
+		// One free seat, the way the open add's own pickup pass takes it.
+		const seats = { current: 1 };
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			seatCount: () => seats.current,
+		});
+		// The ticket's last handoff ran on the herdr-core host: a manual start
+		// beside the run's own host, recorded on the handoff the turn settles
+		// from.
+		const coreClaim = state.handoff.claimHandoff(
+			"github:github.com:I_5",
+			{ ...choice, host: "herdr-core" as const, taskType: "review" },
+			"open",
+		);
+		if (!coreClaim.ok) throw new Error(coreClaim.reason);
+		state.handoff.settleHandoff(coreClaim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.ticketWorkCycle.settleTurn({
+			ticketIdentity: "github:github.com:I_5",
+			handoffId: coreClaim.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "settled the turn",
+			turnLog: [{ kind: "text", text: "settled the turn" }],
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		await coordinator.tick();
+		// The sources re-read the ticket behind its closed cycle, the way a
+		// refresh would.
+		state.sourceFact.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T12:00:00Z",
+			tickets: [fetched()],
+		});
+		// The next cycle's fresh open walk adds the ticket behind it: the add resolves
+		// the run's host, and the handoff's recorded host stands on the record
+		// alone - the automatic route never takes the per-handoff host
+		// (issue #409).
+		await coordinator.tick();
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "open",
+				automatic: true,
+				ticketIdentity: "github:github.com:I_5",
+				choice: expect.objectContaining({ host: "herdr" }),
+			}),
+		]);
 		state.close();
 	});
 
@@ -3593,6 +3653,7 @@ describe("the open dispatch", () => {
 					agentType: "codex",
 					environment: "live-worktree",
 					taskType: "implement",
+					host: "herdr" as const,
 					model: "profile-model",
 					thinking: "high",
 					contextWindow: "",
@@ -4490,6 +4551,7 @@ describe("the injectable clock", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
+			agentHost: RUN_AGENT_HOST,
 			dispatch: {
 				dispatch: async () => ({ ok: true }),
 				dispatchPlaneAction: async () => ({ ok: true }),
@@ -4540,6 +4602,7 @@ describe("the Consultation parallel seats", () => {
 			id,
 			typeName: "grill",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			template: "/grill {input}",
 			initialInput: "review auth",
@@ -4633,6 +4696,7 @@ describe("Consultation observation identity", () => {
 			id,
 			typeName: "grill",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			template: "/grill {input}",
 			initialInput: "review auth",
@@ -5317,6 +5381,7 @@ describe("an agent that outlives its work cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
+			agentHost: RUN_AGENT_HOST,
 			dispatch: {
 				dispatch: async () => ({ ok: true }),
 				dispatchPlaneAction: async () => ({ ok: true }),
@@ -6065,6 +6130,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 			id,
 			typeName: "grill",
 			agentType: "pi",
+			host: "herdr" as const,
 			environment: "worktree",
 			template: "/grill {input}",
 			initialInput: "review auth",
