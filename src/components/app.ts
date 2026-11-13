@@ -41,6 +41,7 @@ import {
 	type AgentStatus,
 	agentHostBootLine,
 	herdrAgentFocus,
+	herdrCoreGotoLine,
 	herdrWorkspaceGet,
 	normalizeAgentStatus,
 } from "../agent-host.ts";
@@ -5097,6 +5098,11 @@ function appKeyTicketHandlers(f: AppKeyHandlerFields): Record<string, ControlHan
 			if (!ticketSectionFacts(facts)) return;
 			const ticket = facts.selectedTicket;
 			if (ticket === undefined || !inFlight(ticket)) return refuse();
+			// A handoff that stands on herdr-core takes its attach by hand: the
+			// Live view would stream the plain text the host answers, dressed as
+			// the ANSI stream it shows, so the catalogue's line stands instead
+			// (issue #413, ADR 0141).
+			if (ticket.handoff?.host === "herdr-core") return refuse();
 			if (f.factsFor(ticket).failure === "missing")
 				f.setPanel({ kind: "missing", identity: ticket.identity });
 			else f.setPanel({ kind: "live", identity: ticket.identity, workCycle: ticket.workCycle });
@@ -6411,12 +6417,22 @@ function appMergeMethodOf(f: AppTicketOpsFields, taskType: string): string {
 /** The action rows the decision modal wears, with the decision facts. */
 function appDecisionActions(
 	f: AppTicketOpsFields,
+	ticket: Ticket,
 	outcome: TransitionOutcome | null,
 	facts: DecisionFacts,
 ): ActionRow[] {
 	const actions: ActionRow[] = [
 		{ key: "close", label: "Close", detail: "end the work cycle; the ticket returns to open" },
-		{ key: "goto", label: "Goto", detail: "focus the agent's pane; the handoff stays open" },
+		{
+			key: "goto",
+			label: "Goto",
+			// On a herdr-core handoff the row states the refusal the catalogue
+			// gates stand: the operator attaches by hand (issue #413, ADR 0141).
+			detail:
+				ticket.handoff?.host === "herdr-core"
+					? herdrCoreGotoLine(ticket.handoff?.paneId ?? null)
+					: "focus the agent's pane; the handoff stays open",
+		},
 	];
 	if (outcome !== null && facts.offer !== null) {
 		if (facts.offer.kind === "merge") {
@@ -6507,7 +6523,7 @@ function appDecisionFor(
 		defaultTaskType: f.configRef.current.defaultTaskType,
 	});
 	return {
-		actions: appDecisionActions(f, outcome, facts),
+		actions: appDecisionActions(f, ticket, outcome, facts),
 		entries: completion?.turnLog ?? [],
 		contextLine: facts.contextLine,
 		factLines: facts.factLines,
@@ -6562,6 +6578,14 @@ async function appWorkspaceLabelOf(
 // stays in flight.
 function appRunGoto(f: AppTicketOpsFields, ticket: Ticket): void {
 	const paneId = ticket.handoff?.paneId ?? null;
+	// A handoff that stands on herdr-core takes its attach by hand: every
+	// path that reaches this runner - the catalogue Goto, the decision
+	// modal's Goto row, the Live view's Goto - states the line instead of
+	// spending the operator's key on a herdr command (issue #413, ADR 0141).
+	if (ticket.handoff?.host === "herdr-core") {
+		f.setWarningMessage(herdrCoreGotoLine(paneId));
+		return;
+	}
 	if (paneId === null) {
 		f.setWarningMessage("no agent pane is recorded for this ticket");
 		return;

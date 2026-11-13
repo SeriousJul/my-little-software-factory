@@ -831,7 +831,10 @@ const completionEligibility = (facts: TicketBaseFacts): ControlAvailability => {
  * Handoff is active: the rows it carries own their own gates, and the
  * operator still needs the missing screen to queue a restart. The claim
  * inside the handler owns the marker check, so the gate only states the
- * state rule.
+ * state rule. Two hosts close the view before any state rule: the run's
+ * herdr-core host answers no styled read at all, and a herdr run's own
+ * herdr-core Agent reads as plain text only, which is not the ANSI stream
+ * the view shows (issue #413, ADR 0141).
  */
 const liveViewEligibility = (facts: TicketBaseFacts): ControlAvailability => {
 	const ticket = facts.selectedTicket;
@@ -840,6 +843,10 @@ const liveViewEligibility = (facts: TicketBaseFacts): ControlAvailability => {
 	// surface that would need it, so the host the run resolved closes it
 	// before any state rule is even asked (issue #409, ADR 0141).
 	if (facts.agentHost.host === "herdr-core") return unavailable(HERDR_CORE_LIVE_VIEW_LINE);
+	// A handoff that stands on herdr-core answers no styled read either:
+	// the run may be on herdr, and its core Agent's read is plain text, not
+	// the ANSI stream the view shows (issue #413, ADR 0141).
+	if (ticket.handoff?.host === "herdr-core") return unavailable(HERDR_CORE_LIVE_VIEW_LINE);
 	if (inFlight(ticket)) return available();
 	return unavailable("only an in-flight Ticket has a Live view");
 };
@@ -1126,6 +1133,11 @@ const consultationGoto = (facts: ConsultationBaseFacts): ControlAvailability => 
 	// #409, ADR 0141).
 	if (facts.agentHost.host === "herdr-core")
 		return unavailable(herdrCoreGotoLine(facts.selectedConsultation?.paneId ?? null));
+	// A Consultation that stands on herdr-core answers no focus move either:
+	// the run may be on herdr, and its core Consultation still takes its
+	// attach by hand (issue #413, ADR 0141).
+	if (facts.selectedConsultation?.host === "herdr-core")
+		return unavailable(herdrCoreGotoLine(facts.selectedConsultation?.paneId ?? null));
 	return facts.selectedConsultation?.paneId !== null &&
 		facts.selectedConsultation?.paneId !== undefined &&
 		facts.consultationPaneAlive
@@ -1146,6 +1158,11 @@ const ticketGoto = (facts: TicketGotoFacts): ControlAvailability => {
 	// the handoff recorded, so the operator can attach to it by hand (issue
 	// #409, ADR 0141).
 	if (facts.agentHost.host === "herdr-core")
+		return unavailable(herdrCoreGotoLine(ticket.handoff?.paneId ?? null));
+	// A handoff that stands on herdr-core answers no focus move either: the
+	// run may be on herdr, and its core Agent still takes its attach by hand.
+	// The line names the terminal the handoff recorded (issue #413, ADR 0141).
+	if (ticket.handoff?.host === "herdr-core")
 		return unavailable(herdrCoreGotoLine(ticket.handoff?.paneId ?? null));
 	const paneId = ticket.handoff?.paneId;
 	if (paneId === null || paneId === undefined)
