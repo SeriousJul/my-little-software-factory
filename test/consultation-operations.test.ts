@@ -753,7 +753,7 @@ describe("Consultation operations: launch", () => {
 		// The checkout the world stands the launch on holds no worktrees root of
 		// its own: the create falls back to the parent of the checkout's linked
 		// worktree, and the plane's leftover search walks that same tree.
-		const root = join(fixture.home, "worktrees", "acme-factory");
+		const root = join(fixture.home, ".herdr", "worktrees", "factory");
 		const candidate = join(root, branch.replaceAll("/", "-"));
 		const world = stubHerdrWorld({
 			checkouts: [

@@ -127,6 +127,7 @@ import {
 	herdrWorktreeOpen,
 	herdrWorktreeRemove,
 	jsonResultField,
+	readHerdrWorktreeList,
 	worktreeAlreadyOpen,
 } from "./agent-host.ts";
 import type { FactoryConfig, TicketSourceConfig, TransitionPin } from "./config.ts";
@@ -1626,7 +1627,7 @@ async function openCoreWorktreeOnBranch(
 	createdBranch: boolean,
 ): Promise<EnvironmentAnswer> {
 	const checkout = ctx.checkout;
-	const paths = await readCoreWorktreePaths(checkout, branch, ctx);
+	const paths = await readWorktreePaths(checkout, branch, ctx);
 	if (paths.standingPath !== null) {
 		return {
 			handles: { paneId: "", tabId: "", workspaceId: paths.standingPath },
@@ -1657,13 +1658,18 @@ function coreWorktreePath(ctx: HandoffContext, branch: string): string {
 }
 
 /**
- * One `git worktree add`, and the recoveries a blocked checkout allows.
+ * The answers a `git worktree add` gives on the host that runs git itself,
+ * and the one recovery a blocked path allows.
  *
  * `base` is the reference a fresh branch starts from, and its absence names
  * a branch that already stands. A refusal the naming rule can name - the
  * leftover directory at the branch's own path - is answered by the plane's
  * move-aside, the way the herdr host answers it, and the create is asked
- * again. Every other refusal is the host's own line for the start to report.
+ * again. git keeps the branch a blocked add made (measured on git 2.56.0),
+ * and an `add -b` would then refuse: when the branch stands, the retry
+ * checks it out as it stands, and when it does not, the create runs again
+ * as it came. Every other refusal is the host's own line for the start to
+ * report.
  */
 async function createCoreWorktree(
 	ctx: HandoffContext,
@@ -1678,10 +1684,17 @@ async function createCoreWorktree(
 			: ["-C", checkout, "worktree", "add", path, "-b", branch, base];
 	const created = await runInvocation(ctx.runner, { command: "git", args });
 	if (created.code === 0) return created;
-	const moved = await moveLeftoverWorktreeDirectory(checkout, branch, ctx, readCoreWorktreePaths);
+	const moved = await moveLeftoverWorktreeDirectory(checkout, branch, ctx, readWorktreePaths);
 	if (moved === null) return created;
 	ctx.notes = { ...ctx.notes, leftoverWorktree: moved.note };
-	return await runInvocation(ctx.runner, { command: "git", args });
+	const known = await runQuietly(ctx, {
+		command: "git",
+		args: ["-C", checkout, "branch", "--list", branch],
+	});
+	const branchStands = known !== null && known.code === 0 && known.stdout.trim() !== "";
+	const retry =
+		base !== undefined && branchStands ? ["-C", checkout, "worktree", "add", path, branch] : args;
+	return await runInvocation(ctx.runner, { command: "git", args: retry });
 }
 
 /**
@@ -1718,46 +1731,6 @@ function createdCoreWorktreeAnswer(fields: {
 		cwd: path,
 		workspaceId: path,
 	};
-}
-
-/**
- * What git's own record answers about one branch's worktree path (issue #409,
- * ADR 0143). The naming rule gives one path, and git's record answers the
- * three facts the rule needs: the path itself, whether a worktree git does
- * not prune stands there, and whether git holds any record of it at all.
- *
- * The record is the source of truth on this host, because git holds the
- * worktrees of both hosts: a checkout herdr made and one the plane made are
- * entries in the same list. A list that does not read answers nothing: every
- * fact stays empty, and the caller neither reopens a path it cannot name nor
- * moves a directory it cannot place.
- */
-async function readCoreWorktreePaths(
-	checkout: string,
-	branch: string,
-	ctx: HandoffContext,
-): Promise<TicketWorktreePaths> {
-	const candidate = coreWorktreePath(ctx, branch);
-	const empty: TicketWorktreePaths = { candidate, standingPath: null, recorded: false };
-	const listed = await runQuietly(ctx, {
-		command: "git",
-		args: ["-C", checkout, "worktree", "list", "--porcelain"],
-	});
-	if (listed === null || listed.code !== 0) return empty;
-	// The porcelain list holds one block per worktree, separated by blank
-	// lines: the `worktree:` path, the branch, and the flags `prunable` and
-	// `locked`. The candidate's block answers the three facts at once.
-	const blocks = listed.stdout.split("\n\n");
-	for (const block of blocks) {
-		if (!block.startsWith(`worktree:${candidate}\n`)) continue;
-		const prunable = block.includes("\nprunable\n") || block.endsWith("\nprunable");
-		return {
-			candidate,
-			standingPath: prunable ? null : candidate,
-			recorded: true,
-		};
-	}
-	return empty;
 }
 
 /**
@@ -2245,36 +2218,26 @@ function createdWorktreeAnswer(fields: {
 /** How many numbered `.leftover-<n>` names one leftover directory may ask for. */
 const LEFTOVER_PATH_TAKES = 20;
 
-/** One `herdr worktree list` entry, as the list writes it. */
-interface WorktreeListEntry {
-	readonly path: string;
-	readonly is_linked_worktree?: unknown;
-	readonly is_prunable?: unknown;
-}
-
 /**
  * The path the ticket's worktree stands in, when the branch lookup found
- * nothing: herdr names a worktree checkout after the branch it was made
- * for (the branch with its slashes for hyphens), beside the repository's
- * other linked worktrees. The agent that last worked the ticket may have
- * left that worktree on another branch - the work of a pull request lands
- * on the branch the agent chose, not the plane's - so no worktree holds
- * the branch while the worktree still stands, and a fresh create would
- * collide with its directory.
+ * nothing: the naming rule names the path, and git's own record answers
+ * whether a worktree git does not prune stands there (issue #411). The record
+ * holds the worktrees of both hosts, so a worktree herdr made and one the
+ * plane made are found alike. The agent that last worked the ticket may have
+ * left that worktree on another branch - the work of a pull request lands on
+ * the branch the agent chose, not the plane's - so no worktree holds the
+ * branch while the worktree still stands, and a fresh create would collide
+ * with its directory.
  *
- * The answer comes from a herdr `worktree list`: the candidate path is
- * taken from the parent of the repository's linked worktrees and the
- * branch's name, and it counts only when the list holds a linked
- * worktree at exactly that path that git no longer prunes. A list that
- * does not read, and a worktree the list does not hold, answer null: the
- * reuse sequence then takes the fresh create, the way it always did.
+ * A list that does not read, and a path git's record does not hold, answer
+ * null: the reuse sequence then takes the fresh create, the way it always did.
  */
 async function findTicketWorktreePath(
 	checkout: string,
 	branch: string,
 	ctx: HandoffContext,
 ): Promise<string | null> {
-	const paths = await readTicketWorktreePaths(checkout, branch, ctx);
+	const paths = await readWorktreePaths(checkout, branch, ctx);
 	return paths.standingPath;
 }
 
@@ -2312,7 +2275,7 @@ async function createWorktree(
 	if (created.code === 0) {
 		return created;
 	}
-	const moved = await moveLeftoverWorktreeDirectory(checkout, branch, ctx, readTicketWorktreePaths);
+	const moved = await moveLeftoverWorktreeDirectory(checkout, branch, ctx, readWorktreePaths);
 	if (moved === null) {
 		return created;
 	}
@@ -2354,7 +2317,7 @@ async function moveLeftoverWorktreeDirectory(
 ): Promise<{ readonly from: string; readonly to: string; readonly note: string } | null> {
 	const paths = await readPaths(checkout, branch, ctx);
 	const from = paths.candidate;
-	if (from === null || paths.recorded) {
+	if (!paths.readable || paths.recorded) {
 		return null;
 	}
 	const entries = await readDirectoryNames(from);
@@ -2390,72 +2353,67 @@ async function freeLeftoverPath(path: string): Promise<string | null> {
 	return null;
 }
 
+/** The answers one branch's worktree path gives, on either host. */
+interface TicketWorktreePaths {
+	/** The path the naming rule gives the branch. */
+	candidate: string;
+	/** That path, when a worktree git does not prune stands in it. */
+	standingPath: string | null;
+	/** Whether git's own record holds the path, prunable or not. */
+	recorded: boolean;
+	/** Whether git's record read at all; when it does not, no fact above it holds. */
+	readable: boolean;
+}
+
 /**
- * What herdr's worktree list and the checkout answer about one branch's
- * worktree path. The naming rule gives one path, and three facts come back
- * from it: the path itself, whether a worktree git still prunes-free stands
- * there, and whether git holds any record of it at all.
+ * What git's own record answers about one branch's worktree path, on either
+ * host (issue #411, ADR 0143). The naming rule gives one path, and git's
+ * record answers the three facts the rule needs: the path itself, whether a
+ * worktree git does not prune stands there, and whether git holds any record
+ * of it at all.
  *
- * A list that does not read answers nothing: `candidate` and `standingPath`
- * stay null and `recorded` stays false, so a caller neither reopens a path it
- * cannot name nor moves a directory it cannot place.
+ * git's record is the record of both hosts: a worktree herdr made and a
+ * worktree the plane made with `git worktree add` are entries in the same
+ * list, so one lookup serves the herdr host's reopen and the core host's
+ * create alike, and the plane reads it from the source checkout. A list that
+ * does not read answers nothing: every fact stays empty, and a caller neither
+ * reopens a path it cannot place nor moves a directory it cannot name
+ * (ADR 0046).
  */
-async function readTicketWorktreePaths(
+async function readWorktreePaths(
 	checkout: string,
 	branch: string,
 	ctx: HandoffContext,
 ): Promise<TicketWorktreePaths> {
-	const empty: TicketWorktreePaths = { candidate: null, standingPath: null, recorded: false };
-	const listed = await runInvocation(ctx.runner, herdrWorktreeList(checkout));
-	if (listed.code !== 0) {
-		return empty;
-	}
-	let data: unknown;
-	try {
-		data = JSON.parse(listed.stdout);
-	} catch {
-		return empty;
-	}
-	const worktrees = (data as { result?: { worktrees?: unknown } }).result?.worktrees;
-	if (!Array.isArray(worktrees)) {
-		return empty;
-	}
-	const entries = worktrees.filter(
-		(entry): entry is WorktreeListEntry =>
-			typeof entry === "object" &&
-			entry !== null &&
-			typeof (entry as { path?: unknown }).path === "string",
-	);
-	// The parent of the linked worktrees is the herdr worktree directory of
-	// this repository; the candidate sits in it under the branch's name.
-	const linked = entries.find((entry) => entry.is_linked_worktree === true);
-	if (linked === undefined) {
-		return empty;
-	}
-	const parent = linked.path.slice(0, linked.path.lastIndexOf("/"));
-	if (parent === "") {
-		return empty;
-	}
-	const candidate = `${parent}/${branch.replaceAll("/", "-")}`;
-	const standing = entries.some(
-		(entry) =>
-			entry.path === candidate && entry.is_linked_worktree === true && entry.is_prunable !== true,
-	);
+	const candidate = coreWorktreePath(ctx, branch);
+	const empty: TicketWorktreePaths = {
+		candidate,
+		standingPath: null,
+		recorded: false,
+		readable: false,
+	};
+	const listed = await runQuietly(ctx, {
+		command: "git",
+		args: ["-C", checkout, "worktree", "list", "--porcelain"],
+	});
+	if (listed === null || listed.code !== 0) return empty;
+	// The porcelain list holds one block per worktree, separated by blank
+	// lines: a `worktree <path>` line, the `HEAD` line, and the `branch`
+	// line. A record whose directory git no longer sees on disk carries a
+	// `prunable <reason>` line beside them, and that line, not the record's
+	// absence, is what marks the record stale.
+	const blocks = listed.stdout.split("\n\n");
+	const block = blocks.find((item) => item.startsWith(`worktree ${candidate}\n`));
+	if (block === undefined) return { ...empty, readable: true };
+	const stale = block
+		.split("\n")
+		.some((line) => line === "prunable" || line.startsWith("prunable "));
 	return {
 		candidate,
-		standingPath: standing ? candidate : null,
-		recorded: entries.some((entry) => entry.path === candidate),
+		standingPath: stale ? null : candidate,
+		recorded: true,
+		readable: true,
 	};
-}
-
-/** The three answers one branch's worktree path gives. */
-interface TicketWorktreePaths {
-	/** The path the naming rule gives the branch, or null when no parent reads. */
-	candidate: string | null;
-	/** That path, when a worktree git does not prune stands in it. */
-	standingPath: string | null;
-	/** Whether git's own list holds the path, prunable or not. */
-	recorded: boolean;
 }
 
 /**
@@ -3676,6 +3634,12 @@ function collisionsAfterPreviousTabClose(
 export interface CloseCleanupOptions {
 	/** Remove the checkout even when herdr says it is dirty. */
 	force?: boolean;
+	/**
+	 * The host the plane's process stands on (issue #411). Only a plane on the
+	 * herdr host can reach herdr, and only such a plane asks herdr whether a
+	 * workspace still holds a checkout before the close removes one.
+	 */
+	runHost?: AgentHost;
 }
 
 /**
@@ -3755,6 +3719,7 @@ export async function closeHandoffEnvironment(
 			workspaceId: reach.workspaceId,
 			environment: reach.environment,
 			force,
+			runHost: options.runHost,
 		});
 	return undefined;
 }
@@ -3829,6 +3794,13 @@ async function closeTabEnvironment(
  * survive, the way herdr's close of the workspace behind its checkout keeps
  * them.
  *
+ * Only herdr's own remove clears herdr's row (issue #411): when the plane
+ * reaches herdr - `runHost` names the herdr host - a herdr workspace still
+ * open on the checkout answers the close, and the checkout stands beside
+ * its row in the record: herdr's row is herdr's to clear. A plane that
+ * cannot reach herdr asks no one: no herdr workspace can hold a checkout
+ * where herdr does not run, so the git removal stands as it always did.
+ *
  * A terminal the host no longer holds answers the close, and a checkout git
  * refuses - a dirty worktree - stands beside its refusal: the row stays in the
  * record, and the operator reaches the checkout the close could not take down.
@@ -3840,6 +3812,7 @@ async function closeCoreTerminalEnvironment(
 		workspaceId: string | null;
 		environment: EnvironmentKind;
 		force: boolean;
+		runHost?: AgentHost;
 	},
 ): Promise<string | undefined> {
 	const killed = await runInvocation(runner, herdrCoreKill(fields.terminalId));
@@ -3852,6 +3825,10 @@ async function closeCoreTerminalEnvironment(
 	// The live environment's checkout is the operator's own: the terminal was
 	// all that stood behind the handoff, and it is gone.
 	if (fields.environment !== "worktree" || fields.workspaceId === null) return undefined;
+	if (fields.runHost === "herdr") {
+		const hold = await checkoutHeldByHerdr(runner, fields.workspaceId);
+		if (hold !== undefined) return hold;
+	}
 	// The worktree checkout goes down with its terminal. The checkout is the
 	// terminal's own directory, so git runs in it, and the branch it holds
 	// never goes.
@@ -3866,6 +3843,28 @@ async function closeCoreTerminalEnvironment(
 		return undefined;
 	}
 	return commandFailureText(checkoutGone);
+}
+
+/**
+ * The herdr workspace that still holds a checkout, the way herdr's own
+ * worktree list answers it (issue #411). Only herdr's own remove clears
+ * herdr's row, and the plane never removes a checkout herdr holds. A list
+ * that does not read answers as the failure it is, so the close reports the
+ * reason instead of removing the checkout.
+ */
+async function checkoutHeldByHerdr(
+	runner: CommandRunner,
+	checkout: string,
+): Promise<string | undefined> {
+	const listed = await runInvocation(runner, herdrWorktreeList(checkout));
+	if (listed.code !== 0) return herdrFailureText(listed);
+	const rows = readHerdrWorktreeList(listed);
+	if (rows === null) return herdrFailureText(listed);
+	const held = rows.find((row) => row.path === checkout);
+	if (held !== undefined && held.open_workspace_id !== undefined) {
+		return `the herdr workspace ${held.open_workspace_id} still holds the checkout ${checkout}; the plane does not remove a checkout herdr holds`;
+	}
+	return undefined;
 }
 
 /**

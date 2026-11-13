@@ -31,6 +31,7 @@
  * beside them (the answer-shape tracing in the verification record, issue
  * #376). A shape the tracing could not measure stands unverified there.
  */
+import { existsSync } from "node:fs";
 import type {
 	CommandOptions,
 	CommandResult,
@@ -1033,7 +1034,13 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 	const answerWorktree = (args: readonly string[]): CommandResult => {
 		const sub = args[1];
 		const checkoutPath = flagValue(args, "--cwd");
-		const checkout = checkoutPath !== undefined ? checkouts.get(checkoutPath) : undefined;
+		// Herdr resolves --cwd through git's record: a command standing in a
+		// linked worktree answers from the source checkout's worktrees
+		// (issue #411, measured against herdr 0.9.5).
+		const checkout =
+			checkoutPath === undefined
+				? undefined
+				: (checkouts.get(checkoutPath) ?? pathWorktree(checkoutPath)?.owner);
 		switch (sub) {
 			case "list":
 				if (checkout === undefined) return unmodelled(`herdr worktree list --cwd ${checkoutPath}`);
@@ -1228,7 +1235,14 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 		const rest = cIndex >= 0 ? args.slice(cIndex + 2) : args;
 		if (path === undefined) return unmodelled(`git ${args.join(" ")}`);
 		const worktree = pathWorktree(path);
-		if (worktree !== undefined) return answerGitInWorktree(worktree, rest);
+		if (worktree !== undefined) {
+			// The worktree commands run against the record git shares between
+			// the source checkout and its worktrees: git answers them from the
+			// source checkout even when the command stands in a linked worktree
+			// (issue #411).
+			if (rest[0] === "worktree") return answerGitWorktree(worktree.owner, rest);
+			return answerGitInWorktree(worktree, rest);
+		}
 		const checkout = checkouts.get(path);
 		if (checkout === undefined) {
 			// A path the world does not hold: the git answers the plane reads
@@ -1499,39 +1513,302 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 		return { code: left.tree === right.tree ? 0 : 1, stdout: "", stderr: "" };
 	};
 
-	/** The git `worktree add` and `worktree remove --force` of the init. */
+	/**
+	 * The git `worktree` commands the plane runs itself (issue #411), with
+	 * the refusal shapes the plane reads: a path that already stands, a stale
+	 * record, a branch the add refuses to take, and a checkout git no longer
+	 * records.
+	 */
 	const answerGitWorktree = (checkout: WorldCheckout, rest: readonly string[]): CommandResult => {
-		if (
-			rest[1] === "add" &&
-			rest[2] === "--detach" &&
-			rest[3] !== undefined &&
-			rest[4] !== undefined
-		) {
-			const path = rest[3];
-			const ref = rest[4].replace(/^origin\//, "");
-			const branch = checkout.branches.get(ref);
-			if (branch === undefined) return gitFatal(`reference is not a sha: ${rest[4]}`);
-			checkout.worktrees.push({
-				kind: "worktree",
-				path,
-				branch: ref,
-				owner: checkout,
-				linked: false,
-				prunable: false,
-				dirty: false,
-				head: branch.sha,
-				tree: branch.tree,
-				staged: false,
-			});
-			return { code: 0, stdout: "", stderr: "" };
-		}
-		if (rest[1] === "remove" && rest[2] === "--force" && rest[3] !== undefined) {
-			const index = checkout.worktrees.findIndex((worktree) => worktree.path === rest[3]);
-			if (index < 0) return gitFatal(`'${rest[3]}' is not a working tree`);
-			checkout.worktrees.splice(index, 1);
+		if (rest[1] === "list") return answerGitWorktreeList(checkout, rest);
+		if (rest[1] === "add") return answerGitWorktreeAdd(checkout, rest);
+		if (rest[1] === "remove") return answerGitWorktreeRemove(checkout, rest);
+		if (rest[1] === "prune") {
+			checkout.worktrees = checkout.worktrees.filter((item) => !item.prunable);
 			return { code: 0, stdout: "", stderr: "" };
 		}
 		return unmodelled(`git worktree ${rest.slice(1).join(" ")}`);
+	};
+
+	/** The sha a branch reference names in the checkout, when it holds. */
+	const branchSha = (checkout: WorldCheckout, ref: string): string | undefined =>
+		checkout.branches.get(ref.replace(/^origin\//, ""))?.sha;
+
+	/**
+	 * `worktree list --porcelain`: git's record of the source checkout and
+	 * every worktree it holds, one blank-line-separated block each. A record
+	 * whose directory no longer stands carries git's reason on its prunable
+	 * line, and the reason's wording varies with the git version, so the
+	 * plane reads the line's first word.
+	 */
+	const answerGitWorktreeList = (
+		checkout: WorldCheckout,
+		rest: readonly string[],
+	): CommandResult => {
+		if (!rest.includes("--porcelain")) return unmodelled(`git worktree ${rest.slice(1).join(" ")}`);
+		const blocks = [`worktree ${checkout.path}\nHEAD ${checkout.head}`];
+		for (const worktree of checkout.worktrees) {
+			blocks.push(
+				[
+					`worktree ${worktree.path}`,
+					`HEAD ${worktree.head}`,
+					...(worktree.branch !== undefined ? [`branch refs/heads/${worktree.branch}`] : []),
+					...(worktree.prunable ? ["prunable gitdir file points to non-existent location"] : []),
+				].join("\n"),
+			);
+		}
+		return { code: 0, stdout: `${blocks.join("\n\n")}\n`, stderr: "" };
+	};
+
+	/**
+	 * `worktree add <path> [--detach]` for the Worktree base's throwaway
+	 * worktree, and `worktree add <path> [-b <branch>] [<base>]` for the
+	 * plane's own worktree (issue #411). The refusal shapes stand as git
+	 * answers them: the add names its branch before the directory check
+	 * refuses, and a stale record is cleared on the way through. The
+	 * directory check reads the filesystem the test stands, the way git
+	 * checks the machine it runs on.
+	 */
+	const answerGitWorktreeAdd = (
+		checkout: WorldCheckout,
+		rest: readonly string[],
+	): CommandResult => {
+		if (rest[2] === "--detach" && rest[3] !== undefined && rest[4] !== undefined) {
+			return answerGitWorktreeAddDetach(checkout, rest[3], rest[4]);
+		}
+		const parsed = parseWorktreeAdd(rest);
+		if (parsed === undefined) return unmodelled(`git worktree add ${rest.slice(1).join(" ")}`);
+		const { path, newBranch, reference } = parsed;
+		const refusal = answerGitWorktreeAddRefusal(checkout, path, newBranch, reference);
+		if (refusal !== undefined) return refusal;
+		const branch = newBranch ?? reference ?? checkout.head;
+		const head = answerGitWorktreeAddHead(checkout, newBranch, reference);
+		gitWorktreeStand(checkout, {
+			record: checkout.worktrees.find((item) => item.path === path),
+			path,
+			branch,
+			head,
+			newBranch,
+		});
+		return {
+			code: 0,
+			stdout: `Preparing worktree (checking out '${branch}')\n`,
+			stderr: "",
+		};
+	};
+
+	/**
+	 * The add's refusals in git's order: the record that stands, the branch
+	 * that is taken, the reference that is not held, and the directory that
+	 * stands beside a stale record or beside no record at all.
+	 */
+	const answerGitWorktreeAddRefusal = (
+		checkout: WorldCheckout,
+		path: string,
+		newBranch: string | undefined,
+		reference: string | undefined,
+	): CommandResult | undefined => {
+		const record = checkout.worktrees.find((item) => item.path === path);
+		if (record !== undefined && !record.prunable) {
+			return gitWorktreeAddPathStands(checkout, path, newBranch, reference);
+		}
+		if (newBranch !== undefined && checkout.branches.has(newBranch)) {
+			return gitWorktreeAddBranchTaken(newBranch);
+		}
+		if (reference !== undefined && !branchRefHolds(checkout, reference)) {
+			return gitFatal(`invalid reference: ${reference}`);
+		}
+		if (existsSync(path)) {
+			return record !== undefined
+				? gitWorktreeAddRegisteredMissing(path)
+				: gitWorktreeAddPathStands(checkout, path, newBranch, reference);
+		}
+		return undefined;
+	};
+
+	/** The add's head: the branch it named starts where the base named it. */
+	const answerGitWorktreeAddHead = (
+		checkout: WorldCheckout,
+		newBranch: string | undefined,
+		reference: string | undefined,
+	): string => {
+		if (newBranch !== undefined) {
+			return reference === undefined ? checkout.head : (branchSha(checkout, reference) ?? newSha());
+		}
+		return branchSha(checkout, reference ?? "") ?? newSha();
+	};
+
+	/** The add asked for a branch git already holds. */
+	const gitWorktreeAddBranchTaken = (branch: string): CommandResult => ({
+		code: 255,
+		stdout: "",
+		stderr: `fatal: a branch named '${branch}' already exists\n`,
+	});
+
+	/**
+	 * A stale record with a directory standing at its path: git names the
+	 * record, not the directory, and the record stands until it is pruned
+	 * or removed.
+	 */
+	const gitWorktreeAddRegisteredMissing = (path: string): CommandResult => ({
+		code: 128,
+		stdout: "",
+		stderr:
+			`fatal: '${path}' is a missing but already registered worktree; ` +
+			`use 'add -f' to override, or 'prune' or 'remove' to clear\n`,
+	});
+
+	/** The shape the plane's own add stands in: `add <path> [-b <branch>] [<base>]`. */
+	const parseWorktreeAdd = (
+		rest: readonly string[],
+	):
+		| {
+				path: string;
+				newBranch?: string;
+				reference?: string;
+		  }
+		| undefined => {
+		let cursor = 2;
+		let path: string | undefined;
+		let newBranch: string | undefined;
+		let reference: string | undefined;
+		while (cursor < rest.length) {
+			const arg = rest[cursor];
+			if (arg === "-b") {
+				newBranch = rest[cursor + 1];
+				cursor += 2;
+			} else if (path === undefined) {
+				path = arg;
+				cursor += 1;
+			} else {
+				reference = arg;
+				cursor += 1;
+			}
+		}
+		return path === undefined ? undefined : { path, newBranch, reference };
+	};
+
+	/**
+	 * An add into a path a worktree already stands in: git names the branch
+	 * it was asked to create before the directory check refuses, and the
+	 * failed add leaves that branch standing.
+	 */
+	const gitWorktreeAddPathStands = (
+		checkout: WorldCheckout,
+		path: string,
+		newBranch: string | undefined,
+		reference: string | undefined,
+	): CommandResult => {
+		if (newBranch !== undefined && !checkout.branches.has(newBranch)) {
+			const from =
+				reference !== undefined ? (branchSha(checkout, reference) ?? newSha()) : newSha();
+			checkout.branches.set(newBranch, {
+				sha: from,
+				tree: treeShaFor(from),
+				local: true,
+				remote: false,
+			});
+		}
+		return {
+			code: 128,
+			stdout: `Preparing worktree (checking out '${newBranch ?? "detached HEAD"}')\n`,
+			stderr: `fatal: '${path}' already exists\n`,
+		};
+	};
+
+	/** Register the branch the add named, and stand the worktree at its path. */
+	const gitWorktreeStand = (
+		checkout: WorldCheckout,
+		add: {
+			record?: WorldWorktree;
+			path: string;
+			branch: string;
+			head: string;
+			newBranch?: string;
+		},
+	): void => {
+		const tree = treeShaFor(add.head);
+		if (add.newBranch !== undefined) {
+			checkout.branches.set(add.newBranch, {
+				sha: add.head,
+				tree,
+				local: true,
+				remote: false,
+			});
+		}
+		if (add.record !== undefined) {
+			// A stale record: git clears it and the worktree stands in its place.
+			add.record.path = add.path;
+			add.record.branch = add.branch;
+			add.record.owner = checkout;
+			add.record.linked = true;
+			add.record.prunable = false;
+			add.record.dirty = false;
+			add.record.head = add.head;
+			add.record.tree = tree;
+			add.record.staged = false;
+		} else {
+			checkout.worktrees.push({
+				kind: "worktree",
+				path: add.path,
+				branch: add.branch,
+				owner: checkout,
+				linked: true,
+				prunable: false,
+				dirty: false,
+				head: add.head,
+				tree,
+				staged: false,
+			});
+		}
+	};
+
+	/** `worktree add <path> --detach <ref>`: the Worktree base's throwaway. */
+	const answerGitWorktreeAddDetach = (
+		checkout: WorldCheckout,
+		path: string,
+		refArg: string,
+	): CommandResult => {
+		const ref = refArg.replace(/^origin\//, "");
+		const branch = checkout.branches.get(ref);
+		if (branch === undefined) return gitFatal(`reference is not a sha: ${refArg}`);
+		checkout.worktrees.push({
+			kind: "worktree",
+			path,
+			branch: ref,
+			owner: checkout,
+			linked: false,
+			prunable: false,
+			dirty: false,
+			head: branch.sha,
+			tree: branch.tree,
+			staged: false,
+		});
+		return { code: 0, stdout: "", stderr: "" };
+	};
+
+	/**
+	 * `worktree remove [--force] <path>`: the plane's own removal (issue
+	 * #411). A checkout git no longer records is not a removal at all, and
+	 * a dirty checkout refuses the remove without force.
+	 */
+	const answerGitWorktreeRemove = (
+		checkout: WorldCheckout,
+		rest: readonly string[],
+	): CommandResult => {
+		const force = rest.includes("--force");
+		const path = rest[rest.length - 1] ?? "";
+		const record = checkout.worktrees.find((item) => item.path === path);
+		if (record === undefined) return gitFatal(`'${path}' is not a working tree`);
+		if (record.prunable) {
+			checkout.worktrees = checkout.worktrees.filter((item) => item !== record);
+			return { code: 0, stdout: "", stderr: "" };
+		}
+		if (record.dirty && !force) {
+			return gitFatal(`'${path}' contains modified or untracked files, use --force to delete it`);
+		}
+		checkout.worktrees = checkout.worktrees.filter((item) => item !== record);
+		return { code: 0, stdout: "", stderr: "" };
 	};
 
 	const answerGitShow = (checkout: WorldCheckout, rest: readonly string[]): CommandResult => {

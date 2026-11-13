@@ -12,6 +12,7 @@
  * rather than in a fallback.
  */
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
 import {
 	type HostInvocation,
 	herdrAgentFocus,
@@ -1236,6 +1237,243 @@ describe("the git write side", () => {
 			"origin/main:docs/agents/missing.md",
 		]);
 		expect(missing.code).toBe(128);
+	});
+});
+
+describe("the git worktree side (issue #411)", () => {
+	/** One checkout whose record holds one standing worktree, the way herdr's naming rule stands one. */
+	function worktreeWorld(): StubHerdrWorld {
+		return stubHerdrWorld({
+			checkouts: [
+				{
+					path: CHECKOUT,
+					cloneUrl: CLONE_URL,
+					head: HEAD_SHA,
+					worktreesRoot: WORKTREES_ROOT,
+					branches: [
+						{ name: "main", local: true, remote: true },
+						{ name: "factory/7-standing", local: true, remote: true },
+					],
+					worktrees: [
+						{
+							path: `${WORKTREES_ROOT}/factory-7-standing`,
+							branch: "factory/7-standing",
+							linked: true,
+						},
+					],
+				},
+			],
+		});
+	}
+
+	test("the porcelain list answers the source's block first, then one block per record, with the stale record's prunable line", async () => {
+		const world = stubHerdrWorld({
+			checkouts: [
+				{
+					path: CHECKOUT,
+					cloneUrl: CLONE_URL,
+					head: HEAD_SHA,
+					worktreesRoot: WORKTREES_ROOT,
+					branches: [
+						{ name: "main", local: true, remote: true },
+						{ name: "factory/7-standing", local: true, remote: true },
+						{ name: "factory/8-stranded", local: true, remote: true },
+					],
+					worktrees: [
+						{
+							path: `${WORKTREES_ROOT}/factory-7-standing`,
+							branch: "factory/7-standing",
+							linked: true,
+						},
+						{
+							path: `${WORKTREES_ROOT}/factory-8-stranded`,
+							branch: "factory/8-stranded",
+							linked: true,
+							prunable: true,
+						},
+					],
+				},
+			],
+		});
+		const listed = await world.run("git", ["-C", CHECKOUT, "worktree", "list", "--porcelain"]);
+		expect(listed.code).toBe(0);
+		const blocks = listed.stdout.trimEnd().split("\n\n");
+		expect(blocks[0]).toBe(`worktree ${CHECKOUT}\nHEAD ${HEAD_SHA}`);
+		// The standing worktree's block: its path, its head, and the branch the
+		// record holds it on.
+		const standing = (blocks[1] ?? "").split("\n");
+		expect(standing[0]).toBe(`worktree ${WORKTREES_ROOT}/factory-7-standing`);
+		expect(standing[1]?.startsWith("HEAD ")).toBe(true);
+		expect(standing[2]).toBe("branch refs/heads/factory/7-standing");
+		// The stale record keeps its block beside a line whose first word is
+		// prunable: the record stands until the plane prunes or removes it.
+		const stranded = (blocks[2] ?? "").split("\n");
+		expect(stranded[0]).toBe(`worktree ${WORKTREES_ROOT}/factory-8-stranded`);
+		expect(stranded[3]?.startsWith("prunable ")).toBe(true);
+	});
+
+	test("herdr's worktree list read from a linked worktree's path answers the source's list", async () => {
+		const world = worktreeWorld();
+		const fromSource = await world.run("herdr", ["worktree", "list", "--cwd", CHECKOUT]);
+		const fromWorktree = await world.run("herdr", [
+			"worktree",
+			"list",
+			"--cwd",
+			`${WORKTREES_ROOT}/factory-7-standing`,
+		]);
+		expect(fromWorktree.code).toBe(0);
+		expect(fromWorktree.stdout).toBe(fromSource.stdout);
+	});
+
+	test("a failed add over a standing record keeps the branch the add asked to create", async () => {
+		const world = worktreeWorld();
+		// The record stands at the path on another branch: git names the path
+		// before it spends the branch, and the branch the add named stands.
+		const path = `${WORKTREES_ROOT}/factory-7-standing`;
+		const added = await world.run("git", [
+			"-C",
+			CHECKOUT,
+			"worktree",
+			"add",
+			path,
+			"-b",
+			"factory/9-still-here",
+			"origin/main",
+		]);
+		expect(added.code).toBe(128);
+		expect(added.stdout).toBe("Preparing worktree (checking out 'factory/9-still-here')\n");
+		expect(added.stderr).toBe(`fatal: '${path}' already exists\n`);
+		const listed = await world.run("git", [
+			"-C",
+			CHECKOUT,
+			"branch",
+			"--list",
+			"factory/9-still-here",
+		]);
+		expect(listed.stdout).toBe("  factory/9-still-here\n");
+	});
+
+	test("an add over a stale record whose directory stands names the record, and the prune clears it", async () => {
+		const path = "/tmp/herdr-world-stale-add";
+		mkdirSync(path, { recursive: true });
+		writeFileSync(`${path}/leftover.txt`, "the directory holds something");
+		const world = stubHerdrWorld({
+			checkouts: [
+				{
+					path: CHECKOUT,
+					cloneUrl: CLONE_URL,
+					head: HEAD_SHA,
+					worktreesRoot: WORKTREES_ROOT,
+					branches: [
+						{ name: "main", local: true, remote: true },
+						{ name: "factory/9-still-here", local: true, remote: true },
+					],
+					worktrees: [
+						{
+							path,
+							branch: "factory/9-still-here",
+							linked: true,
+							prunable: true,
+						},
+					],
+				},
+			],
+		});
+		// git names the record, not the directory: the record stands until it
+		// is pruned or removed, so the add refuses.
+		const added = await world.run("git", [
+			"-C",
+			CHECKOUT,
+			"worktree",
+			"add",
+			path,
+			"factory/9-still-here",
+		]);
+		expect(added.code).toBe(128);
+		expect(added.stderr).toBe(
+			`fatal: '${path}' is a missing but already registered worktree; ` +
+				`use 'add -f' to override, or 'prune' or 'remove' to clear\n`,
+		);
+		const before = await world.run("git", ["-C", CHECKOUT, "worktree", "list", "--porcelain"]);
+		expect(before.stdout).toContain(`worktree ${path}`);
+		const pruned = await world.run("git", ["-C", CHECKOUT, "worktree", "prune"]);
+		expect(pruned.code).toBe(0);
+		expect(pruned.stdout).toBe("");
+		const after = await world.run("git", ["-C", CHECKOUT, "worktree", "list", "--porcelain"]);
+		expect(after.stdout).not.toContain(`worktree ${path}`);
+	});
+
+	test("an add onto a branch git already holds is refused before it touches the directory", async () => {
+		const world = worktreeWorld();
+		const added = await world.run("git", [
+			"-C",
+			CHECKOUT,
+			"worktree",
+			"add",
+			"/tmp/herdr-world-branch-taken",
+			"-b",
+			"factory/7-standing",
+		]);
+		expect(added.code).toBe(255);
+		expect(added.stderr).toBe("fatal: a branch named 'factory/7-standing' already exists\n");
+	});
+
+	test("the removal's answers: the dirty refusal, the path that is no worktree, and the clean removal", async () => {
+		const world = stubHerdrWorld({
+			checkouts: [
+				{
+					path: CHECKOUT,
+					cloneUrl: CLONE_URL,
+					head: HEAD_SHA,
+					worktreesRoot: WORKTREES_ROOT,
+					branches: [
+						{ name: "main", local: true, remote: true },
+						{ name: "factory/7-standing", local: true, remote: true },
+					],
+					worktrees: [
+						{
+							path: `${WORKTREES_ROOT}/factory-7-standing`,
+							branch: "factory/7-standing",
+							linked: true,
+							dirty: true,
+						},
+					],
+				},
+			],
+		});
+		// A path the record holds no record of is not a removal at all.
+		const nowhere = await world.run("git", [
+			"-C",
+			CHECKOUT,
+			"worktree",
+			"remove",
+			"/tmp/herdr-world-no-record",
+		]);
+		expect(nowhere.code).toBe(128);
+		expect(nowhere.stderr).toBe(`fatal: '/tmp/herdr-world-no-record' is not a working tree\n`);
+		// A dirty checkout refuses the removal without force, and stands.
+		const refused = await world.run("git", [
+			"-C",
+			CHECKOUT,
+			"worktree",
+			"remove",
+			`${WORKTREES_ROOT}/factory-7-standing`,
+		]);
+		expect(refused.code).toBe(128);
+		expect(refused.stderr).toBe(
+			`fatal: '${WORKTREES_ROOT}/factory-7-standing' contains modified or untracked files, use --force to delete it\n`,
+		);
+		const forced = await world.run("git", [
+			"-C",
+			CHECKOUT,
+			"worktree",
+			"remove",
+			"--force",
+			`${WORKTREES_ROOT}/factory-7-standing`,
+		]);
+		expect(forced.code).toBe(0);
+		const after = await world.run("git", ["-C", CHECKOUT, "worktree", "list", "--porcelain"]);
+		expect(after.stdout).not.toContain(`worktree ${WORKTREES_ROOT}/factory-7-standing`);
 	});
 });
 

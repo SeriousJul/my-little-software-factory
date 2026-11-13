@@ -393,3 +393,31 @@ export function worktreeListJson(worktrees: ListedWorktree[]): string {
 		},
 	});
 }
+
+/**
+ * One block of `git worktree list --porcelain`'s answer: the path, its head,
+ * and the branch git records for it. A stale record adds a line whose first
+ * word is `prunable`; the reason's wording moves with the git version.
+ */
+export function porcelainBlock(path: string, branch?: string, stale = false): string {
+	return [
+		`worktree ${path}`,
+		"HEAD 3c1f2ab90d",
+		...(branch !== undefined ? [`branch refs/heads/${branch}`] : []),
+		...(stale ? ["prunable gitdir file points to non-existent location"] : []),
+	].join("\n");
+}
+
+/**
+ * The porcelain `git worktree list` the source checkout answers: the source
+ * checkout's own block, then one block per worktree git records.
+ */
+export function stubWorktreeList(
+	runner: FakeRunner,
+	checkout: string,
+	blocks: readonly string[] = [],
+): void {
+	runner.set("git", ["-C", checkout, "worktree", "list", "--porcelain"], {
+		stdout: [porcelainBlock(checkout), ...blocks].join("\n\n") + "\n",
+	});
+}

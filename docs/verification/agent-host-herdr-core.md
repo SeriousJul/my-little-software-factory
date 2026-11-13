@@ -1,6 +1,6 @@
 # The Agent host verification
 
-Status: **the decision records stand, and steps 1 through 4 of the change are
+Status: **the decision records stand, and steps 1 through 5 of the change are
 in the tree.** ADR 0141, ADR 0142, ADR 0143, and ADR 0144 and the glossary's
 **Agent host**, **Host resolution**, and **Adoption label** entries landed on
 2026-11-12, and the first step of the change landed beside them (pull request
@@ -38,7 +38,23 @@ check runs over the merged list, and the collision record names the host that
 holds the name; the Parallel limit counts its seats over the merged list; and
 every herdr-core terminal the plane starts carries its run labels and the
 Adoption labels its own terminal carries, written at the start and never
-rewritten. What has not run is the same boundary it was before, and it stands
+rewritten. Step 5 (issue #411) lands beside them: on the herdr-core host the
+plane runs git itself for the worktree, the branch, and the removal, and the
+Agent still never starts outside a host; one checkout per Ticket stands across
+both hosts in herdr's own directory, the naming rule herdr 0.9.5 answers and
+the plane now states as a contract; the reopen lookups read git's
+`worktree list --porcelain` record on both hosts, whose record holds both
+hosts' worktrees, and herdr's extra facts are read only where a herdr
+workspace has to come down with the checkout; each host's cleanup stays on its
+own side - the herdr-core close kills and removes the terminal with `hc` and
+removes the checkout with git, and it never removes a checkout a herdr
+workspace still holds; the Leftover worktree directory moves aside on both
+hosts; the herdr host keeps its herdr commands, the `worktree create` and
+the `worktree remove --workspace`, which run as before, but its reopen
+lookup now reads git's record instead of herdr's list, and a git list that
+does not read degrades the start to the fresh `worktree create` instead of
+failing it, where a raise of the herdr list used to fail the start, and the
+Close keeps the fail-closed read of herdr's list. What has not run is the same boundary it was before, and it stands
 below: no plane command has ever gone to a real herdr-core host, and the
 herdr-core facts the plane reads on that host are the probe answers above,
 not a live run. A check that could not run is recorded as incomplete; it is
@@ -99,7 +115,33 @@ is the answer a caller gets.
   stand in `<home>/.herdr/worktrees/<repo name>/<branch with each slash for a
   hyphen>`, git already records every one of them at those paths and branches,
   and herdr's list answer is git's shape with `open_workspace_id` and
-  `source_workspace_id` beside it. ADR 0143's path rule rests on this row.
+  `source_workspace_id` beside it. ADR 0143's path rule rests on this row, and
+  step 5 makes it the plane-stated contract: the plane builds a herdr-core
+  checkout at that same path for the branch, and a herdr that changes the
+  naming is a measured break against this row.
+- **herdr's list answers from the checkout's git record**: `herdr worktree
+  list --cwd <linked worktree path>` answers the same list as it does from the
+  source checkout, so the plane reads herdr's extra facts next to the
+  checkout the close has to take down, and git's record holds both hosts'
+  worktrees for the reopen lookups.
+- **The git shapes the plane reads on the herdr-core host**, probed 2026-11-13
+  on this machine's git 2.56.0 against a scratch clone: `git worktree list
+  --porcelain` answers blank-line blocks of `worktree <path>`, `HEAD <sha>`,
+  and `branch refs/heads/<b>`, and a record git prunes carries a line whose
+  first word is `prunable` (`prunable gitdir file points to non-existent
+  location` on 2.56.0). The refusals: an add over a path that already stands
+  answers `fatal: '<path>' already exists` with exit 128, and the add's branch
+  stands behind the refusal; the same add over a stale record with the path
+  standing answers `fatal: '<path>' is a missing but already registered
+  worktree; use 'add -f' to override, or 'prune' or 'remove' to clear` with
+  exit 128, the record surviving; an add onto a branch that already exists
+  answers `fatal: a branch named '<b>' already exists` with exit 255; a remove
+  of a dirty checkout answers `fatal: '<path>' contains modified or untracked
+  files, use --force to delete it` with exit 128; a remove of a path git no
+  longer records answers `fatal: '<path>' is not a working tree` with exit
+  128, which the plane reads as the already-clean close; and `git worktree
+  remove` and `git worktree prune` of a stale record answer silently, the
+  record cleared. The Stub world's git side answers these shapes.
 - **herdr-core's terminal size**: a start from a non-terminal gets `200x120`, and
   the child program receives `HC_TERMINAL_ID` (a probe printed its own address and
   `stty size` as `120 200`).
@@ -151,8 +193,9 @@ What has not run is the same boundary it was before, and
 it stands below, each one owed by the change that lands it:
 
 - No plane command has ever gone to a real herdr-core host: no start, prompt,
-  roster, wait, read, kill, or removal, and no merged Observation cycle over a
-  real herdr-core roster. Every herdr-core command the plane runs in the suite runs
+  roster, wait, read, kill, or removal, and no worktree, branch, or checkout
+  command of the plane's own git, and no merged Observation cycle over a real
+  herdr-core roster. Every herdr-core command the plane runs in the suite runs
   against the Stub herdr world, and the version read the boot runs is the one
   host command a real boot sends, a read that starts no core.
 - The session-record derivation of ADR 0144, including its ambiguous-match
@@ -172,6 +215,22 @@ it stands below, each one owed by the change that lands it:
   [the shared-controls verification record](./shared-controls.md) states, and
   the terminal walks on the theme-inherited paint stay open there. This change
   makes no accessibility claim.
+
+## What step 5 stands on, in the suite
+
+Step 5's behaviors run against the Stub herdr world in these suites; one entry
+per behavior, each beside the behavior's home module. The git answers they read
+are the shapes above, standing in the Stub world's git side.
+
+| Behavior the step lands | Where it stands in the suite |
+| --- | --- |
+| One checkout per Ticket across hosts: the herdr-core start builds the checkout at `<home>/.herdr/worktrees/<repo name>/<branch with each slash for a hyphen>` with `git worktree add`, and the plane owns no second worktrees directory | `test/handoff.test.ts`, the herdr-core start's command pins, and `test/herdr-world.test.ts`, the git shape pins |
+| A host switch inside one Ticket cycle reopens the same checkout on the same branch, and one pull request stands for it | `test/handoff-dispatch.test.ts`, the host-switch reopen test |
+| The reopen lookups answer from git's record on both hosts: a worktree herdr made and a worktree the plane made are both found, a stale git record meets the same path lookup, and a worktree that stands on disk under an unregistered path still refuses the add | `test/handoff.test.ts`, the reopen lookup tests on both hosts, and `test/herdr-world.test.ts` |
+| The herdr host's start degrades a git list that does not read: a refusal or a raise records the start as unreadable, and the start proceeds to the fresh `worktree create`, with no path reopen and no leftover move-aside; a raise of the list no longer fails the start the way a raise of herdr's list did | `test/handoff.test.ts`, the herdr-host start whose worktree list does not read |
+| The residue contract: a start removes only what it made, on each host, and the herdr-core start's failure removes its checkout with git and its own new branch beside it | `test/handoff.test.ts`, the herdr-core start's residue test, and the herdr-host start's residue tests |
+| The Close cleanup on herdr-core never issues a git removal of a checkout a herdr workspace still holds: a close from a herdr host that reads a herdr workspace on the checkout stands with the reason and no removal, a close whose herdr list does not read fails the close and keeps the checkout, and a close from a herdr-core host issues no herdr command and removes the checkout with git | `test/handoff.test.ts`, the herdr-core Close's guard tests |
+| The Leftover worktree directory moves aside on both hosts: the refused add leaves its branch standing, the directory moves under a name that says what it is, and the retry checks the branch out without naming it again, never deleting | `test/handoff.test.ts`, the leftover tests on both hosts |
 
 ## What step 4 stands on, in the suite
 
@@ -208,6 +267,7 @@ one entry per behavior, each beside the behavior's home module.
 ## Issue and version pins
 
 herdr-core 0.1.20 is the release every shape above was read against, and ADR 0141
-makes it the floor. herdr 0.9.5 is the version of the worktree-layout row;
-ADR 0143 records the layout as a contract with herdr's directory naming, and a
-herdr that changes it is a measured break, not a silent one.
+makes it the floor. herdr 0.9.5 is the version of the worktree-layout row and of
+the naming rule the plane states from it; ADR 0143 records the layout as a
+contract with herdr's directory naming, and a herdr that changes it is a measured
+break, not a silent one. git 2.56.0 is the version of the git-shape row.
