@@ -53,6 +53,8 @@ import {
 import {
 	FakeRunner,
 	herdrFocusCommands,
+	porcelainBlock,
+	stubWorktreeList,
 	tabCreateJson,
 	WORKTREE_NOT_FOUND_ERROR,
 	workspaceCreateJson,
@@ -127,13 +129,12 @@ const coreWorktreeChoice: HandoffChoice = { ...coreChoice, environment: "worktre
 /** The run the herdr-core cases resolve: the default host outside herdr. */
 const CORE_AGENT_HOST: AgentHostResolution = { host: "herdr-core", fact: "default" };
 
-/** The path a herdr worktree checkout of the ticket's branch takes in one home. */
+/**
+ * The path a worktree checkout of the ticket's branch takes in one home: the
+ * naming rule the plane states for both hosts (ADR 0143), pinned against
+ * herdr 0.9.5 in the verification record.
+ */
 function worktreePath(home: string): string {
-	return join(home, "worktrees", "factory", BRANCH.replaceAll("/", "-"));
-}
-
-/** The path a herdr-core worktree checkout of the ticket's branch takes (ADR 0143). */
-function coreWorktreePath(home: string): string {
 	return join(home, ".herdr", "worktrees", "factory", BRANCH.replaceAll("/", "-"));
 }
 
@@ -285,18 +286,17 @@ function worktreeCreateBlocked(path: string): { code: number; stderr: string } {
 }
 
 /**
- * The worktree list that names the directory herdr will use for the ticket's
- * branch, without holding that directory: the repository's other linked
- * worktree gives the parent, the same way ADR 0046 reads it.
+ * The porcelain worktree list that records no worktree at the ticket's
+ * branch path: the repository's other linked worktree stands beside it, so
+ * a directory at the ticket's path is a leftover the plane may move.
  */
-function siblingWorktreeList(checkout: string, home: string): string {
-	return worktreeListJson([
-		{ path: checkout, linked: false },
-		{
-			path: join(home, "worktrees", "factory", "factory-6-another-ticket"),
-			branch: "factory/6-another-ticket",
-		},
-	]);
+function siblingWorktreeList(home: string): string[] {
+	return [
+		porcelainBlock(
+			join(home, ".herdr", "worktrees", "factory", "factory-6-another-ticket"),
+			"factory/6-another-ticket",
+		),
+	];
 }
 
 /** Stand one directory up with the entries a removed checkout leaves behind. */
@@ -317,9 +317,7 @@ function reuseToFreshCreate(runner: FakeRunner, checkout: string, home: string):
 		code: 1,
 		stderr: WORKTREE_NOT_FOUND_ERROR,
 	});
-	runner.set("herdr", ["worktree", "list", "--cwd", checkout], {
-		stdout: siblingWorktreeList(checkout, home),
-	});
+	stubWorktreeList(runner, checkout, siblingWorktreeList(home));
 }
 
 /** The create argv the reuse sequence sends for the ticket's branch. */
@@ -1370,22 +1368,18 @@ describe("handOffTicket: the worktree sequence", () => {
 	});
 
 	// The ticket's worktree, left on another branch by the agent that last
-	// worked the ticket: the directory herdr names for the branch still
-	// stands on disk, holding the branch the work needed.
+	// worked the ticket: the directory the naming rule names for the branch
+	// still stands on disk, holding the branch the work needed.
 
-	/** The list that holds the ticket's worktree beside one other worktree. */
-	function strandedWorktreeList(checkout: string, home: string): string {
-		return worktreeListJson([
-			{ path: checkout, linked: false },
-			{
-				path: join(home, "worktrees", "factory", "factory-9-other-branch"),
-				branch: "factory/9-other-branch",
-			},
-			{
-				path: worktreePath(home),
-				branch: "factory/146-the-branch-the-work-needed",
-			},
-		]);
+	/** The porcelain list that holds the ticket's worktree beside one other. */
+	function strandedWorktreeList(home: string): string[] {
+		return [
+			porcelainBlock(
+				join(home, ".herdr", "worktrees", "factory", "factory-9-other-branch"),
+				"factory/9-other-branch",
+			),
+			porcelainBlock(worktreePath(home), "factory/146-the-branch-the-work-needed"),
+		];
 	}
 
 	test("an existing branch no worktree holds reopens the ticket's worktree left on another branch", async () => {
@@ -1393,9 +1387,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const p = await modulePlane(runner);
 		stubBranchList(runner, repoPath(p.home));
 		stubWorktreeOpenMissing(runner, repoPath(p.home));
-		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
-			stdout: strandedWorktreeList(repoPath(p.home), p.home),
-		});
+		stubWorktreeList(runner, repoPath(p.home), strandedWorktreeList(p.home));
 		runner.set(
 			"herdr",
 			["worktree", "open", "--cwd", repoPath(p.home), "--path", worktreePath(p.home), "--no-focus"],
@@ -1410,17 +1402,17 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
-		// The branch lookup finds no worktree, the list finds the ticket's
-		// worktree at the path herdr names for the branch, and the open by
-		// path lands the agent in the worktree the agent last left, on the
-		// branch it holds. No create: a create would collide with the
+		// The branch lookup finds no worktree, git's record holds the
+		// ticket's worktree at the path the naming rule gives, and the open
+		// by path lands the agent in the worktree the agent last left, on
+		// the branch it holds. No create: a create would collide with the
 		// directory.
 		expect(runner.commands()).toEqual([
 			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
 			`git -C ${repoPath(p.home)} remote get-url origin`,
 			`git -C ${repoPath(p.home)} branch --list factory/9-persist-source-facts`,
 			`herdr worktree open --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
-			`herdr worktree list --cwd ${repoPath(p.home)}`,
+			`git -C ${repoPath(p.home)} worktree list --porcelain`,
 			`herdr worktree open --cwd ${repoPath(p.home)} --path ${worktreePath(p.home)} --no-focus`,
 			"hc ls --json",
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
@@ -1434,24 +1426,21 @@ describe("handOffTicket: the worktree sequence", () => {
 		const p = await modulePlane(runner);
 		stubBranchList(runner, repoPath(p.home));
 		stubWorktreeOpenMissing(runner, repoPath(p.home));
-		// The list holds the other worktree, and no worktree at the path the
-		// branch names: the checkout is gone, and the create takes it.
-		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
-			stdout: worktreeListJson([
-				{ path: repoPath(p.home), linked: false },
-				{
-					path: join(p.home, "worktrees", "factory", "factory-9-other-branch"),
-					branch: "factory/9-other-branch",
-				},
-			]),
-		});
+		// The record holds the other worktree, and no worktree at the path
+		// the branch names: the checkout is gone, and the create takes it.
+		stubWorktreeList(runner, repoPath(p.home), [
+			porcelainBlock(
+				join(p.home, ".herdr", "worktrees", "factory", "factory-9-other-branch"),
+				"factory/9-other-branch",
+			),
+		]);
 		stubWorktreeCreate(runner, repoPath(p.home));
 
 		const outcome = await handoffRun(runner, p.home, worktreeChoice);
 
 		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
-		expect(commands).toContain(`herdr worktree list --cwd ${repoPath(p.home)}`);
+		expect(commands).toContain(`git -C ${repoPath(p.home)} worktree list --porcelain`);
 		expect(commands).toContain(
 			`herdr worktree create --cwd ${repoPath(p.home)} --branch factory/9-persist-source-facts --no-focus`,
 		);
@@ -1463,18 +1452,11 @@ describe("handOffTicket: the worktree sequence", () => {
 		const p = await modulePlane(runner);
 		stubBranchList(runner, repoPath(p.home));
 		stubWorktreeOpenMissing(runner, repoPath(p.home));
-		// The worktree git would prune is not the worktree: the create takes
+		// The record git would prune is not the worktree: the create takes
 		// the path it leaves free.
-		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
-			stdout: worktreeListJson([
-				{ path: repoPath(p.home), linked: false },
-				{
-					path: worktreePath(p.home),
-					branch: "factory/146-the-branch-the-work-needed",
-					prunable: true,
-				},
-			]),
-		});
+		stubWorktreeList(runner, repoPath(p.home), [
+			porcelainBlock(worktreePath(p.home), "factory/146-the-branch-the-work-needed", true),
+		]);
 		stubWorktreeCreate(runner, repoPath(p.home));
 
 		const outcome = await handoffRun(runner, p.home, worktreeChoice);
@@ -1494,7 +1476,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		stubWorktreeOpenMissing(runner, repoPath(p.home));
 		// A list that refuses does not stop the handoff: the create runs, the
 		// way the reuse did before the list looked.
-		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
+		runner.set("git", ["-C", repoPath(p.home), "worktree", "list", "--porcelain"], {
 			code: 1,
 			stderr: "the list refused",
 		});
@@ -1517,16 +1499,9 @@ describe("handOffTicket: the worktree sequence", () => {
 		stubWorktreeOpenMissing(runner, repoPath(p.home));
 		// A workspace already stands on the worktree: the open by path reuses
 		// it, and the agent takes a fresh tab in it.
-		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
-			stdout: worktreeListJson([
-				{ path: repoPath(p.home), linked: false },
-				{
-					path: worktreePath(p.home),
-					branch: "factory/146-the-branch-the-work-needed",
-					openWorkspaceId: "ws-open",
-				},
-			]),
-		});
+		stubWorktreeList(runner, repoPath(p.home), [
+			porcelainBlock(worktreePath(p.home), "factory/146-the-branch-the-work-needed"),
+		]);
 		runner.set(
 			"herdr",
 			["worktree", "open", "--cwd", repoPath(p.home), "--path", worktreePath(p.home), "--no-focus"],
@@ -1562,9 +1537,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const p = await modulePlane(runner);
 		stubBranchList(runner, repoPath(p.home));
 		stubWorktreeOpenMissing(runner, repoPath(p.home));
-		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
-			stdout: strandedWorktreeList(repoPath(p.home), p.home),
-		});
+		stubWorktreeList(runner, repoPath(p.home), strandedWorktreeList(p.home));
 		// The worktree went between the list and the open: herdr says so, and
 		// the create takes the place it left.
 		runner.set(
@@ -1594,9 +1567,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const p = await modulePlane(runner);
 		stubBranchList(runner, repoPath(p.home));
 		stubWorktreeOpenMissing(runner, repoPath(p.home));
-		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
-			stdout: strandedWorktreeList(repoPath(p.home), p.home),
-		});
+		stubWorktreeList(runner, repoPath(p.home), strandedWorktreeList(p.home));
 		// A refusal that is not "gone" stands on its own: the handoff fails
 		// with it, and the create never runs on a directory it would collide
 		// with.
@@ -1711,18 +1682,11 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 		const p = await modulePlane(runner);
 		reuseToFreshCreate(runner, repoPath(p.home), p.home);
 		makeDirectory(worktreePath(p.home), { ".docusaurus/routes.js": "cache" });
-		// git's list holds the ticket's own path, and prunes it: a stale record,
-		// not an untracked directory.
-		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
-			stdout: worktreeListJson([
-				{ path: repoPath(p.home), linked: false },
-				{
-					path: worktreePath(p.home),
-					branch: "factory/9-persist-source-facts",
-					prunable: true,
-				},
-			]),
-		});
+		// git's record holds the ticket's own path, and prunes it: a stale
+		// record, not an untracked directory.
+		stubWorktreeList(runner, repoPath(p.home), [
+			porcelainBlock(worktreePath(p.home), "factory/9-persist-source-facts", true),
+		]);
 		runner.set("herdr", createOnBranch(repoPath(p.home)), {
 			code: 1,
 			stderr:
@@ -1765,9 +1729,7 @@ describe("handOffTicket: the leftover worktree directory that blocks a create", 
 		const p = await modulePlane(runner);
 		stubBranchList(runner, repoPath(p.home), "factory/9-persist-source-facts", "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
-		runner.set("herdr", ["worktree", "list", "--cwd", repoPath(p.home)], {
-			stdout: siblingWorktreeList(repoPath(p.home), p.home),
-		});
+		stubWorktreeList(runner, repoPath(p.home), siblingWorktreeList(p.home));
 		makeDirectory(worktreePath(p.home), { ".docusaurus/routes.js": "cache" });
 		runner.setSequence(
 			"herdr",
@@ -3687,7 +3649,7 @@ const PR_AGENT = agentNameFor(PR_TICKET);
 
 /** The path the PR world's ticket's worktree checkout takes. */
 function prWorktreePath(home: string): string {
-	return join(home, "worktrees", "factory", "factory-7-retry-policy-for-webhooks");
+	return join(home, ".herdr", "worktrees", "factory", "factory-7-retry-policy-for-webhooks");
 }
 
 const PR_CONFIG: FactoryConfig = {
@@ -3957,13 +3919,8 @@ class PrWorldRunner extends FakeRunner {
 		args: readonly string[],
 		options?: CommandOptions,
 	): Promise<CommandResult> {
-		const pre = existsSync(prWorktreePath(this.home));
 		this.answerFromWorld(command, args);
-		const result = await super.run(command, args, options);
-		const post = existsSync(prWorktreePath(this.home));
-		if (pre !== post)
-			console.log("DBG-RM", command, args.join(" "), pre, "->", post, "code", result.code);
-		return result;
+		return super.run(command, args, options);
 	}
 
 	/**
@@ -4090,7 +4047,7 @@ class PrWorldRunner extends FakeRunner {
 		const listed = [
 			{ path: this.checkout, linked: false },
 			{
-				path: join(this.home, "worktrees", "factory", "factory-6-another-ticket"),
+				path: join(this.home, ".herdr", "worktrees", "factory", "factory-6-another-ticket"),
 				branch: "factory/6-another-ticket",
 			},
 		];
@@ -6016,7 +5973,7 @@ describe("the herdr-core host: start, Close, and residue (issue #409)", () => {
 			agentHost: CORE_AGENT_HOST,
 		});
 
-		const coreWt = coreWorktreePath(p.home);
+		const coreWt = worktreePath(p.home);
 		expect(outcome.status).toBe("ok");
 		expect(outcome.notes).toBeUndefined();
 		// The branch read is the herdr host's own sequence: the branch the
@@ -6041,7 +5998,7 @@ describe("the herdr-core host: start, Close, and residue (issue #409)", () => {
 	test("a start the core host refuses removes the checkout and the branch it created", async () => {
 		const runner = new FakeRunner();
 		const p = await modulePlane(runner);
-		const coreWt = coreWorktreePath(p.home);
+		const coreWt = worktreePath(p.home);
 		stubBranchList(runner, repoPath(p.home), BRANCH, "");
 		stubRemoteDefaultBranch(runner, repoPath(p.home));
 		runner.set(
@@ -6211,5 +6168,200 @@ describe("the herdr-core host: start, Close, and residue (issue #409)", () => {
 		// The handoff that follows reopens the checkout in its own terminal:
 		// the stored close never removes the checkout, and the branch stays.
 		expect(runner.commands()).toEqual(["hc kill --json term-1", "hc rm --json term-1"]);
+	});
+
+	test("a core start reopens a worktree herdr made, from git's record", async () => {
+		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
+		const coreWt = worktreePath(p.home);
+		// The worktree stands where the naming rule names it: herdr made it
+		// on the herdr host, and git's record holds it for both hosts.
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeList(runner, repoPath(p.home), [porcelainBlock(coreWt, BRANCH)]);
+
+		const outcome = await handoffRun(runner, p.home, coreWorktreeChoice, {
+			agentHost: CORE_AGENT_HOST,
+		});
+
+		expect(outcome.status).toBe("ok");
+		// The record answers the lookup: no add, and no herdr command - herdr
+		// answers nothing on this host.
+		expect(runner.commands()).toEqual([
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
+			`git -C ${repoPath(p.home)} branch --list ${BRANCH}`,
+			`git -C ${repoPath(p.home)} worktree list --porcelain`,
+			`hc run --bg --outlive-parent --no-notify --name ${AGENT} --cwd ${coreWt} -- pi`,
+			`hc send --json ${AGENT} ${PROMPT}`,
+		]);
+		expectNoCommand(runner.commands(), "herdr ");
+	});
+
+	test("a core start whose record is stale clears it with git prune, then builds the checkout", async () => {
+		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
+		const coreWt = worktreePath(p.home);
+		stubBranchList(runner, repoPath(p.home));
+		stubWorktreeList(runner, repoPath(p.home), [porcelainBlock(coreWt, BRANCH, true)]);
+		runner.set("git", ["-C", repoPath(p.home), "worktree", "add", coreWt, BRANCH], {
+			stdout: `Preparing worktree (checking out '${BRANCH}')\n`,
+		});
+
+		const outcome = await handoffRun(runner, p.home, coreWorktreeChoice, {
+			agentHost: CORE_AGENT_HOST,
+		});
+
+		expect(outcome.status).toBe("ok");
+		// The record names a path git no longer sees: the prune clears it, and
+		// the add takes the path back on the branch it already holds.
+		expect(runner.commands()).toEqual([
+			`git -C ${repoPath(p.home)} rev-parse --git-dir`,
+			`git -C ${repoPath(p.home)} remote get-url origin`,
+			`git -C ${repoPath(p.home)} branch --list ${BRANCH}`,
+			`git -C ${repoPath(p.home)} worktree list --porcelain`,
+			`git -C ${repoPath(p.home)} worktree prune`,
+			`git -C ${repoPath(p.home)} worktree add ${coreWt} ${BRANCH}`,
+			`hc run --bg --outlive-parent --no-notify --name ${AGENT} --cwd ${coreWt} -- pi`,
+			`hc send --json ${AGENT} ${PROMPT}`,
+		]);
+		expectNoCommand(runner.commands(), "herdr ");
+	});
+
+	test("the leftover worktree directory moves aside on the herdr-core host, and the retry checks the branch out", async () => {
+		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
+		const repo = repoPath(p.home);
+		const coreWt = worktreePath(p.home);
+		// The first branch read finds none; the failed add left the branch
+		// standing, and the retry reads it again.
+		runner.setSequence(
+			"git",
+			["-C", repo, "branch", "--list", BRANCH],
+			[{ stdout: "" }, { stdout: `  ${BRANCH}\n` }],
+		);
+		stubRemoteDefaultBranch(runner, repo);
+		stubWorktreeList(runner, repo);
+		makeDirectory(coreWt, { ".docusaurus/routes.js": "cache" });
+		runner.set("git", ["-C", repo, "worktree", "add", coreWt, "-b", BRANCH, "origin/main"], {
+			code: 128,
+			stdout: `Preparing worktree (checking out '${BRANCH}')\n`,
+			stderr: `fatal: '${coreWt}' already exists\n`,
+		});
+		runner.set("git", ["-C", repo, "worktree", "add", coreWt, BRANCH], {
+			stdout: `Preparing worktree (checking out '${BRANCH}')\n`,
+		});
+
+		const outcome = await handoffRun(runner, p.home, coreWorktreeChoice, {
+			agentHost: CORE_AGENT_HOST,
+		});
+
+		expect(outcome.status).toBe("ok");
+		expect(runner.commands()).toEqual([
+			`git -C ${repo} rev-parse --git-dir`,
+			`git -C ${repo} remote get-url origin`,
+			`git -C ${repo} branch --list ${BRANCH}`,
+			`git -C ${repo} ls-remote --heads origin ${BRANCH}`,
+			`git -C ${repo} remote get-url origin`,
+			`git -C ${repo} symbolic-ref refs/remotes/origin/HEAD`,
+			`git -C ${repo} fetch origin main`,
+			`git -C ${repo} worktree add ${coreWt} -b ${BRANCH} origin/main`,
+			`git -C ${repo} worktree list --porcelain`,
+			`git -C ${repo} branch --list ${BRANCH}`,
+			`git -C ${repo} worktree add ${coreWt} ${BRANCH}`,
+			`hc run --bg --outlive-parent --no-notify --name ${AGENT} --cwd ${coreWt} -- pi`,
+			`hc send --json ${AGENT} ${PROMPT}`,
+		]);
+		// Nothing is deleted: the leftover stands whole under the name that
+		// says what it is, and the note says where it went.
+		expect(existsSync(coreWt)).toBe(false);
+		expect(readFileSync(`${coreWt}.leftover/.docusaurus/routes.js`, "utf8")).toBe("cache");
+		expect(outcome.notes?.leftoverWorktree).toBe(
+			`the plane moved the leftover worktree directory ${coreWt} aside to ${coreWt}.leftover`,
+		);
+	});
+
+	test("a close from the herdr host does not remove a checkout a herdr workspace still holds", async () => {
+		const runner = new FakeRunner();
+		const checkout = "/home/operator/.herdr/worktrees/factory/factory-9-persist-source-facts";
+		runner.set("herdr", ["worktree", "list", "--cwd", checkout], {
+			stdout: worktreeListJson([
+				{ path: checkout, branch: BRANCH, linked: true, openWorkspaceId: "ws-herdr" },
+			]),
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: "term-1", workspaceId: checkout, host: "herdr-core" },
+			runner,
+			{ runHost: "herdr" },
+		);
+
+		expect(failure).toBe(
+			`the herdr workspace ws-herdr still holds the checkout ${checkout}; the plane does not remove a checkout herdr holds`,
+		);
+		// Only herdr's own remove clears herdr's row: the terminal went down,
+		// and the checkout stands.
+		expectNoCommand(runner.commands(), "worktree remove");
+		expect(runner.commands()).toContain("hc kill --json term-1");
+	});
+
+	test("a close from the herdr host whose worktree list answers no holder removes the checkout", async () => {
+		const runner = new FakeRunner();
+		const checkout = "/home/operator/.herdr/worktrees/factory/factory-9-persist-source-facts";
+		runner.set("herdr", ["worktree", "list", "--cwd", checkout], {
+			stdout: worktreeListJson([{ path: checkout, branch: BRANCH, linked: true }]),
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: "term-1", workspaceId: checkout, host: "herdr-core" },
+			runner,
+			{ runHost: "herdr" },
+		);
+
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([
+			"hc kill --json term-1",
+			"hc rm --json term-1",
+			`herdr worktree list --cwd ${checkout}`,
+			`git -C ${checkout} worktree remove ${checkout}`,
+		]);
+	});
+
+	test("a close from the herdr host whose worktree list does not read keeps the checkout", async () => {
+		const runner = new FakeRunner();
+		const checkout = "/home/operator/.herdr/worktrees/factory/factory-9-persist-source-facts";
+		runner.set("herdr", ["worktree", "list", "--cwd", checkout], {
+			code: 1,
+			stderr: '{"error":{"code":"herdr_unavailable","message":"the herdr server is down"}}\n',
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: "term-1", workspaceId: checkout, host: "herdr-core" },
+			runner,
+			{ runHost: "herdr" },
+		);
+
+		expect(failure).toBe("the herdr server is down (herdr_unavailable)");
+		expectNoCommand(runner.commands(), "worktree remove");
+	});
+
+	test("a close from the herdr-core host removes the checkout without asking herdr", async () => {
+		const runner = new FakeRunner();
+		const checkout = "/home/operator/.herdr/worktrees/factory/factory-9-persist-source-facts";
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: "term-1", workspaceId: checkout, host: "herdr-core" },
+			runner,
+			{ runHost: "herdr-core" },
+		);
+
+		expect(failure).toBeUndefined();
+		// The plane reaches no herdr from this host: herdr answers nothing
+		// there, so the git removal stands as it always did.
+		expect(runner.commands()).toEqual([
+			"hc kill --json term-1",
+			"hc rm --json term-1",
+			`git -C ${checkout} worktree remove ${checkout}`,
+		]);
+		expectNoCommand(runner.commands(), "herdr ");
 	});
 });

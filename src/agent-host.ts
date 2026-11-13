@@ -593,6 +593,49 @@ export function worktreeAlreadyOpen(result: CommandResult): boolean {
 	return (data as { result?: { already_open?: unknown } }).result?.already_open === true;
 }
 
+/** One row of herdr's `worktree list` answer, in git's own shape. */
+export interface HerdrListedWorktree {
+	/** The path of the worktree's checkout. */
+	path: string;
+	/** Set when a herdr workspace is open on the worktree. */
+	open_workspace_id?: string;
+}
+
+/**
+ * The rows of herdr's `worktree list` answer, or null when the answer does not
+ * read (issue #411).
+ *
+ * herdr's list is git's own record with herdr's fact written beside it: each
+ * row keeps the checkout's path, and herdr adds whether a herdr workspace is
+ * open on the worktree. The Close guard reads the rows so the plane never
+ * removes a checkout a herdr workspace still holds.
+ */
+export function readHerdrWorktreeList(result: CommandResult): HerdrListedWorktree[] | null {
+	if (result.code !== 0) {
+		return null;
+	}
+	let data: unknown;
+	try {
+		data = JSON.parse(result.stdout);
+	} catch {
+		return null;
+	}
+	const worktrees = (data as { result?: { worktrees?: unknown } }).result?.worktrees;
+	if (!Array.isArray(worktrees)) return null;
+	const rows: HerdrListedWorktree[] = [];
+	for (const entry of worktrees) {
+		if (typeof entry !== "object" || entry === null) continue;
+		const row = entry as { path?: unknown; open_workspace_id?: unknown };
+		if (typeof row.path !== "string") continue;
+		if (typeof row.open_workspace_id === "string" && row.open_workspace_id !== "") {
+			rows.push({ path: row.path, open_workspace_id: row.open_workspace_id });
+		} else {
+			rows.push({ path: row.path });
+		}
+	}
+	return rows;
+}
+
 /**
  * The handles one herdr create answer names (issue #204): the workspace it made
  * or opened, the root pane of that workspace, and the tab that holds it. One

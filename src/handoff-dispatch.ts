@@ -2742,7 +2742,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 		};
 		try {
 			return reach === "cleanup"
-				? await closeHandoffEnvironment(environment, this.runner)
+				? await closeHandoffEnvironment(environment, this.runner, {
+						// The guard asks herdr whether a workspace still holds a
+						// checkout (issue #411): the plane reaches herdr only
+						// from its own host.
+						runHost: this.agentHost.host,
+					})
 				: await closeStoredEnvironment(environment, this.runner);
 		} catch (error) {
 			return `the close did not run: ${errorMessage(error)}`;
@@ -2985,7 +2990,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 					host: handoff.host,
 				},
 				this.runner,
-				options,
+				// The guard asks herdr whether a workspace still holds a
+				// checkout (issue #411): the plane reaches herdr only from its
+				// own host.
+				{ ...options, runHost: this.agentHost.host },
 			);
 			if (failure === undefined) {
 				const reach = closeCleanupReach({ ...handoff });

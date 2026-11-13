@@ -40,11 +40,12 @@ import { DEFAULT_TICKET_TITLE, RUN_AGENT_HOST, RUN_AGENT_HOST_MARKS } from "./fa
 import {
 	FakeRunner,
 	herdrFocusCommands,
+	porcelainBlock,
+	stubWorktreeList,
 	tabCreateJson,
 	WORKTREE_NOT_FOUND_ERROR,
 	workspaceCreateJson,
 	workspaceListJson,
-	worktreeListJson,
 	worktreeOpenJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
@@ -205,6 +206,10 @@ const liveChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement",
 });
 const worktreeChoice: HandoffChoice = baseChoice("pi", "worktree", "implement", {
 	host: "herdr" as const,
+});
+/** A worktree handoff on the herdr-core host: the checkout stands in herdr's own directory. */
+const coreWorktreeChoice: HandoffChoice = baseChoice("pi", "worktree", "implement", {
+	host: "herdr-core" as const,
 });
 /** A clean live-worktree handoff on the herdr-core host. */
 const coreChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement", {
@@ -4209,13 +4214,14 @@ describe("the decision screen's route close", () => {
 		const rigRef = await rig();
 		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);
 		settleTurn(rigRef, FIRST, stored.handoffId);
-		// The close took the workspace: herdr's list no longer holds it.
+		// The close took the workspace: the worktree still stands in git's
+		// record on the branch the work needed, so no worktree holds the
+		// ticket's branch while the worktree stands at the path herdr names
+		// for it.
 		const branch = "factory/5-persist-source-facts";
-		// The agent that last worked the ticket left the worktree on the
-		// branch the work needed, so no worktree holds the ticket's branch
-		// while the worktree still stands at the path herdr names for it.
 		const worktreePath = join(
 			rigRef.home,
+			".herdr",
 			"worktrees",
 			"factory",
 			"factory-5-persist-source-facts",
@@ -4229,12 +4235,9 @@ describe("the decision screen's route close", () => {
 			["worktree", "open", "--cwd", rigRef.checkout, "--branch", branch, "--no-focus"],
 			{ code: 1, stderr: WORKTREE_NOT_FOUND_ERROR },
 		);
-		rigRef.runner.set("herdr", ["worktree", "list", "--cwd", rigRef.checkout], {
-			stdout: worktreeListJson([
-				{ path: rigRef.checkout, linked: false },
-				{ path: worktreePath, branch: "factory/146-the-branch-the-work-needed" },
-			]),
-		});
+		stubWorktreeList(rigRef.runner, rigRef.checkout, [
+			porcelainBlock(worktreePath, "factory/146-the-branch-the-work-needed"),
+		]);
 		rigRef.runner.set(
 			"herdr",
 			["worktree", "open", "--cwd", rigRef.checkout, "--path", worktreePath, "--no-focus"],
@@ -4244,18 +4247,20 @@ describe("the decision screen's route close", () => {
 		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
 		const commands = rigRef.commands();
 		// The ask closes the workspace, the branch lookup finds no worktree,
-		// and the handoff reopens the worktree the agent left by its path,
-		// on the branch it holds. The fresh create would collide with the
-		// directory, and never runs.
+		// the lookup answers from git's record, and the handoff reopens the
+		// worktree the agent left by its path, on the branch it holds. The
+		// fresh create would collide with the directory, and never runs.
 		const closedAt = commands.indexOf(`herdr workspace close ${stored.workspaceId}`);
 		const branchOpenAt = commands.indexOf(
 			`herdr worktree open --cwd ${rigRef.checkout} --branch ${branch} --no-focus`,
 		);
+		const recordAt = commands.indexOf(`git -C ${rigRef.checkout} worktree list --porcelain`);
 		const pathOpenAt = commands.indexOf(
 			`herdr worktree open --cwd ${rigRef.checkout} --path ${worktreePath} --no-focus`,
 		);
 		expect(closedAt).toBeLessThan(branchOpenAt);
-		expect(branchOpenAt).toBeLessThan(pathOpenAt);
+		expect(branchOpenAt).toBeLessThan(recordAt);
+		expect(recordAt).toBeLessThan(pathOpenAt);
 		expect(pathOpenAt).toBeLessThan(
 			commands.indexOf(`herdr agent start ${FIRST.name} --kind pi --pane pane-route`),
 		);
@@ -5133,6 +5138,66 @@ describe("the host each route takes (issue #409)", () => {
 		// the core's first command did not run.
 		expect(rigRef.commands().some((c) => c.startsWith("hc run "))).toBe(false);
 		expect(rigRef.events).toContain(`notice:"${FIRST.title}" started from the Work queue`);
+	});
+
+	test("a host switch inside one Ticket cycle reopens the same checkout on the same branch", async () => {
+		const rigRef = await rig([FIRST]);
+		const branch = "factory/5-persist-source-facts";
+		// The herdr-core start ran the naming rule: its checkout stands in
+		// herdr's own directory at the path that rule names, on the ticket's
+		// branch. Its stored close took only the terminal: the checkout stays
+		// in git's record.
+		const corePath = `${rigRef.home}/.herdr/worktrees/factory/factory-5-persist-source-facts`;
+		const stored = seedHandoff(rigRef, FIRST, coreWorktreeChoice, { workspaceId: corePath });
+		closeCycle(rigRef, FIRST, stored.handoffId);
+		// The ticket's next cycle runs on herdr: the world holds the one
+		// checkout whose git record names the plane's worktree at exactly that
+		// path, on exactly that branch.
+		const world = stubHerdrWorld({
+			checkouts: [
+				{
+					path: rigRef.checkout,
+					cloneUrl: "https://github.com/acme/factory.git",
+					branches: [{ name: branch, local: true }],
+					worktrees: [{ path: corePath, branch, linked: true }],
+				},
+			],
+		});
+		expect(
+			rigRef.state.workQueue.enqueueWork({
+				ticketIdentity: FIRST.identity,
+				origin: "open",
+				choice: worktreeChoice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		const picking = withRunner(rigRef, world, {
+			agentHost: { host: "herdr", fact: "config" },
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(1);
+		await untilQueueDrains(rigRef);
+		const commands = world.commands();
+		// herdr's open answers from git's record, which holds the checkout the
+		// plane made: the same branch, the same checkout, on the other host.
+		expect(commands).toContain(
+			`herdr worktree open --cwd ${rigRef.checkout} --branch ${branch} --no-focus`,
+		);
+		// One checkout per ticket: the new host rebuilds nothing. The core's
+		// dialect stays the merged name check's roster read, the way it does
+		// on every herdr run (issue #410).
+		expect(commands.some((c) => c.includes("worktree create"))).toBe(false);
+		expect(commands.some((c) => c.includes("worktree add"))).toBe(false);
+		expect(commands.filter((c) => c.startsWith("hc ")).every((c) => c === "hc ls --json")).toBe(
+			true,
+		);
+		// The record the start wrote stands on the run's host, beside the
+		// workspace the open took on the shared checkout.
+		const now = rigRef.state.handoff.latestHandoff(FIRST.identity);
+		expect(now?.host).toBe("herdr");
+		expect(now?.workspaceId).toBe("ws-1");
+		expect(rigRef.events).toContain(`notice:"${FIRST.title}" started from the Work queue`);
+		picking.stop();
 	});
 });
 
