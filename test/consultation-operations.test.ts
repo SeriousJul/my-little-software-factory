@@ -135,6 +135,7 @@ interface Seed {
 	typeName?: string;
 	repository?: ConsultationRepositoryOption;
 	input?: string;
+	host?: "herdr" | "herdr-core";
 }
 
 /** Create the durable opening record the module takes over from the view. */
@@ -147,7 +148,7 @@ function seed(state: FactoryState, fixture: Fixture, id: string, over: Seed = {}
 		id,
 		typeName,
 		agentType: type.agent,
-		host: "herdr",
+		host: over.host ?? "herdr",
 		environment,
 		model: type.model ?? "",
 		template: "/grill {input}",
@@ -1587,6 +1588,78 @@ describe("Consultation operations: close", () => {
 		return consultation;
 	}
 
+	/**
+	 * A working Consultation on the herdr-core host: the terminal name is its
+	 * pane, tab, and workspace, the host reports no session, and the record
+	 * owns the terminal, the Agent, and the worktree checkout (issue #409).
+	 */
+	function seedWorkingCore(
+		fixture: Fixture,
+		id: string,
+		name: string,
+		worktree: string,
+	): Consultation {
+		const consultation = seed(fixture.state, fixture, id, { host: "herdr-core" });
+		fixture.state.consultationRecord.setConsultationAgent(id, {
+			paneId: name,
+			tabId: name,
+			workspaceId: name,
+			sessionId: null,
+		});
+		fixture.state.consultationRecord.recordConsultationResource(id, {
+			kind: "terminal",
+			resourceId: name,
+			owned: true,
+			details: "Consultation terminal",
+		});
+		fixture.state.consultationRecord.recordConsultationResource(id, {
+			kind: "worktree",
+			resourceId: worktree,
+			owned: true,
+			details: `Consultation worktree checkout for ${consultationBranchName(id, "grill")}`,
+		});
+		fixture.state.consultationRecord.recordConsultationResource(id, {
+			kind: "pane",
+			resourceId: name,
+			owned: true,
+			details: "Consultation Agent pane",
+		});
+		fixture.state.consultationRecord.recordConsultationResource(id, {
+			kind: "agent",
+			resourceId: name,
+			owned: true,
+			details: `Agent hosted by pane ${name}`,
+		});
+		return consultation;
+	}
+
+	/** Stub the host reads a close of a herdr-core Consultation issues. */
+	function stubCoreClose(runner: LifecycleRunner, name: string, worktree: string): void {
+		runner.inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		runner.inner.set("hc", ["ls", "--json", "--all"], {
+			stdout: JSON.stringify({
+				terminals: [{ address: "t9", name, state: "live", agent: "pi", cwd: worktree }],
+			}),
+		});
+		// The record read runs by the roster row's address, not its name.
+		runner.inner.set("hc", ["get", "--json", "t9"], {
+			stdout: JSON.stringify({
+				address: "t9",
+				name,
+				state: "live",
+				status: "working",
+				cwd: worktree,
+			}),
+		});
+		runner.inner.set("hc", ["read", "--json", "--lines", "200", name], {
+			stdout: JSON.stringify({ text: "Agent: done" }),
+		});
+		runner.inner.set("hc", ["kill", "--json", name], {
+			stdout: JSON.stringify({ address: "t9", name, state: "finished" }),
+		});
+		runner.inner.set("hc", ["rm", "--json", name], { stdout: JSON.stringify({ address: "t9" }) });
+	}
+
 	test("closes an exclusively owned workspace whole and keeps its worktree", async () => {
 		const fixture = await makeFixture();
 		const runner = new LifecycleRunner();
@@ -1626,6 +1699,38 @@ describe("Consultation operations: close", () => {
 		expect(
 			fixture.state.consultationRecord.consultationSnapshots(id).some((snap) => snap.partial),
 		).toBe(true);
+		expect(statusTexts(harness).at(-1)).toContain("closed");
+	});
+
+	test("closes its terminal on the herdr-core host and keeps its worktree", async () => {
+		const fixture = await makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("e");
+		const name = agentOf(id);
+		const worktree = join(fixture.home, ".herdr", "worktrees", `factory-${name}-grill`);
+		const consultation = seedWorkingCore(fixture, id, name, worktree);
+		stubCoreClose(runner, name, worktree);
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.close(consultation);
+
+		expect(runner.commands()).toEqual([
+			"herdr agent list",
+			"hc ls --json --all",
+			"hc get --json t9",
+			`hc read --json --lines 200 ${name}`,
+			`hc kill --json ${name}`,
+			`hc rm --json ${name}`,
+		]);
+		const closed = current(fixture.state, id);
+		expect(closed.state).toBe("closed");
+		expect(closed.closeResult).toBeNull();
+		// The worktree and its branch survive: retained, never removed.
+		const worktreeResource = closed.resources.find((resource) => resource.kind === "worktree");
+		expect(worktreeResource).toMatchObject({ owned: false, confirmedClosed: false });
+		expect(worktreeResource?.details).toContain("retained after close");
+		for (const resource of closed.resources.filter((item) => item.kind !== "worktree"))
+			expect(resource).toMatchObject({ confirmedClosed: true });
 		expect(statusTexts(harness).at(-1)).toContain("closed");
 	});
 

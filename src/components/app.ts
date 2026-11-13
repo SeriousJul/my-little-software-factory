@@ -5690,10 +5690,15 @@ function coreTerminalNames(state: AppAggregates): readonly string[] {
 	const names: string[] = [];
 	for (const ticket of state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES))
 		if (ticket.host === "herdr-core" && ticket.paneId !== null) names.push(ticket.paneId);
+	// The set the Consultation close's own verification reads stands beside it:
+	// a close marks its record `closing` before it verifies the Agent, so the
+	// cycle keeps the closing Consultation's terminal in the list the close
+	// reads (issue #410, ADR 0142).
 	for (const consultation of state.consultationRecord.consultationsByState([
 		"opening",
 		"working",
 		"awaiting-response",
+		"closing",
 	]))
 		if (consultation.host === "herdr-core" && consultation.paneId !== null)
 			names.push(consultation.paneId);

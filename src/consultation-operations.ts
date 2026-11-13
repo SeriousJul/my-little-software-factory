@@ -14,11 +14,15 @@ import {
 	type AgentHostResolution,
 	type HostInvocation,
 	herdrAgentPrompt,
+	herdrCoreKill,
+	herdrCoreRefusalFact,
+	herdrCoreRemove,
 	herdrPaneClose,
 	herdrPaneList,
 	herdrTabClose,
 	herdrTabList,
 	herdrWorkspaceClose,
+	type RefusalFact,
 	runIdentityOf,
 } from "./agent-host.ts";
 import type { ConsultationCheckoutHold } from "./checkout-hold.ts";
@@ -233,6 +237,17 @@ interface CloseOperation {
 	cancelled: boolean;
 }
 
+/**
+ * One cleanup command of a close plan. A core-host step names the host
+ * refusal facts that read as the environment already gone (ADR 0141): a
+ * terminal the host no longer holds, or already finished, answers the close
+ * the way herdr's close of a gone workspace answers it.
+ */
+interface CloseStep {
+	invocation: HostInvocation;
+	goneFacts?: readonly RefusalFact[];
+}
+
 interface LaunchConflict {
 	status: "conflict";
 	safety: LiveCheckoutSafety;
@@ -242,8 +257,8 @@ type LaunchOutcome = HandoffOutcome | LaunchConflict;
 
 /** The herdr environment one close takes down, and what survives it. */
 interface ClosePlan {
-	/** The one cleanup command, or none when no owned environment remains. */
-	command: HostInvocation | undefined;
+	/** The cleanup commands in order, or none when no owned environment remains. */
+	commands: readonly CloseStep[];
 	/** Resources the command confirmed closed. */
 	closes: ConsultationResource[];
 	/** Resources the operator keeps: shared, or a worktree that never closes. */
@@ -326,6 +341,7 @@ export class ConsultationOperations {
 					"opening",
 					"working",
 					"awaiting-response",
+					"closing",
 				]))
 					if (record.host === "herdr-core" && record.paneId !== null) names.push(record.paneId);
 				return names;
@@ -1015,13 +1031,12 @@ export class ConsultationOperations {
 		// Retaining shared resources is durable work too. Do not let a
 		// Force-close between the loop and the command produce a partial plan.
 		if (operation.cancelled || this.stopped) return;
-		if (plan.command !== undefined) {
-			const result = await this.runner.run(plan.command.command, plan.command.args);
-			if (result.code !== 0) throw new Error(commandFailureText(result));
+		if (plan.commands.length > 0) {
+			const completed = await this.runCloseCommands(plan, operation);
 			// A close sends no focus command, whatever it takes down: the plane
 			// never moves herdr's view on its own (ADR 0061), and a close of a
 			// workspace the client is not viewing leaves that view alone.
-			if (operation.cancelled || this.stopped) return;
+			if (!completed) return;
 			for (const resource of plan.closes)
 				this.state.consultationRecord.markConsultationResourceClosed(
 					settled.id,
@@ -1161,6 +1176,51 @@ export class ConsultationOperations {
 	 * Consultation. An adopted workspace, and a tab that holds a foreign pane,
 	 * belong to someone else: only what is inside them closes.
 	 */
+	/**
+	 * Run the plan's commands in order. A step that fails beyond its own host's
+	 * word that the environment is already gone fails the close; a Force-close
+	 * or a stop over the run stops the loop and reports the steps unfinished.
+	 */
+	private async runCloseCommands(plan: ClosePlan, operation: CloseOperation): Promise<boolean> {
+		for (const step of plan.commands) {
+			const result = await this.runner.run(step.invocation.command, step.invocation.args);
+			if (result.code !== 0 && !closeStepGone(result, step.goneFacts))
+				throw new Error(commandFailureText(result));
+			if (operation.cancelled || this.stopped) return false;
+		}
+		return true;
+	}
+
+	/**
+	 * The close of a herdr-core Consultation (ADR 0141): the host knows no
+	 * workspace, no tab, and no pane. The Consultation's environment is one
+	 * terminal, so the close takes the terminal's program down with a kill and
+	 * the record the terminal stands on with the rm that follows, the way the
+	 * Handoff's close of a predecessor terminal takes it down. The worktree and
+	 * its branch survive, the way they survive on the herdr host.
+	 */
+	private planCoreCloseCleanup(
+		pane: ConsultationResource | undefined,
+		resources: readonly ConsultationResource[],
+		worktrees: ClosePlan["retains"],
+	): ClosePlan {
+		if (pane === undefined) return { commands: [], closes: [], retains: [] };
+		return {
+			commands: [
+				{
+					invocation: herdrCoreKill(pane.resourceId),
+					goneFacts: ["terminal_not_found", "terminal_finished"],
+				},
+				{
+					invocation: herdrCoreRemove(pane.resourceId),
+					goneFacts: ["terminal_not_found"],
+				},
+			],
+			closes: resources.filter((item) => item.kind !== "worktree"),
+			retains: worktrees,
+		};
+	}
+
 	private async planCloseCleanup(
 		current: Consultation,
 		resources: readonly ConsultationResource[],
@@ -1181,14 +1241,17 @@ export class ConsultationOperations {
 		const sharedWorkspace =
 			workspace === undefined ? [] : [{ kind: workspace.kind, resourceId: workspace.resourceId }];
 		const workspaceId = workspace?.resourceId ?? current.workspaceId;
+		// herdr-core knows no workspace, no tab, and no pane: its close is its
+		// own plan, and the shared topology probe never runs for it.
+		if (current.host === "herdr-core") return this.planCoreCloseCleanup(pane, resources, worktrees);
 		// Nothing to take down, so nothing is proved shared: the resources stay
 		// recorded exactly as the launch left them.
-		if (pane === undefined) return { command: undefined, closes: [], retains: [] };
+		if (pane === undefined) return { commands: [], closes: [], retains: [] };
 		if (workspaceId === null)
 			// No workspace handle to probe the topology of: the pane is still the
 			// Consultation's own, and everything else stands as it is.
 			return {
-				command: herdrPaneClose(pane.resourceId),
+				commands: [{ invocation: herdrPaneClose(pane.resourceId) }],
 				closes: withAgent([pane]),
 				retains: [],
 			};
@@ -1203,20 +1266,20 @@ export class ConsultationOperations {
 		// belongs to someone else even while it stands empty.
 		if (topology.workspaceExclusive && workspace !== undefined)
 			return {
-				command: herdrWorkspaceClose(workspace.resourceId),
+				commands: [{ invocation: herdrWorkspaceClose(workspace.resourceId) }],
 				closes: resources.filter((item) => item.kind !== "worktree"),
 				retains: worktrees,
 			};
 		if (topology.ownedTabExclusive && tab !== undefined)
 			return {
-				command: herdrTabClose(tab.resourceId),
+				commands: [{ invocation: herdrTabClose(tab.resourceId) }],
 				closes: withAgent([tab, pane]),
 				retains: [...sharedWorkspace, ...worktrees],
 			};
 		// A foreign pane shares the owned tab: close the Consultation's pane
 		// alone, and leave the tab and the workspace beside it.
 		return {
-			command: herdrPaneClose(pane.resourceId),
+			commands: [{ invocation: herdrPaneClose(pane.resourceId) }],
 			closes: withAgent([pane]),
 			retains: [
 				...sharedWorkspace,
@@ -1667,6 +1730,16 @@ async function workspaceTopology(
 	} catch {
 		return { known: false, workspaceExclusive: false, ownedTabExclusive: false };
 	}
+}
+
+/** Whether a failed close step is the host's own word for an environment already gone. */
+function closeStepGone(
+	result: CommandResult,
+	goneFacts: readonly RefusalFact[] | undefined,
+): boolean {
+	if (goneFacts === undefined) return false;
+	const fact = herdrCoreRefusalFact(result);
+	return fact !== null && goneFacts.includes(fact);
 }
 
 /** Whether a listed Agent's session id contradicts the Consultation's stored one. */
