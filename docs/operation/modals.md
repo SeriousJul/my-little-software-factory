@@ -25,9 +25,7 @@ The rows the modal offers:
 - **Goto** focuses the agent's pane in herdr so you can steer it by hand. The
   ticket stays awaiting until the next poll moves it or you decide it. On a
   herdr-core host the row states its own refusal instead of focusing
-  anything, naming the command the operator types to take the agent's
-  terminal over: `the herdr-core host answers no focus move: type hc attach
-  <name>`.
+  anything, naming the command the operator types to take the agent's terminal over: `the herdr-core host answers no focus move: type hc attach <name>`.
 - **Handoff: `<task type>`** hands the ticket off to the next kind of work,
   when the settled turn's labels put it in a state that offers one. `e` on
   the row edits that one handoff first.
