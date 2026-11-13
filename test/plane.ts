@@ -80,7 +80,7 @@ import {
 	SAMPLE_TICKETS,
 	ticketOf,
 } from "./fact-fixtures.ts";
-import { emptyAgentRunner, type FakeRunner } from "./fake-runner.ts";
+import { emptyAgentRunner, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { holdPlaneClose } from "./plane-cleanup.ts";
 
@@ -1031,6 +1031,15 @@ function seedStandingFacts(
 }
 
 /** The runner the plane serves: the case's where it names one, the table's beside it. */
+/** The standing's empty herdr-core roster on a runner that can hold stubs. */
+function seedEmptyCoreRoster(target: FakeRunner): void {
+	if (!target.hasStub("hc", ["ls", "--json", "--all"]))
+		target.set("hc", ["ls", "--json", "--all"], { stdout: '{"terminals":[]}\n' });
+	if (!target.hasStub("hc", ["ls", "--json"]))
+		target.set("hc", ["ls", "--json"], { stdout: '{"terminals":[]}\n' });
+}
+
+
 function runnerFor(
 	standing: PlaneStanding,
 	fake: FakeRunner,
@@ -1040,8 +1049,16 @@ function runnerFor(
 	if (tableOwnsIt(standing) && (standing.checkout ?? "empty") === "healthy" && checkout !== null) {
 		pinHealthyCheckout(fake, checkout);
 	}
+	const runner: CommandRunner = standing.runner?.(fake) ?? fake;
+	// A herdr-core host with no terminals is the standing answer on a plane
+	// that reads both hosts (ADR 0142): the merged roster holds the core half
+	// empty, and no host note states beside the list. The answer lands on the
+	// runner the app reads, so a standing that stands its own runner beside
+	// the fake keeps the same standing on that runner.
+	for (const target of [fake, ...(runner === fake ? [] : [runner])])
+		if (target instanceof FakeRunner) seedEmptyCoreRoster(target);
 	if (standing.commands !== undefined) standing.commands(fake, home);
-	return standing.runner?.(fake) ?? fake;
+	return runner;
 }
 
 /** The source doubles: one per listed source, then the unlisted doubles beside them. */
@@ -1186,6 +1203,11 @@ export async function plane(standing: PlaneStanding = {}): Promise<Plane> {
 				herdrEnv: standing.agentHostEnv?.herdrEnv,
 				hcTerminalId: standing.agentHostEnv?.hcTerminalId,
 			}),
+			// The marks the standing config resolved the run from (issue #410).
+			agentHostMarks: {
+				herdrEnv: standing.agentHostEnv?.herdrEnv,
+				hcTerminalId: standing.agentHostEnv?.hcTerminalId,
+			},
 			loopPolicy:
 				standing.pollIntervalMs === undefined
 					? { kind: "held" }

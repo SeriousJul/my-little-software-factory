@@ -53,7 +53,7 @@ import type { PlaneActionAggregate } from "../src/state/plane-action.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import { fireTransition, isCoveredByFixingPullRequest } from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { RUN_AGENT_HOST } from "./fact-fixtures.ts";
+import { RUN_AGENT_HOST, RUN_AGENT_HOST_MARKS } from "./fact-fixtures.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -444,6 +444,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 				: config.maxParallelAgents,
 		home: dir,
 		agentHost: RUN_AGENT_HOST,
+		agentHostMarks: RUN_AGENT_HOST_MARKS,
 		working: () => undefined,
 		warning: () => undefined,
 		faultWarning: () => undefined,
@@ -1038,6 +1039,7 @@ describe("the merge row that stands in the queue (issue #352, ADR 0133)", () => 
 		chain.seedRunningTurn(issueIdentity, "implement");
 		chain.setAgents([
 			{
+				host: "herdr",
 				paneId: `pane-${issueIdentity}`,
 				tabId: "tab-1",
 				workspaceId: "ws-1",
@@ -1113,6 +1115,7 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 		const runningAttempt = chain.seedRunningTurn(pullIdentity, "rework");
 		chain.setAgents([
 			{
+				host: "herdr",
 				paneId: `pane-${pullIdentity}`,
 				tabId: "tab-1",
 				workspaceId: "ws-1",
@@ -1200,6 +1203,7 @@ describe("the seat a settling turn frees (the dev-run miss on PR #206)", () => {
 		const runningAttempt = chain.seedRunningTurn(pullIdentity, "rework");
 		chain.setAgents([
 			{
+				host: "herdr",
 				paneId: `pane-${pullIdentity}`,
 				tabId: "tab-1",
 				workspaceId: "ws-1",
@@ -1426,6 +1430,7 @@ describe("the pair of one cycle shares its worktree (ADR 0112)", () => {
 			const runningAttempt = chain.seedRunningTurn(issueIdentity, "implement");
 			chain.setAgents([
 				{
+					host: "herdr",
 					paneId: `pane-${issueIdentity}`,
 					tabId: "tab-1",
 					workspaceId: "ws-1",
@@ -1782,6 +1787,7 @@ describe("the bug position runs the diagnosis machine (issue #330, ADR 0116)", (
 			// Agent does.
 			chain.setAgents([
 				{
+					host: "herdr",
 					paneId: "pane-diag",
 					tabId: "tab-ws-diag",
 					workspaceId: "ws-diag",

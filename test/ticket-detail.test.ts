@@ -8,7 +8,7 @@ import {
 	wheelRows,
 } from "../src/components/ticket-detail.ts";
 import type { ScrollConfig } from "../src/config.ts";
-import type { Handoff, Ticket } from "../src/domain/ticket.ts";
+import type { AgentNameCollision, Handoff, Ticket } from "../src/domain/ticket.ts";
 import { type TicketRowFacts, ticketFactsFor } from "../src/domain/ticket-facts.ts";
 import type { HandoffChoice } from "../src/handoff.ts";
 import { roleColor } from "./app-harness.ts";
@@ -181,7 +181,8 @@ describe("Ticket detail wheel acceleration", () => {
  * two blocks stand apart, and neither states the other's fact.
  */
 describe("the Agent name collision in the Ticket detail (issue #299)", () => {
-	const collision = {
+	const collision: AgentNameCollision = {
+		host: "herdr",
 		heldName: "watch-agent-turns-1a2b3c4d",
 		holderPaneId: "w13K:p1",
 		holderWorkspaceId: "w13K",

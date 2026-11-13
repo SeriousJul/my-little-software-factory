@@ -20,6 +20,7 @@
 import { homedir } from "node:os";
 
 import {
+	type AgentHostMarks,
 	type AgentHostResolution,
 	agentHostBootLine,
 	HERDR_CORE_VERSION_FLOOR,
@@ -110,6 +111,13 @@ export type StartupResult =
 			 * Message line beside the record entry the boot wrote for it.
 			 */
 			agentHost: AgentHostResolution;
+			/**
+			 * The environment marks the boot resolved the run from (issue #410):
+			 * the marks name the run for the labels a herdr-core start writes, and
+			 * the herdr-core mark is the terminal whose Adoption labels the start
+			 * copies (ADR 0141).
+			 */
+			agentHostMarks: AgentHostMarks;
 			/** Non-fatal operator lines: the missing-config note and model warnings. */
 			notes: string[];
 	  };
@@ -417,11 +425,12 @@ async function bootAgentHost(
 	runner: CommandRunner,
 	logger: Logger,
 	notes: string[],
-): Promise<AgentHostResolution> {
-	const agentHost = resolveAgentHost(config.agentHost, {
+): Promise<{ agentHost: AgentHostResolution; marks: AgentHostMarks }> {
+	const marks: AgentHostMarks = {
 		herdrEnv: process.env.HERDR_ENV,
 		hcTerminalId: process.env.HC_TERMINAL_ID,
-	});
+	};
+	const agentHost = resolveAgentHost(config.agentHost, marks);
 	logger.info(agentHostBootLine(agentHost));
 	if (agentHost.host === "herdr-core") {
 		const read = herdrCoreVersionRead(config.agentHostHerdrCore?.binary);
@@ -433,7 +442,7 @@ async function bootAgentHost(
 			logger.warn(warning);
 		}
 	}
-	return agentHost;
+	return { agentHost, marks };
 }
 
 export async function runStartup(configPath: string, worldPath?: string): Promise<StartupResult> {
@@ -453,7 +462,9 @@ export async function runStartup(configPath: string, worldPath?: string): Promis
 		return { ok: false, lines: [...notes, stub.reason], exitCode: 1 };
 	}
 	const runner = stub.runner;
-	const agentHost = await bootAgentHost(loaded.config, runner, logger, notes);
+	const booted = await bootAgentHost(loaded.config, runner, logger, notes);
+	const agentHost = booted.agentHost;
+	const agentHostMarks = booted.marks;
 	// The config's model values, checked against what the agent runtimes
 	// actually offer. An unavailable list only warns: one agent kind that
 	// cannot answer must not block the control plane.
@@ -496,6 +507,7 @@ export async function runStartup(configPath: string, worldPath?: string): Promis
 		home,
 		logger,
 		agentHost,
+		agentHostMarks,
 		notes,
 	};
 }

@@ -39,7 +39,7 @@ import { planeActionCheckoutWord } from "../src/plane-action-registry.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { DEFAULT_TICKET_TITLE, RUN_AGENT_HOST } from "./fact-fixtures.ts";
+import { DEFAULT_TICKET_TITLE, RUN_AGENT_HOST, RUN_AGENT_HOST_MARKS } from "./fact-fixtures.ts";
 import { FakeRunner } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
 import { infoLine, type RecordedLine, recordLogger, warnLine } from "./record-logger.ts";
@@ -358,6 +358,7 @@ function rig(options: RigOptions = {}): Rig {
 			seatCount,
 			home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			log: recordLogger(lines),
 			...reports,
 			...overrides,

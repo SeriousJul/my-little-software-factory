@@ -134,6 +134,7 @@ function agent(
 ): HerdrAgent {
 	const { status = "working", sessionId = "", stableSessionId, name } = fields;
 	return {
+		host: "herdr",
 		paneId,
 		tabId: "tab-1",
 		workspaceId: "ws-1",
@@ -461,6 +462,7 @@ describe("HerdrAgentReader.listAgents", () => {
 			kind: "ok",
 			agents: [
 				{
+					host: "herdr",
 					paneId: "pane-kept",
 					tabId: "",
 					workspaceId: "",
@@ -521,6 +523,7 @@ describe("HerdrAgentReader.listAgents", () => {
 			kind: "ok",
 			agents: [
 				{
+					host: "herdr",
 					paneId: "pane-1",
 					tabId: "",
 					workspaceId: "",
@@ -6959,6 +6962,7 @@ describe("the Agent name collision holds the Top-up out (issue #299)", () => {
 		state.handoff.recordNameCollision({
 			ticketIdentity: IDENTITY,
 			heldName: "persist-source-facts-1a2b3c4d",
+			holderHost: "herdr",
 			holderPaneId: "w13K:p1",
 			holderWorkspaceId: "w13K",
 			reason: REFUSAL,

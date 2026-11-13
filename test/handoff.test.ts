@@ -48,6 +48,7 @@ import {
 	DEFAULT_TICKET_TITLE,
 	ticket as defaultTicket,
 	RUN_AGENT_HOST,
+	RUN_AGENT_HOST_MARKS,
 } from "./fact-fixtures.ts";
 import {
 	FakeRunner,
@@ -161,6 +162,7 @@ async function handoffRun(
 		runner,
 		home,
 		agentHost: over.agentHost ?? RUN_AGENT_HOST,
+		agentHostMarks: RUN_AGENT_HOST_MARKS,
 		onStage: over.onStage,
 		names: over.names,
 		claim: over.claim ?? "open",
@@ -1934,6 +1936,7 @@ describe("handOffTicket: the guard rails", () => {
 				runner,
 				home: p.home,
 				agentHost: RUN_AGENT_HOST,
+				agentHostMarks: RUN_AGENT_HOST_MARKS,
 			});
 
 			expect(outcome.status).toBe("failed");
@@ -1956,6 +1959,7 @@ describe("handOffTicket: the guard rails", () => {
 				runner,
 				home: p.home,
 				agentHost: RUN_AGENT_HOST,
+				agentHostMarks: RUN_AGENT_HOST_MARKS,
 			});
 
 			expect(outcome.status).toBe("failed");
@@ -2002,6 +2006,7 @@ describe("handOffTicket: the guard rails", () => {
 					runner,
 					home: p.home,
 					agentHost: RUN_AGENT_HOST,
+					agentHostMarks: RUN_AGENT_HOST_MARKS,
 				});
 				expect(outcome.status, item.label).toBe("failed");
 				expect(reasonOf(outcome)).toContain(item.text);
@@ -2026,6 +2031,7 @@ describe("handOffTicket: the guard rails", () => {
 				runner,
 				home: p.home,
 				agentHost: RUN_AGENT_HOST,
+				agentHostMarks: RUN_AGENT_HOST_MARKS,
 			});
 			expect(outcome.status).toBe("failed");
 			expect(reasonOf(outcome)).toContain(
@@ -2048,6 +2054,7 @@ describe("handOffTicket: the guard rails", () => {
 				runner,
 				home: p.home,
 				agentHost: RUN_AGENT_HOST,
+				agentHostMarks: RUN_AGENT_HOST_MARKS,
 			});
 
 			expect(outcome.status).toBe("ok");
@@ -2089,6 +2096,7 @@ describe("handOffTicket: the guard rails", () => {
 				runner,
 				home: p.home,
 				agentHost: RUN_AGENT_HOST,
+				agentHostMarks: RUN_AGENT_HOST_MARKS,
 				startCheck,
 			});
 
@@ -2811,6 +2819,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 		expect(outcome.status === "ok" && outcome.collision).toEqual({
 			stableName: AGENT,
 			heldName: AGENT,
+			host: "herdr",
 			startedAs: cycle,
 			holder: {
 				terminalId: "term_1",
@@ -3450,6 +3459,7 @@ describe("the review verdict of the rework handoff prompt", () => {
 			runner,
 			home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 	}
 
@@ -4841,6 +4851,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 		expect(reasonOf(onTicket)).toBe("unknown agent type: nope");
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4859,6 +4870,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 		expect(reasonOf(onTicket)).toBe("the container environment is reserved and not yet built");
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -4903,6 +4915,7 @@ describe("the one start: one pre-flight order on both paths", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 		expect(reasonOf(onTicket)).toContain('has no model "gpt-4o"');
 		expect(reasonOf(onConsultation)).toBe(reasonOf(onTicket));
@@ -5006,6 +5019,7 @@ describe("the one start: one stage order on both paths", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			onStage: stageRecorder(stages),
 		});
 
@@ -5133,6 +5147,7 @@ describe("the one start: one cleanup rule on every Environment kind", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5380,6 +5395,7 @@ describe("the one start: a command that raises", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...resourceCallbacks(recorded, confirmed),
 		});
 
@@ -5416,6 +5432,7 @@ describe("the one start: a command that raises", () => {
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			...resourceCallbacks(recorded, confirmed),
 		});
 
@@ -5467,6 +5484,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			onResource: recorder(resources),
 		});
 
@@ -5502,6 +5520,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			onResource: recorder(resources),
 		});
 
@@ -5544,6 +5563,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			onResource: recorder(resources),
 		});
 
@@ -5578,6 +5598,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 
 		expect(outcome.status).toBe("failed");
@@ -5616,6 +5637,7 @@ describe("the one start: the Consultation sequence at the handoff interface", ()
 			runner,
 			home: p.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 		});
 
 		expect(outcome.status).toBe("failed");

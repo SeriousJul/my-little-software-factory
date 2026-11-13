@@ -42,7 +42,7 @@ import type { FactoryState } from "../src/state.ts";
 import { utf8ByteLength } from "../src/text-bounds.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
-import { RUN_AGENT_HOST } from "./fact-fixtures.ts";
+import { RUN_AGENT_HOST, RUN_AGENT_HOST_MARKS } from "./fact-fixtures.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -319,6 +319,7 @@ function makeHarness(
 			config: () => fixture.config,
 			home: options.home ?? fixture.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			tickets: options.tickets ?? (() => []),
 			seatCount: options.seatCount ?? (() => 0),
 			log: options.log,
@@ -3049,6 +3050,7 @@ describe("Consultation operations: the start line (issue #220)", () => {
 			seatCount: () => consultationSeats(fixture.state),
 			home: fixture.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			pickupConsultation: (consultationId, mode) => harness.operations.pickup(consultationId, mode),
 			working: () => {},
 			warning: () => {},

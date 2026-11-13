@@ -72,12 +72,20 @@
  * restart anything.
  */
 
-import type { AgentHostResolution } from "./agent-host.ts";
+import type { AgentHost, AgentHostResolution } from "./agent-host.ts";
 import {
 	herdrAgentList,
 	herdrAgentRead,
 	herdrAgentWait,
+	herdrCoreFailureText,
+	herdrCoreGet,
+	herdrCoreList,
+	herdrCoreRead,
+	herdrCoreRecord,
+	herdrCoreRoster,
+	herdrCoreWait,
 	normalizeAgentStatus,
+	type HerdrCoreRosterRow,
 } from "./agent-host.ts";
 import type { FactoryConfig, TransitionOutcome } from "./config.ts";
 // The Missing agent rule is the domain's, beside the host status words the
@@ -250,6 +258,7 @@ function herdrAgentOf(item: unknown): HerdrAgent | null {
 	const stableSessionId = firstStringField(record, ["session_id", "agent_session_id"]);
 	const name = typeof record.name === "string" && record.name !== "" ? record.name : undefined;
 	return {
+		host: "herdr",
 		paneId: record.pane_id,
 		tabId: typeof record.tab_id === "string" ? record.tab_id : "",
 		workspaceId: typeof record.workspace_id === "string" ? record.workspace_id : "",
@@ -381,6 +390,262 @@ export class HerdrAgentReader implements AgentReader {
 	}
 }
 
+/**
+ * The options the merged reader stands on (ADR 0142).
+ */
+export interface MergedAgentReaderOptions {
+	/** The one seam the reader runs its host commands through. */
+	runner: CommandRunner;
+	/**
+	 * The host the run resolved at boot: a herdr run reads both hosts and
+	 * merges their Agents into the one list the plane's readers take; a
+	 * herdr-core run reads its own host only, because herdr is unreachable
+	 * from it (ADR 0141).
+	 */
+	runHost: AgentHost;
+	/**
+	 * The herdr-core terminal names this plane's Agents stand under, for the
+	 * bounded per-Agent reads: the roster decides which terminals matter, so
+	 * the poll never reads every terminal on the machine (ADR 0142).
+	 */
+	coreNames?: () => readonly string[];
+	/**
+	 * Route one pane or terminal reference to the host that holds it. A
+	 * reference no surface named goes to the run's host.
+	 */
+	hostOf?: (reference: string) => AgentHost;
+}
+
+/**
+ * The reader of the one Agent list over the run's hosts (ADR 0142).
+ *
+ * One start may choose its host, so one run can hold Agents on herdr and on
+ * herdr-core at the same time, and every reader of the Agent list reads a
+ * list that no longer comes from one host. The poll reads both rosters and
+ * merges them into the one list the readers take, each Agent carrying its
+ * host, so the identity rule, the seat count, the failure badge, the
+ * Missing marker, the grace window, and the Consultation operations all
+ * read the merged list and none of them grows a host branch: `ownAgentInPane`
+ * stays the one rule ADR 0060 wrote.
+ *
+ * A herdr run reads both hosts. The herdr half is the run's host: its
+ * failure is the probe's error, the list is dropped, and the observation
+ * holds, the standing the herdr reader has always worn. The core half
+ * tolerates its own failure: the list stands with the herdr half, the reader
+ * names the gap in `lastCoreFailure`, and the cycle states it beside the
+ * list it kept. A herdr-core run reads its own host only, and a core
+ * failure there is the probe's error.
+ *
+ * The core half costs one roster read plus one record read per terminal the
+ * plane holds: the roster carries no status word, so the status of each held
+ * terminal comes from its record, and the terminal names the plane's own
+ * Agents stand under are the bound, so the poll never reads every terminal
+ * on the machine (ADR 0142). A terminal that exits with a code reads `done`,
+ * the settle herdr's `done` is. A terminal the host lost - killed or
+ * crashed, with no exit code - is the lost Agent the `--no-keep` start stands
+ * for, and the row is dropped so it reads Missing, not as a completed turn
+ * (ADR 0141). The wake wait maps the same way: `reason` `exit` beside an
+ * `exit_code` is the settle, and a timeout or a killed terminal is no settle.
+ */
+export class MergedAgentReader implements AgentReader {
+	private readonly runner: CommandRunner;
+	private readonly runHost: AgentHost;
+	private readonly coreNames: () => readonly string[];
+	private readonly hostOf: (reference: string) => AgentHost;
+	private readonly herdrHalf: HerdrAgentReader;
+	/**
+	 * The last core half failure a standing herdr half answered beside: the
+	 * gap the cycle states beside the list it kept (ADR 0142). Null while the
+	 * core half answers.
+	 */
+	lastCoreFailure: string | null = null;
+
+	constructor(options: MergedAgentReaderOptions) {
+		this.runner = options.runner;
+		this.runHost = options.runHost;
+		this.coreNames = options.coreNames ?? (() => []);
+		this.hostOf = options.hostOf ?? (() => options.runHost);
+		this.herdrHalf = new HerdrAgentReader(options.runner);
+	}
+
+	async listAgents(): Promise<HerdrProbe> {
+		this.lastCoreFailure = null;
+		let herdrAgents: HerdrAgent[] | null = null;
+		if (this.runHost === "herdr") {
+			const probe = await this.herdrHalf.listAgents();
+			if (probe.kind === "error") {
+				return { kind: "error", reason: probe.reason };
+			}
+			herdrAgents = probe.agents;
+		}
+		const half = await this.coreHalfOf();
+		if ("failure" in half) {
+			if (this.runHost === "herdr-core") {
+				return { kind: "error", reason: half.failure };
+			}
+			this.lastCoreFailure = half.failure;
+			return { kind: "ok", agents: herdrAgents ?? [] };
+		}
+		return { kind: "ok", agents: [...(herdrAgents ?? []), ...half.agents] };
+	}
+
+	/**
+	 * The core half of the merged list (ADR 0142): one unscoped roster read,
+	 * and the record of every terminal the plane's own Agents stand under.
+	 * The roster decides which terminals matter, so the poll never reads every
+	 * terminal on the machine. A terminal that exits with a code reads `done`,
+	 * the settle herdr's `done` is. A terminal the host lost - killed or
+	 * crashed, with no exit code - is the lost Agent the `--no-keep` start
+	 * stands for, and the row is dropped so it reads Missing, not as a
+	 * completed turn (ADR 0141). A roster the host does not answer is the
+	 * failure the caller states beside the half it kept.
+	 */
+	private async coreHalfOf(): Promise<{ agents: HerdrAgent[] } | { failure: string }> {
+		const inv = herdrCoreList({ all: true });
+		const result = await this.runner.run(inv.command, inv.args);
+		const rows = herdrCoreRoster(result);
+		if (result.code !== 0 || rows === null) {
+			const failure =
+				result.code !== 0
+					? herdrCoreFailureText(result)
+					: "herdr-core did not return a readable terminal roster";
+			return { failure };
+		}
+		const wanted = new Set(this.coreNames());
+		const agents: HerdrAgent[] = [];
+		for (const row of rows) {
+			if (!wanted.has(row.name)) continue;
+			const record = await this.coreRecordOf(row);
+			const agent = MergedAgentReader.coreAgentOf(row, record);
+			if (agent !== null) agents.push(agent);
+		}
+		return { agents };
+	}
+
+	async readPane(paneId: string, lines: number): Promise<string | null> {
+		if (this.hostOf(paneId) === "herdr-core") {
+			return this.readCorePane(paneId, lines);
+		}
+		return this.herdrHalf.readPane(paneId, lines);
+	}
+
+	async readPaneVisible(paneId: string, lines: number): Promise<string | null> {
+		if (this.hostOf(paneId) === "herdr-core") {
+			// `hc read` answers one form: the terminal's history. The visible
+			// and recent split is herdr's, and the plane's pane reads take the
+			// same body on both hosts.
+			return this.readCorePane(paneId, lines);
+		}
+		return this.herdrHalf.readPaneVisible(paneId, lines);
+	}
+
+	async readPaneAnsi(paneId: string, lines: number): Promise<string | null> {
+		if (this.hostOf(paneId) === "herdr-core") {
+			return this.readCorePane(paneId, lines);
+		}
+		return this.herdrHalf.readPaneAnsi(paneId, lines);
+	}
+
+	/**
+	 * The wake wait (ADR 0084), over both hosts. On herdr the until set is
+	 * pinned, and the host's settle answer is the match. On herdr-core the
+	 * host enforces the timeout itself and answers it: a finished program that
+	 * exits with a code - `reason` `exit` beside an `exit_code` - is the
+	 * settle herdr's `done` is, and a timeout, a killed terminal, and every
+	 * other answer are no settle (ADR 0142).
+	 */
+	async waitAgent(target: string, budgetMs: number): Promise<AgentWaitResult> {
+		if (this.hostOf(target) !== "herdr-core") {
+			return this.herdrHalf.waitAgent(target, budgetMs);
+		}
+		const timeoutSeconds = Math.max(1, Math.ceil(budgetMs / 1000));
+		const inv = herdrCoreWait(target, timeoutSeconds);
+		// The host enforces the timeout and answers it; the seam's budget runs
+		// beyond it so the answer arrives before the kill.
+		const result = await this.runner.run(inv.command, inv.args, {
+			timeoutMs: budgetMs + 10_000,
+		});
+		if (result.code !== 0) return { matched: false };
+		let data: unknown;
+		try {
+			data = JSON.parse(result.stdout);
+		} catch {
+			return { matched: false };
+		}
+		const answer = data as { ended?: unknown; reason?: unknown; exit_code?: unknown };
+		return {
+			matched:
+				answer.ended === true &&
+				(answer.reason === "exit" || answer.reason === "exited") &&
+				typeof answer.exit_code === "number",
+		};
+	}
+
+	private async coreRecordOf(row: HerdrCoreRosterRow): Promise<ReturnType<typeof herdrCoreRecord>> {
+		const inv = herdrCoreGet(row.address);
+		const result = await this.runner.run(inv.command, inv.args);
+		return herdrCoreRecord(result);
+	}
+
+	/**
+	 * One held herdr-core terminal as the merged list's Agent, or null when the
+	 * row is the lost Agent the list drops (the class doc's rule).
+	 */
+	private static coreAgentOf(
+		row: HerdrCoreRosterRow,
+		record: ReturnType<typeof herdrCoreRecord>,
+	): HerdrAgent | null {
+		const agent: HerdrAgent = {
+			host: "herdr-core",
+			// The terminal name is the record the handoff keeps of the Agent's
+			// place: the pane, the tab, and the workspace are all the terminal
+			// (ADR 0141), and the name the start took is the Agent's name.
+			paneId: row.name,
+			tabId: row.name,
+			workspaceId: row.name,
+			name: row.name,
+			agent: row.agent ?? "agent",
+			status: "unknown",
+			sessionId: "",
+		};
+		if (record === null) {
+			// The roster row stands, but its record did not answer: the Agent is
+			// present with an unknown status. The plane restarts no Agent it
+			// cannot read, and the gap the record gap states stands beside it.
+			return agent;
+		}
+		if (record.state === "live") {
+			return { ...agent, agent: row.agent ?? "agent", status: record.status };
+		}
+		const exited =
+			(record.reason === "exited" || record.reason === "exit") && record.exitCode !== null;
+		if (!exited) {
+			// The host lost the terminal: the --no-keep start's lost Agent. The
+			// row drops so the Missing marker reads it, and the wake wait's no
+			// settle stands beside it.
+			return null;
+		}
+		return { ...agent, agent: row.agent ?? "agent", status: "done" };
+	}
+
+	private async readCorePane(name: string, lines: number): Promise<string | null> {
+		const inv = herdrCoreRead(name, lines);
+		const result = await this.runner.run(inv.command, inv.args);
+		if (result.code !== 0) return null;
+		let output: string | null = null;
+		try {
+			const data = JSON.parse(result.stdout) as { text?: unknown; result?: { output?: unknown } };
+			if (typeof data.text === "string") output = data.text;
+			else if (typeof data.result?.output === "string") output = data.result.output;
+		} catch {
+			// Not JSON: the read's raw output.
+			output = result.stdout;
+		}
+		if (output === null) return null;
+		return stripAnsi(output).split("\n").slice(0, lines).join("\n");
+	}
+}
+
 export function matchConsultationAgent(
 	consultation: Consultation,
 	agents: readonly HerdrAgent[],
@@ -462,7 +727,7 @@ export interface AwaitingRule {
  * to the human-facing text: the text may be reworded without breaking the
  * behavior that listens for it.
  */
-export type ObservationStatusTopic = "herdr-recovered";
+export type ObservationStatusTopic = "herdr-recovered" | "herdr-core-recovered";
 
 /**
  * The aggregates the observation cycle reads, as a list (issue #202).
@@ -609,6 +874,7 @@ export class ObservationCoordinator {
 	private stopped = false;
 	private cycleInFlight = false;
 	private holdingHerdrError = false;
+	private holdingCoreHostError = false;
 	/**
 	 * Whether the Dispatch pause was active last cycle, so the Message line can
 	 * report it when it trips and when it clears. The pause itself is derived
@@ -937,6 +1203,57 @@ export class ObservationCoordinator {
 	}
 
 	/**
+	 * The host errors the cycle states (ADR 0142): a probe error holds the
+	 * herdr note until the probe answers again, and on a run that reads both
+	 * hosts the core half's failure states beside the list it kept. Each note
+	 * states once per gap, the way a held herdr error states once.
+	 */
+	private stateHostErrors(probe: HerdrProbe): void {
+		if (probe.kind === "error") {
+			if (!this.holdingHerdrError) {
+				this.holdingHerdrError = true;
+				this.onStatus(
+					"warning",
+					`herdr is unreachable: ${probe.reason}; the observation is holding`,
+				);
+				this.onChanged();
+			}
+			return;
+		}
+		if (this.holdingHerdrError) {
+			this.holdingHerdrError = false;
+			this.onStatus("info", "herdr is reachable again; the observation resumed", "herdr-recovered");
+			this.onChanged();
+		}
+		// The run's own host answered, but on a run that reads both the other
+		// host's half of the merged list did not (ADR 0142): the list stands
+		// with the half it has, and the plane states the gap once, the way a
+		// held herdr error does.
+		const coreHostFailure =
+			this.herdr instanceof MergedAgentReader ? this.herdr.lastCoreFailure : null;
+		if (coreHostFailure !== null) {
+			if (!this.holdingCoreHostError) {
+				this.holdingCoreHostError = true;
+				this.onStatus(
+					"warning",
+					`herdr-core is unreachable: ${coreHostFailure}; the merged list holds the herdr half only`,
+				);
+				this.onChanged();
+			}
+			return;
+		}
+		if (this.holdingCoreHostError) {
+			this.holdingCoreHostError = false;
+			this.onStatus(
+				"info",
+				"herdr-core is reachable again; the merged list holds both hosts",
+				"herdr-core-recovered",
+			);
+			this.onChanged();
+		}
+	}
+
+	/**
 	 * One observation cycle.
 	 *
 	 * A cycle notes the holds its walks take and states them when its walks
@@ -952,14 +1269,7 @@ export class ObservationCoordinator {
 		if (probe.kind === "error") {
 			// A failed probe carries no list: drop the markers until it holds.
 			this.onAgents?.(null);
-			if (!this.holdingHerdrError) {
-				this.holdingHerdrError = true;
-				this.onStatus(
-					"warning",
-					`herdr is unreachable: ${probe.reason}; the observation is holding`,
-				);
-				this.onChanged();
-			}
+			this.stateHostErrors(probe);
 			return;
 		}
 		this.lastAgentsList = probe.agents;
@@ -967,11 +1277,7 @@ export class ObservationCoordinator {
 		// standing: the App, the cycle's only caller, always runs reconcile-only.
 		this.suppressConsultationAttention = this.startupReconciliation;
 		this.startupReconciliation = false;
-		if (this.holdingHerdrError) {
-			this.holdingHerdrError = false;
-			this.onStatus("info", "herdr is reachable again; the observation resumed", "herdr-recovered");
-			this.onChanged();
-		}
+		this.stateHostErrors(probe);
 
 		// The Auto-handoff mode is factory state on the state file (ADR 0036): the
 		// cycle reads it from the Handoff aggregate it already holds, the same

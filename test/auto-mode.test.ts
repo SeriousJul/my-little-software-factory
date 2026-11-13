@@ -1444,6 +1444,7 @@ describe("the Ticket Close key", () => {
 		app.state.handoff.recordNameCollision({
 			ticketIdentity: identity,
 			heldName: AGENT,
+			holderHost: "herdr",
 			holderPaneId: "w13K:p1",
 			holderWorkspaceId: "w13K",
 			reason:

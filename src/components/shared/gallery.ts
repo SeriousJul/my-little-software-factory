@@ -606,6 +606,7 @@ function factRowTicket(
 /** One agent as the last poll reported it, in the pane the row names. */
 function pollAgent(paneId: string, status: string): HerdrAgent {
 	return {
+		host: "herdr",
 		paneId,
 		tabId: "tab-f",
 		workspaceId: "ws-f",

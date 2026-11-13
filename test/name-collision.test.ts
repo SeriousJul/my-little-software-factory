@@ -24,6 +24,7 @@ import type { AgentNameCollision } from "../src/domain/ticket.ts";
 /** The refusal herdr gave, with the handles it named. */
 const HELD: AgentNameCollision = {
 	heldName: "watch-agent-turns-1a2b3c4d",
+	host: "herdr",
 	holderPaneId: "w13K:p1",
 	holderWorkspaceId: "w13K",
 	reason:

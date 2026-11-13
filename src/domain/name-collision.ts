@@ -26,10 +26,13 @@
  * `handoffLimitReached` and every reader of the run of failed starts asks
  * `failedStartParkStands`.
  *
- * `nameHolderText` is the one wording of the pointer into herdr. The Handoff
- * dispatch's refusal line and the standing fact state the same handles in the
- * same words, so no surface re-states them (issue #299 review).
+ * `nameHolderText` is the one wording of the pointer into the host that holds
+ * the name. The Handoff dispatch's refusal line and the standing fact state the
+ * same handles in the same words, so no surface re-states them (issue #299).
+ * A herdr-core holder is its terminal, named once, and the wording says so
+ * (issue #410, ADR 0142).
  */
+import type { AgentHost } from "../agent-host.ts";
 import type { AgentNameCollision } from "./ticket.ts";
 
 /** The facts one Agent name collision reads. */
@@ -67,20 +70,27 @@ export function nameCollisionStands(facts: NameCollisionFacts): boolean {
 export const NAME_COLLISION_PREFIX = "agent name held:";
 
 /**
- * Where a name is held, in the handles herdr named. This is the one wording of
- * the pointer, read by the Handoff dispatch's refusal line and by the standing
- * fact alike (issue #299). The shape is the two handles herdr names for an Agent
- * (ADR 0043); the dispatch's own holder record carries them beside its tab and
- * terminal handles.
+ * Where a name is held, in the handles the host named. This is the one wording
+ * of the pointer, read by the Handoff dispatch's refusal line and by the
+ * standing fact alike (issue #299). On herdr the shape is the two handles herdr
+ * names for an Agent (ADR 0043); the dispatch's own holder record carries them
+ * beside its tab and terminal handles. On herdr-core the holder is its
+ * terminal, and the terminal name is the holder's one handle: the plane names
+ * the terminal, the way its own records do (ADR 0141).
  *
- * The pane and the workspace are what the operator looks for in herdr: the
- * plane does not own that pane, so it can run no cleanup of its own and the
- * handles are the whole of the pointer (ADR 0098). herdr names no handles for
+ * The handles are what the operator looks for on the host: the plane does not
+ * own that pane or terminal, so it can run no cleanup of its own and the
+ * handles are the whole of the pointer (ADR 0098). A host names no handles for
  * some refusals, and then the sentence says so rather than inventing a place.
  */
 export function nameHolderText(
 	holder: { paneId: string | null; workspaceId: string | null } | null,
+	host: AgentHost = "herdr",
 ): string {
+	if (host === "herdr-core") {
+		if (holder !== null && holder.paneId !== null) return `terminal ${holder.paneId}`;
+		return "a terminal herdr-core did not name";
+	}
 	const parts = [
 		...(holder === null || holder.paneId === null ? [] : [`pane ${holder.paneId}`]),
 		...(holder === null || holder.workspaceId === null ? [] : [`workspace ${holder.workspaceId}`]),
@@ -88,12 +98,15 @@ export function nameHolderText(
 	return parts.length === 0 ? "a pane herdr did not name" : parts.join(" in ");
 }
 
-/** Where the Ticket's standing collision has its name held. */
+/** Where the Ticket's standing collision has its name held, on its host. */
 export function nameCollisionHolder(collision: AgentNameCollision): string {
-	return nameHolderText({
-		paneId: collision.holderPaneId,
-		workspaceId: collision.holderWorkspaceId,
-	});
+	return nameHolderText(
+		{
+			paneId: collision.holderPaneId,
+			workspaceId: collision.holderWorkspaceId,
+		},
+		collision.host,
+	);
 }
 
 /**
@@ -107,8 +120,9 @@ export function nameCollisionHolder(collision: AgentNameCollision): string {
  * refusal reaches the record, where the file can hold a long line.
  */
 export function nameCollisionLine(ticketName: string, collision: AgentNameCollision): string {
+	const host = collision.host === "herdr-core" ? "herdr-core" : "herdr";
 	return (
 		`${NAME_COLLISION_PREFIX} ${ticketName} ` +
-		`(the herdr name ${collision.heldName} is held by ${nameCollisionHolder(collision)})`
+		`(the ${host} name ${collision.heldName} is held by ${nameCollisionHolder(collision)})`
 	);
 }

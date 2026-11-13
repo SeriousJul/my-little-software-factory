@@ -643,6 +643,48 @@ export interface AgentHolder {
 	tabId: string | null;
 }
 
+/** One live agent a herdr `agent list` answer names by name (ADR 0142). */
+export interface HerdrListedAgent {
+	name: string;
+	paneId: string;
+	tabId: string;
+	workspaceId: string;
+}
+
+/**
+ * The live agents one herdr `agent list` answer names by name: the holders a
+ * herdr-core start's cross-host name check reads, so one name held on herdr
+ * is held for the start on herdr-core alike (ADR 0142). An answer that is not
+ * a readable agent list, or an item that names no pane and no agent, comes
+ * back absent or unnamed, the way the observation cycle's own read does.
+ */
+export function herdrListedAgents(result: CommandResult): HerdrListedAgent[] | null {
+	if (result.code !== 0) {
+		return null;
+	}
+	let data: unknown;
+	try {
+		data = JSON.parse(result.stdout);
+	} catch {
+		return null;
+	}
+	const result_ = (data as { result?: { agents?: unknown } }).result;
+	const raw = Array.isArray(result_?.agents) ? (result_?.agents as unknown[]) : [];
+	const listed: HerdrListedAgent[] = [];
+	for (const item of raw) {
+		const record = item as Record<string, unknown>;
+		if (typeof record.pane_id !== "string" || record.pane_id === "") continue;
+		if (typeof record.name !== "string" || record.name === "") continue;
+		listed.push({
+			name: record.name,
+			paneId: record.pane_id,
+			tabId: typeof record.tab_id === "string" ? record.tab_id : "",
+			workspaceId: typeof record.workspace_id === "string" ? record.workspace_id : "",
+		});
+	}
+	return listed;
+}
+
 // ---------------------------------------------------------------------------
 // The herdr-core answer readers
 // ---------------------------------------------------------------------------
@@ -843,11 +885,78 @@ export function herdrCoreRecord(result: CommandResult): HerdrCoreRecord | null {
 }
 
 // ---------------------------------------------------------------------------
+// The start's labels
+// ---------------------------------------------------------------------------
+
+/**
+ * The label namespace the plane writes at the start of every herdr-core
+ * terminal it starts (ADR 0141).
+ *
+ * The plane's own namespace carries the run, the Ticket, the Handoff, and the
+ * repository, which is what scopes the roster read and keeps a dead run's rows
+ * readable. Beside those the plane copies the Adoption labels `herdr.space`
+ * and `herdr.tab` from its own herdr-core terminal when that terminal carries
+ * them, and writes no such label when it does not. The labels are written at
+ * the start and never rewritten by a later command, and a roster read is
+ * scoped by them only for forensics, never to hide the other host (ADR 0142).
+ */
+export const CORE_START_LABEL_RUN = "factory.run";
+export const CORE_START_LABEL_TICKET = "factory.ticket";
+export const CORE_START_LABEL_HANDOFF = "factory.handoff";
+export const CORE_START_LABEL_REPOSITORY = "factory.repository";
+/** The Adoption label the desktop writes on a terminal it adopts into a space. */
+export const CORE_ADOPTION_LABEL_SPACE = "herdr.space";
+/** The Adoption label the desktop writes on a terminal it adopts into a tab. */
+export const CORE_ADOPTION_LABEL_TAB = "herdr.tab";
+
+/** The run's own identity facts, the ones the start's labels name. */
+export interface CoreStartLabelFacts {
+	/** The run the start stands in: the terminal or pane its operator stands in. */
+	runIdentity: string;
+	/** The work the start runs: the Ticket's identity, or the Consultation's on a Consultation start. */
+	ticketIdentity: string;
+	/** The repository the start resolved to. */
+	repositoryIdentity: string;
+}
+
+/**
+ * The labels the plane writes at the start of one herdr-core terminal (ADR
+ * 0141): its own namespace - the run, the Ticket, the Handoff, the
+ * repository - beside the Adoption labels the plane's own terminal carries.
+ * The Handoff label is the terminal name the start takes: the roster that
+ * scopes by it finds the Handoff's terminal, and the finished record the
+ * residue record and the operator's Close act on keeps it until `hc rm`.
+ */
+export function herdrCoreStartLabels(
+	facts: CoreStartLabelFacts,
+	terminalName: string,
+	adoption: Record<string, string>,
+): string[] {
+	const labels = [
+		`${CORE_START_LABEL_RUN}=${facts.runIdentity}`,
+		`${CORE_START_LABEL_TICKET}=${facts.ticketIdentity}`,
+		`${CORE_START_LABEL_HANDOFF}=${terminalName}`,
+		`${CORE_START_LABEL_REPOSITORY}=${facts.repositoryIdentity}`,
+	];
+	for (const [key, value] of Object.entries(adoption)) labels.push(`${key}=${value}`);
+	return labels;
+}
+
+// ---------------------------------------------------------------------------
 // The host resolution
 // ---------------------------------------------------------------------------
 
 /** The fact that settled the host: what the run states beside the host it resolved. */
 export type AgentHostFact = "config" | "herdr-mark" | "herdr-core-mark" | "default";
+
+/**
+ * The identity the start's labels write under the run key (ADR 0141): the
+ * terminal the run stands in on herdr-core, the pane its operator stands in
+ * inside herdr, and the name an unmarked run takes when it marks neither.
+ */
+export function runIdentityOf(marks: AgentHostMarks): string {
+	return marks.hcTerminalId ?? marks.herdrEnv ?? "standalone";
+}
 
 /** The host a start resolves, and the fact that resolved it. */
 export interface AgentHostResolution {

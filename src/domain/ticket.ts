@@ -429,13 +429,23 @@ export interface LeftoverEnvironment {
  */
 export interface AgentNameCollision {
 	/**
-	 * The herdr Agent name the holder holds: the Ticket's stable name, or its
+	 * The Agent name the holder holds: the Ticket's stable name, or its
 	 * work-cycle name when its own Leftover environment held the stable one and
 	 * the search reached the next candidate (ADR 0098). The fact names the name
-	 * the named pane actually holds, so the operator reads a name there.
+	 * the holder actually holds, so the operator reads a name there.
 	 */
 	heldName: string;
-	/** The herdr pane that holds the name, when herdr named one. */
+	/**
+	 * The host that holds the name. One name holds one live Agent across both
+	 * hosts, so the record names the host that holds it, and the holder's
+	 * handles are read on that host (issue #410, ADR 0142).
+	 */
+	host: AgentHost;
+	/**
+	 * The herdr pane that holds the name, when herdr named one. A herdr-core
+	 * holder's terminal name stands in the pane's handle: the terminal is the
+	 * Agent's pane, tab, and workspace alike (ADR 0141).
+	 */
 	holderPaneId: string | null;
 	/** The herdr workspace that holds the name, when herdr named one. */
 	holderWorkspaceId: string | null;

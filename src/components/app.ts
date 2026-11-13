@@ -36,6 +36,7 @@ import {
 } from "react";
 import {
 	type AgentHost,
+	type AgentHostMarks,
 	type AgentHostResolution,
 	type AgentStatus,
 	agentHostBootLine,
@@ -99,7 +100,8 @@ import type { HerdrAgent } from "../herdr.ts";
 import { herdrIdentityFromEnv } from "../herdr-identity.ts";
 import type { Logger } from "../logging.ts";
 import {
-	HerdrAgentReader,
+	type HerdrAgentReader,
+	MergedAgentReader,
 	matchConsultationAgent,
 	ObservationCoordinator,
 	SESSION_TURN_LOGS,
@@ -454,6 +456,13 @@ export interface AppProps {
 	 * resolution, and the App states it once on the Message line from it.
 	 */
 	agentHostResolution: AgentHostResolution;
+	/**
+	 * The environment marks the boot resolved the Agent host from (issue #410):
+	 * the marks name the run for the labels a herdr-core start writes, and the
+	 * herdr-core mark is the terminal whose Adoption labels the start copies
+	 * (ADR 0141).
+	 */
+	agentHostMarks: AgentHostMarks;
 	/** The loop policy: the named fact that decides which loops run. */
 	loopPolicy: AppLoopPolicy;
 	/**
@@ -844,6 +853,7 @@ function useAppOpsFields(props: AppProps, prev: AppRepoInitShellStage) {
 	const opsFields: AppOpsFields = {
 		state: props.state,
 		agentHost: props.agentHostResolution,
+		agentHostMarks: props.agentHostMarks,
 		configRef: prev.configRef,
 		setConfig: prev.setConfig,
 		commandRunner: prev.commandRunner,
@@ -1921,9 +1931,50 @@ function useAppPanelRelease(prev: AppPanelDecisionStage) {
 }
 type AppPanelReleaseStage = ReturnType<typeof useAppPanelRelease>;
 
+/**
+ * One tick of the Live view's stream: read the pane the ticket's current
+ * handoff records, and stand the lines or the note the read answers with.
+ * The one identity read reaches the Ticket whether or not the list draws its
+ * row, so the stream never loses its pane to a filter cycle or a withheld row
+ * (ADR 0042, ADR 0060). A routed handoff moves the stream to the new pane on
+ * its next tick: the handoff read is the tick's, not the stream's. A failed
+ * read stands the last lines under a stale note.
+ */
+async function refreshLivePane(options: {
+	identity: string;
+	findTicket: (identity: string) => Ticket | undefined;
+	reader: MergedAgentReader;
+	hostRead: { current: AgentHost };
+	runHost: AgentHost;
+	lines: number;
+	alive: () => boolean;
+	setStream: Dispatch<SetStateAction<AppLiveStream>>;
+}): Promise<void> {
+	const handoff = options.findTicket(options.identity)?.handoff ?? null;
+	const paneId = handoff?.paneId ?? null;
+	// The merged reader's one host read: the record the stream reads from
+	// names its host, and the read routes to it (issue #410, ADR 0142).
+	options.hostRead.current = handoff?.host ?? options.runHost;
+	if (paneId === null) {
+		if (options.alive())
+			options.setStream({ lines: [], note: "no agent pane is recorded for this ticket" });
+		return;
+	}
+	// The visible screen: the stream shows the pane as herdr shows it, and
+	// herdr answers the read without scrolling the pane the operator watches
+	// (ADR 0140).
+	const output = await options.reader.readPaneVisible(paneId, options.lines);
+	if (!options.alive()) return;
+	if (output === null) {
+		options.setStream((previous) => ({ lines: previous?.lines ?? [], note: STALE_STREAM_NOTE }));
+	} else {
+		options.setStream({ lines: output.split("\n"), note: null });
+	}
+}
+
 /** The Live view's stream: the one-second read of the pane the ticket's handoff records. */
 function useAppLivePanel(prev: AppPanelReleaseStage) {
-	const { commandRunner, configRef, findTicket, liveMode, panel, setLiveStream } = prev;
+	const { commandRunner, configRef, findTicket, liveMode, opsFields, panel, setLiveStream } = prev;
 	// The Live view's stream: while the view shows the stream, a dedicated
 	// refresh reads the pane the ticket's current handoff records at the
 	// one-second cadence, the cadence the Consultation agent view uses
@@ -1937,44 +1988,39 @@ function useAppLivePanel(prev: AppPanelReleaseStage) {
 		}
 		const identity = panel.identity;
 		let active = true;
-		const reader = new HerdrAgentReader(commandRunner);
-		const refresh = async () => {
-			// Re-read the pane the ticket's current handoff records, so a
-			// routed handoff moves the stream to the new pane on the next
-			// tick. The one identity read reaches the Ticket whether or not the
-			// list draws its row, so the stream never loses its pane to a filter
-			// cycle or a withheld row (ADR 0042, ADR 0060).
-			const ticket = findTicket(identity);
-			const paneId = ticket?.handoff?.paneId ?? null;
-			if (paneId === null) {
-				if (active)
-					setLiveStream({
-						lines: [],
-						note: "no agent pane is recorded for this ticket",
-					});
-				return;
-			}
-			// The visible screen: the stream shows the pane as herdr shows it,
-			// and herdr answers the read without scrolling the pane the
-			// operator watches (ADR 0140).
-			const output = await reader.readPaneVisible(paneId, configRef.current.completionMessageLines);
-			if (!active) return;
-			if (output === null) {
-				setLiveStream((previous) => ({
-					lines: previous?.lines ?? [],
-					note: STALE_STREAM_NOTE,
-				}));
-			} else {
-				setLiveStream({ lines: output.split("\n"), note: null });
-			}
+		const hostRead = { current: opsFields.agentHost.host };
+		const reader = new MergedAgentReader({
+			runner: commandRunner,
+			runHost: opsFields.agentHost.host,
+			hostOf: () => hostRead.current,
+		});
+		const refresh = (): void => {
+			void refreshLivePane({
+				identity,
+				findTicket,
+				reader,
+				hostRead,
+				runHost: opsFields.agentHost.host,
+				lines: configRef.current.completionMessageLines,
+				alive: () => active,
+				setStream: setLiveStream,
+			});
 		};
 		void refresh();
-		const timer = setInterval(() => void refresh(), 1000);
+		const timer = setInterval(() => refresh(), 1000);
 		return () => {
 			active = false;
 			clearInterval(timer);
 		};
-	}, [panel, liveMode, commandRunner, findTicket, configRef, setLiveStream]);
+	}, [
+		panel,
+		liveMode,
+		commandRunner,
+		findTicket,
+		configRef,
+		setLiveStream,
+		opsFields.agentHost.host,
+	]);
 	return { ...prev };
 }
 type AppLivePanelStage = ReturnType<typeof useAppLivePanel>;
@@ -5463,7 +5509,7 @@ function consultationSessionRead(f: AppConsultationSessionFields, consultation: 
 async function consultationPaneRefresh(
 	f: AppConsultationSessionFields,
 	tick: {
-		reader: HerdrAgentReader;
+		reader: HerdrAgentReader | MergedAgentReader;
 		consultation: Consultation;
 		paneId: string;
 		readSessionNow: () => readonly SessionEntry[] | null;
@@ -5532,7 +5578,14 @@ function appConsultationSessionRefresh(f: AppConsultationSessionFields): (() => 
 	let active = true;
 	const activeBox = { current: active };
 	const previous = { current: null as string | null };
-	const reader = new HerdrAgentReader(f.commandRunner);
+	// The Consultation record names its Agent's host, and the pane read routes
+	// to it (issue #410, ADR 0142): the merged reader reads the host the
+	// record stands on, whatever host that is.
+	const reader = new MergedAgentReader({
+		runner: f.commandRunner,
+		runHost: consultation.host,
+		hostOf: () => consultation.host,
+	});
 	const tick = { reader, consultation, paneId, readSessionNow, previous, active: activeBox };
 	const refresh = async () => {
 		await consultationPaneRefresh(f, tick);
@@ -5578,15 +5631,46 @@ interface AppObservationFields {
 /** The coordinator's base options: the plane's reads and the report lines. */
 type AppObservationOptions = ConstructorParameters<typeof ObservationCoordinator>[0];
 
+/**
+ * The names the plane's herdr-core Agents hold (issue #410, ADR 0142): the
+ * in-flight Tickets' and Consultations' recorded names on the herdr-core host.
+ * The merged poll's roster read is unscoped, and the per-Agent read runs only
+ * over these names, so the poll never reads every terminal on the machine.
+ */
+function coreTerminalNames(state: AppAggregates): readonly string[] {
+	const names: string[] = [];
+	for (const ticket of state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES))
+		if (ticket.host === "herdr-core" && ticket.paneId !== null) names.push(ticket.paneId);
+	for (const consultation of state.consultationRecord.consultationsByState([
+		"opening",
+		"working",
+		"awaiting-response",
+	]))
+		if (consultation.host === "herdr-core" && consultation.paneId !== null)
+			names.push(consultation.paneId);
+	return names;
+}
+
 function observationCoordinatorBase(
 	f: AppObservationFields,
 	state: AppAggregates,
 	dispatch: HandoffDispatch,
 	agentHost: AgentHostResolution,
 ): Omit<AppObservationOptions, "fireCompleted" | "refireRecordedSkips"> {
+	// The merged Agent reader the cycle reads (issue #410, ADR 0142): both
+	// hosts in one list, and a wake wait routed to the host the last poll
+	// recorded for its name. The read's host answer is the poll's own, and the
+	// cycle arms no wait before its first poll answers.
+	const hostByReference = { current: new Map<string, AgentHost>() };
+	const herdr = new MergedAgentReader({
+		runner: f.commandRunner,
+		runHost: agentHost.host,
+		coreNames: () => coreTerminalNames(state),
+		hostOf: (reference) => hostByReference.current.get(reference) ?? agentHost.host,
+	});
 	return {
 		state,
-		herdr: new HerdrAgentReader(f.commandRunner),
+		herdr,
 		config: () => f.configRef.current,
 		// The host the run resolved (issue #409): the automatic starts the cycle
 		// asks for run on the run's host, never on a host a previous handoff
@@ -5615,7 +5699,18 @@ function observationCoordinatorBase(
 			f.replaceTickets();
 			f.replaceConsultations();
 		},
-		onAgents: (agents) => f.setAgents(agents),
+		onAgents: (agents) => {
+			// The poll's own host answer: a wait the cycle arms routes to the
+			// host the agent stands on, by the name and the handle the record
+			// names it by (issue #410).
+			const hosts = new Map<string, AgentHost>();
+			for (const agent of agents ?? []) {
+				hosts.set(agent.paneId, agent.host);
+				if (agent.name !== undefined) hosts.set(agent.name, agent.host);
+			}
+			hostByReference.current = hosts;
+			f.setAgents(agents);
+		},
 		onConsultationAttention: (_id) => {
 			// The flash stays here; the bell write and its attention-bell gate
 			// live in the shared attention service (ADR 0080).
@@ -5748,6 +5843,13 @@ interface AppOpsFields {
 	 * pre-flight reads it beside the choice's host.
 	 */
 	agentHost: AgentHostResolution;
+	/**
+	 * The environment marks the boot resolved the run from (issue #410): the
+	 * marks name the run for the labels a herdr-core start writes, and the
+	 * herdr-core mark is the terminal whose Adoption labels the start copies
+	 * (ADR 0141).
+	 */
+	agentHostMarks: AgentHostMarks;
 	configRef: RefObject<FactoryConfig>;
 	setConfig: (config: FactoryConfig) => void;
 	commandRunner: CommandRunner;
@@ -5890,6 +5992,9 @@ function appHandoffDispatchOptions(f: AppOpsFields, state: AppAggregates): Hando
 		// The host the run resolved (issue #409): the start's pre-flight
 		// refuses a host the run cannot reach before any external step.
 		agentHost: f.agentHost,
+		// The marks the run resolved from (issue #410): the labels a herdr-core
+		// start writes, and the terminal whose Adoption labels the start copies.
+		agentHostMarks: f.agentHostMarks,
 		seatCount: f.currentSeatCount,
 		// The seats a Missing Agent left, each one reserved for its own
 		// restart row (ADR 0108): the pickup hands them to no other start.
@@ -5955,6 +6060,8 @@ function appConsultationOperations(f: AppOpsFields): void {
 		runner: f.commandRunner,
 		config: () => f.configRef.current,
 		agentHost: f.agentHost,
+		// The marks the run resolved from (issue #410, ADR 0141).
+		agentHostMarks: f.agentHostMarks,
 		home: f.homeDir,
 		// The rows the machine reads, never the operator's List filter (ADR 0060):
 		// the live-checkout conflict read names the in-flight Ticket whose Agent

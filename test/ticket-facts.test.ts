@@ -441,6 +441,7 @@ describe("the Agent name collision (issue #299)", () => {
 	/** The fact one refused start leaves. */
 	const collision: AgentNameCollision = {
 		heldName: "watch-agent-turns-1a2b3c4d",
+		host: "herdr",
 		holderPaneId: "w13K:p1",
 		holderWorkspaceId: "w13K",
 		reason:

@@ -8,7 +8,7 @@
  * other reader builds, because every reader builds the same record.
  */
 
-import type { AgentHostResolution } from "../src/agent-host.ts";
+import type { AgentHostMarks, AgentHostResolution } from "../src/agent-host.ts";
 import type { WorkflowState } from "../src/config.ts";
 import type {
 	Completion,
@@ -34,6 +34,16 @@ export const DEFAULT_IDENTITY = "github:github.com:I_9";
 
 /** The host the test's run resolves: the default, on the herdr host. */
 export const RUN_AGENT_HOST: AgentHostResolution = { host: "herdr", fact: "default" };
+
+/**
+ * The environment marks the test's run resolves from (issue #410): unmarked
+ * on both sides, so the run takes the default herdr host and a herdr-core
+ * start writes its run label as the run's fallback identity.
+ */
+export const RUN_AGENT_HOST_MARKS: AgentHostMarks = {
+	herdrEnv: undefined,
+	hcTerminalId: undefined,
+};
 
 /** The default Ticket's title. */
 export const DEFAULT_TICKET_TITLE = "Persist source facts";
@@ -322,6 +332,7 @@ export function ticket(over: Partial<Ticket> = {}): Ticket {
 /** One agent as a poll reports it. */
 export function agent(over: Partial<HerdrAgent> = {}): HerdrAgent {
 	return {
+		host: "herdr",
 		paneId: "pane-1",
 		tabId: "tab-1",
 		workspaceId: "ws-1",

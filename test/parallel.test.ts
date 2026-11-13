@@ -58,6 +58,7 @@ function consultationFact(
 /** The agent list's entry for one pane, under the given name. */
 function listed(paneId: string, name: string): HerdrAgent {
 	return {
+		host: "herdr",
 		paneId,
 		tabId: "tab-1",
 		workspaceId: "ws-1",

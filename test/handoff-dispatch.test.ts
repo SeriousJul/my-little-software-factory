@@ -36,7 +36,7 @@ import { workQueueIdentityOf } from "../src/state/work-queue.ts";
 import type { FactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { expectNoCommand } from "./command-assertions.ts";
-import { DEFAULT_TICKET_TITLE, RUN_AGENT_HOST } from "./fact-fixtures.ts";
+import { DEFAULT_TICKET_TITLE, RUN_AGENT_HOST, RUN_AGENT_HOST_MARKS } from "./fact-fixtures.ts";
 import {
 	FakeRunner,
 	herdrFocusCommands,
@@ -346,6 +346,7 @@ async function rig(
 		seatCount: () => 0,
 		home,
 		agentHost: RUN_AGENT_HOST,
+		agentHostMarks: RUN_AGENT_HOST_MARKS,
 		...recorder(events),
 	});
 	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
@@ -394,6 +395,7 @@ function withRunner(
 		seatCount: () => 0,
 		home: rig.home,
 		agentHost: RUN_AGENT_HOST,
+		agentHostMarks: RUN_AGENT_HOST_MARKS,
 		...recorder(rig.events),
 		...overrides,
 	});
@@ -961,6 +963,7 @@ describe("the starting report", () => {
 			config: () => rigRef.config,
 			home: rigRef.home,
 			agentHost: RUN_AGENT_HOST,
+			agentHostMarks: RUN_AGENT_HOST_MARKS,
 			seatCount: () => 0,
 			...recorder(events),
 		});
@@ -1446,9 +1449,16 @@ describe("the outcome wording", () => {
 		};
 	}
 
-	const agent = { name: "webhook-retry", paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1" };
+	const agent = {
+		host: "herdr",
+		name: "webhook-retry",
+		paneId: "pane-1",
+		tabId: "tab-1",
+		workspaceId: "ws-1",
+	};
 	const held: NameCollision = {
 		stableName: "webhook-retry",
+		host: "herdr",
 		heldName: "webhook-retry",
 		startedAs: null,
 		holder: { paneId: "pane-x", tabId: "tab-x", workspaceId: "ws-x", terminalId: "term-x" },
@@ -2028,6 +2038,7 @@ describe("the name fact", () => {
 		const collision = rigRef.state.handoff.nameCollision(FIRST.identity);
 		expect(collision).toEqual({
 			heldName: FIRST.name,
+			host: "herdr",
 			holderPaneId: "pane-stranger",
 			holderWorkspaceId: "ws-stranger",
 			reason: expect.stringContaining("agent_name_taken"),

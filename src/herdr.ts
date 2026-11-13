@@ -3,10 +3,17 @@
  * the observation loop, the Consultation operations, the app's mode cell,
  * and the Parallel limit seat count.
  */
+import type { AgentHost } from "./agent-host.ts";
 import { identifyHandoffAgentName } from "./naming.ts";
 
-/** One agent herdr reports for a pane. */
+/** One agent herdr reports for a pane, or herdr-core reports for a terminal. */
 export interface HerdrAgent {
+	/**
+	 * The host this agent stands on. The plane merges one Agent list over its
+	 * hosts, and every reader reads the host with the agent, so a name live on
+	 * either host is held on both (ADR 0142).
+	 */
+	host: AgentHost;
 	paneId: string;
 	tabId: string;
 	workspaceId: string;
@@ -35,6 +42,11 @@ export interface HerdrAgent {
 /**
  * The Ticket's own Agent in the pane its handoff records, as one poll's agent
  * list reports it, or null when the pane holds none of its own (ADR 0043).
+ *
+ * The poll the paneId lands in already carries the host the Ticket's handoff
+ * records (ADR 0142), so the one rule reads both hosts through the same
+ * name check; a herdr paneId and a herdr-core address can never collide in
+ * the poll's key.
  *
  * Herdr hands the id of a closed pane out again: a pane the list does not
  * report, or reports under another Agent's name, holds no Agent of the

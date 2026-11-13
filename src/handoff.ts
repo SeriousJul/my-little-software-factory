@@ -88,20 +88,33 @@
 import {
 	type AgentHolder,
 	type AgentHost,
+	type AgentHostMarks,
 	type AgentHostResolution,
 	agentHostReachable,
 	agentHostUnreachableLine,
+	CORE_ADOPTION_LABEL_SPACE,
+	CORE_ADOPTION_LABEL_TAB,
+	type CoreStartLabelFacts,
+	type HerdrCoreRosterRow,
+	type HerdrListedAgent,
 	type HostInvocation,
+	herdrAgentList,
 	herdrAgentPrompt,
 	herdrAgentStart,
 	herdrCoreFailureText,
+	herdrCoreGet,
 	herdrCoreKill,
+	herdrCoreList,
+	herdrCoreRecord,
 	herdrCoreRefusalFact,
 	herdrCoreRemove,
+	herdrCoreRoster,
 	herdrCoreRun,
 	herdrCoreSend,
+	herdrCoreStartLabels,
 	herdrFailureText,
 	herdrHandles,
+	herdrListedAgents,
 	herdrNameHolders,
 	herdrRefusalFact,
 	herdrTabClose,
@@ -321,6 +334,13 @@ export interface NameCollision {
 	 * fact the collision refreshes lands on the handoff that owns it.
 	 */
 	holder: AgentHolder | null;
+	/**
+	 * The host that holds the name: one name holds one live Agent across both
+	 * hosts, so the collision names the host the holder stands on, and the
+	 * record and the line the operator reads say where to look (issue #410,
+	 * ADR 0142).
+	 */
+	host: AgentHost;
 	/** True when the holder is one of this ticket's own handoffs. */
 	own: boolean;
 	/** herdr's own readable reason. */
@@ -499,10 +519,22 @@ export interface TicketHandoffOptions {
 	 * refuses a host the run cannot reach before any external step.
 	 */
 	agentHost: AgentHostResolution;
+	/**
+	 * The environment marks the resolution read (issue #410): the marks name
+	 * the run for the start's labels, and the herdr-core mark is the terminal
+	 * the plane's own run stands in, whose Adoption labels the start copies.
+	 */
+	agentHostMarks: AgentHostMarks;
 	runner: CommandRunner;
 	home: string;
 	/** Records durable progress after the claim and before external work. */
 	onStage?: (stage: string) => void;
+	/**
+	 * The run's identity facts for the labels a herdr-core start writes (ADR
+	 * 0141): the run the start stands in, the Ticket the start runs, and the
+	 * repository it resolves to.
+	 */
+	coreStartLabels?: CoreStartLabelFacts;
 	/** What the caller knows about the names this ticket's own agents hold. */
 	names?: OwnNameKnowledge;
 	/**
@@ -538,13 +570,25 @@ interface HandoffContext {
 	runner: CommandRunner;
 	/** The checkout the start resolved to: every git step and cleanup runs in it. */
 	checkout: string;
-	/**
-	 * The Agent host this start runs on (issue #409): the host's dialect is the
+	/** The Agent host this start runs on (issue #409): the host's dialect is the
 	 * start's own, whatever the run resolved. A herdr-core start works in the
 	 * checkout through the terminal the host names, and a herdr start through
 	 * the panes and workspaces herdr holds.
 	 */
 	host: AgentHost;
+	/**
+	 * The host the run resolved at boot (issue #410): the live-name check runs
+	 * over the merged list, so the start asks the other host for a name before
+	 * it asks its own (ADR 0142).
+	 */
+	runHost: AgentHost;
+	/** The environment marks the run resolved from, for the start's labels. */
+	agentHostMarks: AgentHostMarks;
+	/**
+	 * The run's identity facts for a herdr-core start's labels (ADR 0141), or
+	 * null on a start that writes no labels.
+	 */
+	coreStartLabels: CoreStartLabelFacts | null;
 	/** The home directory the start's ~/src convention and worktree path rule read. */
 	home: string;
 	onStage?: (stage: string) => void;
@@ -696,6 +740,7 @@ export async function handOffTicket(
 	{
 		config,
 		agentHost,
+		agentHostMarks,
 		runner,
 		home,
 		onStage,
@@ -703,6 +748,7 @@ export async function handOffTicket(
 		claim,
 		previous,
 		previousMessage,
+		coreStartLabels,
 	}: TicketHandoffOptions,
 ): Promise<HandoffOutcome> {
 	if (claim === "open" && ticket.state !== "open") {
@@ -735,6 +781,9 @@ export async function handOffTicket(
 		runner,
 		home,
 		onStage,
+		runHost: agentHost.host,
+		agentHostMarks,
+		...(coreStartLabels === undefined ? {} : { coreStartLabels }),
 		repository: ticket.repositoryRef,
 		workspace: ticketWorkspaceFact(choice, previous),
 		previousTabId: previous?.tabId ?? null,
@@ -891,6 +940,12 @@ export interface ConsultationHandoffOptions {
 	 * refuses a host the run cannot reach before any external step.
 	 */
 	agentHost: AgentHostResolution;
+	/**
+	 * The environment marks the resolution read (issue #410): the marks name
+	 * the run for the start's labels, and the herdr-core mark is the terminal
+	 * the plane's own run stands in, whose Adoption labels the start copies.
+	 */
+	agentHostMarks: AgentHostMarks;
 	runner: CommandRunner;
 	home: string;
 	consultation: Consultation;
@@ -917,6 +972,12 @@ export interface ConsultationHandoffOptions {
 	 * none is, so no path reaches the Agent unchecked.
 	 */
 	startCheck?: StartCheck;
+	/**
+	 * The run's identity facts for the labels a herdr-core start writes (ADR
+	 * 0141): the run the start stands in, the Consultation the start runs, and
+	 * the repository it resolves to.
+	 */
+	coreStartLabels?: CoreStartLabelFacts;
 }
 
 /** Render a Consultation opening prompt without interpreting operator text. */
@@ -936,6 +997,7 @@ export async function handOffConsultation({
 	consultation,
 	config,
 	agentHost,
+	agentHostMarks,
 	runner,
 	home,
 	onStage,
@@ -945,6 +1007,7 @@ export async function handOffConsultation({
 	onRepositoryResolved,
 	resolvedRepository,
 	startCheck,
+	coreStartLabels,
 }: ConsultationHandoffOptions): Promise<HandoffOutcome> {
 	const check =
 		startCheck ??
@@ -967,6 +1030,9 @@ export async function handOffConsultation({
 		onStage,
 		onAgentStarted,
 		onRepositoryResolved,
+		agentHostMarks,
+		runHost: agentHost.host,
+		...(coreStartLabels === undefined ? {} : { coreStartLabels }),
 		repository: {
 			identity: consultation.repository.identity,
 			displayName: consultation.repository.displayName,
@@ -1120,6 +1186,16 @@ interface HandoffStartRequest {
 	 * Agent's Model list is asked once per start.
 	 */
 	startCheck: StartCheck;
+	/**
+	 * The host the run resolved at boot (issue #410): the live-name check runs
+	 * over the merged list, so the start asks the other host for a name before
+	 * it asks its own (ADR 0142).
+	 */
+	runHost: AgentHost;
+	/** The environment marks the run resolved from, for the start's labels. */
+	agentHostMarks: AgentHostMarks;
+	/** The run's identity facts for a herdr-core start's labels (ADR 0141). */
+	coreStartLabels?: CoreStartLabelFacts;
 	/** Records durable progress after the claim and before external work. */
 	onStage?: (stage: string) => void;
 	/**
@@ -1260,6 +1336,9 @@ async function runHandoffStart(request: HandoffStartRequest): Promise<HandoffOut
 		runner: request.runner,
 		checkout,
 		host: request.choice.host,
+		runHost: request.runHost,
+		agentHostMarks: request.agentHostMarks,
+		coreStartLabels: request.coreStartLabels ?? null,
 		home: request.home,
 		onStage: request.onStage,
 		resources: request.resources ?? null,
@@ -2927,6 +3006,215 @@ async function startCoreAgentAndPrompt(fields: {
 }
 
 /**
+ * The other host of a start: the host the start's own host cannot ask, whose
+ * live Agents hold names the start may ask for (issue #410, ADR 0142).
+ */
+function otherHostOf(ctx: HandoffContext): AgentHost {
+	return ctx.host === "herdr" ? "herdr-core" : "herdr";
+}
+
+/**
+ * The names the other host's live Agents hold, for the merged live-name check
+ * (ADR 0142): one name holds one live Agent across both hosts, and each host
+ * refuses a taken name about its own host alone, so the plane asks the other
+ * host before it asks its own. On a herdr start the other host is herdr-core,
+ * whose live roster the read answers unscoped - the plane's labels scope its
+ * own reads for forensics, never to hide the other host. On a herdr-core start
+ * the other host is herdr, reachable only from a herdr run, and the read is
+ * the Agent list herdr holds. The answer is null when the host does not
+ * answer, and a start the other host cannot read proceeds on its own host's
+ * answer alone: the own-host refusal still stands, and the gap states beside
+ * the start rather than failing it.
+ */
+async function otherHostNameHolders(ctx: HandoffContext): Promise<Map<string, AgentHolder> | null> {
+	if (ctx.host === "herdr") {
+		const result = await runQuietly(ctx, herdrCoreList());
+		if (result === null || result.code !== 0) return null;
+		const rows = herdrCoreRoster(result);
+		if (rows === null) return null;
+		return coreRosterHolders(rows);
+	}
+	// The other host is herdr, and herdr is reachable only from a herdr run.
+	if (ctx.runHost !== "herdr") return null;
+	const result = await runQuietly(ctx, herdrAgentList());
+	if (result === null || result.code !== 0) return null;
+	const agents = herdrListedAgents(result);
+	if (agents === null) return null;
+	return herdrAgentHolders(agents);
+}
+
+/** The live terminal names herdr-core holds, one holder per name: on that host the name is the handle. */
+function coreRosterHolders(rows: readonly HerdrCoreRosterRow[]): Map<string, AgentHolder> {
+	const held = new Map<string, AgentHolder>();
+	for (const row of rows)
+		if (row.state === "live")
+			held.set(row.name, {
+				terminalId: row.name,
+				paneId: row.name,
+				tabId: row.name,
+				workspaceId: row.name,
+			});
+	return held;
+}
+
+/** The live Agent names herdr holds, one holder per name in herdr's handles. */
+function herdrAgentHolders(agents: readonly HerdrListedAgent[]): Map<string, AgentHolder> {
+	const held = new Map<string, AgentHolder>();
+	for (const agent of agents)
+		held.set(agent.name, {
+			terminalId: agent.paneId,
+			paneId: agent.paneId,
+			tabId: agent.tabId,
+			workspaceId: agent.workspaceId,
+		});
+	return held;
+}
+
+/**
+ * The collision a name held on the other host stands (issue #410, ADR 0142):
+ * the plane met no refusal - its own host would have taken the name - and the
+ * holder is the other host's live Agent, named in its own handles. The own
+ * fact settles the way the own-host rule settles it: a handle this ticket's
+ * own handoffs recorded is its own leftover.
+ */
+function crossHostCollisionOf(
+	ctx: HandoffContext,
+	name: string,
+	holder: AgentHolder,
+): NameCollision {
+	const host = otherHostOf(ctx);
+	return {
+		stableName: ctx.names.candidates[0],
+		heldName: name,
+		startedAs: null,
+		holder,
+		host,
+		own: nameIsOwnLeftover(ctx.names, [holder]),
+		reason:
+			host === "herdr-core"
+				? `the name is held by a live terminal on herdr-core`
+				: `the name is held by a live agent on herdr`,
+	};
+}
+
+/**
+ * The search state one candidate name walk keeps (issue #409, #410): the
+ * collision the last refusal stood, the own leftover it kept beside it, and
+ * whether the attempt that ended the search was the host refusing a name.
+ */
+type NameSearchState = {
+	nameHeld: boolean;
+	collision: NameCollision | undefined;
+	ownCollision: NameCollision | undefined;
+};
+
+/**
+ * The merged live-name check for one candidate (issue #410, ADR 0142): the
+ * name is held on the other host, and the own host would have taken it -
+ * the plane met no refusal, and the holder is the other host's live Agent.
+ * The collision settles the way an own-host collision settles: the walk keeps
+ * it, and the caller advances to the next candidate on an own leftover or
+ * breaks on a stranger's hold. Null when the other host holds no such name.
+ */
+function nameHeldElsewhere(
+	state: NameSearchState,
+	ctx: HandoffContext,
+	name: string,
+	heldElsewhere: Map<string, AgentHolder> | null,
+): NameCollision | null {
+	if (heldElsewhere === null) return null;
+	const holder = heldElsewhere.get(name);
+	if (holder === undefined) return null;
+	state.nameHeld = true;
+	const collision = crossHostCollisionOf(ctx, name, holder);
+	state.collision = collision;
+	if (collision.own && state.ownCollision === undefined) state.ownCollision = collision;
+	return collision;
+}
+
+/** The facts one refused start's step reads: the host's word for the refusal, and the collision that word stands. */
+interface RefusalFacts {
+	names: NamePlan;
+	stableName: string;
+	name: string;
+	result: CommandResult;
+	fact: (result: CommandResult) => string | null;
+	collisionOf: (
+		names: NamePlan,
+		stableName: string,
+		name: string,
+		result: CommandResult,
+	) => NameCollision;
+}
+
+/**
+ * The step one refused start takes in the candidate walk (issue #409, #410):
+ * the search records whether the host refused a name, and the collision the
+ * refusal stands. True while the walk asks for the next candidate name: the
+ * refusal held a name, and its holder is this ticket's own leftover. A
+ * refusal for any other reason stops the search where it stands.
+ */
+function recordRefusedName(search: NameSearchState, facts: RefusalFacts): boolean {
+	search.nameHeld = facts.fact(facts.result) === "agent_name_taken";
+	if (!search.nameHeld) return false;
+	search.collision = facts.collisionOf(facts.names, facts.stableName, facts.name, facts.result);
+	if (search.collision.own && search.ownCollision === undefined)
+		search.ownCollision = search.collision;
+	return search.collision.own;
+}
+
+/**
+ * The Adoption labels the plane's own terminal carries, for the terminal a
+ * herdr-core start takes (ADR 0141). The plane reads its own terminal's record
+ * once per start, and copies the labels that terminal carries: a terminal the
+ * desktop adopted into a space or tab is the space's or the tab's, and the
+ * start's terminal stands beside it. A run outside a herdr-core terminal - or
+ * one whose record the host does not return - carries no adoption label, and
+ * the start writes none. The labels are written at the start and never
+ * rewritten by a later command.
+ */
+async function coreAdoptionLabels(ctx: HandoffContext): Promise<Record<string, string>> {
+	const terminal = ctx.agentHostMarks.hcTerminalId;
+	if (terminal === undefined) return {};
+	const result = await runQuietly(ctx, herdrCoreGet(terminal));
+	if (result === null || result.code !== 0) return {};
+	const labels = herdrCoreRecord(result)?.labels;
+	if (labels === undefined) return {};
+	const adoption: Record<string, string> = {};
+	for (const key of [CORE_ADOPTION_LABEL_SPACE, CORE_ADOPTION_LABEL_TAB]) {
+		const value = labels[key];
+		if (value !== undefined) adoption[key] = value;
+	}
+	return adoption;
+}
+
+/**
+ * The invocation one candidate's herdr-core start issues (issue #410, ADR
+ * 0141): the plane's start labels name the run, the Ticket, the Handoff, and
+ * the repository the terminal runs in, and the Adoption labels the plane's
+ * own terminal carries ride with them. The labels are written at the start
+ * and never rewritten by a later command.
+ */
+function coreStartInvocation(options: {
+	ctx: HandoffContext;
+	agent: FactoryConfig["agents"][string];
+	args: string[];
+	cwd: string;
+	name: string;
+	adoption: Record<string, string>;
+}): HostInvocation {
+	const { ctx, agent, args, cwd, name, adoption } = options;
+	return herdrCoreRun({
+		name,
+		cwd,
+		argv: [agent.kind, ...args],
+		...(ctx.coreStartLabels === null
+			? {}
+			: { labels: herdrCoreStartLabels(ctx.coreStartLabels, name, adoption) }),
+	});
+}
+
+/**
  * Start an Agent terminal on the herdr-core host, one candidate name at a
  * time (issue #409).
  *
@@ -2952,31 +3240,59 @@ async function startCoreAgentUnderAvailableName(
 ): Promise<AgentStart> {
 	const candidates = ctx.names.candidates;
 	ctx.onStage?.("starting-agent");
-	let collision: NameCollision | undefined;
-	let ownCollision: NameCollision | undefined;
+	// The merged live-name check runs over both hosts before the first ask
+	// (ADR 0142): the own host's refusal answers about its own host alone.
+	const heldElsewhere = await otherHostNameHolders(ctx);
+	// The plane's own terminal carries the Adoption labels its desktop adopted
+	// it with, and the labels the start writes are stated once for every
+	// candidate it asks: the candidate the host takes is the terminal the
+	// labels name (ADR 0141).
+	const adoption = await coreAdoptionLabels(ctx);
+	const search: NameSearchState = {
+		nameHeld: false,
+		collision: undefined,
+		ownCollision: undefined,
+	};
 	let result: CommandResult = { code: 0, stdout: "", stderr: "" };
-	let nameHeld = false;
 	for (let index = 0; index < candidates.length; index += 1) {
 		const name = candidates[index];
+		const held = nameHeldElsewhere(search, ctx, name, heldElsewhere);
+		if (held !== null) {
+			// Another ticket's terminal, or the last candidate spent: the hold
+			// stands, and no name is asked for on this host at all.
+			if (!held.own || index + 1 === candidates.length) break;
+			continue;
+		}
 		result = await runInvocation(
 			ctx.runner,
-			herdrCoreRun({ name, cwd, argv: [agent.kind, ...args] }),
+			coreStartInvocation({ ctx, agent, args, cwd, name, adoption }),
 		);
 		if (result.code === 0) {
 			return {
 				name,
 				result,
 				nameHeld: false,
-				...collisionFields(collision, ownCollision, name),
+				...collisionFields(search.collision, search.ownCollision, name),
 			};
 		}
-		nameHeld = herdrCoreRefusalFact(result) === "agent_name_taken";
-		if (!nameHeld) break;
-		collision = coreNameCollisionOf(ctx.names, candidates[0], name, result);
-		if (collision.own && ownCollision === undefined) ownCollision = collision;
-		if (!collision.own || index + 1 === candidates.length) break;
+		const next = recordRefusedName(search, {
+			names: ctx.names,
+			stableName: candidates[0],
+			name,
+			result,
+			fact: herdrCoreRefusalFact,
+			collisionOf: coreNameCollisionOf,
+		});
+		// Another ticket's terminal, or the last candidate spent, or a refusal
+		// the held name is not: the search stops where it stands.
+		if (!next || index + 1 === candidates.length) break;
 	}
-	return { name: null, result, nameHeld, ...collisionFields(collision, ownCollision) };
+	return {
+		name: null,
+		result,
+		nameHeld: search.nameHeld,
+		...collisionFields(search.collision, search.ownCollision),
+	};
 }
 
 /**
@@ -3000,6 +3316,7 @@ function coreNameCollisionOf(
 		heldName: name,
 		startedAs: null,
 		holder,
+		host: "herdr-core",
 		own,
 		reason: herdrCoreFailureText(result),
 	};
@@ -3084,16 +3401,24 @@ async function startAgentUnderAvailableName(
 ): Promise<AgentStart> {
 	const candidates = ctx.names.candidates;
 	ctx.onStage?.("starting-agent");
-	let collision: NameCollision | undefined;
-	// Keep the first own collision when a later candidate has another owner:
-	// the failure reports the later owner, but the earlier leftover is still
-	// this ticket's durable fact.
-	let ownCollision: NameCollision | undefined;
+	const search: NameSearchState = {
+		nameHeld: false,
+		collision: undefined,
+		ownCollision: undefined,
+	};
 	let result: CommandResult = { code: 0, stdout: "", stderr: "" };
-	/** True while the attempt that ended the search was herdr refusing a name. */
-	let nameHeld = false;
+	// The merged live-name check runs over both hosts before the first ask
+	// (ADR 0142): the own host's refusal answers about its own host alone.
+	const heldElsewhere = await otherHostNameHolders(ctx);
 	for (let index = 0; index < candidates.length; index += 1) {
 		const name = candidates[index];
+		const held = nameHeldElsewhere(search, ctx, name, heldElsewhere);
+		if (held !== null) {
+			// Another ticket's agent, or the last candidate spent: the hold
+			// stands, and no name is asked for on this host at all.
+			if (!held.own || index + 1 === candidates.length) break;
+			continue;
+		}
 		result = await startAgentWhenPaneIsReady(
 			herdrAgentStart(name, agent.kind, paneId, args),
 			ctx.runner,
@@ -3104,18 +3429,28 @@ async function startAgentUnderAvailableName(
 				result,
 				// The last answer herdr gave was an acceptance, not a refusal.
 				nameHeld: false,
-				...collisionFields(collision, ownCollision, name),
+				...collisionFields(search.collision, search.ownCollision, name),
 			};
 		}
-		nameHeld = herdrRefusalFact(result) === "agent_name_taken";
-		if (!nameHeld) break;
-		collision = nameCollisionOf(ctx.names, candidates[0], name, result);
-		if (collision.own && ownCollision === undefined) ownCollision = collision;
-		// Another ticket's agent, or the last candidate spent: the collision
-		// stands, and no further name is asked for.
-		if (!collision.own || index + 1 === candidates.length) break;
+		const next = recordRefusedName(search, {
+			names: ctx.names,
+			stableName: candidates[0],
+			name,
+			result,
+			fact: herdrRefusalFact,
+			collisionOf: nameCollisionOf,
+		});
+		// Another ticket's agent, the last candidate spent, or a refusal the
+		// held name is not: the collision stands, and no further name is
+		// asked for.
+		if (!next || index + 1 === candidates.length) break;
 	}
-	return { name: null, result, nameHeld, ...collisionFields(collision, ownCollision) };
+	return {
+		name: null,
+		result,
+		nameHeld: search.nameHeld,
+		...collisionFields(search.collision, search.ownCollision),
+	};
 }
 
 /**
@@ -3139,6 +3474,7 @@ function nameCollisionOf(
 		// The operator is sent to find the holder that matters: for an own
 		// collision, the one this ticket's handoffs recorded.
 		holder: own ? (ownHolder(names, holders) ?? holders[0] ?? null) : (holders[0] ?? null),
+		host: "herdr",
 		own,
 		reason: herdrFailureText(result),
 	};
@@ -3176,12 +3512,17 @@ function failedNameUnusable(attempt: AgentStart, ctx: HandoffContext): HandoffOu
 			...collisionFields(collision, attempt.ownCollision),
 		};
 	}
-	const nameWord = ctx.host === "herdr-core" ? "terminal name" : "herdr name";
-	const hostWord = ctx.host === "herdr-core" ? "herdr-core host" : "herdr";
-	const holder = nameHolderText(collision.holder);
+	// The holder's host is the host the wording reads from: a collision the
+	// plane met on its own host keeps the host's own words, and one it met on
+	// the other host names that host, the way the record does (issue #410,
+	// ADR 0142).
+	const hostWord = collision.host === "herdr-core" ? "herdr-core host" : "herdr";
+	const nameWord = collision.host === "herdr-core" ? "terminal name" : "herdr name";
+	const holder = nameHolderText(collision.holder, collision.host);
+	const elsewhere = collision.host === ctx.host ? "" : ` on the ${hostWord}`;
 	const reason = collision.own
 		? `this ticket's own leftover agent still holds the ${nameWord} ${collision.heldName} (${holder}); end its leftover environment in ${hostWord}, then hand off again: ${collision.reason}`
-		: `the ${nameWord} ${collision.heldName} is held by ${holder}, which is no agent of ${ctx.names.owner}: ${collision.reason}`;
+		: `the ${nameWord} ${collision.heldName} is held by ${holder}${elsewhere}, which is no agent of ${ctx.names.owner}: ${collision.reason}`;
 	return {
 		status: "failed",
 		reason,
