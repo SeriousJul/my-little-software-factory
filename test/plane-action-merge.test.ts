@@ -2668,7 +2668,7 @@ describe("the auto top-up merge", () => {
 		}) as typeof process.stdout.write);
 		try {
 			let held: FactoryState;
-			const { state, runner } = await topUpApp(
+			const { state } = await topUpApp(
 				async (setup) => {
 					// The block's line on the Message line races the rework
 					// handoff's working line, which the converged position asks
