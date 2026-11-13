@@ -80,9 +80,11 @@ start then lands.
 Three proofs gate the rename, and each closes a door the plane must not walk
 through:
 
-- **The naming rule names the path.** The path comes from herdr's own
-  `worktree list`, the same derivation ADR 0046 established. A list that does
-  not read names no path, so no directory is touched.
+- **The naming rule names the path.** The path comes from the naming rule the
+  plane states, not from a host's list: herdr's own layout, recorded in the
+  verification record against herdr 0.9.5 (ADR 0143). The rule names one path
+  on either host, so a record that does not read leaves proof 2 below unmade,
+  and no directory is touched.
 - **git holds no record of the path.** A recorded worktree - standing or
   prunable - is herdr's and git's to open or remove. The plane moves nothing a
   tool still owns.
@@ -114,5 +116,6 @@ anywhere, in this path.
   ticket Handoff's outcome line and the Consultation's own. The move line has no
   success gate, because a moved directory is a fact the operator needs even when
   the start fails after it.
-- The reopen lookup and this rule read one derivation of herdr's naming rule,
-  so the two can never disagree about where a ticket's worktree lives.
+- The reopen lookup and this rule apply the one naming rule the plane states
+  (ADR 0143), so the two can never disagree about where a ticket's worktree
+  lives.

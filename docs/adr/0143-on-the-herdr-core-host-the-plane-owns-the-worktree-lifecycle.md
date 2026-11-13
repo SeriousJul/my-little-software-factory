@@ -62,11 +62,10 @@ herdr-core reopens the same checkout on the same branch instead of forking a
 second working copy of its own work. The plane owns no second worktrees directory.
 
 **The reopen lookup reads git, and one lookup serves both hosts.** The branch
-lookup and the leftover-path lookup of
-`readTicketWorktreePaths` answer from git's own record of the checkout's linked
-worktrees, because git holds both hosts' worktrees, and herdr's extra facts
-(`open_workspace_id`, `is_prunable`) are read only where a herdr workspace has to
-be taken down with the checkout.
+lookup and the leftover-path lookup of `readWorktreePaths` answer from git's
+own record of the checkout's linked worktrees, because git holds both hosts'
+worktrees, and herdr's extra fact (`open_workspace_id`) is read only where a
+herdr workspace has to be taken down with the checkout.
 
 **Each host's cleanup stays on its own side of the boundary.** On herdr,
 `worktree remove --workspace` and the workspace and tab closes stand as they are.

@@ -49,8 +49,12 @@ workspace has to come down with the checkout; each host's cleanup stays on its
 own side - the herdr-core close kills and removes the terminal with `hc` and
 removes the checkout with git, and it never removes a checkout a herdr
 workspace still holds; the Leftover worktree directory moves aside on both
-hosts; and nothing on the herdr host changes, whose `worktree create` and
-`worktree remove --workspace` stand as they were. What has not run is the same boundary it was before, and it stands
+hosts; the herdr host keeps its herdr commands, the `worktree create` and
+the `worktree remove --workspace`, which run as before, but its reopen
+lookup now reads git's record instead of herdr's list, and a git list that
+does not read degrades the start to the fresh `worktree create` instead of
+failing it, where a raise of the herdr list used to fail the start, and the
+Close keeps the fail-closed read of herdr's list. What has not run is the same boundary it was before, and it stands
 below: no plane command has ever gone to a real herdr-core host, and the
 herdr-core facts the plane reads on that host are the probe answers above,
 not a live run. A check that could not run is recorded as incomplete; it is
@@ -223,6 +227,7 @@ are the shapes above, standing in the Stub world's git side.
 | One checkout per Ticket across hosts: the herdr-core start builds the checkout at `<home>/.herdr/worktrees/<repo name>/<branch with each slash for a hyphen>` with `git worktree add`, and the plane owns no second worktrees directory | `test/handoff.test.ts`, the herdr-core start's command pins, and `test/herdr-world.test.ts`, the git shape pins |
 | A host switch inside one Ticket cycle reopens the same checkout on the same branch, and one pull request stands for it | `test/handoff-dispatch.test.ts`, the host-switch reopen test |
 | The reopen lookups answer from git's record on both hosts: a worktree herdr made and a worktree the plane made are both found, a stale git record meets the same path lookup, and a worktree that stands on disk under an unregistered path still refuses the add | `test/handoff.test.ts`, the reopen lookup tests on both hosts, and `test/herdr-world.test.ts` |
+| The herdr host's start degrades a git list that does not read: a refusal or a raise records the start as unreadable, and the start proceeds to the fresh `worktree create`, with no path reopen and no leftover move-aside; a raise of the list no longer fails the start the way a raise of herdr's list did | `test/handoff.test.ts`, the herdr-host start whose worktree list does not read |
 | The residue contract: a start removes only what it made, on each host, and the herdr-core start's failure removes its checkout with git and its own new branch beside it | `test/handoff.test.ts`, the herdr-core start's residue test, and the herdr-host start's residue tests |
 | The Close cleanup on herdr-core never issues a git removal of a checkout a herdr workspace still holds: a close from a herdr host that reads a herdr workspace on the checkout stands with the reason and no removal, a close whose herdr list does not read fails the close and keeps the checkout, and a close from a herdr-core host issues no herdr command and removes the checkout with git | `test/handoff.test.ts`, the herdr-core Close's guard tests |
 | The Leftover worktree directory moves aside on both hosts: the refused add leaves its branch standing, the directory moves under a name that says what it is, and the retry checks the branch out without naming it again, never deleting | `test/handoff.test.ts`, the leftover tests on both hosts |

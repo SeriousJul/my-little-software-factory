@@ -687,7 +687,7 @@ It is not a Leftover environment, which is the ticket's own workspace, tab, or A
 _Avoid_: name conflict, stuck retry, orphaned agent
 
 **Leftover worktree directory**:
-The directory Herdr's naming rule reserves for a Branch, standing on disk after Git stopped recording the worktree that held it.
+The directory the naming rule the plane states (ADR 0143) reserves for a Branch, standing on disk after Git stopped recording the worktree that held it.
 It blocks a fresh worktree for that Branch, and it is no tool's to remove: the control plane moves it aside under a name that says what it is, and never deletes it (ADR 0062).
 It is not a Leftover environment, which is a workspace, tab, or Agent Herdr still holds.
 _Avoid_: stale checkout, orphaned worktree, ghost directory
