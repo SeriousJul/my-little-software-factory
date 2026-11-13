@@ -25,6 +25,7 @@ import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import {
 	type AppSetup,
+	actionBarRowOf,
 	frameText,
 	frameUntil,
 	guideKey,
@@ -1374,6 +1375,116 @@ describe("the Live view against a running factory", () => {
 				height: HEIGHT,
 				plane: planeRecord,
 				loopPolicy: { kind: "polled", intervalMs: 20 },
+			},
+		);
+		planeRecord.state.close();
+	});
+});
+
+describe("Goto and the Live view on the host the ticket's record stands on", () => {
+	test("g on a herdr-core run refuses and states the command the operator types", async () => {
+		const runner = new FakeRunner();
+		// No herdr environment: the run resolves herdr-core by default, and
+		// the focus move is a command that host does not answer (issue #413).
+		const planeRecord = await plane({ runner: () => runner });
+
+		await withApp(
+			async (setup) => {
+				// The selection boots on the awaiting Ticket, and the walk
+				// reaches the in-flight one whose handoff records a terminal.
+				await pressControl(setup, "move-list", { via: "j", moved: "Migrate scheduler" });
+				// herdr-core answers no focus move: the press states the command
+				// the operator types to take the terminal over, and spends no
+				// key on a command the run cannot run.
+				const frame = await pressControl(setup, "ticket-goto", {
+					via: "g",
+					refuses: "the herdr-core host answers no focus move: type hc attach pane-fix",
+				});
+				expect(frame).toContain(
+					"the herdr-core host answers no focus move: type hc attach pane-fix",
+				);
+				// The refusal is pure: no focus ran on either host, so the
+				// ticket keeps standing in flight under its face.
+				for (const command of runner.commands()) {
+					expect(command, `the refusal ran an external command: ${command}`).not.toMatch(
+						/focus|attach/,
+					);
+				}
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
+		);
+		planeRecord.state.close();
+	});
+
+	test("g on a herdr-core handoff of a herdr run refuses and states the command the operator types", async () => {
+		const runner = new FakeRunner();
+		// The run is on herdr, but the ticket's handoff stands on herdr-core:
+		// the focus move the record owes is the operator's own attach, and the
+		// guide and the bar state the host that answers no styled read (issue
+		// #413, ADR 0141).
+		const planeRecord = await plane({
+			runner: () => runner,
+			agentHostEnv: { herdrEnv: "1" },
+			handoffs: [
+				{
+					// A sample Ticket with no stored handoff, stood on the host
+					// the case turns on.
+					ticket: "github:github.com:I_5",
+					choice: { host: "herdr-core" },
+				},
+			],
+		});
+
+		await withApp(
+			async (setup) => {
+				// The selection boots on the awaiting Ticket; step until the
+				// cursor stands on the ticket whose handoff stands on herdr-core.
+				// The walk matches the raw frame: the marker row keeps its border,
+				// and the text read strips it.
+				for (let step = 0; step < 12; step += 1) {
+					const raw = await settle(setup);
+					if ((rowsOf(raw)[markerRowOf(raw)] ?? "").includes("Observe the agent")) break;
+					await pressControl(setup, "move-list", { via: "j", quiet: true });
+				}
+				// herdr answers no focus move for the terminal the handoff
+				// recorded on herdr-core: the press states the command the
+				// operator types to take the terminal over, and spends no key
+				// on a command the run cannot run.
+				const frame = await pressControl(setup, "ticket-goto", {
+					via: "g",
+					refuses: "the herdr-core host answers no focus move: type hc attach pane-1",
+				});
+				expect(frame).toContain("the herdr-core host answers no focus move: type hc attach pane-1");
+				for (const command of runner.commands()) {
+					expect(command, `the refusal ran an external command: ${command}`).not.toMatch(
+						/focus|attach/,
+					);
+				}
+				// The Live view stands off the same host: the guide states the
+				// styled read the host does not answer, and the bar names the
+				// control nowhere.
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
+				// The host's line wraps onto a continuation row, so the guide
+				// body is read as one string, the way the key guide's tests do.
+				const body = frameText(await settle(setup));
+				expect(body).toContain(
+					"the herdr-core host answers no styled read: the Live view is not offered",
+				);
+				await pressControl(setup, "guide-close", { closes: "Key guide" });
+				const bar = actionBarRowOf(setup.captureCharFrame());
+				expect(bar).toContain("g Goto");
+				expect(bar).not.toContain("Live view");
+			},
+			{
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
 			},
 		);
 		planeRecord.state.close();

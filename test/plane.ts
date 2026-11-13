@@ -187,9 +187,9 @@ export interface PlaneStanding {
 	 */
 	tickets?: readonly FetchedTicket[];
 	/**
-	 * The handoff of the standing, over the six-field choice the suite
-	 * shares. Name only the environment, the task type, or the origin the
-	 * case turns on.
+	 * The handoff of the standing, over the choice the suite shares. Name
+	 * only the field the case turns on: the host, the environment, the task
+	 * type, or the origin.
 	 */
 	handoff?: Partial<HandoffChoice> & {
 		origin?: HandoffOrigin;
@@ -355,7 +355,10 @@ export interface PlaneStanding {
 export interface PlaneTicketHandoff {
 	/** The ticket the handoff stores for, listed by the plane's source. */
 	ticket: string;
-	/** The stored choice, over the six fields the suite shares. */
+	/**
+	 * The stored choice, over the fields the suite shares. Name the host the
+	 * case turns on: the stored handoff stands on it (issue #413).
+	 */
 	choice?: Partial<HandoffChoice>;
 	/** The origin the stored handoff took. Default: the open claim. */
 	origin?: HandoffOrigin;
@@ -836,6 +839,7 @@ function choiceOf(handoff: PlaneStanding["handoff"]): HandoffChoice {
 	if (handoff?.model !== undefined) over.model = handoff.model;
 	if (handoff?.thinking !== undefined) over.thinking = handoff.thinking;
 	if (handoff?.contextWindow !== undefined) over.contextWindow = handoff.contextWindow;
+	if (handoff?.host !== undefined) over.host = handoff.host;
 	return handoffChoice(over);
 }
 
@@ -878,7 +882,7 @@ function seedTicketHandoffs(state: FactoryState, handoffs: readonly PlaneTicketH
 			agentType: entry.choice?.agentType,
 			environment: entry.choice?.environment,
 			taskType: entry.choice?.taskType,
-			host: "herdr",
+			host: entry.choice?.host ?? "herdr",
 			model: entry.choice?.model,
 			thinking: entry.choice?.thinking,
 			contextWindow: entry.choice?.contextWindow,
