@@ -3,12 +3,14 @@
  * guides show.
  *
  * The world is a temporary directory holding a config, a seeded state file,
- * and three stub executables the production binary resolves through PATH:
+ * and four stub executables the production binary resolves through PATH:
  * `gh` answers the ticket source's search query with one fixed page per
- * fixture repository, `pi` reports a fixed model list, and `herdr` reports
+ * fixture repository, `pi` reports a fixed model list, `herdr` reports
  * three live agent panes - one working on the in-flight ticket, one holding
  * the working Consultation, one idle beside the Consultation that awaits its
- * answer. The screenshots are the production renderer's bytes over this
+ * answer - and `hc` answers the merged read's herdr-core side with the empty
+ * standing: the world's herdr-core holds no terminal (issue #410). The
+ * screenshots are the production renderer's bytes over this
  * world: real frames, canned facts.
  *
  * The world holds two repositories, the way the operator's real one does:
@@ -456,6 +458,17 @@ printf '%s\\n' 'anthropic  claude-haiku-4-5  200000  32768  true  true'
 exit 0
 `;
 
+/** The `hc` stub: the world's herdr-core holds no terminal. */
+const HC_STUB = `#!/bin/sh
+# Screenshot stub for hc: the merged read's herdr-core side stands empty
+# (issue #410), so the plane's other-host read reads a world with no
+# terminal and no gap note. Builtins only: the fixture PATH holds this bin
+# dir and nothing else.
+[ "$1" = "ls" ] || exit 1
+printf '%s' '{"hidden_finished":0,"terminals":[]}'
+exit 0
+`;
+
 /**
  * The `herdr` stub: three live panes. `pane-2` works the in-flight ticket and
  * reports working until the capture touches `done.flag`; `pane-3` holds the
@@ -724,7 +737,8 @@ export function buildFixture(root: string): string {
 	writeFileSync(join(dir, "bin", "gh"), GH_STUB);
 	writeFileSync(join(dir, "bin", "pi"), PI_STUB);
 	writeFileSync(join(dir, "bin", "herdr"), HERDR_STUB);
-	for (const name of ["gh", "pi", "herdr"]) chmodSync(join(dir, "bin", name), 0o755);
+	writeFileSync(join(dir, "bin", "hc"), HC_STUB);
+	for (const name of ["gh", "pi", "herdr", "hc"]) chmodSync(join(dir, "bin", name), 0o755);
 	// The world's own settings hash, so the init facts it seeds match the
 	// config the plane will load from the same file (ADR 0075): the fixtures'
 	// repositories stand initialized, not drifted, on the screen the guide shows.

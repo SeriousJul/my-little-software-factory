@@ -1340,6 +1340,9 @@ describe("the merged Main view", () => {
 			sources: [],
 			config,
 			runner: () => runner,
+			// The Consultation fixture stands on the herdr dialect: the plane
+			// runs on herdr and reads the merged list (issue #410).
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {
@@ -1388,6 +1391,9 @@ describe("the merged Main view", () => {
 			sources: [],
 			config,
 			runner: () => runner,
+			// The Consultation fixture stands on the herdr dialect: the plane
+			// runs on herdr and reads the merged list (issue #410).
+			agentHostEnv: { herdrEnv: "1" },
 		});
 		await withApp(
 			async (setup) => {

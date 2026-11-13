@@ -109,6 +109,10 @@ async function rig(over: { config?: Partial<FactoryConfig>; live?: boolean } = {
 		groupingAxis: "none",
 		sources: [{ config: issuesSourceConfig, tickets: restingRows(live) }],
 		config: over.config,
+		// The fixture stands its live Agent on herdr, beside the handoff's own
+		// record: the plane runs on herdr, and the merged read (issue #410)
+		// sees the Agent on herdr's side.
+		agentHostEnv: { herdrEnv: "1" },
 		...(live
 			? { commands: (fake) => fake.set("herdr", ["agent", "list"], { stdout: workingAgent() }) }
 			: {}),
