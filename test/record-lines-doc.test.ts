@@ -17,8 +17,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	agentHostBootLine,
+	HERDR_CORE_LIVE_VIEW_LINE,
 	HERDR_CORE_VERSION_FLOOR,
 	herdrCoreFloorWarningLine,
+	herdrCoreGotoLine,
 } from "../src/agent-host.ts";
 import {
 	checkoutHoldDropLine,
@@ -364,5 +366,14 @@ describe("the record lines the configuration reference states", () => {
 		// out of the module that writes the line.
 		statedInGuide(herdrCoreFloorWarningLine("0.1.9"), 'herdrCoreFloorWarningLine("0.1.9")');
 		statedInGuide(HERDR_CORE_VERSION_FLOOR, "the version floor the page names");
+	});
+
+	test("the host-dependent control lines state themselves in the guide (issue #413)", () => {
+		// The Goto on a herdr-core Agent refuses and hands the operator the exact
+		// attach command; a record that names no terminal states the line without
+		// it. The Live view's absence line is the mode's Availability reason.
+		statedInGuide(herdrCoreGotoLine("<name>"), 'herdrCoreGotoLine("<name>")');
+		statedInGuide(herdrCoreGotoLine(null), "herdrCoreGotoLine(null)");
+		statedInGuide(HERDR_CORE_LIVE_VIEW_LINE, "HERDR_CORE_LIVE_VIEW_LINE");
 	});
 });

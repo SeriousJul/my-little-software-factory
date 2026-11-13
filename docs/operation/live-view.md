@@ -13,6 +13,25 @@ in full, with the repository, task type, and agent named above it. New output
 pins the stream to the bottom; a scroll releases the pin, and reaching the
 bottom by scrolling pins it again.
 
+The screen stands on the host the ticket's record stands on. On a
+herdr-core host the screen is not offered: herdr-core reads a screen as
+text and answers no styled read at all, so the plane shows no stand-in
+stream. The Key guide and the Action bar state the reason the Live view's
+mode is absent instead of showing a dead key:
+
+```text
+the herdr-core host answers no styled read: the Live view is not offered
+```
+
+A settled turn on that host does not hand this screen over: the decision
+opens as the [decision modal](modals.md) on the Main view, and the modal's
+Goto row states its own refusal, naming the command the operator types to
+take the agent's terminal over:
+
+```text
+the herdr-core host answers no focus move: type hc attach <name>
+```
+
 While the agent works, the keys are:
 
 | Key            | What it does                                                |

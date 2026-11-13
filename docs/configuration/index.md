@@ -1161,6 +1161,35 @@ A host that answers no version at all - a binary that is missing or unreadable
 the first read it makes, and the plane does not guess a floor from a read it
 did not get.
 
+Two of the controls the plane owns stand on the host the run resolved:
+Goto and the Live view. On a herdr-core host neither answers - herdr-core
+offers the operator no view to move, and it reads a screen as text,
+answering no styled read at all - so both state the fact instead of taking
+the operator's key or streaming a stand-in. The Goto on a herdr-core Agent
+refuses and hands the operator the exact command to take the terminal over,
+one record line; a record that names no terminal states the line without
+the command:
+
+```text
+the herdr-core host answers no focus move: type hc attach <name>
+the herdr-core host answers no focus move
+```
+
+The Live view's mode is not offered on that host, and the Key guide and
+the Action bar state the reason the control is absent:
+
+```text
+the herdr-core host answers no styled read: the Live view is not offered
+```
+
+The Consultation view's body keeps its text read on that host: herdr-core
+answers `hc read`, and the text body is the same body the plane reads on
+the herdr host's visible screen. The plane shows no herdr-core terminal
+inside its own TUI: no attach, no screen mirror. A herdr run can start a
+herdr-core Agent, and the controls that act on that Agent stand on the host
+the record stands on, not the host the run resolved: the same refusals
+close the same two controls for it.
+
 ### The security feed sources
 
 The three security kinds read the repository security tab, one call set per
