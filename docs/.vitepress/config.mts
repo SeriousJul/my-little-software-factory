@@ -22,7 +22,7 @@ const srcDirPosix = srcDir.replace(/\\/g, "/");
 
 // Repository-only content: these folders stay in the docs folder but out of
 // the site build. This is the single declaration of the published subset.
-const EXCLUDED = ["agents", "research", "verification"];
+const EXCLUDED = ["agents", "research", "specs", "verification"];
 
 // Links from published pages into repository-only content (the excluded
 // folders, or files outside the docs folder) are rewritten to the repository,

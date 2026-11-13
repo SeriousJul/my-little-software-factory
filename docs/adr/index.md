@@ -153,3 +153,6 @@ body states the context, the decision, and the consequences.
 - [ADR 0142: One run holds Agents on both hosts, and the host stands on the Handoff](./0142-one-run-holds-agents-on-both-hosts-and-the-host-stands-on-the-handoff.md)
 - [ADR 0143: On the herdr-core host the plane owns the worktree lifecycle](./0143-on-the-herdr-core-host-the-plane-owns-the-worktree-lifecycle.md)
 - [ADR 0144: On the herdr-core host the plane derives the Agent session record path](./0144-on-the-herdr-core-host-the-plane-derives-the-agent-session-record-path.md)
+- [ADR 0145: The renderer adapter owns the repaint policy](./0145-the-renderer-adapter-owns-the-repaint-policy.md)
+- [ADR 0146: The observation cycle sends one report, and its identity carries its change](./0146-the-observation-cycle-sends-one-report-and-its-identity-carries-its-change.md)
+- [ADR 0147: The pane screen's revision changes only when the read differs](./0147-the-pane-screens-revision-changes-only-when-the-read-differs.md)
