@@ -146,7 +146,7 @@ import {
 	errorMessage,
 	supportsModelList,
 } from "../runner.ts";
-import { realSessionRecordLookup, type SessionRecordLookup } from "../session-record.ts";
+import type { SessionRecordLookup } from "../session-record.ts";
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
 import type {
 	Consultation,
@@ -468,10 +468,10 @@ export interface AppProps {
 	 * The derived session record path on the host that reports none (ADR
 	 * 0144): the per-kind table's lookup. The Observation loop takes it for
 	 * the settle, and the Session view takes it for the exchange of a
-	 * herdr-core Agent. Omitted: the real lookup of the machine the run
-	 * stands on.
+	 * herdr-core Agent. The plane names it: the real lookup of the machine
+	 * the run stands on, or the unavailable lookup a test names.
 	 */
-	sessionRecord?: SessionRecordLookup;
+	sessionRecord: SessionRecordLookup;
 	/** The loop policy: the named fact that decides which loops run. */
 	loopPolicy: AppLoopPolicy;
 	/**
@@ -1491,7 +1491,7 @@ function useAppSessionRefresh(props: AppProps, prev: AppKeyHandlersStage) {
 			agentsRef: prev.agentsRef,
 			configRef: prev.configRef,
 			commandRunner: prev.commandRunner,
-			sessionRecord: props.sessionRecord ?? realSessionRecordLookup,
+			sessionRecord: props.sessionRecord,
 			consultationOperations: prev.consultationOperations,
 			interaction: prev.interaction,
 			consultationFollowRef: prev.consultationFollowRef,
@@ -1535,7 +1535,7 @@ function observationLoopFields(
 		handoffDispatch: prev.handoffDispatch,
 		loopPolicy: props.loopPolicy,
 		commandRunner: prev.commandRunner,
-		sessionRecord: props.sessionRecord ?? realSessionRecordLookup,
+		sessionRecord: props.sessionRecord,
 		configRef: prev.configRef,
 		autoModeRef: prev.autoModeRef,
 		replaceTickets: prev.replaceTickets,
