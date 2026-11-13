@@ -11,6 +11,7 @@ import {
 	type AgentWaitResult,
 	type AwaitingDecision,
 	HerdrAgentReader,
+	MergedAgentReader,
 	ObservationCoordinator,
 	STARTUP_GRACE_MS,
 	stripAnsi,
@@ -1402,6 +1403,50 @@ describe("missing agents", () => {
 		// Inside the startup grace the agent is booting, not missing: a
 		// restart would double-start the turn even though the limit has room.
 		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(0);
+		state.close();
+	});
+
+	test("the grace window and the Missing marker read the herdr-core host record (issue #410)", async () => {
+		// The herdr-core host record the merged list carries: the terminal name
+		// is the pane, the tab, and the workspace (ADR 0141).
+		const coreRecord: HerdrAgent = {
+			host: "herdr-core",
+			paneId: "pane-implement",
+			tabId: "pane-implement",
+			workspaceId: "pane-implement",
+			agent: "factory-implement-I_5",
+			status: "working",
+			sessionId: "",
+		};
+		const rigHandle = rig({ autoOn: true, agents: [] });
+		const { state, intents, coordinator, advance } = rigHandle;
+		const identity = "github:github.com:I_5";
+		// The handoff settles on the pinned clock, so the grace runs from now.
+		handOut(state, identity);
+		// The herdr-core record lists the Agent in the ticket's pane. Inside
+		// the startup grace the record reads booting, not missing, the way the
+		// herdr record does: the read takes the host fact, and no reader grows a
+		// host branch of its own.
+		rigHandle.setAgents([coreRecord]);
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(0);
+		// Past the grace, the listed herdr-core record holds the ticket's seat,
+		// so the Missing marker stays off for the host record it lists.
+		advance(STARTUP_GRACE_MS + 1);
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(0);
+		// The record drops out of the merged list: the same read answers Missing
+		// for the host record, and the auto restart stands in for the lost
+		// terminal the way it stands in for the lost pane.
+		rigHandle.setAgents([]);
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "restart")).toEqual([
+			expect.objectContaining({
+				automatic: true,
+				ticketIdentity: identity,
+				choice: expect.objectContaining({ taskType: "implement" }),
+			}),
+		]);
 		state.close();
 	});
 
@@ -6290,6 +6335,331 @@ describe("HerdrAgentReader.waitAgent", () => {
 		runner.set("herdr", waitArgs, { code: 1, stderr: "agent target the-agent not found" });
 		const result = await new HerdrAgentReader(runner).waitAgent("the-agent", 1500);
 		expect(result).toEqual({ matched: false });
+	});
+});
+
+describe("MergedAgentReader (issue #410, ADR 0142)", () => {
+	/** The `herdr agent list` answer holding the named items. */
+	function herdrListJson(items: Record<string, unknown>[]): string {
+		return JSON.stringify({ result: { agents: items } });
+	}
+
+	/** The `hc ls` answer holding the named terminal rows. */
+	function rosterJson(rows: Record<string, unknown>[]): string {
+		return JSON.stringify({ terminals: rows });
+	}
+
+	/** The `hc get` answer holding one terminal's record. */
+	function recordJson(record: Record<string, unknown>): string {
+		return JSON.stringify(record);
+	}
+
+	/**
+	 * The core half the host-merge tests stand on: the held terminal beside a
+	 * stranger, with the held terminal's live record.
+	 */
+	function coreHalf(runner: FakeRunner): void {
+		runner.set("hc", ["ls", "--json", "--all"], {
+			stdout: rosterJson([
+				{ address: "t-held", name: "core-agent", state: "live", agent: "pi" },
+				// The machine's other terminal: the roster names it, and the
+				// plane holds no Agent under it, so the poll never reads it.
+				{ address: "t-stranger", name: "stranger", state: "live" },
+			]),
+		});
+		runner.set("hc", ["get", "--json", "t-held"], {
+			stdout: recordJson({
+				address: "t-held",
+				name: "core-agent",
+				state: "live",
+				status: "working",
+			}),
+		});
+	}
+
+	test("a herdr run reads both hosts into the one list, each Agent carrying its host", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			stdout: herdrListJson([
+				{ pane_id: "pane-1", name: "herdr-agent", agent: "pi", agent_status: "working" },
+			]),
+		});
+		coreHalf(runner);
+		const reader = new MergedAgentReader({
+			runner,
+			runHost: "herdr",
+			coreNames: () => ["core-agent"],
+		});
+		expect(await reader.listAgents()).toEqual({
+			kind: "ok",
+			agents: [
+				{
+					host: "herdr",
+					paneId: "pane-1",
+					tabId: "",
+					workspaceId: "",
+					name: "herdr-agent",
+					agent: "pi",
+					status: "working",
+					sessionId: "",
+				},
+				{
+					host: "herdr-core",
+					paneId: "core-agent",
+					tabId: "core-agent",
+					workspaceId: "core-agent",
+					name: "core-agent",
+					agent: "pi",
+					status: "working",
+					sessionId: "",
+				},
+			],
+		});
+		// The per-Agent read is bounded by the roster: the one held terminal is
+		// read, and the stranger's is not (ADR 0142).
+		expect(runner.commands()).toEqual([
+			"herdr agent list",
+			"hc ls --json --all",
+			"hc get --json t-held",
+		]);
+	});
+
+	test("a core half failure stands beside the herdr half the run keeps", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			stdout: herdrListJson([
+				{ pane_id: "pane-1", name: "herdr-agent", agent: "pi", agent_status: "working" },
+			]),
+		});
+		runner.set("hc", ["ls", "--json", "--all"], { code: 1, stderr: "hc: no such server" });
+		const reader = new MergedAgentReader({
+			runner,
+			runHost: "herdr",
+			coreNames: () => ["core-agent"],
+		});
+		const probe = await reader.listAgents();
+		expect(probe).toEqual({
+			kind: "ok",
+			agents: [
+				{
+					host: "herdr",
+					paneId: "pane-1",
+					tabId: "",
+					workspaceId: "",
+					name: "herdr-agent",
+					agent: "pi",
+					status: "working",
+					sessionId: "",
+				},
+			],
+		});
+		expect(reader.lastCoreFailure).toBe("hc: no such server");
+		// The next poll that the core half answers clears the gap it states.
+		runner.set("hc", ["ls", "--json", "--all"], {
+			stdout: rosterJson([{ address: "t-held", name: "core-agent", state: "live", agent: "pi" }]),
+		});
+		runner.set("hc", ["get", "--json", "t-held"], {
+			stdout: recordJson({
+				address: "t-held",
+				name: "core-agent",
+				state: "live",
+				status: "idle",
+			}),
+		});
+		expect(await reader.listAgents()).toMatchObject({
+			kind: "ok",
+			agents: [
+				expect.objectContaining({ host: "herdr" }),
+				expect.objectContaining({ host: "herdr-core", status: "idle" }),
+			],
+		});
+		expect(reader.lastCoreFailure).toBeNull();
+	});
+
+	test("a herdr half failure drops the list the run reads from", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { code: 1, stderr: "no herdr session" });
+		const reader = new MergedAgentReader({
+			runner,
+			runHost: "herdr",
+			coreNames: () => ["core-agent"],
+		});
+		expect(await reader.listAgents()).toEqual({ kind: "error", reason: "no herdr session" });
+		// The run's own host failed: the core half is never read beside it.
+		expect(runner.commands()).toEqual(["herdr agent list"]);
+	});
+
+	test("a herdr-core run reads its own host only, and its failure is the probe's error", async () => {
+		const runner = new FakeRunner();
+		coreHalf(runner);
+		const reader = new MergedAgentReader({
+			runner,
+			runHost: "herdr-core",
+			coreNames: () => ["core-agent"],
+		});
+		expect(await reader.listAgents()).toEqual({
+			kind: "ok",
+			agents: [
+				{
+					host: "herdr-core",
+					paneId: "core-agent",
+					tabId: "core-agent",
+					workspaceId: "core-agent",
+					name: "core-agent",
+					agent: "pi",
+					status: "working",
+					sessionId: "",
+				},
+			],
+		});
+		// Herdr is unreachable from a herdr-core run: the run reads no herdr
+		// command and names no herdr gap.
+		expect(runner.commands()).toEqual(["hc ls --json --all", "hc get --json t-held"]);
+		expect(reader.lastCoreFailure).toBeNull();
+
+		const failing = new FakeRunner();
+		failing.set("hc", ["ls", "--json", "--all"], { code: 1, stderr: "hc: no such server" });
+		const errorReader = new MergedAgentReader({
+			runner: failing,
+			runHost: "herdr-core",
+			coreNames: () => ["core-agent"],
+		});
+		expect(await errorReader.listAgents()).toEqual({ kind: "error", reason: "hc: no such server" });
+	});
+
+	test("the record's words stand on the terminal the plane holds", async () => {
+		/** One poll over the named roster rows and records. */
+		async function poll(rows: Record<string, unknown>[], records: Record<string, unknown>[]) {
+			const runner = new FakeRunner();
+			runner.set("hc", ["ls", "--json", "--all"], { stdout: rosterJson(rows) });
+			for (const row of rows) {
+				const record = records.find((r) => r.address === row.address);
+				if (record === undefined) continue;
+				runner.set("hc", ["get", "--json", String(row.address)], {
+					stdout: recordJson(record),
+				});
+			}
+			const reader = new MergedAgentReader({
+				runner,
+				runHost: "herdr-core",
+				coreNames: () => rows.map((r) => String(r.name)),
+			});
+			const probe = await reader.listAgents();
+			return probe.kind === "ok" ? probe.agents : [];
+		}
+
+		// A live terminal reads the status its record carries.
+		expect(
+			await poll(
+				[{ address: "t-1", name: "core-a", state: "live", agent: "pi" }],
+				[
+					{
+						address: "t-1",
+						name: "core-a",
+						state: "live",
+						status: "working",
+					},
+				],
+			),
+		).toMatchObject([{ status: "working" }]);
+
+		// A terminal that exited with a code reads `done`, the settle herdr's
+		// `done` is (ADR 0141).
+		expect(
+			await poll(
+				[{ address: "t-2", name: "core-b", state: "finished", agent: "pi" }],
+				[
+					{
+						address: "t-2",
+						name: "core-b",
+						state: "finished",
+						reason: "exit",
+						exit_code: 0,
+					},
+				],
+			),
+		).toMatchObject([{ status: "done" }]);
+
+		// A terminal the host lost - finished with no exit code, the --no-keep
+		// start's lost Agent - is dropped from the list, so the Missing marker
+		// reads it, not a completed turn.
+		expect(
+			await poll(
+				[{ address: "t-3", name: "core-c", state: "finished", agent: "pi" }],
+				[{ address: "t-3", name: "core-c", state: "finished", reason: "killed" }],
+			),
+		).toEqual([]);
+
+		// A row whose record did not answer stands with an unknown status: the
+		// Agent is present, and the plane restarts no Agent it cannot read.
+		const runner = new FakeRunner();
+		runner.set("hc", ["ls", "--json", "--all"], {
+			stdout: rosterJson([{ address: "t-4", name: "core-d", state: "live" }]),
+		});
+		runner.set("hc", ["get", "--json", "t-4"], { code: 1, stderr: "no such terminal" });
+		const reader = new MergedAgentReader({
+			runner,
+			runHost: "herdr-core",
+			coreNames: () => ["core-d"],
+		});
+		const probe = await reader.listAgents();
+		expect(probe).toEqual({
+			kind: "ok",
+			agents: [
+				{
+					host: "herdr-core",
+					paneId: "core-d",
+					tabId: "core-d",
+					workspaceId: "core-d",
+					name: "core-d",
+					agent: "agent",
+					status: "unknown",
+					sessionId: "",
+				},
+			],
+		});
+	});
+
+	test("the wake wait takes the core's settle words", async () => {
+		/** One wait over the named answer. */
+		async function wait(answer: { code?: number; stdout?: string; stderr?: string }) {
+			const runner = new FakeRunner();
+			runner.set("hc", ["wait", "--json", "--timeout", "2", "core-a"], {
+				code: answer.code ?? 0,
+				stdout: answer.stdout ?? "",
+				stderr: answer.stderr ?? "",
+			});
+			const reader = new MergedAgentReader({
+				runner,
+				runHost: "herdr-core",
+				hostOf: () => "herdr-core",
+			});
+			return reader.waitAgent("core-a", 1500);
+		}
+
+		// A finished program that exits with a code is the settle herdr's
+		// `done` is (ADR 0142).
+		expect(await wait({ stdout: '{"ended":true,"reason":"exit","exit_code":0}' })).toEqual({
+			matched: true,
+		});
+		expect(await wait({ stdout: '{"ended":true,"reason":"exited","exit_code":1}' })).toEqual({
+			matched: true,
+		});
+
+		// An exit word with no exit code is the lost terminal: no settle.
+		expect(await wait({ stdout: '{"ended":true,"reason":"exit"}' })).toEqual({
+			matched: false,
+		});
+		// The wait's timeout is an answer, and it is no settle.
+		expect(await wait({ stdout: '{"ended":false}' })).toEqual({ matched: false });
+		// A killed terminal is the lost Agent the --no-keep start stands for.
+		expect(await wait({ stdout: '{"ended":true,"reason":"killed"}' })).toEqual({
+			matched: false,
+		});
+		// A failed wait command is a failed wait, the way herdr's is.
+		expect(await wait({ code: 1, stderr: "no such terminal" })).toEqual({ matched: false });
+		// An answer the host did not write as JSON settles nothing.
+		expect(await wait({ stdout: "not json" })).toEqual({ matched: false });
 	});
 });
 

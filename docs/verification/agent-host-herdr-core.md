@@ -1,7 +1,7 @@
 # The Agent host verification
 
-Status: **the decision records stand, and steps 1, 2, and 3 of the change are in
-the tree.** ADR 0141, ADR 0142, ADR 0143, and ADR 0144 and the glossary's
+Status: **the decision records stand, and steps 1 through 4 of the change are
+in the tree.** ADR 0141, ADR 0142, ADR 0143, and ADR 0144 and the glossary's
 **Agent host**, **Host resolution**, and **Adoption label** entries landed on
 2026-11-12, and the first step of the change landed beside them (pull request
 #414): one module (`src/agent-host.ts`) owns both Agent host dialects, the host
@@ -28,12 +28,21 @@ host's dialect - the seam test runs it on a run that resolves the other host
 pickup, take the run's resolved host and never the per-handoff record; on a
 herdr-core run the herdr host is unreachable, and the launcher's Launch row,
 the panel's row, the start's pre-flight, and the Key guide all state the one
-line that names the host and the reason. Everything on the plane's side of the
-herdr-core dialect now runs against the Stub herdr world in the suite. What
-has not run is the same thing it was before, and it stands below: no plane
-command has ever gone to a real herdr-core host, and the herdr-core facts the
-plane reads on that host are the probe answers above, not a live run. A check
-that could not run is recorded as incomplete; it is not a pass.
+line that names the host and the reason. Step 4 (issue #410) lands beside
+them: the observation poll reads both hosts and merges them into one Agent
+list, and every reader of the list - the Top-up walk, the Parallel limit's
+seat count, the row's failure badge, the Missing agent marker, the Startup
+grace window, and the Consultation operations - takes the merged list
+unchanged; the one name holds one live Agent across both hosts, the live-name
+check runs over the merged list, and the collision record names the host that
+holds the name; the Parallel limit counts its seats over the merged list; and
+every herdr-core terminal the plane starts carries its run labels and the
+Adoption labels its own terminal carries, written at the start and never
+rewritten. What has not run is the same boundary it was before, and it stands
+below: no plane command has ever gone to a real herdr-core host, and the
+herdr-core facts the plane reads on that host are the probe answers above,
+not a live run. A check that could not run is recorded as incomplete; it is
+not a pass.
 
 See [ADR 0141](../adr/0141-the-plane-resolves-its-agent-host-herdr-or-herdr-core.md),
 [ADR 0142](../adr/0142-one-run-holds-agents-on-both-hosts-and-the-host-stands-on-the-handoff.md),
@@ -100,11 +109,27 @@ is the answer a caller gets.
   starts no core, the measurement ADR 0141's no-lifecycle rule rests on. The
   boot's floor check runs this same probe, and an older host states the
   Warning line beside it.
-- **The poll cost ADR 0142 states**: one roster read plus one `hc get` per Agent,
-  because the roster carries no status word. At the shipped
-  `max-parallel-agents = 2` that is **three commands per poll** on that host,
-  against herdr's one. Counted, not timed: no latency measurement of herdr-core
-  has run, and none is claimed.
+- **The poll cost, re-measured over the merged read (issue #410)**: the merged
+  poll is one roster read per host plus one `hc get` per herdr-core Agent the
+  plane holds, because the core roster carries no status word. Counted from
+  the command set the frame's tests stand on:
+  - a **herdr run** poll is `herdr agent list` plus `hc ls --json --all` plus
+    one `hc get` per held herdr-core terminal: **two commands per poll** when
+    the plane holds no core terminal, three at the shipped
+    `max-parallel-agents = 2` holding one core Agent and one herdr Agent.
+    Before step 4 the herdr run's poll was herdr's one command, and this is
+    the cost the step adds to it.
+  - a **herdr-core run** poll is `hc ls --json --all` plus one `hc get` per
+    held terminal: **three commands per poll** at the shipped cap, the same
+    count ADR 0142 stated, one when the plane holds no terminal.
+  - **the start's cross-host read** adds one roster read of the other host to
+    each start: a herdr start runs `hc ls --json`, a herdr-core start on a
+    herdr run runs `herdr agent list`, and a herdr-core start on a herdr-core
+    run reads nothing on the other host, because the host is unreachable from
+    the run there.
+  The count stands from the command sequences the named suites assert, not
+  from a timer: no latency measurement of the merged poll has run, and none
+  is claimed.
 - **The name rules agree**: hc's set is `a-z 0-9 - _ .` to 32 characters with the
   id-shape clause; herdr's is `[a-z][a-z0-9_-]{0,31}`, which `src/naming.ts`
   already honours through `HERDR_NAME_MAX_LENGTH`. hc accepts a dot herdr refuses;
@@ -126,8 +151,8 @@ What has not run is the same boundary it was before, and
 it stands below, each one owed by the change that lands it:
 
 - No plane command has ever gone to a real herdr-core host: no start, prompt,
-  roster, wait, read, kill, or removal, and no Observation cycle over a real
-  herdr-core roster. Every herdr-core command the plane runs in the suite runs
+  roster, wait, read, kill, or removal, and no merged Observation cycle over a
+  real herdr-core roster. Every herdr-core command the plane runs in the suite runs
   against the Stub herdr world, and the version read the boot runs is the one
   host command a real boot sends, a read that starts no core.
 - The session-record derivation of ADR 0144, including its ambiguous-match
@@ -147,6 +172,23 @@ it stands below, each one owed by the change that lands it:
   [the shared-controls verification record](./shared-controls.md) states, and
   the terminal walks on the theme-inherited paint stay open there. This change
   makes no accessibility claim.
+
+## What step 4 stands on, in the suite
+
+Step 4's behaviors run against the Stub herdr world in these suites; one entry
+per behavior, each beside the behavior's home module. Every herdr-core answer
+they read is the Stub world's standing for the probe answers above.
+
+| Behavior the step lands | Where it stands in the suite |
+| --- | --- |
+| The merged list is one list with a host fact: a herdr run reads both hosts into it, the per-Agent read is bounded to the terminals the plane holds, a core half failure stands beside the herdr half, and a herdr half failure drops the list; a herdr-core run reads its own host only | `test/observation.test.ts`, the `MergedAgentReader` suite |
+| The readers take the merged list unchanged: the Startup grace window and the Missing marker read per host record, and a lost herdr-core terminal beside a live handoff reads as Missing | `test/observation.test.ts`, the missing-agents suite |
+| The Parallel limit's seat count over the merged list: a herdr-core terminal holds the seat the herdr pane holds, a started herdr-core Agent holds inside its startup grace, and the one count sums both hosts' Agents | `test/parallel.test.ts`, the merged-list seat suite |
+| The wake-wait mapping: `hc wait`'s `reason: exit` beside an `exit_code` reads as the settle fact herdr's `done` is, and nothing else - no code, `ended: false`, a killed reason, a failed command, or unreadable output - matches | `test/observation.test.ts`, the merged reader's wait suite, and `test/auto-mode.test.ts`, the full loop over both hosts |
+| One name across both hosts: a herdr start is refused on a name herdr-core holds and vice versa, each failure and the Ticket's standing collision record name the holding host, and the start reads the other host's roster | `test/handoff-dispatch.test.ts`, the one-name-across-both-hosts suite, and `test/handoff-frame.test.ts`, the start's command sequence |
+| The labels written at the start: the run labels on the herdr-core start's `hc run`, beside the adoption labels its own terminal carries - a terminal that carries `herdr.space` and one that does not, and the standalone run identity - with the flags ADR 0141 fixes | `test/handoff-dispatch.test.ts`, the label tests of the same suite |
+| The poll's command set per frame: the merged read's `herdr agent list` beside `hc ls --json --all` is the only command the observation frame runs | `test/ignored-ticket.test.ts` and `test/muted-source.test.ts`, the frame command assertions |
+| The closed surface over the merged dialect: the Stub world answers `ls` with `--all` and label scopes, the per-terminal `get`, and the refusal kinds, and the argument check walks the builders the module builds | `test/herdr-world.test.ts`, the closed-surface walk, and `test/agent-host.test.ts` |
 
 ## What step 3 stands on, in the suite
 
