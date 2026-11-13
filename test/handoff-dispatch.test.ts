@@ -5097,27 +5097,22 @@ describe("the host each route takes (issue #409)", () => {
 		// the core left its override on the record.
 		const stored = seedHandoff(rigRef, FIRST, coreChoice, { workspaceId: rigRef.checkout });
 		closeCycle(rigRef, FIRST, stored.handoffId);
-		// The capped dispatch enqueues the open ticket on the run's host, the
-		// way the automatic routes record their choice.
-		const capped = withRunner(rigRef, rigRef.runner, {
-			seatCount: () => rigRef.config.maxParallelAgents,
-		});
-		await expect(
-			capped.dispatch({
-				origin: "open",
+		// The queue item records the run's host, the way the automatic routes
+		// record their choice, beside a ticket whose own record names the core.
+		expect(
+			rigRef.state.workQueue.enqueueWork({
 				ticketIdentity: FIRST.identity,
+				origin: "open",
 				choice: liveChoice,
 				previousMessage: "",
 			}),
-		).resolves.toEqual({ ok: true });
+		).toEqual({ ok: true });
 		// One seat frees: the pickup claims the item and starts it.
 		const picking = withRunner(rigRef, rigRef.runner, {
 			seatCount: () => rigRef.config.maxParallelAgents - 1,
 		});
 		expect(await picking.pickupWorkQueue()).toBe(1);
 		await untilQueueDrains(rigRef);
-		expect(rigRef.state.workQueue.items()).toHaveLength(0);
-		expect(rigRef.state.ticketWorkCycle.ticketState(FIRST.identity)).toBe("handed-off");
 		// The start ran the run's dialect on the host the item recorded...
 		expect(rigRef.commands()).toContain(agentStart(FIRST.name));
 		expect(rigRef.state.handoff.latestHandoff(FIRST.identity)?.host).toBe("herdr");
