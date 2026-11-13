@@ -93,6 +93,34 @@ the settings that handoff started with.
 the run's own record of the facts the Message line has been asked to state
 (ADR 0119), and `q` quits.
 
+Two of these keys stand on the host the run resolved, and one stands on the
+host the record stands on. On a herdr-core host, `g` refuses and states the
+exact command the operator types to take the agent's terminal over, one
+record line; a record that names no terminal states the line without the
+command:
+
+```text
+the herdr-core host answers no focus move: type hc attach <name>
+the herdr-core host answers no focus move
+```
+
+and the Live view - the screen `Enter` opens on an in-flight ticket - is not
+offered on that host at all: herdr-core reads a screen as text and answers
+no styled read, so the plane shows no stand-in stream. The Key guide and
+the Action bar state the reason the control is absent instead of showing a
+dead key:
+
+```text
+the herdr-core host answers no styled read: the Live view is not offered
+```
+
+A herdr run that starts a herdr-core Agent stands the same two refusals on
+the controls that act on that Agent: the controls stand on the host the
+record stands on, not the host the run resolved. The decision the Decision
+modal opens keeps its body on a herdr-core host: the body is the turn log,
+the same text body the plane reads on the herdr host's visible screen,
+and herdr-core answers that read with `hc read`.
+
 ## The badges
 
 - `awaiting`: the agent's turn settled, and the ticket waits for your

@@ -1,6 +1,6 @@
 # The Agent host verification
 
-Status: **the decision records stand, and steps 1 through 5 of the change are
+Status: **the decision records stand, and steps 1 through 7 of the change are
 in the tree.** ADR 0141, ADR 0142, ADR 0143, and ADR 0144 and the glossary's
 **Agent host**, **Host resolution**, and **Adoption label** entries landed on
 2026-11-12, and the first step of the change landed beside them (pull request
@@ -70,7 +70,25 @@ machine. What has not run is the same boundary it was before, and it stands
 below: no plane command has ever gone to a real herdr-core host, and the
 herdr-core facts the plane reads on that host are the probe answers above,
 not a live run. A check that could not run is recorded as incomplete; it is
-not a pass.
+not a pass. Step 7 (issue #413) lands beside them: the two controls the
+plane owns that have no herdr-core answer stand off that host and state why
+instead of faking it. Goto refuses on a herdr-core Agent and names the
+command the operator types to take the terminal over, `hc attach <name>`,
+the one line the configuration and operation reference state and the doc
+test holds against the code that writes it; the refusal stands on the host
+the run resolves beside the host the ticket's handoff stands on, so a herdr
+run that hands a ticket off on herdr-core refuses that ticket's Goto and
+keeps the herdr one, and a record without a pane names no name. The Live
+view's mode is unavailable on that host, with the reason in the
+Availability facts, so the Action bar omits the key and the Key guide states
+why the control is absent instead of showing a dead key, on the host the run
+resolves and on the host the ticket's handoff stands on. The Consultation
+view's body keeps its text read: herdr-core answers `hc read`, and the text
+body is the same body the plane reads on the herdr host's visible screen. No
+synthesized ANSI and no replay of an old capture dressed as a live stream
+stand anywhere for the styled read the host does not answer, and the Stale
+Agent output and the Live view's stale note keep their current meaning: they
+name a record or a read that truly cannot be had.
 
 See [ADR 0141](../adr/0141-the-plane-resolves-its-agent-host-herdr-or-herdr-core.md),
 [ADR 0142](../adr/0142-one-run-holds-agents-on-both-hosts-and-the-host-stands-on-the-handoff.md),
@@ -245,6 +263,26 @@ it stands below, each one owed by the change that lands it:
   [the shared-controls verification record](./shared-controls.md) states, and
   the terminal walks on the theme-inherited paint stay open there. This change
   makes no accessibility claim.
+- No styled read was ever attempted against herdr-core, in the probes and in
+  the suite: herdr-core reads a screen as text and answers no styled read
+  at all, so the read the Live view would ask does not exist for that host.
+  Step 7's frames stand the unavailability on the run host and on the host
+  the ticket's handoff stands on, and the Consultation settle beside the
+  styled read stands on the text read the host does answer.
+
+## What step 7 stands on, in the suite
+
+Step 7's behaviors run in these suites; one entry per behavior, each beside
+the behavior's home module. The herdr-core answers they read are the Stub
+herdr world's standing for the probe answers above.
+
+| Behavior the step lands | Where it stands in the suite |
+| --- | --- |
+| Goto per host: the move on the herdr host focuses the pane; on a herdr-core run the press refuses and states the command the operator types, and no command runs | `test/live-view.test.ts`, the Goto frame tests on both hosts |
+| The refusal stands on the host the ticket's handoff stands on: a herdr run that hands a ticket off on herdr-core refuses that ticket's Goto with the attach line, keeps the herdr Goto for its own handoffs, and the press runs no command | `test/live-view.test.ts`, the mixed-host frame test |
+| The refusal line holds its shape in the code that writes it: the name line and the pane-less line stand in the configuration reference and the operation reference | `test/record-lines-doc.test.ts`, the host-dependent control lines test |
+| The Live view's mode per host: the control appears on the herdr host, and on a herdr-core host the Action bar omits its key and the Key guide states the reason the control is absent | `test/key-guide.test.ts`, the guide and bar tests per host, and `test/live-view.test.ts`, the mixed-host guide and bar assertions |
+| The Consultation body keeps its text read beside the styled read the host does not answer: a herdr-core Consultation settles its turn on the text read, and the settle asks no styled read of that host | `test/observation.test.ts`, the Consultation settle tests |
 
 ## What step 6 stands on, in the suite
 
