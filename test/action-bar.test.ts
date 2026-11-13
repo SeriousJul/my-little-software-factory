@@ -697,11 +697,23 @@ describe("the contextual Action bar", () => {
 						startingFaceOf(rowsOf(f)[markerRowOf(f)] ?? "") !== null &&
 						!messageRowOf(f).includes("Working:"),
 				);
-				const commands = planeRecord.fakeRunner.commands();
+				// The window's commands: the start's own, beside the merged poll's
+				// rosters the plane answers over both hosts (issue #410). The
+				// count drops the poll's reads, so it covers the start's own
+				// seven only.
+				const commands = planeRecord.fakeRunner
+					.commands()
+					.slice(commandsBefore)
+					.filter(
+						(command) =>
+							!command.startsWith("herdr agent list") &&
+							!command.startsWith("hc ls") &&
+							!command.startsWith("hc get"),
+					);
 				// The start's own seven: the checkout's two git questions, the
 				// workspace list and create, the tab create, and the agent's
 				// start and prompt.
-				expect(commands.length - commandsBefore).toBe(7);
+				expect(commands.length).toBe(7);
 			},
 			{ width: WIDTH, height: HEIGHT, plane: planeRecord },
 		);
