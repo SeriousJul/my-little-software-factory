@@ -157,3 +157,6 @@ body states the context, the decision, and the consequences.
 - [ADR 0146: The observation cycle sends one report, and its identity carries its change](./0146-the-observation-cycle-sends-one-report-and-its-identity-carries-its-change.md)
 - [ADR 0147: The pane screen's revision changes only when the read differs](./0147-the-pane-screens-revision-changes-only-when-the-read-differs.md)
 - [ADR 0148: On the herdr-core host, the plane adopts its start into the desktop's space, not the plane's tab](./0148-on-the-herdr-core-host-the-plane-adopts-its-start-into-the-space-not-the-tab.md)
+- [ADR 0149: The frame module owns the plane's animation frames](./0149-the-frame-module-owns-the-planes-animation-frames.md)
+- [ADR 0150: The screen stack holds one active screen, and a suspended screen runs nothing](./0150-the-screen-stack-holds-one-active-screen-and-a-suspended-screen-runs-nothing.md)
+- [ADR 0151: The ticket work cycle answers one ticket identity with a scoped read](./0151-the-ticket-work-cycle-answers-one-ticket-identity-with-a-scoped-read.md)
