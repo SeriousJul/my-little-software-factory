@@ -661,6 +661,9 @@ describe("the Enter handoff", () => {
 					"herdr workspace list",
 					`herdr workspace create --cwd ${checkout} --no-focus`,
 					`herdr tab create --workspace ws-1 --cwd ${checkout} --no-focus`,
+					// The one name holds one live Agent across both hosts (issue #410):
+					// the start reads the other host's roster for the name check.
+					"hc ls --json",
 					`herdr agent start ${firstAgent} --kind pi --pane pane-1`,
 					`herdr agent prompt ${firstAgent} ${firstPrompt}`,
 				]);

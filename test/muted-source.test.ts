@@ -198,11 +198,15 @@ describe("the mute key", () => {
 				expect(messageRowOf(frame)).toContain(
 					"source issues is muted: no row while its tickets rest, no automatic start",
 				);
+				// The only commands the frame runs after the key are the
+				// observation's own read-only rosters, one per host (issue #410):
+				// the core read asks `--all`, because a finished terminal is what
+				// the Missing and Leftover reads stand on.
 				expect(
 					runner
 						.commands()
 						.slice(commandsBefore)
-						.every((c) => c === "herdr agent list"),
+						.every((c) => c === "herdr agent list" || c === "hc ls --json --all"),
 				).toBe(true);
 				// The flag is factory state on the source's row, read back
 				// through the file's own API, and the row's projection carries

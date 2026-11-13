@@ -425,8 +425,8 @@ export interface MergedAgentReaderOptions {
  * merges them into the one list the readers take, each Agent carrying its
  * host, so the identity rule, the seat count, the failure badge, the
  * Missing marker, the grace window, and the Consultation operations all
- * read the merged list and none of them grows a host branch: `ownAgentInPane`
- * stays the one rule ADR 0060 wrote.
+ * read the merged list and none of them grows a host branch: the pane's own
+ * Agent rule stays the one rule ADR 0060 wrote.
  *
  * A herdr run reads both hosts. The herdr half is the run's host: its
  * failure is the probe's error, the list is dropped, and the observation

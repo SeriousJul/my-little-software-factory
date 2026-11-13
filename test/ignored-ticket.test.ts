@@ -356,13 +356,15 @@ describe("the ignore key", () => {
 				// nothing to the source for it: no label, no close, no comment.
 				// The only external command this frame ran is the observation's
 				// own read-only agent list.
-				// The only command the frame runs after the key is the
-				// observation's own read-only agent list.
+				// The only commands the frame runs after the key are the
+				// observation's own read-only rosters, one per host (issue #410):
+				// the core read asks `--all`, because a finished terminal is what
+				// the Missing and Leftover reads stand on.
 				expect(
 					runner
 						.commands()
 						.slice(commandsBefore)
-						.every((c) => c === "herdr agent list"),
+						.every((c) => c === "herdr agent list" || c === "hc ls --json --all"),
 				).toBe(true);
 				// The flag is factory state on the state file, read back through
 				// the file's own API, and the row's projection carries it.

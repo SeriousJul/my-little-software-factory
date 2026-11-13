@@ -2730,7 +2730,7 @@ describe("the auto top-up merge", () => {
 	test("a blocked merge whose label write failed keeps the merge position, and the hold stands until the source re-reads", async () => {
 		let held: FactoryState;
 		let heldRunner: FakeRunner;
-		const { state } = await topUpApp(
+		const { state, runner } = await topUpApp(
 			async (setup) => {
 				await frameUntil(
 					setup,
