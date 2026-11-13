@@ -10,7 +10,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import type { AgentHost } from "../src/agent-host.ts";
+import { type AgentHost, agentHostUnreachableLine } from "../src/agent-host.ts";
 import { ConsultationLauncher } from "../src/components/consultation-launcher.ts";
 import type { StandingFacts } from "../src/components/controls.ts";
 import {
@@ -174,9 +174,9 @@ describe("Consultation launcher input", () => {
 });
 
 // The one line the host that the run cannot reach states, whatever surface
-// asks it (issue #409, ADR 0142).
-const HERDR_UNREACHABLE =
-	"host herdr is unreachable from this run: the plane runs outside herdr, and no herdr server answers there";
+// asks it (issue #409, ADR 0142), read from its owner so a wording change
+// moves one place.
+const HERDR_UNREACHABLE = agentHostUnreachableLine("herdr");
 
 describe("the Agent host row (issue #409)", () => {
 	test("on a herdr run the row defaults to the run's host, and the launch reaches start on it", async () => {

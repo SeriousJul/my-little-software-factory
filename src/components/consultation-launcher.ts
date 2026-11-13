@@ -191,7 +191,6 @@ export function ConsultationLauncher(props: ConsultationLauncherProps) {
 	});
 }
 
-/** The launcher's two choices: the Consultation type, the Repository. */
 /** The launcher's three choices: the Consultation type, the Repository, and the Agent host it offers. */
 function useLauncherChoices(
 	types: Readonly<Record<string, ConsultationTypeConfig>>,

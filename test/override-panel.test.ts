@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import type { AgentHostResolution } from "../src/agent-host.ts";
+import { type AgentHostResolution, agentHostUnreachableLine } from "../src/agent-host.ts";
 import type { StandingFacts } from "../src/components/controls.ts";
 import {
 	type AgentModelList,
@@ -924,9 +924,9 @@ describe("the plane action's task type states that no Agent runs", () => {
 });
 
 // The one line the host that the run cannot reach states, whatever surface
-// asks it (issue #409, ADR 0142).
-const HERDR_UNREACHABLE =
-	"host herdr is unreachable from this run: the plane runs outside herdr, and no herdr server answers there";
+// asks it (issue #409, ADR 0142), read from its owner so a wording change
+// moves one place.
+const HERDR_UNREACHABLE = agentHostUnreachableLine("herdr");
 
 /** The host carried by the choice the panel confirms, or its empty note. */
 function confirmedHost(): string | undefined {

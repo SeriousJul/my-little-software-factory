@@ -12,6 +12,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 
+import { agentHostUnreachableLine } from "../src/agent-host.ts";
 import { GALLERY_EXAMPLES, Gallery, galleryColumns } from "../src/components/shared/gallery.ts";
 import { controlInk } from "../src/components/shared/presentation.ts";
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
@@ -91,6 +92,7 @@ describe("the shared control gallery", () => {
 		expect(ids).toEqual([
 			"fields",
 			"states",
+			"agent-host-row",
 			"response-over-limit",
 			"search",
 			"notes",
@@ -299,6 +301,26 @@ describe("the shared control gallery", () => {
 		// The oversized draft stays editable: the field still paints its text.
 		expect(text).toContain("Response draft");
 		expect(text).toContain("the oversized draft stays editable");
+	});
+
+	test("the Agent host row shows its refused face, and the line states on row and action", async () => {
+		// The box is wide enough for the whole line on both the row's note and
+		// the Launch action's refusal, the way the notes example's box holds its
+		// reason whole.
+		const setup = await gallery("agent-host-row", 160, 20);
+		const text = frameText(setup.captureCharFrame());
+		expect(text).toContain(stateLine("agent-host-row"));
+		// The row and the Launch action wear the one line the plane states for
+		// the host the run cannot reach, read from its owner (issue #409, ADR
+		// 0142), so a wording change moves one place.
+		const line = agentHostUnreachableLine("herdr");
+		expect(text).toContain(`Error: Agent host: ${line}`);
+		expect(text).toContain(`Unavailable: Launch Consultation: ${line}`);
+		// The row wears the warning tone on its own value, the way the notes
+		// example's row does.
+		const value = findCell(setup, "herdr");
+		const ink = controlInk();
+		expect(hexOf(cellColors(setup, value.x, value.y).fg)).toBe(ink.warning.fg ?? "");
 	});
 
 	test("the gallery walks past the select list without losing its keys", async () => {

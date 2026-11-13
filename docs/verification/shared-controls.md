@@ -2520,7 +2520,11 @@ standing and the herdr-core standing, with the unreachable line on the
 launcher's Launch row and the panel's row - in
 `test/consultation-launcher.test.ts` and `test/override-panel.test.ts`,
 beside the seam and automatic-route suites the
-[Agent host verification](./agent-host-herdr-core.md) names.
+[Agent host verification](./agent-host-herdr-core.md) names. The gallery's
+`agent-host-row` example paints the row's refused face on a run that resolves
+outside herdr - the row wears the line in its warning tone, and the launcher's
+Launch action carries the same line - and the example is driven by
+`test/shared-gallery.test.ts`, so the preview cannot drift from the row.
 
 What was not measured: no terminal walk of the rows was run in Ghostty or
 foot, the screen-reader path is not verified for either host, and no plane
