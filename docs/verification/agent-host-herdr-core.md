@@ -54,7 +54,19 @@ the `worktree remove --workspace`, which run as before, but its reopen
 lookup now reads git's record instead of herdr's list, and a git list that
 does not read degrades the start to the fresh `worktree create` instead of
 failing it, where a raise of the herdr list used to fail the start, and the
-Close keeps the fail-closed read of herdr's list. What has not run is the same boundary it was before, and it stands
+Close keeps the fail-closed read of herdr's list. Step 6 (issue #412) lands
+beside them: on the herdr-core host the plane derives the Agent session record
+path in the per-kind table that stands beside the Agent type's other per-kind
+knowledge, where pi stands and no other kind does (ADR 0144); a settle whose
+host names no record reads the derived path through the same per-kind reader
+the herdr path reads, a host that names its record is never overruled, and a
+derivation that answers unavailable - two candidates that both fit, an unreadable
+session home, or a kind with no derivation - settles on the terminal capture
+with the fail-open `unknown` cause and the settle's one line on the Message
+record, never a failure of the turn and never `no-turn`; the derivation is one
+directory read of one session home, the plane writes nothing into a runtime's
+session home, and it stands only for an Agent that runs on the plane's own
+machine. What has not run is the same boundary it was before, and it stands
 below: no plane command has ever gone to a real herdr-core host, and the
 herdr-core facts the plane reads on that host are the probe answers above,
 not a live run. A check that could not run is recorded as incomplete; it is
@@ -181,6 +193,22 @@ is the answer a caller gets.
   probe's hand-written 7501 record was refused by the host and registered
   nothing, so the plane's own mapping of those five words is **unmeasured**: no
   real agent ran under herdr-core in these probes.
+- **The pi session home the derivation reads**, measured 2026-11-13 on this
+  machine's pi 1.5.2 against one real pi session that ran in this worktree:
+  the session home stands at `<home>/.pi/agent/sessions`; the per-checkout
+  directory is the checkout path with each of `/`, `\`, and `:` replaced by a
+  dash and wrapped in a leading and a trailing dash - for this ticket's
+  checkout, `--home-seriousjul-.herdr-worktrees-my-little-software-factory-factory-412-the-derived-agent-session-record-path-on-the-herdr-core-host--`;
+  and a session record stands in that directory named
+  `<YYYY-MM-DDTHH-MM-SS-mmmZ>_<uuid>.jsonl`, its first line a
+  `{"type":"session"}` header carrying the record's `id`, its `cwd` (the
+  checkout), and the `timestamp` the record began. The derivation's test
+  reproduces these facts on a fixture home, so no test reads the operator's
+  session home. What the measurement covers: the session home's place, the
+  checkout's directory name, the record's file name, and that header, as pi
+  1.5.2 writes them on this machine. What it does not cover: a session a
+  herdr-core-launched Agent opens, a settle on a real herdr-core host, and any
+  runtime but pi.
 
 ## What has not run
 
@@ -198,10 +226,12 @@ it stands below, each one owed by the change that lands it:
   herdr-core roster. Every herdr-core command the plane runs in the suite runs
   against the Stub herdr world, and the version read the boot runs is the one
   host command a real boot sends, a read that starts no core.
-- The session-record derivation of ADR 0144, including its ambiguous-match
-  answer, against any real runtime directory. The plane derives the path from
-  the run's own environment in the tree, and the derivation's test runs the
-  rule on a fixture directory.
+- The settle that reads a record a herdr-core-launched Agent wrote on a real
+  host: the derivation of ADR 0144 and its ambiguous-match answer run in the
+  suite on fixture session homes, one of them standing in for the real pi
+  session measured above, but no settle on this host has read a record a
+  herdr-core-launched Agent opened, and no runtime but pi has stood on the
+  derivation at all.
 - The Adoption labels of ADR 0141: the Herdr desktop was not running during
   the probes, so no terminal was ever seen in a desktop window through those
   labels. The adoption rule itself is quoted from the desktop app's own
@@ -215,6 +245,23 @@ it stands below, each one owed by the change that lands it:
   [the shared-controls verification record](./shared-controls.md) states, and
   the terminal walks on the theme-inherited paint stay open there. This change
   makes no accessibility claim.
+
+## What step 6 stands on, in the suite
+
+Step 6's behaviors run in these suites; one entry per behavior, each beside
+the behavior's home module. The session homes they read are fixtures, and the
+one measurement suite stands in for the operator's session home with the facts
+measured above.
+
+| Behavior the step lands | Where it stands in the suite |
+| --- | --- |
+| The per-kind table: pi stands with its layout, and a kind outside the table answers `no-derivation`, the unavailable lookup the plane carries for frame tests answering it for every kind | `test/session-record.test.ts`, the per-kind table suite |
+| The pi layout: the checkout directory under dashes, the record name's stamp - a name without a millisecond stands for the whole second, a name with no stamp is not followed, and a stamp that is not a time says none - and the `{"type":"session"}` header's words for the checkout and the start | `test/session-record.test.ts`, the layout suite |
+| The lookup in the open: the record the runtime began for the run is named, and a record that began before the run, a record of another checkout, a name the stamp cannot read, and a header that is not a session all name no path; a home without the checkout's directory, and a session place that is a file, answer `no-home`; a run without a checkout, and a start time that is not a time, answer `no-checkout` and `no-start` | `test/session-record.test.ts`, the derivation suite |
+| The ambiguous match, a first-class answer: two candidate records that both fit refuse the path and answer `ambiguous` | `test/session-record.test.ts`, the derivation suite |
+| The ticket settle seam: an available derived path reads through the same per-kind reader the herdr path reads with the run's start time, the pane stays unread, and the turn settles beside the record's log; an unavailable derivation takes the capture, settles the turn with the fail-open `unknown` cause and the settle's one line on the Message line, asks no reader, and never settles `no-turn`; a herdr-host settle keeps its host-reported record and never asks the lookup | `test/observation.test.ts`, the herdr-core settle tests |
+| The Consultation seam: a herdr-core Consultation settles its turn on the derived record beside the visible screen, and a derivation that answers unavailable settles on the recent scroll capture with the fail-open cause | `test/observation.test.ts`, the Consultation settle tests |
+| The real-runtime measurement: the measured pi session's facts - the checkout's directory name, the record's file name, and its header - stand on a fixture home, and the derivation names the record | `test/session-record.test.ts`, the measurement suite |
 
 ## What step 5 stands on, in the suite
 

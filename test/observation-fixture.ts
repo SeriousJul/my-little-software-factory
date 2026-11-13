@@ -25,6 +25,7 @@ import {
 	ObservationCoordinator,
 	stripAnsi,
 } from "../src/observation.ts";
+import { type SessionRecordLookup, UNAVAILABLE_SESSION_RECORD } from "../src/session-record.ts";
 import type { HandoffTicket } from "../src/state/handoff.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
@@ -101,6 +102,12 @@ export interface RigOptions {
 		sessionId: string,
 		startedAt: string | null,
 	) => Promise<SessionTurnRead>;
+	/**
+	 * The derived session record lookup on the host that reports none (ADR
+	 * 0144); absent: the unavailable lookup, so the fixture's settle never
+	 * reads the operator's real session home.
+	 */
+	sessionRecord?: SessionRecordLookup;
 	/** The cycle's record lines; absent: the fixture's own record. */
 	log?: Logger;
 	/** The transition fire the cycle settles a completed turn with; absent: the real fire. */
@@ -328,6 +335,7 @@ export function rig(options: RigOptions, baseConfig: FactoryConfig): Rig {
 		turnLogs: {
 			read: options.turnLogs ?? (async () => ({ kind: "unavailable" })),
 		},
+		sessionRecord: options.sessionRecord ?? UNAVAILABLE_SESSION_RECORD,
 		fireCompleted:
 			options.fireCompleted ??
 			((ticket) =>

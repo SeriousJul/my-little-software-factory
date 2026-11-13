@@ -59,6 +59,7 @@ import type { EnvironmentKind, FetchedTicket, Ticket } from "../src/domain/ticke
 import type { HandoffChoice } from "../src/handoff.ts";
 import { NOOP_LOGGER } from "../src/logging.ts";
 import type { CommandRunner } from "../src/runner.ts";
+import { UNAVAILABLE_SESSION_RECORD } from "../src/session-record.ts";
 import type {
 	ConsultationRepository,
 	ConsultationState,
@@ -1207,6 +1208,9 @@ export async function plane(standing: PlaneStanding = {}): Promise<Plane> {
 				herdrEnv: standing.agentHostEnv?.herdrEnv,
 				hcTerminalId: standing.agentHostEnv?.hcTerminalId,
 			},
+			// The test plane names the unavailable lookup: a frame test never
+			// reads the operator's real session home (issue #412, ADR 0144).
+			sessionRecord: UNAVAILABLE_SESSION_RECORD,
 			loopPolicy:
 				standing.pollIntervalMs === undefined
 					? { kind: "held" }
