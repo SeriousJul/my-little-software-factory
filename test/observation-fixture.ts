@@ -14,7 +14,7 @@ import { afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type PaneScreen } from "../src/components/pane-screen.ts";
+import type { PaneScreen } from "../src/components/pane-screen.ts";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { HandoffIntent, PlaneActionIntent } from "../src/handoff-dispatch.ts";
 import { createHandoffDispatch, type HandoffDispatch } from "../src/handoff-dispatch.ts";

@@ -418,6 +418,6 @@ export function stubWorktreeList(
 	blocks: readonly string[] = [],
 ): void {
 	runner.set("git", ["-C", checkout, "worktree", "list", "--porcelain"], {
-		stdout: [porcelainBlock(checkout), ...blocks].join("\n\n") + "\n",
+		stdout: `${[porcelainBlock(checkout), ...blocks].join("\n\n")}\n`,
 	});
 }

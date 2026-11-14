@@ -168,12 +168,7 @@ import { workQueueIdentityOf } from "../state/work-queue.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import { createTicketSource, GhAuthenticator } from "../ticket-source.ts";
-import {
-	readSessionExchange,
-	type SessionEntry,
-	type TurnEndCause,
-	type TurnLogEntry,
-} from "../turn-log.ts";
+import { readSessionExchange, type SessionEntry, type TurnEndCause } from "../turn-log.ts";
 import { deriveNextStep, fireTransition, refireRecordedSkips } from "../workflow.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
