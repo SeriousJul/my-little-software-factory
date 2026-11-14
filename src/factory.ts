@@ -8,11 +8,11 @@
  * the boot order are decided in the startup module, so a unit test reads
  * them as values without a process or a pseudo-terminal.
  */
-import { createCliRenderer } from "@opentui/core";
 import { createElement, createRoot } from "@opentui/react";
 
 import { App } from "./components/app.ts";
 import { createHerdrIdentityReporter } from "./herdr-identity.ts";
+import { createRendererAdapter, installOutsideWriteReporter } from "./renderer-adapter.ts";
 import { errorMessage } from "./runner.ts";
 import { isSupportedBunVersion, unsupportedBunVersionMessage } from "./runtime.ts";
 import { realSessionRecordLookup } from "./session-record.ts";
@@ -57,18 +57,39 @@ process.on("unhandledRejection", (reason) => {
 	startup.logger.error(`unhandled rejection: ${errorMessage(reason)}`);
 });
 
+// The renderer adapter owns the renderer and the repaint policy (ADR
+// 0145): it builds the renderer from the boot facts below, installs the
+// frame callback that runs the policy, and returns the terminal on the
+// run's shutdown. The entry keeps the private full-repaint request the
+// policy sets out of reach, so the next screen change does not re-mark it.
+//
 // Ctrl+C is a documented emergency control. Keep it in the shared control
 // catalogue instead of letting OpenTUI bypass the application.
 // Ticket detail and Ticket list have direct wheel, click, and scrollbar
 // controls. They need terminal mouse reporting, so this intentionally
 // supersedes the old host-owned text-selection setting.
-const renderer = await createCliRenderer({
-	exitOnCtrlC: false,
-	useMouse: true,
-	// Kitty keyboard names F13-F24, which the shared control catalogue accepts
-	// for configurable Agent interaction exits.
-	useKittyKeyboard: {},
+const adapter = await createRendererAdapter({
+	rendererConfig: {
+		exitOnCtrlC: false,
+		useMouse: true,
+		// Kitty keyboard names F13-F24, which the shared control catalogue
+		// accepts for configurable Agent interaction exits.
+		useKittyKeyboard: {},
+	},
+	// The blanket force (ADR 0145): the entry passes it on every frame
+	// until a byte-loss signal exists, so the screen keeps its recorded
+	// insurance against the drift class of OpenTUI issue 1187. When the
+	// signal stands and a terminal walk verifies it, the entry withdraws
+	// this fact and hands the signal to the adapter; the policy is
+	// unchanged by the lift.
+	blanketForce: () => true,
 });
+const renderer = adapter.renderer;
+// The plane's modules report the writes they make on the terminal outside
+// the renderer (ADR 0145), and the entry wires the report to the adapter it
+// builds. The bell on a Fault paints no cell and moves no cursor, so the
+// policy reads it as the fact it is and forces no rewrite.
+installOutsideWriteReporter((write) => adapter.reportOutsideTerminalWrite(write));
 // Inside a herdr pane the plane gives herdr its own face before the first
 // frame, so herdr's detection of this pane reads the report instead of the
 // process it misreads as a pi agent in some screen states (issue #405,
@@ -83,8 +104,8 @@ const herdrIdentity = createHerdrIdentityReporter({
 // running an exit hook, so the state lease would stay held by this process and
 // the next boot would refuse to start. The decision of which endings close the
 // state lives in the startup module; the entry only wires it up. It is wired
-// here, once the renderer exists, so the renderer puts the terminal back
-// before the run ends. A run that dies before this line leaves a row whose pid
+// here, once the renderer adapter exists, so the renderer puts the
+// terminal back before the run ends. A run that dies before this line leaves a row whose pid
 // is gone, which the next boot takes over.
 // The app's teardown handle lands on the App's onReady once the mount runs,
 // and the shutdown installer stops the app's background loops on every
@@ -98,17 +119,8 @@ const herdrIdentity = createHerdrIdentityReporter({
 const appStop: { current: (() => void) | undefined } = { current: undefined };
 installStateShutdown(startup.state, process, startup.logger, () => {
 	appStop.current?.();
+	adapter.destroy();
 	herdrIdentity.release();
-});
-// The native renderer diffs each frame against its model of the screen and
-// marks a model cell as written while it emits the cell's bytes. If the host
-// terminal loses bytes of a frame, the model and the screen diverge and the
-// later frames skip the lost cells, so stale fragments of an earlier frame
-// linger until the next full repaint (anomalyco/opentui issue 1187). Force a
-// full repaint every frame so any lost bytes are overwritten within one
-// frame and the screen always converges to the model.
-renderer.setFrameCallback(async () => {
-	(renderer as unknown as { forceFullRepaintRequested?: boolean }).forceFullRepaintRequested = true;
 });
 createRoot(renderer).render(
 	createElement(App, {

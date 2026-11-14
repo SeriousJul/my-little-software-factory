@@ -66,6 +66,10 @@ const stub = [
 	"    ;;",
 	"esac",
 	"  ;;",
+	"wait)",
+	"  # A live wait on a working agent blocks; the plane's timeout ends it.",
+	"  sleep 100",
+	"  ;;",
 	"*)",
 	"  exit 1",
 	"  ;;",
@@ -119,7 +123,7 @@ const boot = tmux([
 	String(COLS),
 	"-y",
 	String(ROWS),
-	`env HOME=${fixture} XDG_CONFIG_HOME=${join(fixture, ".config")} XDG_STATE_HOME=${join(fixture, ".state")} XDG_DATA_HOME=${join(fixture, ".data")} XDG_CACHE_HOME=${join(fixture, ".cache")} PATH=${join(fixture, "bin")}:$PATH TERM=xterm-256color MLSF_REPRO_DIR=${fixture} ${process.execPath} ${join(process.cwd(), "bin/factory.mjs")} --config ${join(fixture, "config.toml")}`,
+	`env HOME=${fixture} XDG_CONFIG_HOME=${join(fixture, ".config")} XDG_STATE_HOME=${join(fixture, ".state")} XDG_DATA_HOME=${join(fixture, ".data")} XDG_CACHE_HOME=${join(fixture, ".cache")} PATH=${join(fixture, "bin")}:$PATH TERM=xterm-256color MLSF_REPRO_DIR=${fixture} HERDR_ENV=mlsf-repro HERDR_PANE_ID= HC_TERMINAL_ID= HC_SCOPE= HC_TERMINAL_SOCKET= ${process.execPath} ${join(process.cwd(), "bin/factory.mjs")} --config ${join(fixture, "config.toml")}`,
 ]);
 if (boot.includes("can't find") || boot.includes("no server running")) {
 	throw new Error(`tmux failed: ${boot}`);
@@ -130,7 +134,7 @@ let sawMain = false;
 const deadline = Date.now() + 30000;
 while (Date.now() < deadline) {
 	const cap = tmux(["capture-pane", "-p", "-t", SESSION]);
-	if (cap.includes("open: 1  running: 1  awaiting: 1")) {
+	if (/open: \d+ {2}running: \d+ {2}awaiting: \d+/.test(cap)) {
 		sawMain = true;
 		break;
 	}
@@ -142,8 +146,58 @@ if (!sawMain) {
 	clearInterval(gen);
 	process.exit(2);
 }
-tmux(["send-keys", "-t", SESSION, "Down"]);
-await sleep(250);
+// The in-flight ticket's row, named by its title: the fixture's list
+// carries the repository group headers, so the row's position is not a
+// constant. Step the keyboard onto it the way the screenshot walk does,
+// reading the cursor row from the same frame.
+async function cursorRow(): Promise<string> {
+	const cap = tmux(["capture-pane", "-p", "-t", SESSION]);
+	const rows = cap.split("\n");
+	const border = rows.findIndex((l) => l.includes("─❯"));
+	if (border === -1) return "";
+	for (let i = border + 1; i < rows.length; i++) {
+		if (rows[i].startsWith("└")) break;
+		if (rows[i].includes("❯")) return rows[i].replace("❯", " ").trim();
+	}
+	return "";
+}
+let onInFlightRow = false;
+for (let i = 0; i < 10 && !onInFlightRow; i++) {
+	if ((await cursorRow()).includes("Retry failed webhook")) {
+		onInFlightRow = true;
+		break;
+	}
+	tmux(["send-keys", "-t", SESSION, "j"]);
+	await sleep(150);
+}
+if (!onInFlightRow) {
+	console.error("could not reach the in-flight ticket's row");
+	tmux(["kill-session", "-t", SESSION]);
+	clearInterval(gen);
+	process.exit(2);
+}
+// The row's state lags the boot: Observation settles it on [running] when
+// it matches the ticket's pane, and only a running row opens the Live view.
+// Wait for the badge before the Enter, or the key is refused.
+let sawRunning = false;
+const runningDeadline = Date.now() + 20000;
+while (Date.now() < runningDeadline) {
+	const cap = tmux(["capture-pane", "-p", "-t", SESSION]);
+	const row = cap
+		.split("\n")
+		.some((l) => l.includes("Retry failed webhook") && l.includes("running"));
+	if (row) {
+		sawRunning = true;
+		break;
+	}
+	await sleep(200);
+}
+if (!sawRunning) {
+	console.error("the in-flight ticket never settled on [running]");
+	tmux(["kill-session", "-t", SESSION]);
+	clearInterval(gen);
+	process.exit(2);
+}
 tmux(["send-keys", "-t", SESSION, "Enter"]);
 await sleep(400);
 let sawLive = false;
@@ -184,7 +238,12 @@ while (Date.now() - start < RUN_MS) {
 	const body = rows.slice(ctx + 1, act).map((r) => {
 		const left = r.indexOf("│") + 1;
 		const right = r.lastIndexOf("│");
-		return r.slice(left, right).trim();
+		// The Live view's body stands inside two box levels; drop the inner
+		// border so a line start reads as the stream line it is.
+		return r
+			.slice(left, right)
+			.replace(/^\s*│\s*/, "")
+			.trim();
 	});
 	// Every line start in the body, in screen order.
 	const nums: number[] = [];

@@ -20,6 +20,7 @@
  */
 import type { FactoryConfig } from "./config.ts";
 import { type Logger, NOOP_LOGGER } from "./logging.ts";
+import { reportOutsideTerminalWrite } from "./renderer-adapter.ts";
 import { type CommandRunner, commandFailureText, errorMessage } from "./runner.ts";
 
 /** The severities a desktop notification carries. */
@@ -93,6 +94,12 @@ export class AttentionService {
 	ring(): void {
 		if (!this.config().attentionBell) return;
 		process.stdout.write("\u0007");
+		// The bell lands on the terminal outside the renderer. It paints no
+		// cell and moves no cursor, so the renderer adapter's repaint policy
+		// (ADR 0145) reads it as the fact it is and forces no rewrite. The
+		// entry wired the report to the adapter; a boot that stands no
+		// adapter reports nowhere, and the bell still lands.
+		reportOutsideTerminalWrite({ kind: "bell" });
 	}
 
 	/**
