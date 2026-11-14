@@ -8,9 +8,13 @@
  * the same kind, and answers one path or the unavailable answer.
  *
  * A derivation is a lookup in the open, never a guess: it names a path only
- * when the file stands there and one record can be the Agent's, picked by the
- * Agent type, the checkout, and the start time the plane already recorded.
- * Two candidates that both fit, an unreadable session home, or a kind with no
+ * when the file stands there and one record can be the Agent's. It is picked
+ * by the Agent type, the checkout, and the earliest time the record can
+ * exist: the host's terminal-creation time when the host reports it, the
+ * start time the plane recorded otherwise. The host confirms a run's start
+ * only after the record already exists, so the recorded start alone rejects
+ * the run's own record on the host that names no record (ADR 0161). Two
+ * candidates that both fit, an unreadable session home, or a kind with no
  * derivation all answer unavailable, and the settle takes the capture with
  * one line in the run's record. Unavailable is never `no-turn`: the record's
  * absence says nothing about whether the turn ran, the same fail-open
@@ -36,6 +40,15 @@ export interface SessionRecordFacts {
 	readonly checkoutPath: string | null;
 	/** The start time the plane recorded for the run, or null when it has none. */
 	readonly startedAt: string | null;
+	/**
+	 * The earliest time the run's record can exist, in ms: the time the host
+	 * created the run's terminal, or null when the host reports none. The
+	 * record begins after its terminal exists, and the host's clock for that
+	 * stands beside the record's stamp: it bounds the record earlier than
+	 * the plane's recorded start can, because the host confirms the start
+	 * only after the record exists (ADR 0161).
+	 */
+	readonly notBeforeMs?: number | null;
 }
 
 /** Why the derivation could not name the record's path. */
@@ -200,8 +213,12 @@ function firstLineOf(path: string): string | null {
 
 /**
  * Whether one named record can be this run's: the stamp stands on or after
- * the recorded start, the first line names the session, and the header
- * carries the checkout. A name the plane has not seen is never followed.
+ * the earliest time the record can exist, the first line names the session,
+ * and the header carries the checkout. That earliest time is the host's
+ * terminal-creation time when the host reports one, the recorded start
+ * otherwise: the host confirms the start only after the record exists,
+ * so the recorded start alone rejects the run's own record (ADR 0161). A
+ * name the plane has not seen is never followed.
  */
 function canBeThisRun(
 	name: string,
@@ -209,15 +226,15 @@ function canBeThisRun(
 		recordsDir: string;
 		layout: SessionRecordLayout;
 		checkoutPath: string;
-		startedAtMs: number;
+		notBeforeMs: number;
 	},
 ): boolean {
 	const stampMs = context.layout.startedAtMs(name);
-	if (stampMs === null || stampMs < context.startedAtMs) return false; // the record began before this run
+	if (stampMs === null || stampMs < context.notBeforeMs) return false; // the record began before this run
 	const header = context.layout.header(firstLineOf(join(context.recordsDir, name)) ?? "");
 	if (header === null) return false; // the name is not one the plane follows
 	if (header.cwd !== context.checkoutPath) return false; // the directory name stands for another checkout
-	if (header.startedAtMs !== null && header.startedAtMs < context.startedAtMs) return false; // the header says the record began before this run
+	if (header.startedAtMs !== null && header.startedAtMs < context.notBeforeMs) return false; // the header says the record began before this run
 	return true;
 }
 
@@ -245,6 +262,10 @@ export function resolveSessionRecord(
 	if (facts.startedAt === null) return { kind: "unavailable", reason: "no-start" };
 	const startedAtMs = Date.parse(facts.startedAt);
 	if (Number.isNaN(startedAtMs)) return { kind: "unavailable", reason: "no-start" };
+	const notBeforeMs =
+		typeof facts.notBeforeMs === "number" && Number.isFinite(facts.notBeforeMs)
+			? facts.notBeforeMs
+			: startedAtMs;
 	const directory = layout.checkoutDirectory(checkoutPath);
 	if (directory === null) return { kind: "unavailable", reason: "no-checkout" };
 	const recordsDir = join(home, layout.home, directory);
@@ -258,7 +279,7 @@ export function resolveSessionRecord(
 	}
 	const matches: string[] = [];
 	for (const name of names) {
-		if (canBeThisRun(name, { recordsDir, layout, checkoutPath, startedAtMs })) {
+		if (canBeThisRun(name, { recordsDir, layout, checkoutPath, notBeforeMs })) {
 			matches.push(join(recordsDir, name));
 		}
 	}

@@ -94,8 +94,10 @@ name a record or a read that truly cannot be had.
 
 See [ADR 0141](../adr/0141-the-plane-resolves-its-agent-host-herdr-or-herdr-core.md),
 [ADR 0142](../adr/0142-one-run-holds-agents-on-both-hosts-and-the-host-stands-on-the-handoff.md),
-[ADR 0143](../adr/0143-on-the-herdr-core-host-the-plane-owns-the-worktree-lifecycle.md), and
-[ADR 0144](../adr/0144-on-the-herdr-core-host-the-plane-derives-the-agent-session-record-path.md)
+[ADR 0143](../adr/0143-on-the-herdr-core-host-the-plane-owns-the-worktree-lifecycle.md),
+[ADR 0144](../adr/0144-on-the-herdr-core-host-the-plane-derives-the-agent-session-record-path.md),
+and
+[ADR 0161](../adr/0161-the-herdr-core-derivation-bounds-the-session-record-by-the-hosts-terminal-creation-time.md)
 for the decisions, and
 [the Stub herdr world verification](./stub-herdr-world.md) for the answer-shape
 rule this file follows.
@@ -242,9 +244,28 @@ is the answer a caller gets.
   reproduces these facts on a fixture home, so no test reads the operator's
   session home. What the measurement covers: the session home's place, the
   checkout's directory name, the record's file name, and that header, as pi
-  1.5.2 writes them on this machine. What it does not cover: a session a
-  herdr-core-launched Agent opens, a settle on a real herdr-core host, and any
-  runtime but pi.
+  1.5.2 writes them on this machine. What it does not cover: a settle on a
+  real herdr-core host, and any runtime but pi. The measurement below from
+  2026-11-14 closes the other gap: a session a herdr-core-launched Agent
+  opens, and how its record's time stands to the run's times.
+- **The record a herdr-core-launched Agent opens, and the run's times
+  (2026-11-14)**: on this machine's `hc` 0.1.20 and pi 1.5.2, three runs the
+  plane started on the herdr-core host - two implement turns and one review
+  turn, all in one worktree - each opened the pi record measured above. The
+  host's terminal record carries the time the host created the terminal
+  (`created_ms`); the live review run's stood at 2026-11-14T12:58:37.509Z, the
+  pi record it booted stands stamped 2026-11-14T12:58:37.660Z, and the plane
+  recorded the run's start at 2026-11-14T12:58:39.722Z: the record the runtime
+  opens begins before the start the plane records, inside the host's start
+  round trip. Bounded by the recorded start, the derivation rejected each run's
+  own record - the standing code, replayed against the real files, answers
+  `no-candidate` for the live run, and those settled turns took the capture
+  with the fail-open `unknown` cause and no workflow transition. Bounded by the
+  host's terminal creation time (ADR 0161), the same replay through the
+  plane's actual derivation and reader names each run's own record and reads
+  its turn end: `completed` on the review turn, `completed` on the second
+  implement turn, `aborted` on the first. What it does not cover: the plane's
+  process running that settle on the live host, and any runtime but pi.
 - **The Adoption walk against the live desktop (2026-11-13)**: the plane ran
   in the desktop's own terminal, whose record names `null` and carries the
   labels `herdr.space`, `herdr.tab`, and `herdr.seen`. The plane's `hc get`
@@ -325,12 +346,12 @@ it stands below, each one owed by the change that lands it:
   the plane runs in the suite runs against the Stub herdr world, and the
   version read the boot runs is the one host command a real boot sends, a
   read that starts no core.
-- The settle that reads a record a herdr-core-launched Agent wrote on a real
-  host: the derivation of ADR 0144 and its ambiguous-match answer run in the
-  suite on fixture session homes, one of them standing in for the real pi
-  session measured above, but no settle on this host has read a record a
-  herdr-core-launched Agent opened, and no runtime but pi has stood on the
-  derivation at all.
+- The settle the plane's process runs on this host over a record a herdr-core-
+  launched Agent wrote: the 2026-11-14 measurement replays the derivation and
+  the reader - the plane's actual code - over the real records of the three
+  host-launched runs, and the suite holds the same facts on fixture homes, but
+  no plane process on this host has run that settle on the live host since the
+  ADR 0161 fix, and no runtime but pi has stood on the derivation at all.
 - The Adoption labels of ADR 0141: the walk ran on this machine on
   2026-11-13 with the Herdr desktop live, and it failed on the plane's own
   reader, the nameless-record gap recorded above. The plane's side of the
@@ -388,9 +409,9 @@ measured above.
 | --- | --- |
 | The per-kind table: pi stands with its layout, and a kind outside the table answers `no-derivation`, the unavailable lookup the plane carries for frame tests answering it for every kind | `test/session-record.test.ts`, the per-kind table suite |
 | The pi layout: the checkout directory under dashes, the record name's stamp - a name without a millisecond stands for the whole second, a name with no stamp is not followed, and a stamp that is not a time says none - and the `{"type":"session"}` header's words for the checkout and the start | `test/session-record.test.ts`, the layout suite |
-| The lookup in the open: the record the runtime began for the run is named, and a record that began before the run, a record of another checkout, a name the stamp cannot read, and a header that is not a session all name no path; a home without the checkout's directory, and a session place that is a file, answer `no-home`; a run without a checkout, and a start time that is not a time, answer `no-checkout` and `no-start` | `test/session-record.test.ts`, the derivation suite |
+| The lookup in the open: the record the runtime began for the run is named, and a record of another checkout, a name the stamp cannot read, and a header that is not a session all name no path; a record that began before the run's recorded start but after the host's terminal creation time is named, and a previous run's record, created before this run's terminal, names no path (ADR 0161); a home without the checkout's directory, and a session place that is a file, answer `no-home`; a run without a checkout, and a start time that is not a time, answer `no-checkout` and `no-start` | `test/session-record.test.ts`, the derivation suite |
 | The ambiguous match, a first-class answer: two candidate records that both fit refuse the path and answer `ambiguous` | `test/session-record.test.ts`, the derivation suite |
-| The ticket settle seam: an available derived path reads through the same per-kind reader the herdr path reads with the run's start time, the pane stays unread, and the turn settles beside the record's log; an unavailable derivation takes the capture, settles the turn with the fail-open `unknown` cause and the settle's one line on the Message line, asks no reader, and never settles `no-turn`; a herdr-host settle keeps its host-reported record and never asks the lookup | `test/observation.test.ts`, the herdr-core settle tests |
+| The ticket settle seam: an available derived path reads through the same per-kind reader the herdr path reads with the run's start time, the pane stays unread, and the turn settles beside the record's log; a settle whose host reports the terminal's creation time reads the record that began before the run's recorded start, and a settle whose host reports none keeps the recorded start as the bound (ADR 0161); an unavailable derivation takes the capture, settles the turn with the fail-open `unknown` cause and the settle's one line on the Message line, asks no reader, and never settles `no-turn`; a herdr-host settle keeps its host-reported record and never asks the lookup | `test/observation.test.ts`, the herdr-core settle tests |
 | The Consultation seam: a herdr-core Consultation settles its turn on the derived record beside the visible screen, and a derivation that answers unavailable settles on the recent scroll capture with the fail-open cause | `test/observation.test.ts`, the Consultation settle tests |
 | The real-runtime measurement: the measured pi session's facts - the checkout's directory name, the record's file name, and its header - stand on a fixture home, and the derivation names the record | `test/session-record.test.ts`, the measurement suite |
 

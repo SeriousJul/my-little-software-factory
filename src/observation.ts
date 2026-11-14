@@ -622,12 +622,15 @@ export class MergedAgentReader implements AgentReader {
 		if (record.state === "live") {
 			// The record's checkout is the derivation's checkout fact (ADR
 			// 0144): the session record the host names no path of stands under
-			// the checkout the Agent runs in.
+			// the checkout the Agent runs in. Its creation time is the
+			// derivation's earliest-time fact (ADR 0161): the run's record begins
+			// after the terminal exists.
 			return {
 				...agent,
 				agent: row.agent ?? "agent",
 				status: record.status,
 				checkoutPath: record.cwd,
+				createdMs: record.createdMs,
 			};
 		}
 		const exited =
@@ -638,7 +641,13 @@ export class MergedAgentReader implements AgentReader {
 			// settle stands beside it.
 			return null;
 		}
-		return { ...agent, agent: row.agent ?? "agent", status: "done", checkoutPath: record.cwd };
+		return {
+			...agent,
+			agent: row.agent ?? "agent",
+			status: "done",
+			checkoutPath: record.cwd,
+			createdMs: record.createdMs,
+		};
 	}
 
 	private async readCorePane(name: string, lines: number): Promise<string | null> {
@@ -1528,9 +1537,10 @@ export class ObservationCoordinator {
 	 *
 	 * The herdr host keeps its supplier: a host that names the record is never
 	 * overruled by the derivation. On the herdr-core host, which names no
-	 * record, the per-kind derivation is the second supplier (ADR 0144); its
-	 * unavailable answer is the capture, one line in the run's record, and
-	 * never `no-turn`.
+	 * record, the per-kind derivation is the second supplier (ADR 0144), and
+	 * it bounds the record by the host's terminal-creation time when the
+	 * host reports one (ADR 0161); its unavailable answer is the capture, one
+	 * line in the run's record, and never `no-turn`.
 	 */
 	private async maybeReadTurnEnd(
 		ticket: { ticketIdentity: string; agentType: string; startedAt: string },
@@ -1544,6 +1554,7 @@ export class ObservationCoordinator {
 		const derived = this.sessionRecord(kind, {
 			checkoutPath: agent.checkoutPath ?? null,
 			startedAt: ticket.startedAt,
+			notBeforeMs: agent.createdMs ?? null,
 		});
 		if (derived.kind === "unavailable") return { kind: "unavailable" };
 		return await this.turnLogs.read(kind, derived.path, ticket.startedAt);
@@ -1554,8 +1565,9 @@ export class ObservationCoordinator {
 	 * 0144): the herdr-core derivation's path through the same reader the
 	 * herdr path uses, or unavailable. The record is picked by the Agent's
 	 * checkout, the Consultation's when the Agent names none, and the
-	 * Consultation's created time; the pending turn's accepted time feeds the
-	 * reader's staleness guard.
+	 * Consultation's created time, bounded earlier by the Agent's terminal
+	 * creation time when the host reports one (ADR 0161); the pending turn's
+	 * accepted time feeds the reader's staleness guard.
 	 */
 	private async consultationTurnRead(
 		kind: string | undefined,
@@ -1567,6 +1579,7 @@ export class ObservationCoordinator {
 		const derived = this.sessionRecord(kind, {
 			checkoutPath: match.checkoutPath ?? consultation.repository.path,
 			startedAt: consultation.createdAt,
+			notBeforeMs: match.createdMs ?? null,
 		});
 		if (derived.kind === "unavailable") return { kind: "unavailable" };
 		return await this.turnLogs.read(kind, derived.path, pendingTurn?.acceptedAt ?? null);

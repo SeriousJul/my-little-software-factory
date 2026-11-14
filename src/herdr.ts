@@ -21,6 +21,15 @@ export interface HerdrAgent {
 	stableSessionId?: string;
 	/** The checkout or working directory when this Herdr version reports it. */
 	checkoutPath?: string;
+	/**
+	 * The time the host created the Agent's terminal, in ms, when the host
+	 * reports it (herdr-core's `created_ms`). The run's session record begins
+	 * after its terminal exists, and the host's clock stands beside the
+	 * record's stamp: the plane bounds the derived record by this time rather
+	 * than the start time it records, which the host confirms only after the
+	 * record already exists (ADR 0161).
+	 */
+	createdMs?: number;
 	/** Herdr's monotonic state-change sequence when available. */
 	sequence?: number;
 	/**

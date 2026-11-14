@@ -5533,6 +5533,7 @@ function coreHostRecordPath(
 	const derived = f.sessionRecord(kind, {
 		checkoutPath: match.checkoutPath ?? consultation.repository.path,
 		startedAt: consultation.createdAt,
+		notBeforeMs: match.createdMs ?? null,
 	});
 	return derived.kind === "path" ? derived.path : "";
 }

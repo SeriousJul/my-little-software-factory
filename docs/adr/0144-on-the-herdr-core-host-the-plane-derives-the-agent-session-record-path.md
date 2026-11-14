@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-11-12
+Amended by ADR 0161: the start time the plane already recorded is no longer the record's only identity bound: when the herdr-core host reports the time it created the run's terminal, that time stands in its place, because the host confirms the start only after the runtime has opened the record. The recorded start keeps its bound when the host reports no creation time.
 
 Records that ADR 0008's session record path has a second supplier: on the
 herdr-core host the plane derives it in a per-Agent-type module from facts it

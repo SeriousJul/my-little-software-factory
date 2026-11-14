@@ -627,7 +627,7 @@ _Avoid_: no-auto-decision, no auto close, manual completion, no-auto-start
 
 **Turn log**:
 The agent's messages of one settled turn, in order: the agent's text, and one short note per tool call.
-The control plane builds it from the agent's session record when the host reports one; the herdr-core host reports none, and the plane derives the path from the Agent type, the checkout, and the start time it recorded (ADR 0144). When no session record stands, it builds the Turn log from the terminal capture.
+The control plane builds it from the agent's session record when the host reports one; the herdr-core host reports none, and the plane derives the path from the Agent type, the checkout, and the time the run's record can have begun: the host's terminal creation time when the host reports it, the recorded start time when it does not (ADR 0144, ADR 0161). When no session record stands, it builds the Turn log from the terminal capture.
 _Avoid_: agent log, transcript, terminal capture
 
 **Turn end cause**:

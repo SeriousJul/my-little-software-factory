@@ -25,6 +25,9 @@ const STARTED_AT = "2026-11-13T15:47:12.691Z";
 /** The stamp a record that began with the run carries in its name. */
 const STAMP = "2026-11-13T15-47-12-691Z";
 const RECORD_ID = "01a1d597-6ab3-70b0-a6d6-43ad8c68eeb8";
+const OTHER_RECORD_ID = "01a1d598-6ab3-70b0-a6d6-43ad8c68eeb9";
+/** The run's terminal creation time, the host's own stamp for the start. */
+const NOT_BEFORE = "2026-11-13T15:47:11.000Z";
 
 const homes: string[] = [];
 
@@ -169,6 +172,68 @@ describe("the derivation", () => {
 		// before the run: the header is the record's own word.
 		putRecord(home, CHECKOUT, STAMP, headerOf(CHECKOUT, "2026-11-13T15:47:12.000Z"));
 		expect(resolveSessionRecord("pi", facts(), home)).toEqual({
+			kind: "unavailable",
+			reason: "no-candidate",
+		});
+	});
+
+	test("a record that began before the recorded start but after the terminal's creation names (ADR 0161)", () => {
+		// The measured race (docs/verification/agent-host-herdr-core.md): the
+		// runtime opens the record before the plane records the run's start - the
+		// host confirms the start only after the record exists. The host's
+		// terminal-creation time stands earlier than both and bounds the record,
+		// while the recorded start, taken alone, rejects the run's own record.
+		const home = fixtureHome();
+		const path = putRecord(
+			home,
+			CHECKOUT,
+			"2026-11-13T15-47-12-000Z",
+			headerOf(CHECKOUT, "2026-11-13T15:47:12.000Z"),
+		);
+		// Bounded by the recorded start alone, the record began before the run.
+		expect(resolveSessionRecord("pi", facts(), home)).toEqual({
+			kind: "unavailable",
+			reason: "no-candidate",
+		});
+		// Bounded by the terminal's creation, it is the run's own record.
+		expect(
+			resolveSessionRecord("pi", facts({ notBeforeMs: Date.parse(NOT_BEFORE) }), home),
+		).toEqual({ kind: "path", path });
+	});
+
+	test("a previous run's record, created before this run's terminal, names no path (ADR 0161)", () => {
+		// Two records of the checkout stand in the directory: the run's own,
+		// and a previous run's. The previous run's record was created under
+		// its own terminal, which the host created before this run's terminal
+		// exists: the terminal's creation time rejects it, and the run's own
+		// record stands alone.
+		const home = fixtureHome();
+		const own = putRecord(
+			home,
+			CHECKOUT,
+			"2026-11-13T15-47-12-000Z",
+			headerOf(CHECKOUT, "2026-11-13T15:47:12.000Z"),
+		);
+		putRecord(
+			home,
+			CHECKOUT,
+			"2026-11-13T15-47-10-000Z",
+			headerOf(CHECKOUT, "2026-11-13T15:47:10.000Z", OTHER_RECORD_ID),
+		);
+		expect(
+			resolveSessionRecord("pi", facts({ notBeforeMs: Date.parse(NOT_BEFORE) }), home),
+		).toEqual({ kind: "path", path: own });
+	});
+
+	test("a notBeforeMs that is not a time falls back to the recorded start (ADR 0161)", () => {
+		const home = fixtureHome();
+		putRecord(
+			home,
+			CHECKOUT,
+			"2026-11-13T15-47-12-000Z",
+			headerOf(CHECKOUT, "2026-11-13T15:47:12.000Z"),
+		);
+		expect(resolveSessionRecord("pi", facts({ notBeforeMs: Number.NaN }), home)).toEqual({
 			kind: "unavailable",
 			reason: "no-candidate",
 		});

@@ -868,6 +868,13 @@ export interface HerdrCoreRecord {
 	exitCode?: number;
 	signal?: number;
 	cwd?: string;
+	/**
+	 * The time the host created the terminal, in ms, when the host reports it
+	 * (`created_ms`). The run's session record begins after its terminal
+	 * exists: the plane bounds the derived record by this time rather than
+	 * the start time it records (ADR 0161).
+	 */
+	createdMs?: number;
 	labels?: Record<string, string>;
 }
 
@@ -943,6 +950,7 @@ export function herdrCoreRecord(result: CommandResult): HerdrCoreRecord | null {
 		exitCode: recordNumber(item, "exit_code"),
 		signal: recordNumber(item, "signal"),
 		cwd: recordString(item, "cwd"),
+		createdMs: recordNumber(item, "created_ms"),
 		labels: recordLabels(item),
 	};
 }

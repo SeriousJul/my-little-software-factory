@@ -157,9 +157,9 @@ function agent(
  */
 function coreAgent(
 	paneId: string,
-	fields: { status?: string; checkoutPath?: string } = {},
+	fields: { status?: string; checkoutPath?: string; createdMs?: number } = {},
 ): HerdrAgent {
-	const { status = "working", checkoutPath } = fields;
+	const { status = "working", checkoutPath, createdMs } = fields;
 	return {
 		host: "herdr-core",
 		paneId,
@@ -169,6 +169,7 @@ function coreAgent(
 		status,
 		sessionId: "",
 		...(checkoutPath === undefined ? {} : { checkoutPath }),
+		...(createdMs === undefined ? {} : { createdMs }),
 	};
 }
 
@@ -222,6 +223,29 @@ function handOut(state: FactoryState, identity: string, taskType = "implement"):
 		workspaceId: "ws-1",
 	});
 	return claim.claim.attemptId;
+}
+
+/**
+ * The herdr-core settle rig's session home: a fresh fixture home and the
+ * checkout the session records stand under it (ADR 0144).
+ */
+function coreHome(): { home: string; checkout: string } {
+	const home = mkdtempSync(join(tmpdir(), "observation-core-"));
+	const checkout = join(home, "src", "factory");
+	return { home, checkout };
+}
+
+/**
+ * The herdr-core settle rig: the suite's rig over the home, wired so the
+ * derivation reads that home as the record's supplier (ADR 0144). The test
+ * names its own records, agents, and reader answers.
+ */
+function coreRig(home: string, options: RigOptions): Rig {
+	return rig({
+		...options,
+		home,
+		sessionRecord: (kind, facts) => resolveSessionRecord(kind, facts, home),
+	});
 }
 
 /**
@@ -732,18 +756,15 @@ describe("the observation cycle", () => {
 		// The host names no record, so the derivation stands in: one directory
 		// read of the fixture home, the record picked by the run's checkout
 		// and start time, the same reader the herdr path uses (ADR 0144).
-		const home = mkdtempSync(join(tmpdir(), "observation-core-"));
-		const checkout = join(home, "src", "factory");
-		const recordStart = PINNED_EPOCH + 500;
-		const expectedRecord = putSessionRecord(home, checkout, recordStart);
+		const { home, checkout } = coreHome();
+		const expectedRecord = putSessionRecord(home, checkout, PINNED_EPOCH + 500);
 		const calls: Array<{ kind: string; path: string }> = [];
 		const paneReads: string[] = [];
 		const entries: TurnLogEntry[] = [
 			{ kind: "text", text: "I looked at the code." },
 			{ kind: "text", text: "Done. the record speaks." },
 		];
-		const { state, coordinator, advance } = rig({
-			home,
+		const { state, coordinator, advance } = coreRig(home, {
 			agents: [coreAgent("pane-implement", { status: "done", checkoutPath: checkout })],
 			turnLogs: async (kind, path) => {
 				calls.push({ kind, path });
@@ -756,7 +777,6 @@ describe("the observation cycle", () => {
 				paneReads.push(paneId);
 				return "the pane capture";
 			},
-			sessionRecord: (kind, facts) => resolveSessionRecord(kind, facts, home),
 		});
 		handOut(state, "github:github.com:I_5");
 		advance(30_001);
@@ -779,16 +799,64 @@ describe("the observation cycle", () => {
 		state.close();
 	});
 
-	test("a herdr-core settle whose derivation is ambiguous takes the capture (issue #412)", async () => {
-		// The first-class answer: two candidate records that both fit refuse
-		// the path, the settle takes the capture, and the turn settles with
-		// the fail-open cause and one line on the Message record - never a
-		// failure of the turn (ADR 0144).
-		const home = mkdtempSync(join(tmpdir(), "observation-core-"));
-		const checkout = join(home, "src", "factory");
+	test("a herdr-core settle whose record began before the recorded start picks it by the terminal's creation (ADR 0161)", async () => {
+		// The measured race (docs/verification/agent-host-herdr-core.md): the
+		// runtime opens the session record before the plane records the run's
+		// start - the host confirms the start only after the record exists. The
+		// host's terminal-creation time stands earlier than both: bounded by it,
+		// the derivation names the run's own record, the reader reads it, and
+		// the turn settles completed, not on the capture with the fail-open
+		// cause.
+		const { home, checkout } = coreHome();
+		const expectedRecord = putSessionRecord(home, checkout, PINNED_EPOCH - 1_000, "record-own");
+		const calls: Array<{ kind: string; path: string }> = [];
+		const { state, coordinator, advance } = coreRig(home, {
+			agents: [
+				coreAgent("pane-implement", {
+					status: "done",
+					checkoutPath: checkout,
+					createdMs: PINNED_EPOCH - 2_000,
+				}),
+			],
+			turnLogs: async (kind, path) => {
+				calls.push({ kind, path });
+				return {
+					kind: "ended",
+					turnEnd: {
+						log: [{ kind: "text", text: "the record speaks." }],
+						cause: "completed",
+						detail: "",
+					},
+				};
+			},
+		});
+		handOut(state, "github:github.com:I_5");
+		advance(30_001);
+		await coordinator.tick();
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
+		// The record began before the recorded start, yet it is the run's
+		// own: the terminal's creation time bounds it, the reader was asked
+		// for the record, and the turn settled completed.
+		expect(calls).toEqual([{ kind: "pi", path: expectedRecord }]);
+		expect(ticket.lastCompletion).toEqual(
+			expect.objectContaining({
+				message: "the record speaks.",
+				cause: "completed",
+				decision: null,
+			}),
+		);
+		state.close();
+	});
+
+	test("a herdr-core settle whose host reports no terminal creation time keeps the recorded start as the bound (ADR 0161)", async () => {
+		// A host that names no terminal-creation time gives the derivation no
+		// earlier bound: a record that began before the recorded start names
+		// no path, and the settle takes the capture with the fail-open cause,
+		// the standing a host that reports no creation time keeps.
+		const { home, checkout } = coreHome();
+		putSessionRecord(home, checkout, PINNED_EPOCH - 1_000, "record-own");
 		let readersAsked = 0;
-		const { state, coordinator, advance, statuses } = rig({
-			home,
+		const { state, coordinator, advance } = coreRig(home, {
 			agents: [coreAgent("pane-implement", { status: "done", checkoutPath: checkout })],
 			turnLogs: async () => {
 				readersAsked += 1;
@@ -801,7 +869,42 @@ describe("the observation cycle", () => {
 					},
 				};
 			},
-			sessionRecord: (kind, facts) => resolveSessionRecord(kind, facts, home),
+		});
+		handOut(state, "github:github.com:I_5");
+		advance(30_001);
+		await coordinator.tick();
+		const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
+		expect(readersAsked).toBe(0);
+		expect(ticket.lastCompletion).toEqual(
+			expect.objectContaining({
+				message: "Done. message of pane-implement",
+				cause: "unknown",
+				decision: null,
+			}),
+		);
+		state.close();
+	});
+
+	test("a herdr-core settle whose derivation is ambiguous takes the capture (issue #412)", async () => {
+		// The first-class answer: two candidate records that both fit refuse
+		// the path, the settle takes the capture, and the turn settles with
+		// the fail-open cause and one line on the Message record - never a
+		// failure of the turn (ADR 0144).
+		const { home, checkout } = coreHome();
+		let readersAsked = 0;
+		const { state, coordinator, advance, statuses } = coreRig(home, {
+			agents: [coreAgent("pane-implement", { status: "done", checkoutPath: checkout })],
+			turnLogs: async () => {
+				readersAsked += 1;
+				return {
+					kind: "ended" as const,
+					turnEnd: {
+						log: [{ kind: "text" as const, text: "a log" }],
+						cause: "completed" as const,
+						detail: "",
+					},
+				};
+			},
 		});
 		// Two records that both fit: the run's own, and a second of the same
 		// checkout opened a moment later.
