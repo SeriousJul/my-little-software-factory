@@ -44,6 +44,7 @@ import {
 	spanColors,
 	staleKeyClaim,
 	startingFaceOf,
+	tickAnimation,
 	WIDTH,
 	waitFor,
 	waitUntil,
@@ -320,8 +321,11 @@ describe("the Live view on the ticket list", () => {
 
 				await pressControl(setup, "live-view", { quiet: true });
 				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
-				// The pop-in settles before the geometry is measured.
-				await sleep(250);
+				// The pop-in settles before the geometry is measured: the named
+				// tick hands the frame module the pop's budget on its own clock,
+				// so the box stands at its settled size when the frame is read
+				// (ADR 0149).
+				await tickAnimation(setup, "rest");
 				// Near-fullscreen: the box's border sits one cell in from the
 				// terminal's edge on top, and the shared chrome keeps the box
 				// above its own Message line, so the bottom border stands two
@@ -362,8 +366,10 @@ describe("the Live view on the ticket list", () => {
 				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
 				const frame = await waitFor(setup, { shows: "line one of the agent work" });
 				expect(frame).toContain("line two of the agent work");
-				// The pop-in settles before the color is measured.
-				await sleep(250);
+				// The pop-in settles before the color is measured: the named tick
+				// hands the frame module the pop's budget on its own clock (ADR
+				// 0149).
+				await tickAnimation(setup, "rest");
 				// Plain text in the palette's prose voice: no ANSI, no styling.
 				expect(spanColors(setup, "line one of the agent work")).toContainEqual(
 					rgb(roleColor("text")),

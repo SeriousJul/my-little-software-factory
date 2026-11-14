@@ -12,6 +12,13 @@
  * the Live view's window proof drive. The architecture check discovers its
  * scope from this module's own imports, so a suite that brings the retired
  * shape back fails the check instead of migrating again.
+ *
+ * The animation's frames (the ticket list's face, the modal's pop) step on
+ * the shared frame module's clock (ADR 0149): every wait of this module
+ * hands the module one fixed quantum of module time between its polls, so
+ * a wait that reads a box interior or a face frame sees the animation move
+ * on module time, never on wall-clock luck, and the named tick operation
+ * hands it the amount a suite names.
  */
 
 import { afterEach, beforeEach, expect, spyOn } from "bun:test";
@@ -29,6 +36,8 @@ import {
 	keyName,
 	omitFromOtherSection,
 } from "../src/components/controls.ts";
+import { POP_TICK_MS } from "../src/components/modal-chrome.ts";
+import { releaseAllFrameOwners, settleFrames, tickFrame } from "../src/components/shared/frame.ts";
 import { controlInk } from "../src/components/shared/presentation.ts";
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import { resolveTheme, type ThemeRole } from "../src/components/shared/theme.ts";
@@ -504,6 +513,12 @@ export async function bootApp(fields: AppBootFields = {}): Promise<AppSetup> {
 		loopPolicy: loopPolicy ?? planeRecord.props.loopPolicy,
 	};
 	let stopApp: (() => void) | null = null;
+	// The test renderer's unmount does not run the app's effect cleanups, so
+	// the frame owners the app registered on its renderables outlive its
+	// renderer. They are inert - their paint writes to a destroyed renderer
+	// - but the next boot releases them first, so the module's clock table
+	// stands clean on every test (ADR 0149).
+	releaseAllFrameOwners();
 	// Match src/factory.ts: the renderer does not own Ctrl+C. The app's
 	// emergency-exit dispatch is what destroys the renderer under test, so
 	// the frame tests verify the catalogue's control, not OpenTUI's built-in.
@@ -541,6 +556,9 @@ export async function withApp(
 		// outlives the state reads a closed database. The plane's own close
 		// runs after, in its module's cleanup, whatever this body did.
 		setup.stopApp();
+		// The app's frame owners leave the frame module with its renderer, so
+		// the next test's owners stand on clean clocks (ADR 0149).
+		releaseAllFrameOwners();
 	}
 }
 
@@ -822,6 +840,15 @@ export async function awaitFrameChecking(
 		await sleep(pollMs);
 		window.offScheduleMs += Math.max(0, Date.now() - pollStart - pollMs);
 		flushPassiveNow();
+		// The animation's frame owners step on the shared frame module's
+		// clock, which the test renderer never runs on its own. Each poll
+		// hands the module one fixed quantum of module time, so a wait that
+		// reads a box interior or a face frame sees the animation move on
+		// module time, never on wall-clock luck, and the pop rests after
+		// exactly its budget of module time on any runner (ADR 0149).
+		if (tickFrame(ANIMATION_TICK_MS)) {
+			await setup.renderOnce();
+		}
 		frame = setup.captureCharFrame();
 	}
 }
@@ -1283,6 +1310,12 @@ export async function settle(setup: Setup, maxMs = 300): Promise<string> {
 	let stablePolls = 0;
 	for (;;) {
 		await sleep(FRAME_POLL_MS);
+		// The frame module's clock moves on this poll's quantum, the way the
+		// frame waits move it, so a pop that was still opening rests before
+		// the frame this poll reads (ADR 0149).
+		if (tickFrame(ANIMATION_TICK_MS)) {
+			await setup.renderOnce();
+		}
 		const current = setup.captureCharFrame();
 		if (current === last) {
 			stablePolls += 1;
@@ -1297,6 +1330,43 @@ export async function settle(setup: Setup, maxMs = 300): Promise<string> {
 			return current;
 		}
 	}
+}
+
+/**
+ * The named quantum the rig hands the frame module's clock between two of
+ * its own polls.
+ *
+ * It stands on the pop's tick, the shared modal chrome's step: small enough
+ * that the pop's rest is a countable number of quanta, and the face steps
+ * on its own, coarser step beside it. Every rig wait and the named tick
+ * operation hand the same module one of these quanta or a delta a suite
+ * names, so the clock the animation runs on is the clock the rig drives,
+ * and a rest stands on module time, never on a wall-clock window the
+ * animation's budget can land outside of (ADR 0149).
+ */
+export const ANIMATION_TICK_MS = POP_TICK_MS;
+
+/**
+ * Advance the plane's animation frames by a named amount, and read the
+ * frame that follows.
+ *
+ * The production renderer's per-frame callback hands the frame module the
+ * frame's time, and this operation is the test's hand on the same port (ADR
+ * 0149): it hands the module the named delta - or runs every owner that
+ * rests to its rest - and then paints the frame the module's paint wrote,
+ * so a suite asserts the frame it chose: the face frame at a named tick, the
+ * box size at a named tick, the settled frame at rest. A suite that uses it
+ * never waits on a wall-clock window for the animation's budget to run out.
+ */
+export async function tickAnimation(setup: Setup, amount: number | "rest"): Promise<string> {
+	// The commit a pending update owes (a face owner that registered, a pop
+	// that mounted) lands before the tick it must move, the way the rig's
+	// own polls land the flush before their read.
+	flushPassiveNow();
+	if (amount === "rest") settleFrames();
+	else tickFrame(amount);
+	await setup.renderOnce();
+	return setup.captureCharFrame();
 }
 
 /**

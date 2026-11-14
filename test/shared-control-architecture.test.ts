@@ -19,6 +19,41 @@ import { sourceFiles } from "./static-checks.ts";
 /** The library's own directory: the only place a renderer field may live. */
 const LIBRARY = "src/components/shared/";
 
+/**
+ * The call that starts at `open`'s paren closes where the paren depth
+ * returns to zero. A callback that holds its own parens is read whole.
+ * Source that never balances (a read error, not a file this repository
+ * ships) ends at the end of the source.
+ */
+function intervalCallClose(source: string, open: number): number {
+	let depth = 0;
+	for (let i = open; i < source.length; i += 1) {
+		if (source[i] === "(") depth += 1;
+		else if (source[i] === ")" && depth === 1) return i;
+		else if (source[i] === ")") depth -= 1;
+	}
+	return source.length - 1;
+}
+
+/**
+ * The literal delays the source's intervals state, in call order.
+ *
+ * The delay is the call's last argument. An interval whose delay is not a
+ * literal (a named constant) states no number here, and the rule cannot
+ * see it: the hook-name rule sees the timers a screen retires, and the
+ * literal rule sees the rest of the per-frame spellings.
+ */
+function intervalDelays(source: string): number[] {
+	const delays: number[] = [];
+	for (const match of source.matchAll(/\bsetInterval\s*\(/gu)) {
+		const open = source.indexOf("(", match.index ?? 0);
+		const close = intervalCallClose(source, open);
+		const delay = /,\s*(\d+)\s*\)\s*$/u.exec(source.slice(open, close + 1))?.[1];
+		if (delay !== undefined) delays.push(Number(delay));
+	}
+	return delays;
+}
+
 const screens = sourceFiles("src", (file) => !file.startsWith(LIBRARY));
 const library = sourceFiles("src", (file) => file.startsWith(LIBRARY));
 
@@ -332,6 +367,30 @@ describe("the shared control library is the only control implementation", () => 
 		for (const file of surfaces) {
 			const source = readFileSync(file, "utf8");
 			if (/\.\.\.(?:\w*Context|\w*Facts|context)\s*[,)}]/u.test(source)) {
+				offenders.push(file);
+			}
+		}
+		expect(offenders).toEqual([]);
+	});
+
+	test("no screen owns a per-frame animation timer", () => {
+		// The plane's motions step on the shared frame module's clock (ADR
+		// 0149): a surface states the structural fact that its window is open,
+		// and the module steps its face or its pop. A screen that keeps a
+		// per-frame timer of its own - a hook that drives its own face frame, or
+		// an interval that steps a glyph or a scale - repaints its region on
+		// every frame, and the motion no longer settles in the one module it
+		// should. The retired hook names are the rule's spellings, and a
+		// literal interval at the face's step or below is a per-frame timer in
+		// another. The library's own `Spinner` control keeps its interval, and
+		// the state poll keeps its second-scale intervals, so both are clean.
+		const offenders: string[] = [];
+		for (const file of screens) {
+			const source = readFileSync(file, "utf8");
+			if (
+				/\buseSpinnerFrame\s*\(|\buseModalPopScale\s*\(/u.test(source) ||
+				intervalDelays(source).some((delay) => delay <= 100)
+			) {
 				offenders.push(file);
 			}
 		}
