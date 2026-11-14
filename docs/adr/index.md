@@ -166,3 +166,6 @@ body states the context, the decision, and the consequences.
 - [ADR 0155: The boot-sequence module owns the plane's boot order and its teardown](./0155-the-boot-sequence-module-owns-the-plane-s-boot-order-and-its-teardown.md)
 - [ADR 0156: The frame rig's waits resolve on the renderer's frame passes](./0156-the-frame-rigs-waits-resolve-on-the-renderers-frame-passes.md)
 - [ADR 0157: The frame rig keeps its test renderer and the App's root mounted across a file's tests](./0157-the-frame-rig-keeps-its-test-renderer-and-the-apps-root-mounted-across-a-files-tests.md)
+- [ADR 0158: The frame rig derives the plane's key and hint facts once per setup](./0158-the-frame-rig-derives-the-planes-key-and-hint-facts-once-per-setup.md)
+- [ADR 0159: The plane stands the key owner as a fact the rig's key windows read](./0159-the-plane-stands-the-key-owner-as-a-fact-the-rigs-key-windows-read.md)
+- [ADR 0160: The plane's boot call stands the Stub herdr world by default](./0160-the-planes-boot-call-stands-the-stub-herdr-world-by-default.md)
