@@ -3260,6 +3260,175 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 		}
 	});
 });
+
+describe("the Consultation detail's body stands on the pane's screen fact (ADR 0147)", () => {
+	test("a tick on a still pane keeps the same body frame, and a read that differs stands on the new fact", async () => {
+		let fake: FakeRunner;
+		const state = wrappedState();
+		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (f) => {
+				fake = f;
+				// The pane read the refresh timer issues, across three still
+				// ticks, then a read that appends a line.
+				f.setSequence(
+					"herdr",
+					["agent", "read", paneId, "--lines", "200", "--source", "visible", "--format", "text"],
+					[
+						{ stdout: "first line\nsecond line" },
+						{ stdout: "first line\nsecond line" },
+						{ stdout: "first line\nsecond line" },
+						{ stdout: "first line\nsecond line\nthird line" },
+						{ stdout: "first line\nsecond line\nthird line" },
+					],
+				);
+			},
+			runner: (f) =>
+				new ConsultationRunner(f, agentListJson([{ pane: paneId, status: "working" }])),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, WORKING_ID, checkout);
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the Agent view on the pane's body", (f) =>
+						detailPaneText(f).includes("second line"),
+					);
+					const still = detailPaneText(setup.captureCharFrame());
+					// The refresh keeps its one-second cadence: the ticks read
+					// the same pane, the read answers unchanged, and the body
+					// stands on the stored screen fact - the same frame the
+					// tick before.
+					await sleep(2100);
+					const reads = `herdr agent read ${paneId} --lines 200 --source visible --format text`;
+					expect(fake.commands().filter((c) => c === reads).length).toBeGreaterThanOrEqual(3);
+					expect(detailPaneText(setup.captureCharFrame())).toBe(still);
+					// A read that differs publishes a new revision, and the
+					// body shows the pane's new output on the next tick.
+					await sleep(1200);
+					const frame = await waitFor(setup, { shows: "third line" });
+					expect(detailPaneText(frame)).toContain("third line");
+				},
+				{
+					width: WIDTH,
+					height: 32,
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("interaction mode re-interprets the pane only when its read differs", async () => {
+		let fake: FakeRunner;
+		const state = wrappedState();
+		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
+		const { planeRecord } = await consultationBoot({
+			state,
+			commands: (f) => {
+				fake = f;
+				stubPaneReadAnsi(f, paneId, "\u001b[32msteady output\u001b[0m");
+			},
+			runner: (f) =>
+				new ConsultationRunner(f, agentListJson([{ pane: paneId, status: "working" }])),
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, INTERACTION_ID, checkout);
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the working Consultation", (f) =>
+						detailPaneText(f).includes("State:"),
+					);
+					await pressControl(setup, "consultation-interact", { shows: "F12 Exit interaction" });
+					await waitFor(setup, { shows: "steady output" });
+					const still = detailPaneText(setup.captureCharFrame());
+					// The interaction refresh reads every two-fifty: the ticks
+					// read the same ANSI pane, and the interpretation reads its
+					// cache while the fact stands.
+					await sleep(700);
+					expect(detailPaneText(setup.captureCharFrame())).toBe(still);
+					// A key press forwards to the Agent and re-reads the pane;
+					// the read answers unchanged, so the body does not move.
+					typeText(setup, "x");
+					await settle(setup);
+					expect(detailPaneText(setup.captureCharFrame())).toBe(still);
+					// A read that differs re-interprets the pane into its new
+					// screen, and the new body stands on the next read.
+					stubPaneReadAnsi(fake, paneId, "\u001b[31mchanged output\u001b[0m");
+					typeText(setup, "y");
+					const frame = await waitFor(setup, { shows: "changed output" });
+					expect(frame).not.toContain("\u001b");
+				},
+				{
+					width: WIDTH,
+					height: 32,
+					plane: planeRecord,
+					loopPolicy: { kind: "polled", intervalMs: 100 },
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a frame at a width the body has not stood on shapes the body once at that width", async () => {
+		const detailRows = (frame: string, width: number): string[] =>
+			rowsOf(frame).map((row) => row.slice(Math.floor(width / 2) + 2, width - 2));
+		const boot = async (width: number): Promise<string[]> => {
+			const state = wrappedState();
+			let rows: string[] = [];
+			const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
+			const { planeRecord } = await consultationBoot({
+				state,
+				commands: (f) => {
+					stubPaneReadText(f, paneId, "the agent's answer stands whole beside it");
+				},
+				runner: (f) =>
+					new ConsultationRunner(f, agentListJson([{ pane: paneId, status: "working" }])),
+			});
+			const checkout = join(planeRecord.home, "src", "factory");
+			seed(state, WORKING_ID, checkout);
+			try {
+				await withApp(
+					async (setup) => {
+						// The wait stands on the raw detail rows, so the frame it
+						// returns is the one the body rows stand on.
+						const frame = await toConsultations(setup, "the Agent view on the pane's body", (f) =>
+							detailRows(f, width).some((row) => row.includes("beside it")),
+						);
+						rows = detailRows(frame, width);
+					},
+					{
+						width,
+						height: 32,
+						plane: planeRecord,
+						loopPolicy: { kind: "polled", intervalMs: 100 },
+					},
+				);
+				return rows;
+			} finally {
+				state.close();
+			}
+		};
+		// The body stands at the width beyond the list: at 120 the
+		// 40-character body holds on one row, and at 70 it wraps at the
+		// detail's inner width.
+		const wide = await boot(WIDTH);
+		expect(wide.some((row) => row.includes("the agent's answer stands whole beside it"))).toBe(
+			true,
+		);
+		const narrow = await boot(70);
+		expect(narrow.some((row) => row.includes("the agent's answer stands whole beside it"))).toBe(
+			false,
+		);
+		expect(narrow.some((row) => row.includes("beside it"))).toBe(true);
+	});
+});
+
 describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)", () => {
 	/**
 	 * The seat the cap tests hold: a working Consultation whose Agent the

@@ -87,6 +87,7 @@ import {
 	herdrCoreWait,
 	normalizeAgentStatus,
 } from "./agent-host.ts";
+import { type PaneScreen, PaneScreenReads } from "./components/pane-screen.ts";
 import type { FactoryConfig, TransitionOutcome } from "./config.ts";
 // The Missing agent rule is the domain's, beside the host status words the
 // observation cycle reads from the Agent host module (issue #407).
@@ -200,13 +201,15 @@ export interface AgentReader {
 	/** The pane's recent output in text format, unwrapped, capped and ANSI stripped. Null when it cannot be read. */
 	readPane(paneId: string, lines: number): Promise<string | null>;
 	/**
-	 * The pane's visible screen in text format, capped and ANSI stripped. Null
-	 * when it cannot be read. Herdr answers the visible read without scrolling
-	 * the pane, while the agent works as well as while it rests, so the plane's
-	 * periodic pane reads take it (ADR 0140). Optional: a reader without it
-	 * leaves the visible read to the recent read.
+	 * The pane's visible screen as the screen fact the read hands back
+	 * (ADR 0140, ADR 0147): the ANSI-stripped, capped body, and a revision
+	 * that moves only when the read differs from the previous read of the
+	 * same pane. Null when it cannot be read. Herdr answers the visible read
+	 * without scrolling the pane, while the agent works as well as while it
+	 * rests, so the plane's periodic pane reads take it (ADR 0140). Optional:
+	 * a reader without it leaves the visible read to the recent read.
 	 */
-	readPaneVisible?(paneId: string, lines: number): Promise<string | null>;
+	readPaneVisible?(paneId: string, lines: number): Promise<PaneScreen | null>;
 	/**
 	 * Wait until the agent named `target` reaches a settle state, or the
 	 * budget runs out. `matched` is true only when the wait answered with a
@@ -311,6 +314,8 @@ function sessionPathValue(session: Record<string, unknown> | undefined): string 
 /** A reader that runs the pinned herdr commands through the command runner. */
 export class HerdrAgentReader implements AgentReader {
 	private readonly runner: CommandRunner;
+	/** The previous visible reads this reader owns, per pane and kind (ADR 0147). */
+	private readonly screens = new PaneScreenReads();
 
 	constructor(runner: CommandRunner) {
 		this.runner = runner;
@@ -344,12 +349,16 @@ export class HerdrAgentReader implements AgentReader {
 
 	/**
 	 * The visible screen as text: herdr answers it without scrolling the pane,
-	 * while the agent works as well as while it rests (ADR 0140). The body the
-	 * Consultation view's tick and the Live view's stream take, so the pane the
-	 * operator watches stays still while the plane reads it.
+	 * while the agent works as well as while it rests (ADR 0140). The screen
+	 * fact the Consultation view's tick and the Live view's stream take, so the
+	 * pane the operator watches stays still while the plane reads it. A read
+	 * that answers the same text as the previous read of this pane hands back
+	 * the same fact, the same revision (ADR 0147).
 	 */
-	async readPaneVisible(paneId: string, lines: number): Promise<string | null> {
-		return this.readPaneFormat(paneId, lines, "visible", "text");
+	async readPaneVisible(paneId: string, lines: number): Promise<PaneScreen | null> {
+		const text = await this.readPaneFormat(paneId, lines, "visible", "text");
+		if (text === null) return null;
+		return this.screens.read("herdr", paneId, "visible", text);
 	}
 
 	/**
@@ -364,9 +373,17 @@ export class HerdrAgentReader implements AgentReader {
 		return { matched: result.code === 0 };
 	}
 
-	/** Read the visible ANSI terminal for Agent interaction mode. */
-	async readPaneAnsi(paneId: string, lines: number): Promise<string | null> {
-		return this.readPaneFormat(paneId, lines, "visible", "ansi");
+	/**
+	 * The visible screen in ANSI format, as the screen fact of the interaction
+	 * mode's read (ADR 0147): the plane's key presses and polls no longer make
+	 * the pane re-parse, a read that answers the same text hands back the same
+	 * fact, and the interpretation runs on a read that differs or a width that
+	 * changes.
+	 */
+	async readPaneAnsi(paneId: string, lines: number): Promise<PaneScreen | null> {
+		const text = await this.readPaneFormat(paneId, lines, "visible", "ansi");
+		if (text === null) return null;
+		return this.screens.read("herdr", paneId, "ansi", text);
 	}
 
 	private async readPaneFormat(
@@ -458,6 +475,8 @@ export class MergedAgentReader implements AgentReader {
 	private readonly coreNames: () => readonly string[];
 	private readonly hostOf: (reference: string) => AgentHost;
 	private readonly herdrHalf: HerdrAgentReader;
+	/** The previous core-half pane reads this reader owns, per pane and kind (ADR 0147). */
+	private readonly screens = new PaneScreenReads();
 	/**
 	 * The last core half failure a standing herdr half answered beside: the
 	 * gap the cycle states beside the list it kept (ADR 0142). Null while the
@@ -534,19 +553,23 @@ export class MergedAgentReader implements AgentReader {
 		return this.herdrHalf.readPane(paneId, lines);
 	}
 
-	async readPaneVisible(paneId: string, lines: number): Promise<string | null> {
+	async readPaneVisible(paneId: string, lines: number): Promise<PaneScreen | null> {
 		if (this.hostOf(paneId) === "herdr-core") {
 			// `hc read` answers one form: the terminal's history. The visible
 			// and recent split is herdr's, and the plane's pane reads take the
-			// same body on both hosts.
-			return this.readCorePane(paneId, lines);
+			// same body on both hosts, the same screen fact on both (ADR 0147).
+			const text = await this.readCorePane(paneId, lines);
+			if (text === null) return null;
+			return this.screens.read("herdr-core", paneId, "visible", text);
 		}
 		return this.herdrHalf.readPaneVisible(paneId, lines);
 	}
 
-	async readPaneAnsi(paneId: string, lines: number): Promise<string | null> {
+	async readPaneAnsi(paneId: string, lines: number): Promise<PaneScreen | null> {
 		if (this.hostOf(paneId) === "herdr-core") {
-			return this.readCorePane(paneId, lines);
+			const text = await this.readCorePane(paneId, lines);
+			if (text === null) return null;
+			return this.screens.read("herdr-core", paneId, "ansi", text);
 		}
 		return this.herdrHalf.readPaneAnsi(paneId, lines);
 	}
@@ -1884,7 +1907,7 @@ export class ObservationCoordinator {
 				match.paneId,
 				this.config().completionMessageLines,
 			);
-			if (visible !== undefined) return visible;
+			if (visible !== undefined && visible !== null) return visible.text;
 		}
 		return await this.herdr.readPane(match.paneId, this.config().completionMessageLines);
 	}

@@ -33,11 +33,11 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import { type Dispatch, type SetStateAction, useMemo, useState } from "react";
 
-import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
+import { isHeldCause, type TurnEndCause } from "../turn-log.ts";
 import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
 import { availabilityFacts, type StandingFacts } from "./controls.ts";
 import { maxScrollOf } from "./geometry.ts";
-import { type MdColors, type MdLine, renderMarkdown } from "./markdown.ts";
+import type { MdLine } from "./markdown.ts";
 import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
@@ -53,6 +53,7 @@ import {
 	turnLogPane,
 	useModalPopScale,
 } from "./modal-chrome.ts";
+import { logScreenLines, type PaneScreen } from "./pane-screen.ts";
 import { bodyPaneFacts, type DecisionRegion, useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
@@ -62,8 +63,8 @@ interface DecisionModalProps {
 	title: string;
 	/** One context row under the border: repository, task type, agent, time. */
 	contextLine: string;
-	/** The settled turn's log, in order. */
-	entries: readonly TurnLogEntry[];
+	/** The settled turn's log as the screen fact of its read (ADR 0147): the entries, in order, and the revision that moves when the read of the log differs. */
+	screen: PaneScreen;
 	/** The turn's end cause; a held cause shows its warning above the rows. */
 	cause?: TurnEndCause | null;
 	/** The agent's or provider's text for the cause; empty when none. */
@@ -183,40 +184,6 @@ export function decisionBodyLayout(
 	return null;
 }
 
-/**
- * The turn log's rows at a width: text blocks render with the markdown
- * rules, tool calls are one dim note, "▸ name: target". A blank row stands
- * between two text blocks; a tool note sits close to the text that asked
- * for it. Failed calls wear the warning color.
- */
-export function turnLogBody(entries: readonly TurnLogEntry[], width: number): MdLine[] {
-	// The log's voices are asked of the theme when the log is drawn, the way
-	// every other surface paints at render time: a resolution that changes
-	// after this module loads is the resolution the rows paint.
-	const colors: MdColors = { text: paint("text"), dim: paint("subtext0") };
-	const out: MdLine[] = [];
-	let previousWasText = false;
-	for (const entry of entries) {
-		if (entry.kind === "text") {
-			if (previousWasText) out.push([]);
-			const lines = renderMarkdown(entry.text, width, colors);
-			if (lines.length === 0) out.push([]);
-			else out.push(...lines);
-			previousWasText = true;
-		} else {
-			const note = entry.target === "" ? entry.name : `${entry.name}: ${entry.target}`;
-			out.push([
-				{
-					text: truncateToWidth(`▸ ${note}`, width),
-					fg: entry.failed ? paint("yellow") : paint("subtext0"),
-				},
-			]);
-			previousWasText = false;
-		}
-	}
-	return out;
-}
-
 export function DecisionModal(props: DecisionModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	// The pop-in: a short fade with the box growing to its final size, the
@@ -304,7 +271,7 @@ function useDecisionBodyFacts(
 	held: boolean,
 	contentRows: number,
 ): DecisionBodyFacts {
-	const { entries, actions, factLines = [] } = props;
+	const { screen, actions, factLines = [] } = props;
 	// The pane's chrome yields before the log yields rows: padding first,
 	// border second, and only then does the surface stand down to the size
 	// message. The scrollbar is decided at the final size, so the thumb does
@@ -316,7 +283,7 @@ function useDecisionBodyFacts(
 	const layout = decisionBodyLayout(frame.contentRows, actions.length, held, factLines.length);
 	// An empty turn log states its reason as one row inside the pane, and
 	// the pane keeps its chrome.
-	const emptyLog = entries.length === 0;
+	const emptyLog = (screen.entries?.length ?? 0) === 0;
 	// The pane's body width at this render: the box's content minus the
 	// pane's border and padding, and one column for the inline thumb when
 	// the body scrolls. A scrollbar can add wrap rows, so determine overflow
@@ -328,8 +295,8 @@ function useDecisionBodyFacts(
 		() =>
 			emptyLog
 				? [[{ text: EMPTY_TURN_LOG_NOTE, fg: paint("subtext0") }]]
-				: turnLogBody(entries, paneInnerWidth),
-		[entries, emptyLog, paneInnerWidth],
+				: logScreenLines(screen, paneInnerWidth),
+		[screen, emptyLog, paneInnerWidth],
 	);
 	const hasScrollbar = finalLayout !== null && fullWidthBody.length > finalLayout.paneRows;
 	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
@@ -339,8 +306,8 @@ function useDecisionBodyFacts(
 		() =>
 			emptyLog
 				? [[{ text: EMPTY_TURN_LOG_NOTE, fg: paint("subtext0") }]]
-				: turnLogBody(entries, bodyWidth),
-		[entries, emptyLog, bodyWidth],
+				: logScreenLines(screen, bodyWidth),
+		[screen, emptyLog, bodyWidth],
 	);
 	const bodyRows = layout === null ? 0 : Math.min(renderedBody.length, layout.paneRows);
 	const maxBodyScroll = maxScrollOf(renderedBody.length, bodyRows);

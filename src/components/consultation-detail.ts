@@ -12,6 +12,7 @@ import type { SessionEntry } from "../turn-log.ts";
 import type { AnsiLine } from "./ansi-screen.ts";
 import { windowOf } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
+import { type PaneScreen, visibleScreenLines } from "./pane-screen.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
@@ -28,19 +29,22 @@ export interface ConsultationDetailLine {
  * the Session view, read live from the Agent's session record; the Agent
  * view, the terminal's pane read, when the record does not render yet; or
  * the Captured history, the closed Consultation's turns and snapshots, when
- * there is no live view at all.
+ * there is no live view at all. The Agent view's body stands on the pane's
+ * screen fact (ADR 0147): the same fact, while the pane stands still, shows
+ * the same body, shaped once per (revision, width) pair by the pane screen
+ * module.
  */
 export type ConsultationDetailBody = "session" | "agent" | "captured";
 
 /** Pick the body by the reads the last ticks produced, not by hope. */
 export function consultationDetailBody(
 	consultation: Consultation | undefined,
-	liveOutput: string | null,
+	screen: PaneScreen | null,
 	sessionEntries: readonly SessionEntry[] | null,
 ): ConsultationDetailBody {
 	if (consultation === undefined) return "captured";
 	if (sessionEntries !== null && sessionEntries.length > 0) return "session";
-	if (liveOutput !== null && consultation.state !== "closed") return "agent";
+	if (screen !== null && consultation.state !== "closed") return "agent";
 	return "captured";
 }
 
@@ -54,7 +58,8 @@ export function consultationDetailLines(fields: {
 	turns: readonly ConsultationTurn[];
 	snapshots: readonly ConsultationSnapshot[];
 	width: number;
-	liveOutput: string | null;
+	/** The pane's screen fact the Agent view's body stands on (ADR 0147), or null while it stands still unread. */
+	screen: PaneScreen | null;
 	sessionEntries?: readonly SessionEntry[] | null;
 	replacementIds?: readonly string[];
 	agentStatus?: string | null;
@@ -65,7 +70,7 @@ export function consultationDetailLines(fields: {
 		turns,
 		snapshots,
 		width,
-		liveOutput,
+		screen,
 		sessionEntries = null,
 		replacementIds = [],
 		agentStatus = null,
@@ -82,7 +87,7 @@ export function consultationDetailLines(fields: {
 	consultationResourceLines({ consultation, replacementIds, remainingResources, push });
 	lines.push({ text: " ", fg: paint("subtext0") });
 	const session = sessionEntries !== null && sessionEntries.length > 0 ? sessionEntries : null;
-	consultationHistoryLines({ consultation, turns, snapshots, liveOutput, session, push });
+	consultationHistoryLines({ consultation, turns, snapshots, screen, width, session, push });
 	return lines.map((line) => ({ ...line, text: truncateToWidth(line.text, width) }));
 }
 
@@ -173,22 +178,25 @@ function consultationResourceLines(fields: {
 
 /**
  * The Consultation's history: the session view, the live Agent view, or the
- * captured turns and snapshots.
+ * captured turns and snapshots. The Agent view's lines are the pane screen
+ * module's shaping of the pane's screen fact at the body's width (ADR 0147),
+ * stored while the fact and the width stand.
  */
 function consultationHistoryLines(fields: {
 	consultation: Consultation;
 	turns: readonly ConsultationTurn[];
 	snapshots: readonly ConsultationSnapshot[];
-	liveOutput: string | null;
+	screen: PaneScreen | null;
+	width: number;
 	session: readonly SessionEntry[] | null;
 	push: DetailPush;
 }): void {
-	const { consultation, turns, snapshots, liveOutput, session, push } = fields;
+	const { consultation, turns, snapshots, screen, width, session, push } = fields;
 	if (session !== null) {
 		sessionViewLines(session, push);
-	} else if (liveOutput !== null && consultation.state !== "closed") {
+	} else if (screen !== null && consultation.state !== "closed") {
 		push("Agent view:", paint("text"), true);
-		for (const line of liveOutput.split("\n")) push(line);
+		for (const line of visibleScreenLines(screen, width)) push(line);
 	} else {
 		capturedHistoryLines(turns, snapshots, push);
 	}

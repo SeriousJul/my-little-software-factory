@@ -52,7 +52,7 @@ import {
 	controlById,
 	type StandingFacts,
 } from "../controls.ts";
-import { EMPTY_TURN_LOG_NOTE, turnLogBody } from "../decision-modal.ts";
+import { EMPTY_TURN_LOG_NOTE } from "../decision-modal.ts";
 import type { MessageHistoryEntry } from "../message-facts.ts";
 import { type MessageFact, messageRowElement } from "../messages.ts";
 import {
@@ -64,6 +64,7 @@ import {
 	paneElement,
 	TURN_LOG_PANE,
 } from "../modal-chrome.ts";
+import { logScreen, logScreenLines, visibleScreen } from "../pane-screen.ts";
 import { RepositorySelectPanel } from "../repository-select-panel.ts";
 import { SectionHeader } from "../section-header.ts";
 import { truncateToWidth } from "../text.ts";
@@ -457,7 +458,7 @@ function decisionModalRegions(
 	const lines =
 		log.length === 0
 			? [[{ text: EMPTY_TURN_LOG_NOTE, fg: paint("subtext0") }]]
-			: turnLogBody(log, bodyWidth);
+			: logScreenLines(logScreen(log, 0), bodyWidth);
 	return createElement(
 		"box",
 		{ key, style: { flexDirection: "column" } },
@@ -2373,7 +2374,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					turns: [],
 					snapshots: [],
 					width: columns.contentWidth - 4,
-					liveOutput: null,
+					screen: null,
 					sessionEntries: [
 						{ kind: "input", text: "review the auth design" },
 						{ kind: "text", text: "The design keeps the session in memory." },
@@ -2401,7 +2402,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					turns: [],
 					snapshots: [],
 					width: columns.contentWidth - 4,
-					liveOutput: "Agent: reading src/auth.ts\nAgent: running the tests",
+					screen: visibleScreen("Agent: reading src/auth.ts\nAgent: running the tests", 1),
 				}),
 				visibleRows: 7,
 				scroll: 1,
@@ -2445,7 +2446,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 						},
 					],
 					width: columns.contentWidth - 4,
-					liveOutput: null,
+					screen: null,
 				}),
 				visibleRows: 7,
 				scroll: 3,
@@ -2752,7 +2753,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					],
 					snapshots: [],
 					width: columns.contentWidth - 4,
-					liveOutput: null,
+					screen: null,
 				}),
 				visibleRows: 7,
 				scroll: 0,
@@ -2831,7 +2832,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					turns: [],
 					snapshots: [],
 					width: columns.contentWidth - 4,
-					liveOutput: null,
+					screen: null,
 				}),
 				visibleRows: 7,
 				scroll: 0,

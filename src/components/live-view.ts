@@ -27,10 +27,10 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import { type Dispatch, type SetStateAction, useMemo, useState } from "react";
 import type { Ticket } from "../domain/ticket.ts";
-import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
+import { isHeldCause, type TurnEndCause } from "../turn-log.ts";
 import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
 import { availabilityFacts, type StandingFacts } from "./controls.ts";
-import { decisionBodyLayout, turnLogBody } from "./decision-modal.ts";
+import { decisionBodyLayout } from "./decision-modal.ts";
 import { maxScrollOf } from "./geometry.ts";
 import type { MdLine, MdSpan } from "./markdown.ts";
 import type { MessageFact } from "./messages.ts";
@@ -50,8 +50,9 @@ import {
 	turnLogPane,
 	useModalPopScale,
 } from "./modal-chrome.ts";
+import { logScreenLines, type PaneScreen, visibleScreenLines } from "./pane-screen.ts";
 import { bodyPaneFacts, type DecisionRegion, useDecisionRegion } from "./shared/region.ts";
-import { truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
+import { truncateToWidth, widthOf } from "./text.ts";
 import { paint } from "./theme.ts";
 
 /** The Live view leaves one cell of margin on every side. */
@@ -61,10 +62,10 @@ const CONTEXT_ROWS = 1;
 /** The rows the body keeps behind the pane's border alone. */
 const BODY_MIN = 1;
 
-/** The body the Live view pane shows. */
+/** The body the Live view pane shows: the ticket's agent pane, the screen fact the pane's read hands back, or the settled turn's log, the screen fact of its read (ADR 0147). */
 export type LiveViewBody =
-	| { kind: "stream"; lines: readonly string[]; note: string | null }
-	| { kind: "turn-log"; entries: readonly TurnLogEntry[] };
+	| { kind: "stream"; screen: PaneScreen | null; note: string | null }
+	| { kind: "turn-log"; screen: PaneScreen };
 
 interface LiveViewProps {
 	/** The ticket title, for the border. */
@@ -120,14 +121,20 @@ interface LiveViewProps {
 	onAutoHandoff: () => void;
 }
 
-/** One stream row as styled lines: plain text, the palette's prose voice. */
-function streamLines(lines: readonly string[], note: string | null, width: number): MdLine[] {
-	const out: MdLine[] = lines.flatMap((line) => {
-		if (line === "") return [[]];
-		return wrapToWidth(line, width).map<MdLine>((row) => [
-			{ text: row, fg: paint("text") } satisfies MdSpan,
-		]);
-	});
+/**
+ * One stream body as styled lines: the pane screen module's shaping of the
+ * pane's screen fact at the width (ADR 0147), each line in the palette's
+ * prose voice, and the stale or missing note as the body's last line. While
+ * the fact and the width stand, the shaping reads the stored lines: the
+ * stream stands still when the pane does.
+ */
+function streamBody(screen: PaneScreen | null, note: string | null, width: number): MdLine[] {
+	const lines = screen === null ? [] : visibleScreenLines(screen, width);
+	const out: MdLine[] = [];
+	for (const line of lines) {
+		if (line === "") out.push([]);
+		else out.push([{ text: line, fg: paint("text") } satisfies MdSpan]);
+	}
 	// The read's trailing newline is not a line: the tail's last row is the
 	// agent's last output, so the bottom pin rests on it, not on a blank.
 	if (out.length > 0 && out[out.length - 1].length === 0) out.pop();
@@ -249,30 +256,31 @@ function useLiveBodyFacts(
 	const fullWidthBody = useMemo(
 		() =>
 			props.body.kind === "turn-log"
-				? turnLogBody(props.body.entries, paneInnerWidth)
-				: streamLines(props.body.lines, props.body.note, paneInnerWidth),
+				? logScreenLines(props.body.screen, paneInnerWidth)
+				: streamBody(props.body.screen, props.body.note, paneInnerWidth),
 		[props.body, paneInnerWidth],
 	);
 	const hasScrollbar = finalLayout !== null && fullWidthBody.length > finalLayout.paneRows;
 	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
-	// Wrap at the width the box has right now, so a line is never wider
-	// than the frame being drawn while the pop-in grows the box.
+	// Shape at the width the box has right now, so a line is never wider
+	// than the frame being drawn while the pop-in grows the box. A width the
+	// fact already stood on reads the stored lines (ADR 0147).
 	const renderedBody = useMemo(
 		() =>
 			props.body.kind === "turn-log"
-				? turnLogBody(props.body.entries, bodyWidth)
-				: streamLines(props.body.lines, props.body.note, bodyWidth),
+				? logScreenLines(props.body.screen, bodyWidth)
+				: streamBody(props.body.screen, props.body.note, bodyWidth),
 		[props.body, bodyWidth],
 	);
 	const bodyRows = layout === null ? 0 : Math.min(renderedBody.length, layout.paneRows);
 	const maxBodyScroll = maxScrollOf(renderedBody.length, bodyRows);
 	// The newest output is in front: the body opens at its bottom and stays
-	// pinned to it while new rows arrive, until the operator scrolls.
+	// pinned to it until the operator scrolls.
 	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
 	const bodyEmpty =
 		props.body.kind === "turn-log"
-			? props.body.entries.length === 0
-			: props.body.lines.length === 0 && props.body.note === null;
+			? (props.body.screen.entries?.length ?? 0) === 0
+			: props.body.screen === null && props.body.note === null;
 	return {
 		layout,
 		panePadding,
