@@ -98,12 +98,16 @@ Two exceptions:
 - the work is a CI flakiness investigation, where the remote's runs are the
   evidence, and the record names every run read.
 
-A suspected load flake is settled at the unit layer, not on the remote: run the
+A suspected load flake is settled at the test layer, not on the remote: run the
 file alone, run the base commit in the same worktree, and record both. See
 [the test failure triage](#test-failure-triage).
 
 ## Testing limits
 
+- Never write unit tests. A test that does not boot the app - in-process
+  through the shared harness, or as a real process - is a unit test, and it does
+  not belong in this repository. Test the app only at the integration layer,
+  with fake external operations and isolated test state.
 - A frame test states the arithmetic that fixes the terminal width it picks.
 - One copy of a describe block per test file: a split leaves a duplicated suite
   behind once, and it doubles the run.
@@ -112,9 +116,7 @@ file alone, run the base commit in the same worktree, and record both. See
 - Do NOT control the desktop environment to test the app. Never run
   `hyprctl` (or any other window manager or desktop tool) from a test,
   a script, or by hand while verifying a change.
-- Test the app at the unit test layer, and only at that layer. Run tests
-  with `bun run test` and the shared test harness. Use fake external operations
-  and isolated test state.
+- Run tests with `bun run test` and the shared test harness.
 
 ## Test failure triage
 

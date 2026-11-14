@@ -24,10 +24,10 @@ after every edit is the cost that makes an agent skip a check.
 The audit stands in place of the separate `bun run lint` and `bun run
 typecheck` runs an agent read after its edits; [the Quality
 audit](#the-quality-audit) states its metrics, its baseline, and its cost by
-component. The scoped run is the part that moves: a unit file costs a fraction
-of a second, and a frame file that boots the real renderer costs 14 to 22
-seconds. That is still far below the full suite, and `bun run test` does not
-belong in the loop either way.
+component. The scoped run is the part that moves: a static check over the tree
+costs a fraction of a second, and a frame file that boots the real renderer
+costs 14 to 22 seconds. That is still far below the full suite, and `bun run
+test` does not belong in the loop either way.
 
 ## The Quality audit
 
@@ -179,20 +179,20 @@ had already renamed.
 
 A documented user-visible string has a test that reads it back: a record line, a
 Message line, a config key, and the level or kind the reference states beside it.
-`test/record-lines-doc.test.ts` is the pattern: it holds the configuration
-reference's literal lines to the source that writes them. A documented line with
-no test is how a record drifts, and a documented level no fake can tell apart is
-the same drift one level down.
+The frame and seam suites read the lines back off the `log` seam. The suite that
+held the configuration reference's literal lines to the source that writes them
+(`test/record-lines-doc.test.ts`) was removed with the unit test layer, so the
+reference page is held to the code by that seam read and by review. A documented
+line with no test is how a record drifts, and a documented level no fake can tell
+apart is the same drift one level down.
 
 ## What a check holds
 
-Three checks read the repository's own prose and sources and refuse the drift a
-review would otherwise have to find:
+The check below reads the repository's own prose and sources and refuses the
+drift a review would otherwise have to find:
 
 | Check | What it refuses |
 | --- | --- |
-| `test/record-lines-doc.test.ts` | a record line the configuration reference states that the code does not write, and a level the page states that the code does not send |
-| `test/shape-doc-paths.test.ts` | a path `docs/agents/shape.md` prints that the tree does not hold, resolved against the entry that printed it |
 | `test/domain-export-architecture.test.ts` | a `src/domain/` value export neither `src` nor a test asks for; a domain export that is a pure alias of another export of its own module; a domain type that neither side names, against a baseline that can only shrink and that stands empty since [issue #301](https://github.com/SeriousJul/my-little-software-factory/issues/301) answered its 14 names; and a baseline entry that states no reason |
 
 The second rule is the one the #223 review found standing in that directory:

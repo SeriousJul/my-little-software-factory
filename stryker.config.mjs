@@ -68,18 +68,6 @@ export default {
 		// kill every mutant in the nine state modules for the wrong reason. It
 		// stays in `bun run test`, which reads the uninstrumented tree.
 		"test/state-architecture.test.ts",
-		// The record-lines-doc suite (issue #223 review) holds that the configuration
-		// reference states the same words the code writes, and for the words that
-		// live only in a module's source it reads them out of that source: the
-		// dispatch's refusal facts out of `src/handoff-dispatch.ts`, the checkout
-		// hold's lines out of `src/checkout-hold.ts`, and the rest out of the domain
-		// modules. Instrumentation rewrites those string literals in every file it
-		// mutates, so under mutation the suite reads the mutated words and fails on
-		// a text change rather than on a behavior change. Measured on this branch:
-		// with `src/handoff-dispatch.ts` in the scope, the campaign's initial run
-		// died on `every refusal shape the dispatch writes is on the page`. It stays
-		// in `bun run test`, which reads the uninstrumented tree.
-		"test/record-lines-doc.test.ts",
 		// The Quality audit's command case (ADR 0120) runs `bun run audit` as a
 		// child, and the audit measures the duplication of `src` against the
 		// baseline the clean tree sets (`.quality-baseline.json`). Instrumentation
@@ -113,9 +101,9 @@ export default {
 		// reads the two state modules' text and counts the shared module's call
 		// shapes. Instrumentation rewrites those shapes, so under mutation the
 		// tripwire fails on a text change rather than a behavior change. Its
-		// behavior half stays in `test/attempt-hold.test.ts`, inside the
-		// campaign; the tripwire stands alone in this file, out of it, and in
-		// `bun run test`.
+		// behavior half stood in `test/attempt-hold.test.ts`, removed with the unit
+		// test layer; the tripwire stands alone in this file, out of the campaign,
+		// and in `bun run test`.
 		"test/attempt-hold-architecture.test.ts",
 		// Not an exclusion, and the note stands here because the file looks like one:
 		// `test/config-write-architecture.test.ts` (ADR 0103, issue #222) also reads

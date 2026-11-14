@@ -30,7 +30,6 @@
  * take (issue #234). A multiline string name that closes on its own line is
  * decoded as the value it says, and the block it names stands byte for byte the
  * way every block the scan names does. The source-name records in
- * `test/config-write.test.ts` measure both sides, and
  * `docs/configuration/index.md` states them to the operator.
  *
  * Inside the two regions the plane's own copy is what stands. A `[repos]` key
@@ -55,8 +54,7 @@
  * the verify step, which refuses a patched text that does not carry what the
  * plane holds. A file whose lines end CRLF is edited the same way: every line
  * the plane writes carries the file's own line ending. A full rewrite does not
- * carry it: it writes the plane's own text, which ends its lines LF, and the
- * records in `test/config-write.test.ts` name that cost.
+ * carry it: it writes the plane's own text, which ends its lines LF.
  *
  * One window this design does not close, stated so the next contributor does
  * not read the verify step as a lock: the patch is built and checked in
