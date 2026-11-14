@@ -14,6 +14,7 @@ import { afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type PaneScreen } from "../src/components/pane-screen.ts";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { HandoffIntent, PlaneActionIntent } from "../src/handoff-dispatch.ts";
 import { createHandoffDispatch, type HandoffDispatch } from "../src/handoff-dispatch.ts";
@@ -93,7 +94,7 @@ export interface RigOptions {
 	/** The pane output the reader answers, ANSI stripped. */
 	readPane?: (paneId: string, lines: number) => Promise<string | null>;
 	/** The visible screen the reader answers; absent: the recent read stands in for it. */
-	readPaneVisible?: (paneId: string, lines: number) => Promise<string | null>;
+	readPaneVisible?: (paneId: string, lines: number) => Promise<PaneScreen | null>;
 	/** The wake wait the reader answers; absent: the poll-only standing. */
 	waitAgent?: (target: string, budgetMs: number) => Promise<AgentWaitResult>;
 	/** The settled turn's log reader; absent: no session to read. */

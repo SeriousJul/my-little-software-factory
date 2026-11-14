@@ -416,6 +416,51 @@ describe("the Live view on the ticket list", () => {
 		);
 	});
 
+	test("a still pane's stream stands on the stored screen fact, and a read that appends shows the new lines", async () => {
+		const fake = new FakeRunner();
+		await appOn(
+			{ runner: () => fake },
+			async (setup, _planeRecord) => {
+				fake.set("herdr", [...READ("pane-implement")], {
+					stdout: "first tick\nsecond tick\n",
+				});
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
+				await frameUntil(
+					setup,
+					"the running ticket beside the cursor",
+					(f) => markerRowOf(f) === 4,
+				);
+				await pressControl(setup, "move-list", { via: "↓", quiet: true });
+				await frameUntil(setup, "the ticket below the running one", (f) => markerRowOf(f) === 5);
+
+				await pressControl(setup, "live-view", { quiet: true });
+				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
+				await waitFor(setup, { shows: "second tick" });
+				const still = frameText(setup.captureCharFrame());
+				// The stream keeps its one-second cadence: the ticks read the
+				// same pane, the read answers unchanged, and the stream stands
+				// on the stored screen fact - the same frame the tick before.
+				await sleep(2200);
+				expect(
+					fake.commands().filter((c) => c === READ_COMMAND("pane-implement")).length,
+				).toBeGreaterThanOrEqual(3);
+				expect(frameText(setup.captureCharFrame())).toBe(still);
+				// A read that appends a line stands on the new screen fact, and
+				// the stream carries the turn with the lines the pane gains.
+				fake.set("herdr", [...READ("pane-implement")], {
+					stdout: "first tick\nsecond tick\nthird tick\n",
+				});
+				await waitFor(setup, { shows: "third tick" });
+			},
+			(planeRecord) => ({
+				width: WIDTH,
+				height: HEIGHT,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			}),
+		);
+	});
+
 	test("new output pins the stream to the bottom", async () => {
 		const many = tickLines;
 		const fake = new FakeRunner();

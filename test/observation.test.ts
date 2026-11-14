@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { visibleScreen } from "../src/components/pane-screen.ts";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { HandoffIntent } from "../src/handoff-dispatch.ts";
@@ -418,10 +419,54 @@ describe("HerdrAgentReader.readPaneVisible", () => {
 		);
 		const reader = new HerdrAgentReader(runner);
 		const pane = await reader.readPaneVisible("pane-1", 10);
-		expect(pane).toBe("first 0\nsecond 1");
+		expect(pane?.kind).toBe("visible");
+		expect(pane?.text).toBe("first 0\nsecond 1");
+		expect(pane?.revision).toBe(1);
 		expect(runner.commands()).toEqual([
 			"herdr agent read pane-1 --lines 10 --source visible --format text",
 		]);
+	});
+
+	test("the revision stands while the read answers unchanged, and moves when the read differs", async () => {
+		const runner = new FakeRunner();
+		const command = [
+			"agent",
+			"read",
+			"pane-1",
+			"--lines",
+			"10",
+			"--source",
+			"visible",
+			"--format",
+			"text",
+		];
+		runner.set("herdr", command, {
+			stdout: JSON.stringify({ result: { output: "first 0\nsecond 1" } }),
+		});
+		const reader = new HerdrAgentReader(runner);
+		const first = await reader.readPaneVisible("pane-1", 10);
+		expect(first?.revision).toBe(1);
+		// The same read of the same pane publishes no new revision: the
+		// reader owns the comparison (ADR 0147), and the fact it hands back
+		// is the one it published before.
+		const repeat = await reader.readPaneVisible("pane-1", 10);
+		expect(repeat).toBe(first);
+		expect(repeat?.revision).toBe(1);
+		// A read that differs publishes a new revision, and the revision
+		// counts the reads that differ, not the ticks.
+		runner.set("herdr", command, {
+			stdout: JSON.stringify({ result: { output: "first 0\nsecond 1\nthird 2" } }),
+		});
+		const moved = await reader.readPaneVisible("pane-1", 10);
+		expect(moved).not.toBe(first);
+		expect(moved?.revision).toBe(2);
+		// The other read forms keep their own revision lines on the same pane.
+		runner.set("herdr", command, {
+			stdout: JSON.stringify({ result: { output: "unchanged" } }),
+		});
+		const ansi = await reader.readPaneAnsi("pane-1", 10);
+		expect(ansi?.kind).toBe("ansi");
+		expect(ansi?.revision).toBe(1);
 	});
 
 	test("a failed visible read yields null", async () => {
@@ -6554,7 +6599,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 			},
 			readPaneVisible: async (paneId) => {
 				reads.push(`visible ${paneId}`);
-				return `visible ${paneId}`;
+				return visibleScreen(`visible ${paneId}`, 1);
 			},
 		});
 		workingConsultationWithTurn(fake.state, "c-vis", "pane-consult");
@@ -6586,7 +6631,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 			},
 			readPaneVisible: async (paneId) => {
 				reads.push(`visible ${paneId}`);
-				return `visible ${paneId}`;
+				return visibleScreen(`visible ${paneId}`, 1);
 			},
 		});
 		workingConsultationWithTurn(fake.state, "c-fall", "pane-consult");
@@ -6665,7 +6710,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 			},
 			readPaneVisible: async (paneId) => {
 				reads.push(`visible ${paneId}`);
-				return `visible ${paneId}`;
+				return visibleScreen(`visible ${paneId}`, 1);
 			},
 			sessionRecord: (kind, facts) => resolveSessionRecord(kind, facts, home),
 		});
@@ -6709,7 +6754,7 @@ describe("the agent wake wait (ADR 0084)", () => {
 			},
 			readPaneVisible: async (paneId) => {
 				reads.push(`visible ${paneId}`);
-				return `visible ${paneId}`;
+				return visibleScreen(`visible ${paneId}`, 1);
 			},
 			sessionRecord: (kind, facts) => resolveSessionRecord(kind, facts, home),
 		});

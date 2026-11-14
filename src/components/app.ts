@@ -176,7 +176,6 @@ import {
 import { deriveNextStep, fireTransition, refireRecordedSkips } from "../workflow.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
-import { renderAnsiScreen } from "./ansi-screen.ts";
 import { consultationClosePanel, consultationDeletePanel } from "./consultation-close-panel.ts";
 import {
 	ConsultationDetail,
@@ -222,6 +221,7 @@ import {
 import { MissingModal } from "./missing-modal.ts";
 import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts";
 import { type AgentModelList, type ModelListStatus, OverridePanel } from "./override-panel.ts";
+import { ansiScreenLines, type PaneScreen, TurnLogReads } from "./pane-screen.ts";
 import { repositoryInitPanel } from "./repository-init-panel.ts";
 import { RepositorySelectPanel } from "./repository-select-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
@@ -844,6 +844,12 @@ function useAppOpsRefs(prev: AppModelListStage) {
 	const refireInFlightRef = useRef<string | null>(null);
 	const ticketOpsFieldsRef = useRef<AppTicketOpsFields | null>(null);
 	const handoffStartFieldsRef = useRef<AppHandoffStartFields | null>(null);
+	// The log's read holder every turn log stands on (ADR 0147): the
+	// Decision modal's log and the Live view's decision sub-mode read the
+	// same ticket's log through it, so the two surfaces hold the same
+	// screen fact and the revision moves only when the read of the log
+	// differs from the previous read of the same log.
+	const turnLogReads = useRef<TurnLogReads>(new TurnLogReads());
 	return {
 		...prev,
 		handoffDispatchRef,
@@ -854,6 +860,7 @@ function useAppOpsRefs(prev: AppModelListStage) {
 		refireInFlightRef,
 		ticketOpsFieldsRef,
 		handoffStartFieldsRef,
+		turnLogReads: turnLogReads.current,
 	};
 }
 type AppOpsRefsStage = ReturnType<typeof useAppOpsRefs>;
@@ -875,6 +882,7 @@ function useAppOpsFields(props: AppProps, prev: AppRepoInitShellStage) {
 		configWriteQueue: prev.configWriteQueue,
 		handoffDispatchRef: prev.handoffDispatchRef,
 		consultationOperationsRef: prev.consultationOperationsRef,
+		turnLogReads: prev.turnLogReads,
 		currentSeatCount: prev.currentSeatCount,
 		currentMissingSeatTickets: prev.currentMissingSeatTickets,
 		listViewsRef: prev.listViewsRef,
@@ -1980,18 +1988,29 @@ async function refreshLivePane(options: {
 	options.hostRead.current = handoff?.host ?? options.runHost;
 	if (paneId === null) {
 		if (options.alive())
-			options.setStream({ lines: [], note: "no agent pane is recorded for this ticket" });
+			options.setStream({ screen: null, note: "no agent pane is recorded for this ticket" });
 		return;
 	}
 	// The visible screen: the stream shows the pane as herdr shows it, and
 	// herdr answers the read without scrolling the pane the operator watches
-	// (ADR 0140).
-	const output = await options.reader.readPaneVisible(paneId, options.lines);
+	// (ADR 0140). The read is the screen fact of ADR 0147: its revision
+	// moves only when the read differs, so the stream state moves only when
+	// the fact or the note does.
+	const screen = await options.reader.readPaneVisible(paneId, options.lines);
 	if (!options.alive()) return;
-	if (output === null) {
-		options.setStream((previous) => ({ lines: previous?.lines ?? [], note: STALE_STREAM_NOTE }));
+	if (screen === null) {
+		// The last read of the pane stands: the note says the read failed,
+		// and the fact it showed keeps standing under it.
+		options.setStream((previous) => ({
+			screen: previous?.screen ?? null,
+			note: STALE_STREAM_NOTE,
+		}));
 	} else {
-		options.setStream({ lines: output.split("\n"), note: null });
+		options.setStream((previous) =>
+			previous !== null && previous.screen === screen && previous.note === null
+				? previous
+				: { screen, note: null },
+		);
 	}
 }
 
@@ -2870,7 +2889,7 @@ function appDecisionModal(o: AppRenderModesStage): React.ReactElement | false {
 			key: `decision:${panel.identity}`,
 			title: panelTicket.title,
 			contextLine: decision.contextLine,
-			entries: decision.entries,
+			screen: decision.screen,
 			actions: decision.actions,
 			factLines: decision.factLines,
 			cause: decision.cause,
@@ -2899,10 +2918,10 @@ function appLiveViewProps(o: AppRenderModesStage, panelTicket: Ticket) {
 		blocked: o.factsFor(panelTicket).failure === "blocked",
 		body:
 			o.liveDecision !== undefined
-				? { kind: "turn-log" as const, entries: o.liveDecision.entries }
+				? { kind: "turn-log" as const, screen: o.liveDecision.screen }
 				: o.liveStream === null
-					? { kind: "stream" as const, lines: [], note: null }
-					: { kind: "stream" as const, lines: o.liveStream.lines, note: o.liveStream.note },
+					? { kind: "stream" as const, screen: null, note: null }
+					: { kind: "stream" as const, screen: o.liveStream.screen, note: o.liveStream.note },
 		cause: o.liveDecision?.cause ?? null,
 		detail: o.liveDecision?.detail ?? "",
 		actions: o.liveDecision?.actions ?? [],
@@ -5501,7 +5520,7 @@ interface AppConsultationSessionFields {
 	state: AppAggregates;
 	selection: "ticket" | "consultation" | "queue";
 	selectedConsultation: Consultation | undefined;
-	setLiveOutput: (value: string | null) => void;
+	setLiveOutput: (value: PaneScreen | null) => void;
 	setSessionEntries: (value: readonly SessionEntry[] | null) => void;
 	agentsRef: RefObject<readonly HerdrAgent[] | null>;
 	configRef: RefObject<FactoryConfig>;
@@ -5566,14 +5585,17 @@ async function consultationPaneRefresh(
 		active: { current: boolean };
 	},
 ): Promise<void> {
-	const output = f.interaction
+	// The read is the screen fact (ADR 0147): the revision moves only when
+	// the read differs from the previous read of the same pane, and the
+	// settled turn's capture takes the fact's text.
+	const screen = f.interaction
 		? await tick.reader.readPaneAnsi(tick.paneId, f.configRef.current.completionMessageLines)
 		: await tick.reader.readPaneVisible(tick.paneId, f.configRef.current.completionMessageLines);
 	if (!tick.active.current) return;
-	f.consultationOperations?.recordOutputRead(tick.consultation.id, output);
+	f.consultationOperations?.recordOutputRead(tick.consultation.id, screen?.text ?? null);
 	const session = f.interaction ? null : tick.readSessionNow();
 	if (!tick.active.current) return;
-	if (output !== null) f.setLiveOutput(output);
+	if (screen !== null) f.setLiveOutput(screen);
 	f.setSessionEntries(session);
 	// The body the operator is looking at: the Session view when it
 	// renders, the pane read otherwise. Its growth is what the
@@ -5583,7 +5605,7 @@ async function consultationPaneRefresh(
 			? JSON.stringify(session)
 			: f.interaction
 				? null
-				: output;
+				: (screen?.text ?? null);
 	const changed = shown !== null && shown !== tick.previous.current;
 	tick.previous.current = shown;
 	if (f.consultationFollowRef.current) {
@@ -5922,6 +5944,14 @@ interface AppOpsFields {
 		{ state: HandoffDispatchAggregates; dispatch: HandoffDispatch } | undefined
 	>;
 	consultationOperationsRef: RefObject<ConsultationOperations | undefined>;
+	/**
+	 * The log's read holder the turn logs stand on (ADR 0147): the Decision
+	 * modal's log and the Live view's decision sub-mode read a ticket's log
+	 * through it, so the same ticket's log is one screen fact on both
+	 * surfaces and its revision moves only when the read of the log differs
+	 * from the previous read of the same log.
+	 */
+	turnLogReads: TurnLogReads;
 	currentSeatCount: () => number;
 	currentMissingSeatTickets: () => string[];
 	listViewsRef: RefObject<TicketListViews>;
@@ -6488,7 +6518,12 @@ function appDecisionFor(
 	ticket: Ticket,
 ): {
 	actions: ActionRow[];
-	entries: readonly TurnLogEntry[];
+	/**
+	 * The turn log's screen fact (ADR 0147): the entries the log shows, and
+	 * the revision the log's read owns, which moves only when the read of
+	 * the log differs from the previous read of the same log.
+	 */
+	screen: PaneScreen;
 	contextLine: string;
 	factLines: readonly string[];
 	/** The turn's end cause, or null when the turn has no settled record. */
@@ -6530,7 +6565,10 @@ function appDecisionFor(
 	});
 	return {
 		actions: appDecisionActions(f, ticket, outcome, facts),
-		entries: completion?.turnLog ?? [],
+		// The turn log's screen fact: the log's read owns its revision (ADR
+		// 0147), so the log shapes once per (revision, width) pair and the
+		// pop-in's frames at the same width read the stored lines.
+		screen: f.turnLogReads.read(ticket.identity, completion?.turnLog ?? []),
 		contextLine: facts.contextLine,
 		factLines: facts.factLines,
 		cause: completion?.cause ?? null,
@@ -8003,7 +8041,7 @@ type AppLauncherStateStage = ReturnType<typeof useAppLauncherState>;
 /** The Consultation interaction state: the editor, the stream, the bell. */
 function useAppInteractionState(prev: AppLauncherStateStage) {
 	const [interaction, setInteraction] = useState(false);
-	const [liveOutput, setLiveOutput] = useState<string | null>(null);
+	const [liveOutput, setLiveOutput] = useState<PaneScreen | null>(null);
 	// The selected Consultation's Session view rows, read from the Agent's
 	// session record at the pane's own pace (ADR 0025). Null means the last
 	// read was unavailable, and the detail shows the terminal body instead.
@@ -8173,8 +8211,13 @@ function useAppWorkQueueState(props: AppProps, prev: AppSectionSyncsStage) {
 }
 type AppWorkQueueStateStage = ReturnType<typeof useAppWorkQueueState>;
 
-/** The Live view's stream: the lines of the last pane read, and the stale note. */
-type AppLiveStream = { lines: readonly string[]; note: string | null } | null;
+/**
+ * The Live view's stream: the screen fact of the last pane read, and the
+ * stale note while the latest read failed (ADR 0147: the revision moves
+ * only when the read differs from the previous read of the same pane).
+ * Null while no stream runs.
+ */
+type AppLiveStream = { screen: PaneScreen | null; note: string | null } | null;
 
 /** The detail pane's refs: the focus, the detail handle, the override, and the utility and health state. */
 function useAppDetailRefs(props: AppProps, prev: AppWorkQueueStateStage) {
@@ -8229,8 +8272,9 @@ function useAppFactoryRefs(props: AppProps, prev: AppDetailRefsStage) {
 	// async with the base view's keyboard live, and the operator must not
 	// start a second init the first would then overwrite.
 	const repositoryInitInFlight = useRef<string | null>(null);
-	// The Live view's stream: the lines of the last pane read, and the stale
-	// note while the latest read failed. Null while no stream runs.
+	// The Live view's stream: the screen fact of the last pane read, and the
+	// stale note while the latest read failed (ADR 0147). Null while no
+	// stream runs.
 	const [liveStream, setLiveStream] = useState<AppLiveStream>(null);
 	// The Auto-handoff mode is factory state (ADR 0036): the plane reads the
 	// operator's last choice back from the state file, so a restart or a dev
@@ -8970,7 +9014,7 @@ function appConsultationDetailFacts(args: {
 	consultation: Consultation | undefined;
 	agentStatus: string | null;
 	interaction: boolean;
-	liveOutput: string | null;
+	liveOutput: PaneScreen | null;
 	sessionEntries: readonly SessionEntry[] | null;
 	turns: readonly ConsultationTurn[];
 	snapshots: readonly ConsultationSnapshot[];
@@ -8992,7 +9036,7 @@ function appConsultationDetailFacts(args: {
 		turns: args.turns,
 		snapshots: args.snapshots,
 		width: args.width,
-		liveOutput: args.interaction ? null : args.liveOutput,
+		screen: args.interaction ? null : args.liveOutput,
 		sessionEntries: args.interaction ? null : args.sessionEntries,
 		replacementIds: args.replacementIds,
 		agentStatus: args.agentStatus,
@@ -9000,7 +9044,7 @@ function appConsultationDetailFacts(args: {
 	});
 	const ansiLines =
 		args.interaction && args.liveOutput !== null
-			? renderAnsiScreen(args.liveOutput, args.width)
+			? ansiScreenLines(args.liveOutput, args.width)
 			: undefined;
 	const consultationMaxScroll = maxScrollOf(
 		ansiLines?.length ?? consultationLines.length,

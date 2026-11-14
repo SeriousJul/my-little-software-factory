@@ -9,6 +9,7 @@ import {
 	consultationDetailLines,
 	consultationDetailTitle,
 } from "../src/components/consultation-detail.ts";
+import { visibleScreen } from "../src/components/pane-screen.ts";
 import type { Consultation } from "../src/state/consultation-record.ts";
 import type { SessionEntry } from "../src/turn-log.ts";
 
@@ -63,27 +64,37 @@ const session: readonly SessionEntry[] = [
 
 describe("consultationDetailBody", () => {
 	test("the readable record wins over the pane read", () => {
-		expect(consultationDetailBody(consultation("working"), "pane text", session)).toBe("session");
+		expect(
+			consultationDetailBody(consultation("working"), visibleScreen("pane text", 1), session),
+		).toBe("session");
 		expect(consultationDetailBody(consultation("working"), null, session)).toBe("session");
 	});
 
 	test("the pane read stands in while the record does not render", () => {
-		expect(consultationDetailBody(consultation("working"), "pane text", null)).toBe("agent");
+		expect(
+			consultationDetailBody(consultation("working"), visibleScreen("pane text", 1), null),
+		).toBe("agent");
 		// A readable record that still holds no messages holds no view:
 		// the fallback shows instead of an empty body.
-		expect(consultationDetailBody(consultation("working"), "pane text", [])).toBe("agent");
+		expect(consultationDetailBody(consultation("working"), visibleScreen("pane text", 1), [])).toBe(
+			"agent",
+		);
 	});
 
 	test("a closed Consultation reads its captured history when nothing renders", () => {
 		expect(consultationDetailBody(consultation("closed"), null, null)).toBe("captured");
 		// A closed Consultation does not keep its terminal body.
-		expect(consultationDetailBody(consultation("closed"), "pane text", null)).toBe("captured");
+		expect(
+			consultationDetailBody(consultation("closed"), visibleScreen("pane text", 1), null),
+		).toBe("captured");
 		// But its session record still renders, for the after-the-fact review.
 		expect(consultationDetailBody(consultation("closed"), null, session)).toBe("session");
 	});
 
 	test("no Consultation selected shows no live body", () => {
-		expect(consultationDetailBody(undefined, "pane text", session)).toBe("captured");
+		expect(consultationDetailBody(undefined, visibleScreen("pane text", 1), session)).toBe(
+			"captured",
+		);
 	});
 });
 
@@ -102,7 +113,7 @@ describe("consultationDetailLines", () => {
 			turns: [],
 			snapshots: [],
 			width: 80,
-			liveOutput: "pane text",
+			screen: visibleScreen("pane text", 1),
 			sessionEntries: session,
 		}).map((line) => line.text);
 		expect(lines).toContain("Session view:");
@@ -122,7 +133,7 @@ describe("consultationDetailLines", () => {
 			turns: [],
 			snapshots: [],
 			width: 80,
-			liveOutput: null,
+			screen: null,
 			sessionEntries: [
 				{ kind: "tool", name: "mcp", target: "", failed: false },
 				{ kind: "tool", name: "bash", target: "npm test", failed: true },
@@ -135,7 +146,7 @@ describe("consultationDetailLines", () => {
 			turns: [],
 			snapshots: [],
 			width: 80,
-			liveOutput: null,
+			screen: null,
 			sessionEntries: [{ kind: "tool", name: "bash", target: "npm test", failed: true }],
 		}).find((line) => line.text === "▸ bash: npm test");
 		expect(failed?.fg).not.toEqual(
@@ -144,7 +155,7 @@ describe("consultationDetailLines", () => {
 				turns: [],
 				snapshots: [],
 				width: 80,
-				liveOutput: null,
+				screen: null,
 				sessionEntries: [{ kind: "tool", name: "bash", target: "npm test", failed: false }],
 			}).find((line) => line.text === "▸ bash: npm test")?.fg,
 		);
@@ -156,7 +167,7 @@ describe("consultationDetailLines", () => {
 			turns: [],
 			snapshots: [],
 			width: 80,
-			liveOutput: "Agent: reading src/auth.ts",
+			screen: visibleScreen("Agent: reading src/auth.ts", 1),
 		}).map((line) => line.text);
 		expect(lines).toContain("Agent view:");
 		expect(lines).toContain("Agent: reading src/auth.ts");
@@ -168,7 +179,7 @@ describe("consultationDetailLines", () => {
 			turns: [],
 			snapshots: [],
 			width: 80,
-			liveOutput: "pane text",
+			screen: visibleScreen("pane text", 1),
 		}).map((line) => line.text);
 		expect(lines).toContain("Captured history:");
 		expect(lines).not.toContain("pane text");
@@ -181,7 +192,7 @@ describe("consultationDetailLines", () => {
 			turns: [],
 			snapshots: [],
 			width: 40,
-			liveOutput: null,
+			screen: null,
 			sessionEntries: [{ kind: "input", text: long }],
 		});
 		expect(lines.some((line) => line.text.startsWith("❯ word "))).toBe(true);
