@@ -160,3 +160,6 @@ body states the context, the decision, and the consequences.
 - [ADR 0149: The frame module owns the plane's animation frames](./0149-the-frame-module-owns-the-planes-animation-frames.md)
 - [ADR 0150: The screen stack holds one active screen, and a suspended screen runs nothing](./0150-the-screen-stack-holds-one-active-screen-and-a-suspended-screen-runs-nothing.md)
 - [ADR 0151: The ticket work cycle answers one ticket identity with a scoped read](./0151-the-ticket-work-cycle-answers-one-ticket-identity-with-a-scoped-read.md)
+- [ADR 0152: The merged agent reader reads the held terminals in one batch, and the observation cycle's period holds its interval](./0152-the-merged-agent-reader-reads-the-held-terminals-in-one-batch-and-the-observation-cycles-period-holds-its-interval.md)
+- [ADR 0153: The settled turn's fire refreshes the ticket's own pull request sources, and the settling tickets settle side by side](./0153-the-settled-turns-fire-refreshes-the-tickets-own-pull-request-sources-and-the-settling-tickets-settle-side-by-side.md)
+- [ADR 0154: The plane holds its first probe and its first list move until the initial load settles](./0154-the-plane-holds-its-first-probe-and-its-first-list-move-until-the-initial-load-settles.md)
