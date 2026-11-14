@@ -516,7 +516,7 @@ function chainRig(options: ChainRigOptions = {}): Chain {
 				ticketIdentity: ticket.ticketIdentity,
 				taskType: ticket.taskType,
 			}),
-		onChanged: () => undefined,
+		onReport: () => undefined,
 		onStatus: (kind, text) => {
 			statuses.push({ kind, text });
 		},
