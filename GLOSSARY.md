@@ -351,8 +351,20 @@ The last known Consultation states stay visible and cannot become `missing` from
 _Avoid_: missing Agent, Herdr offline
 
 **Spinner**:
-The animated control of the shared control library: a braille glyph that steps one frame every about 100 ms beside the written word the surface names. It drives its own frames the way the Decision modal's pop-in drives its own, so a frame snapshot taken at the mount reads the first frame and holds. The word carries the meaning, so the no-color presentation keeps it and drops only the color. A ticket in the Starting window wears it in place of its state badge (ADR 0030).
+The animated control of the shared control library: a braille glyph that steps one frame every about 100 ms beside the written word the surface names. The frames, the step, and the face's word are the control's own presentation, and the clock that steps them stands in the shared frame module: the ticket list registers a face owner while a visible row wears the face, and the module's tick steps the face of every row it holds on the face's shared clock. The face stands on its first frame the moment the window opens, so a frame snapshot read at the open holds. The word carries the meaning, so the no-color presentation keeps it and drops only the color. A ticket in the Starting window wears it in place of its state badge (ADR 0030).
 _Avoid_: progress bar, loader animation, hourglass
+
+**Animation frame**:
+The per-tick fact the frame module holds for one frame owner: the spinner face's frame index, the modal pop-in's scale. The owner's paint resolves it through the shared presentation into the word or box geometry it stands on, and through the shared paint layer into its color, so a motion's presentation stays with the control that names it while the clock that steps it stands in the shared module (ADR 0149).
+_Avoid_: timeline, animation state, frame data
+
+**Frame owner**:
+The registration a surface makes with the shared frame module for one motion window: the structural fact that the window stands - a ticket in its Starting window, a modal in its opening - and the paint that takes the window's per-tick fact and writes it into the renderer's frame. The module is the one writer of the owner's per-frame cells while the owner stands, so a structural repaint never paints a stale frame, and the renderer's frame loop holds liveness only while at least one owner stands. The window's close releases the owner, and the surface's structural repaint takes its cells back to the settled state (ADR 0149).
+_Avoid_: animation state, motion subscription, frame timer
+
+**Tick source**:
+The thing outside the frame module that hands it a tick, a delta of time: the renderer's per-frame callback in production, and the frame rig's named tick operation in tests. The two stand on the module's one tick port, so the module's clock, its step, and its rest are one code path both drive, and a green frame test says the module's tick path is the path production runs (ADR 0149).
+_Avoid_: animation clock, interval, timer
 
 **Starting**:
 The window during which a ticket's Handoff is claimed and not yet settled, or the ticket is `handed-off`: the agent is being started, or it has started and its work is not yet observed.
@@ -819,6 +831,7 @@ _Avoid_: executor, spawner
 The shared test module that boots the control plane at a fixed terminal size and runs its controls for the frame tests.
 It resolves a Control catalogue id to the key the Action bar states on the current frame, sends that key, and waits for one named outcome: `opens`, `closes`, `refuses`, `shows`, `hides`, `moved`, or `quiet`.
 A test names a control and an outcome; it names no key, no frame predicate, and no deadline. The frame poll, the passive-effect flush, a surface's key ownership, and the deadline all stand behind the interface.
+One named operation hands the frame module a named amount of the module's time, so a suite stands a face or a pop on the tick it chose, and no wait stands on wall-clock luck for a motion's budget to run out (ADR 0149).
 _Avoid_: test harness, frame harness, UI test helper, key presser
 
 **Seeded plane**:

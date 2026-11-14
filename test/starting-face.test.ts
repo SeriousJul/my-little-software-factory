@@ -23,6 +23,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import type { FactoryConfig, TicketSourceConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
@@ -55,7 +56,6 @@ import {
 import type { FakeSource } from "./fake-source.ts";
 import { type GatedRunner, gatedRunner } from "./gated-runner.ts";
 import { type Plane, plane } from "./plane.ts";
-import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import "./theme-isolation.ts";
 
 const paths: string[] = [];

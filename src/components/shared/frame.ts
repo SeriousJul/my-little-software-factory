@@ -26,7 +26,7 @@
  * its own per-frame timer is rejected the way a separate key system or a color
  * table is (ADR 0014, extended by ADR 0149).
  */
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 
 /**
  * The liveness the renderer keeps while a frame owner is active: the plane asks
@@ -243,7 +243,7 @@ export function useFrameOwner(active: boolean, build: () => FrameOwner): void {
 	buildRef.current = build;
 	const handleRef = useRef<FrameOwnerHandle | null>(null);
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		if (!active) {
 			if (handleRef.current !== null) {
 				handleRef.current.release();
@@ -258,7 +258,7 @@ export function useFrameOwner(active: boolean, build: () => FrameOwner): void {
 		}
 	});
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		return () => {
 			if (handleRef.current !== null) {
 				handleRef.current.release();

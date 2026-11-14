@@ -160,6 +160,63 @@ function ticketListRows(fields: {
 	);
 }
 
+/**
+ * The ticket list's face owner, on the shared frame module (ADR 0149).
+ *
+ * A row wears the face as written text, not as a mounted control: the row is
+ * one text renderable, and a text renderable takes no nested control, so the
+ * face is the shared face's text, painted as one run the way the state badge
+ * is painted. The list holds the structural fact that a visible row wears the
+ * face, and while it stands it registers one face owner: one tick source
+ * steps the faces of every starting row it holds on the face's shared clock.
+ * A window that is not on screen owes no motion, and the face stands on its
+ * first frame the moment the window opens, so a frame snapshot read at the
+ * open holds. The word, not the glyph, is the fact (ADR 0030).
+ */
+function useTicketFaceOwner(
+	anyStarting: boolean,
+	visible: readonly ListedRow<TicketRowFacts>[],
+): (identity: string, span: TextNodeRenderable | null) => void {
+	// The face spans the module's face owner steps, by the ticket they ride in.
+	const faceSpans = useRef(new Map<string, TextNodeRenderable>());
+	// The rows that currently owe the module a face. React reuses a face span's
+	// renderable for the state badge when the window closes, so the paint may
+	// only write a span its ticket still wears the face in: the structural
+	// repaint and the frame tick share one writer per owner cell, and a row
+	// that is no longer starting owes the module nothing (ADR 0149).
+	const startingIdentities = useRef(new Set<string>());
+	const startingNow = new Set<string>();
+	for (const row of visible) {
+		if (row.kind === "item" && row.item.starting) startingNow.add(row.item.identity);
+	}
+	startingIdentities.current = startingNow;
+	useFrameOwner(anyStarting, () => ({
+		id: "ticket-list-face",
+		factAt: (elapsed: number) => Math.floor(elapsed / SPINNER_FRAME_MS) % SPINNER_FRAMES.length,
+		paint: (fact: number) => {
+			const face = spinnerFace(fact, STARTING_WORD, BADGE_WIDTH);
+			for (const [identity, span] of faceSpans.current) {
+				if (!startingIdentities.current.has(identity)) continue;
+				// The face's word stands in the text node the tree commits for the
+				// span's word: the module steps that node's text and nothing else,
+				// so the tree's own writes through the same node (the badge the
+				// window's close commits) land where the paint left them, and a
+				// step that changes no cell asks for no frame (ADR 0149).
+				const word = span.children.find(
+					(child): child is TextNodeRenderable => typeof child === "object",
+				);
+				if (word === undefined) continue;
+				if (word.children[0] !== face) word.children = [face];
+			}
+		},
+	}));
+	// The face span a starting row registers so the face owner can step it.
+	return (identity: string, span: TextNodeRenderable | null) => {
+		if (span === null) faceSpans.current.delete(identity);
+		else faceSpans.current.set(identity, span);
+	};
+}
+
 export function TicketList({
 	rows,
 	selectedIndex,
@@ -180,41 +237,8 @@ export function TicketList({
 	// The window, the mouse hit test, and the cursor step all read the one row
 	// list, so a Group header costs a window row exactly like a ticket does.
 	const { start, visible } = listWindow(rows, selectedIndex, visibleRows);
-	// The row wears the face as written text, not as a mounted control: the row
-	// is one text renderable, and a text renderable takes no nested control, so
-	// the face is the shared face's text, painted as one run the way the state
-	// badge is painted. The shared frame module owns the clock the face steps
-	// on (ADR 0149): the list holds the structural fact that a visible row
-	// wears the face, registers one face owner for it, and the module steps the
-	// face of every starting row it holds through the same paint. A window
-	// that is not on screen owes no motion, and the face stands on its first
-	// frame the moment the window opens, so a frame snapshot read at the open
-	// holds. The word, not the glyph, is the fact (ADR 0030).
 	const anyStarting = visible.some((row) => row.kind === "item" && row.item.starting);
-	// The face spans the module's face owner steps, by the ticket they ride in.
-	const faceSpans = useRef(new Map<string, TextNodeRenderable>());
-	useFrameOwner(anyStarting, () => ({
-		id: "ticket-list-face",
-		factAt: (elapsed: number) => Math.floor(elapsed / SPINNER_FRAME_MS) % SPINNER_FRAMES.length,
-		paint: (fact: number) => {
-			const face = spinnerFace(fact, STARTING_WORD, BADGE_WIDTH);
-			const fg = paint("subtext0");
-			for (const span of faceSpans.current.values()) {
-				// The guard keeps a step that changes no cell from asking for a
-				// frame: the face stands still until its glyph turns.
-				if (span.children[0] !== face) span.children = [face];
-				// The no-color presentation drops the face's color, keeping its
-				// word: the tree paints the span without an fg, and the module
-				// owes it none.
-				if (fg !== undefined) span.fg = fg;
-			}
-		},
-	}));
-	// The face span a starting row registers so the face owner can step it.
-	const registerFaceSpan = (identity: string, span: TextNodeRenderable | null) => {
-		if (span === null) faceSpans.current.delete(identity);
-		else faceSpans.current.set(identity, span);
-	};
+	const registerFaceSpan = useTicketFaceOwner(anyStarting, visible);
 	const handleMouse = listMouse({
 		active: () => active,
 		onFocus,
