@@ -6882,6 +6882,23 @@ describe("MergedAgentReader (issue #410, ADR 0142)", () => {
 			),
 		).toMatchObject([{ status: "working" }]);
 
+		// The live record hc 0.1.20 answers: the status is the reporting
+		// program's word beside its name. The word the record carries is the
+		// status the poll reports.
+		expect(
+			await poll(
+				[{ address: "t-live", name: "core-live", state: "live", agent: "pi" }],
+				[
+					{
+						address: "t-live",
+						name: "core-live",
+						state: "live",
+						status: { app: "pi", state: "working" },
+					},
+				],
+			),
+		).toMatchObject([{ status: "working" }]);
+
 		// A terminal that exited with a code reads `done`, the settle herdr's
 		// `done` is (ADR 0141).
 		expect(

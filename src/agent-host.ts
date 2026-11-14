@@ -871,6 +871,22 @@ export interface HerdrCoreRecord {
 	labels?: Record<string, string>;
 }
 
+/**
+ * The status word of an `hc` record, in either shape the host writes it: the
+ * word alone, or the reporting program's word beside its name. A value the
+ * host writes in no shape it reads - or a shape whose word is not a string -
+ * reads as absent.
+ */
+function recordStatusWord(item: Record<string, unknown>): string | undefined {
+	const value = item.status;
+	if (typeof value === "string") return value;
+	if (typeof value === "object" && value !== null) {
+		const state = (value as Record<string, unknown>).state;
+		if (typeof state === "string") return state;
+	}
+	return undefined;
+}
+
 /** Read one string field of an `hc` record; a value the host did not write as a string reads as absent. */
 function recordString(item: Record<string, unknown>, key: string): string | undefined {
 	const value = item[key];
@@ -921,7 +937,7 @@ export function herdrCoreRecord(result: CommandResult): HerdrCoreRecord | null {
 		address: item.address,
 		name: item.name === null ? null : item.name,
 		state: item.state === "live" ? "live" : "finished",
-		status: normalizeAgentStatus(recordString(item, "status") ?? ""),
+		status: normalizeAgentStatus(recordStatusWord(item) ?? ""),
 		turn: recordNumber(item, "turn"),
 		reason: recordString(item, "reason"),
 		exitCode: recordNumber(item, "exit_code"),

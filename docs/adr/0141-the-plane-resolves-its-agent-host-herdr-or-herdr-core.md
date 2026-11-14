@@ -48,16 +48,24 @@ was never touched):
 - herdr-core answers the plane's whole loop: `run` with a name, a cwd, and
   labels; `send` for a prompt; `ls` and `get` for the roster and one record;
   `wait` for a turn; `read` for the screen; `kill` and `rm` for cleanup. A
-  record carries `name`, `labels`, `state: live|finished`,
-  `status: idle|working|done|blocked|error`, `turn`, `exit_code`, `reason`,
-  `parent`, and `argv`, and a taken name is refused with the code `name_taken`.
+  record carries `name`, `labels`, `state: live|finished`, `turn`,
+  `exit_code`, `reason`, `parent`, and `argv`, and a taken name is refused
+  with the code `name_taken`. A record's `status` is the reporting program's
+  word beside its name: a live terminal whose program reports one carries
+  `{"app": <program>, "state": <word>}`, and a terminal whose program reports
+  no status, beside a finished one, carries no status. Corrected 2026-11-14
+  on the operator's core: the 2026-11-12 probe's terminals reported no
+  status, so the probe left the record's status shape unmeasured.
 - herdr-core's name rule is `[a-z][a-z0-9_-]{0,31}`. The plane's own rule in
   `src/naming.ts` (`HERDR_NAME_MAX_LENGTH = 32`, the slug and identity tag)
   already builds that shape, so the naming module does not move.
 - herdr-core knows no workspace, no tab, no pane, and no worktree. Its unit is
   one terminal, addressed by `t<n>` or by name, carrying labels.
-- `hc ls --json` carries **no** status word; the status lives in
-  `hc get <terminal> --json`. The roster alone cannot run the observation cycle.
+- The plane reads the status from `hc get <terminal> --json`, never from the
+  roster, and the roster alone cannot run the observation cycle. The roster's
+  live rows can carry a `status` field beside the reported word (measured
+  2026-11-14 on the operator's core; the 2026-11-12 probe's rows showed
+  none), but the record's status is the read the cycle takes.
 - On Unix every herdr-core command starts its session's core when none runs:
   `hc server status` on a fresh session answered with a core whose
   `uptime_ms` was `8`. There is no read that answers without starting one.
@@ -68,7 +76,11 @@ was never touched):
   readable fact.
 - The status words are the same five herdr reports, because both read the
   program's OSC 7501 reports, and herdr-core's own manual says the rule the
-  plane already follows: "Do not guess status from screen text."
+  plane already follows: "Do not guess status from screen text." Measured
+  2026-11-14 on the operator's core beside live pi terminals, the words stand
+  in the record's `state` beside the program's name, and the records that
+  stood there carried `working`, `done`, and no status: the words
+  `idle`, `blocked`, and `error` have not stood on that host.
 
 Two of the plane's facts have no herdr-core answer at all: the Goto's view
 focus, and the agent session-record path the Turn log reads (ADR 0008). Those

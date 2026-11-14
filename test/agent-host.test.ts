@@ -769,6 +769,21 @@ describe("the herdr-core answer readers", () => {
 		expect(herdrCoreRecord({ code: 0, stdout: '{"address":"t1"}', stderr: "" })).toBeNull();
 	});
 
+	test("the record reads the live status the host writes beside the reporting program", () => {
+		// The live record hc 0.1.20 answers: the status is the reporting
+		// program's word beside its name, not a bare word. A live terminal
+		// whose program reports no status reads with no status beside it.
+		const working = herdrCoreRecord(
+			coreRecord({ state: "live", status: { app: "pi", state: "working" } }),
+		);
+		expect(working?.state).toBe("live");
+		expect(working?.status).toBe("working");
+		const idle = herdrCoreRecord(
+			coreRecord({ state: "live", status: { app: "pi", state: "idle" } }),
+		);
+		expect(idle?.status).toBe("idle");
+	});
+
 	test("a terminal the desktop created without a name reads with its adoption labels", () => {
 		// The desktop creates its terminals without a name: an `hc get` record
 		// that names null is still the terminal's record, and its labels are

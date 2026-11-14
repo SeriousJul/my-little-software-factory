@@ -134,6 +134,8 @@ is the answer a caller gets.
 | `hc server status` with no core on the session | `{"core":{"id":"dcb6…","name":"seriousarch"},"holder":null,"holders":[],"live":0,"pid":951931,"uptime_ms":8,"version":"0.1.20"}`: the status read **started the core**. No Unix read answers without starting one, so the plane states the effect instead of pre-checking it (ADR 0141) |
 | `hc ls --json` | `{"hidden_finished":0,"terminals":[{"address":"t1","agent":"sh","cwd":"…","name":"probe-a","state":"live","turn":0}]}`: the roster carries **no status word** |
 | `hc get <t> --json` | the full record: `address, argv, cols, rows, cwd, die_with_parent, exit_code, finished_ms, foreground, identity, keep, labels, name, notify, parent, pid, reason, reported, rm, screen, signal, state, status, status_ms, template, title, turn` |
+| `hc get <t> --json` on the operator's core (2026-11-14) | a live pi terminal answers `"status":{"app":"pi","state":"working"}`, and the live terminal whose program reports no status, beside a finished one, answers `"status":null`: the record's status is the reporting program's word beside its name, not the word alone |
+| `hc ls --json` on the operator's core (2026-11-14) | the live rows carry a `status` field: the reported word (`"working"`), or `null` where the program reports none - a field the 2026-11-12 probe's rows did not show. The plane's rule stands: the status is read from the record |
 | `hc run --bg --outlive-parent --no-notify --name probe-a --label factory.run=probe --label factory.ticket=t-1 -- sh -c …` | `{"address":"t1","agent":"sh","cwd":"…","name":"probe-a","state":"live","turn":0}`, and the later `get` shows `die_with_parent: false`, `notify: false`, `keep: false`, `rm: false`, `labels: {"factory.run":"probe","factory.ticket":"t-1"}`: the flags ADR 0141 fixes land on the record |
 | `hc send --json <t> <text>` | `{"started":null,"status":null,"turn":0}`: `started` is null for a program that reports no status, so the plane reads "the text went in" and not "the turn started" |
 | `hc send --json --if idle <t> <text>` on a finished terminal | `{"error":{"kind":"finished","message":"t1 has finished","hint":"hc read t1"}}` |
@@ -217,8 +219,16 @@ is the answer a caller gets.
 - **The status words are the same five** (`idle`, `working`, `done`, `blocked`,
   `error`) on both hosts, because both read the program's OSC 7501 reports. My
   probe's hand-written 7501 record was refused by the host and registered
-  nothing, so the plane's own mapping of those five words is **unmeasured**: no
-  real agent ran under herdr-core in these probes.
+  nothing, so these probes left the plane's mapping of the words unmeasured.
+  On 2026-11-14 the plane's own reader ran against the operator's core beside
+  a live pi terminal: it reported the terminal `working` while the turn ran,
+  and read `unknown` for the terminal whose program reports no status, and the
+  host's own record stood beside it with the same status object in the
+  `state: "done"` shape for a finished turn. That run exposed the record's
+  status shape the reader had not read - the word beside the program's name,
+  not the word alone - and the fix landed at the record's reader beside the
+  two seams its regression tests name. The words `idle`, `blocked`, and
+  `error` still stand in the word table only, unmeasured on this host.
 - **The pi session home the derivation reads**, measured 2026-11-13 on this
   machine's pi 1.5.2 against one real pi session that ran in this worktree:
   the session home stands at `<home>/.pi/agent/sessions`; the per-checkout
@@ -333,6 +343,10 @@ it stands below, each one owed by the change that lands it:
   showed as a split pane in the plane's tab, and its fixed side - a
   space-labeled start standing as its own tab in the plane's space - stands
   pending on the operator's re-walk.
+- The status words `idle`, `blocked`, and `error` on a real herdr-core host:
+  the plane's reader has read `working`, `done`, and no status on the
+  operator's core (2026-11-14, beside the live pi terminals named above), and
+  the other three words stand in the word table only, unmeasured on the host.
 - The naming-suite check that keeps the plane's names inside herdr-core's
   refused id shape (the derived row above).
 - Two runs of the plane on one machine sharing one herdr-core session: never
