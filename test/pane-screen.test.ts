@@ -209,6 +209,13 @@ describe("the pure cores", () => {
 		);
 	});
 
+	test("a blank line of the body stands as one blank line", () => {
+		expect(shapeVisibleText("first\n\nsecond", 40)).toEqual(["first", "", "second"]);
+		// The read's trailing newline is not a line: the tail's last line is the
+		// read's last output, so the body ends on it, not on a blank.
+		expect(shapeVisibleText("first\n", 40)).toEqual(["first", ""]);
+	});
+
 	test("the log's shaping is a pure function of the entries and the width", () => {
 		expect(shapeLogEntries(entries, 40)).toEqual(shapeLogEntries(entries, 40));
 		const note = shapeLogEntries([{ kind: "tool", name: "bash", target: "", failed: true }], 40);

@@ -191,12 +191,18 @@ export function logScreenLines(screen: PaneScreen, width: number): MdLine[] {
 
 /**
  * The lines a visible screen's body shapes to at the width: each line of
- * the body wrapped to the width, one shaping per line. A pure function of
- * the body and the width: no terminal, no host, no renderer.
+ * the body wrapped to the width, one shaping per line. A blank line of the
+ * body stands as one blank line: a body the operator's pane shows empty
+ * keeps its empty rows. A pure function of the body and the width: no
+ * terminal, no host, no renderer.
  */
 export function shapeVisibleText(text: string, width: number): string[] {
 	const lines: string[] = [];
 	for (const raw of text.split("\n")) {
+		if (raw === "") {
+			lines.push("");
+			continue;
+		}
 		for (const wrapped of wrapToWidth(raw, width)) lines.push(truncateToWidth(wrapped, width));
 	}
 	return lines;
