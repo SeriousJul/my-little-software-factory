@@ -25,15 +25,16 @@
  * module and its colors from the paint layer, so the fold needs no palette of
  * its own and no color alone carries it.
  */
-import type { BoxRenderable } from "@opentui/core";
+import type { BoxRenderable, TextNodeRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { type ReactElement, useRef } from "react";
 
 import type { TicketRowFacts } from "../domain/ticket-facts.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
+import { useFrameOwner } from "./shared/frame.ts";
 import { groupHeaderSpans, type ListedRow } from "./shared/grouping.ts";
-import { spinnerFace, useSpinnerFrame } from "./shared/spinner.ts";
+import { SPINNER_FRAME_MS, SPINNER_FRAMES, spinnerFace } from "./shared/spinner.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import {
 	BADGE_WIDTH,
@@ -115,7 +116,7 @@ function ticketListRows(fields: {
 	selectedIndex: number;
 	emptyMessage: string | undefined;
 	usableCols: number;
-	faceFrame: number;
+	registerFaceSpan: (identity: string, span: TextNodeRenderable | null) => void;
 }): ReactElement[] {
 	if (fields.visible.length === 0 && fields.emptyMessage !== undefined) {
 		return [
@@ -153,7 +154,7 @@ function ticketListRows(fields: {
 							row.item,
 							fields.start + offset === fields.selectedIndex,
 							fields.usableCols,
-							fields.faceFrame,
+							fields.registerFaceSpan,
 						),
 					),
 	);
@@ -181,15 +182,39 @@ export function TicketList({
 	const { start, visible } = listWindow(rows, selectedIndex, visibleRows);
 	// The row wears the face as written text, not as a mounted control: the row
 	// is one text renderable, and a text renderable takes no nested control, so
-	// the face is the shared face's text at the shared frame, painted as one run
-	// the way the state badge is painted. The frame comes from the shared
-	// `useSpinnerFrame`, gated on whether a visible row wears it: a window that
-	// is not on screen owes no motion, and the face stands on its first frame
-	// the moment the window opens, so a frame snapshot read at the open holds.
-	// The word, not the glyph, is the fact (ADR 0030).
-	const faceFrame = useSpinnerFrame(
-		visible.some((row) => row.kind === "item" && row.item.starting),
-	);
+	// the face is the shared face's text, painted as one run the way the state
+	// badge is painted. The shared frame module owns the clock the face steps
+	// on (ADR 0149): the list holds the structural fact that a visible row
+	// wears the face, registers one face owner for it, and the module steps the
+	// face of every starting row it holds through the same paint. A window
+	// that is not on screen owes no motion, and the face stands on its first
+	// frame the moment the window opens, so a frame snapshot read at the open
+	// holds. The word, not the glyph, is the fact (ADR 0030).
+	const anyStarting = visible.some((row) => row.kind === "item" && row.item.starting);
+	// The face spans the module's face owner steps, by the ticket they ride in.
+	const faceSpans = useRef(new Map<string, TextNodeRenderable>());
+	useFrameOwner(anyStarting, () => ({
+		id: "ticket-list-face",
+		factAt: (elapsed: number) => Math.floor(elapsed / SPINNER_FRAME_MS) % SPINNER_FRAMES.length,
+		paint: (fact: number) => {
+			const face = spinnerFace(fact, STARTING_WORD, BADGE_WIDTH);
+			const fg = paint("subtext0");
+			for (const span of faceSpans.current.values()) {
+				// The guard keeps a step that changes no cell from asking for a
+				// frame: the face stands still until its glyph turns.
+				if (span.children[0] !== face) span.children = [face];
+				// The no-color presentation drops the face's color, keeping its
+				// word: the tree paints the span without an fg, and the module
+				// owes it none.
+				if (fg !== undefined) span.fg = fg;
+			}
+		},
+	}));
+	// The face span a starting row registers so the face owner can step it.
+	const registerFaceSpan = (identity: string, span: TextNodeRenderable | null) => {
+		if (span === null) faceSpans.current.delete(identity);
+		else faceSpans.current.set(identity, span);
+	};
 	const handleMouse = listMouse({
 		active: () => active,
 		onFocus,
@@ -229,7 +254,7 @@ export function TicketList({
 			selectedIndex,
 			emptyMessage,
 			usableCols: geometry.usableCols,
-			faceFrame,
+			registerFaceSpan,
 		}),
 	);
 }
@@ -264,7 +289,10 @@ function rowTrailingMarkers(fact: TicketRowFacts): { text: string; fg: string | 
 }
 
 /** The badge the row wears in the state badge's slot (ADR 0016, ADR 0030). */
-function rowStateBadge(fact: TicketRowFacts, faceFrame: number): ReactElement {
+function rowStateBadge(
+	fact: TicketRowFacts,
+	registerFaceSpan: (identity: string, span: TextNodeRenderable | null) => void,
+): ReactElement {
 	// The failure badge replaces the state badge: the agent blocked or the
 	// pane gone stand out in the badge's own place. A held turn wears its
 	// own badge in the state's place (ADR 0016): it is the fact the operator
@@ -280,8 +308,15 @@ function rowStateBadge(fact: TicketRowFacts, faceFrame: number): ReactElement {
 	if (fact.starting)
 		return createElement(
 			"span",
-			{ fg: paint("subtext0") },
-			spinnerFace(faceFrame, STARTING_WORD, BADGE_WIDTH),
+			{
+				fg: paint("subtext0"),
+				// The face is the frame module's cell: the list hands the span to
+				// its face owner, and the module steps it on its own clock (ADR
+				// 0149). The tree draws the first frame, which is the frame the
+				// window opens on.
+				ref: (span: TextNodeRenderable | null) => registerFaceSpan(fact.identity, span),
+			},
+			spinnerFace(0, STARTING_WORD, BADGE_WIDTH),
 		);
 	if (fact.held) return createElement("span", { fg: paint("yellow") }, heldBadge());
 	if (fact.queueWait)
@@ -357,7 +392,7 @@ function rowSpans(
 	fact: TicketRowFacts,
 	selected: boolean,
 	usableCols: number,
-	faceFrame: number,
+	registerFaceSpan: (identity: string, span: TextNodeRenderable | null) => void,
 ): ReactElement[] {
 	const spans: ReactElement[] = [];
 	let budget = usableCols;
@@ -373,7 +408,7 @@ function rowSpans(
 		budget -= SELECTION_WIDTH;
 	}
 	if (budget >= BADGE_WIDTH) {
-		spans.push(rowStateBadge(fact, faceFrame));
+		spans.push(rowStateBadge(fact, registerFaceSpan));
 		budget -= BADGE_WIDTH;
 	}
 	const taskType = rowTaskTypeBadge(fact, budget);

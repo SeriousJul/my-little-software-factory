@@ -1,12 +1,14 @@
 /**
- * The shared spinner: the animated face a control wears beside its written
- * word while a wait runs.
+ * The shared spinner: the face a control wears beside its written word
+ * while a wait runs.
  *
- * The face is a braille glyph that steps one frame every about 100 ms. It
- * drives itself with its own interval the way the Decision modal's pop-in
- * drives its own progress: the renderer's animation engine is never asked,
- * and the first frame stands on mount, so a frame snapshot taken at the
- * mount reads the first frame and stays stable.
+ * The face is a braille glyph that steps one frame every about 100 ms. The
+ * frames and the step the face wears are the presentation's, shared with the
+ * frame module, which steps the ticket list's face on its own clock (ADR
+ * 0149). The `Spinner` control that stands in a slot of its own keeps a
+ * self-driven interval: its first frame stands on mount, so a frame
+ * snapshot taken at the mount reads the first frame and stays stable, and
+ * the renderer's animation engine is never asked.
  *
  * The word carries the meaning, the way the shared state words do: the
  * glyph is the motion, and the word is the fact, so the no-color
@@ -29,17 +31,20 @@ export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", 
 export const SPINNER_FRAME_MS = 100;
 
 /**
- * The spinner's self-driven frame index.
+ * The spinner control's self-driven frame index.
  *
  * One interval steps the index one frame at a time, wrapping past the last
  * frame back to the first. The index starts at zero, so the mount paints
  * the first frame before any tick can move it.
  *
- * Every slot the face stands in takes its frame from here, so the animated
- * control and a slot that paints the face as written text never disagree on
- * the frames or on their timing. A slot that owes no motion while no face of
- * its own is on screen passes `active` false: no interval runs, and the
- * frame stands where it last stood.
+ * The slots the `Spinner` control stands in (the detail header, the
+ * repository panel, the gallery) take their frame from here, so a slot that
+ * paints the face as a mounted control never disagrees on the frames or on
+ * their timing. The ticket list's face is not driven from here: the shared
+ * frame module steps it on its own clock, sharing the frames and the step
+ * (ADR 0149). A slot that owes no motion while no face of its own is on
+ * screen passes `active` false: no interval runs, and the frame stands
+ * where it last stood.
  */
 export function useSpinnerFrame(
 	active: boolean = true,
@@ -56,10 +61,10 @@ export function useSpinnerFrame(
 
 /**
  * The face as written text at one frame: the braille glyph, a cell of air,
- * and the word, padded to the width. A slot the face stands in that cannot
- * mount the control paints this string as a plain run and drives its own
- * frame with the shared frames and timing, so the face reads the same in
- * every slot it stands in.
+ * and the word, padded to the width. A slot that cannot mount the control
+ * paints this string as a plain run: the ticket list's face is stepped by
+ * the shared frame module on the shared frames and step, and a static
+ * presentation names the frame it stands on.
  */
 export function spinnerFace(frame: number, word: string, width: number): string {
 	const index = ((frame % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length;
