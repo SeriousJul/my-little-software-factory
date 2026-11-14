@@ -26,7 +26,7 @@ import { describe, expect, test } from "bun:test";
 import { CliRenderEvents } from "@opentui/core";
 
 import {
-	awaitFrame,
+	frameUntil,
 	HEIGHT,
 	messageRowOf,
 	rowsOf,
@@ -210,13 +210,10 @@ describe("the observation report at the plane's seam (issue #422, ADR 0146)", ()
 			async (setup) => {
 				const base = await settle(setup);
 				failProbe();
-				const failed = await awaitFrame(
-					setup,
-					(frame) =>
-						messageRowOf(frame).includes(
-							"herdr is unreachable: no herdr session; the observation is holding",
-						),
-					"the failure marker on the Message line",
+				const failed = await frameUntil(setup, "the failure marker on the Message line", (frame) =>
+					messageRowOf(frame).includes(
+						"herdr is unreachable: no herdr session; the observation is holding",
+					),
 				);
 				const baseRows = rowsOf(base);
 				const failedRows = rowsOf(failed);
@@ -242,10 +239,10 @@ describe("the observation report at the plane's seam (issue #422, ADR 0146)", ()
 				// The marker clears on the first probe that succeeds again: the
 				// fault line ends, the roster returns, and the recovery lands in the
 				// one frame that both clears the marker and restores the standing.
-				const recovered = await awaitFrame(
+				const recovered = await frameUntil(
 					setup,
-					(frame) => !messageRowOf(frame).includes("herdr is unreachable"),
 					"the recovery clearing the failure marker",
+					(frame) => !messageRowOf(frame).includes("herdr is unreachable"),
 				);
 				const recoveredRows = rowsOf(recovered);
 				expect(recoveredRows).toHaveLength(baseRows.length);
