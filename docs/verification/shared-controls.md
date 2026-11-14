@@ -2534,3 +2534,65 @@ foot, the screen-reader path is not verified for either host, and no plane
 command ever reached a real herdr-core host - the rows' herdr-core frames
 stand on the run's resolution beside the Stub world's answers, as
 [that record](./agent-host-herdr-core.md) states.
+
+## The renderer adapter owns the renderer and the repaint policy (issue #421, ADR 0145)
+
+The renderer adapter module (`src/renderer-adapter.ts`) owns the renderer: it
+constructs the renderer from the entry's boot facts (no exit on Ctrl+C, mouse
+reporting, the kitty keyboard names that back the Agent interaction mode's
+exits), it installs the frame callback that evaluates the repaint policy on
+the frame's facts, it observes the renderer's own events as frame facts
+(the resize, the capability answer, the external output the renderer
+detects), and the entry destroys it in the shutdown order, so the renderer
+returns the terminal before the run ends. The policy is the small function
+inside the same module: it answers the diff, which writes only the cells
+that changed, on quiet facts, and it answers the full rewrite when any
+force fact stands: the resize, the capability answer, an outside output that
+could paint or move a cell, a byte-loss signal, and the blanket force. The
+entry passes the blanket force as an explicit fact on every frame until a
+byte-loss signal stands. The lift withdraws that fact and hands the signal
+to the adapter, and the policy is unchanged by the lift. The plane's
+modules report the write they make on the terminal through the plane's
+report, and the entry wires that report to the adapter it builds. The bell
+stands as the fact it is - it paints no cell and moves no cursor - so it
+forces no rewrite, and the entry and the UI module never touch the
+renderer's private repaint flag: the adapter touches it only when the
+policy answers full.
+
+What was measured: the policy's fact matrix is tested without a terminal in
+`test/renderer-adapter.test.ts` - the quiet facts answer the diff, each
+force fact alone and in combination answers the full rewrite, the bell
+alone forces nothing, and a fact a frame forced is consumed by that frame.
+The frame suites are unchanged: the rig proves the painted frame reads the
+same content after the move - the spinner face, the report and the section
+headers' counts, the Consultation view's body and the Live view's stream
+under a working agent, a pop-in that settles on its final body, a key
+press's effect, the resize's reflow, and the probe failure's note on the
+Message line. The byte-loss history was re-measured on this machine's class
+after the move, with the blanket force still standing, on the tmux terminal
+(kernel 7.2.15-1-omarchy, Bun 1.4.2, tmux 3.8, OpenTUI 0.5.11):
+`bun scripts/repro-tmux-live.ts` ran the fixture plane in a 200x50 tmux
+pane on the herdr host, streaming a Live view at 12.5 lines per second, and
+captured the pane every 100 ms. The stream stands: the body's tail follows
+the newest line within the refresh window, and 378 of 388 checked captures
+show the body's lines contiguous. In 10 of 388 a stream line is missing
+from the body (one run's lines read L480 then L482 with L481 absent, and
+another's read L475 then L477 with L476 absent). The missing line stands
+in the stream file the plane reads, and in the run with L481 absent the
+byte reads of the app's own pty bytes show the app never wrote the line
+in the run's window: the fault stands inside the process's frames, the
+same attribution as this record's byte reads for 0.5.9 and for the
+installed 0.5.11, and it fits the installed release's recorded
+sporadic-loss range on this machine's class. The standing full rewrite
+keeps the screen converging while those sporadic frame faults pass through
+it; it insures the drift class of issue 1187 and does not cure the
+stale-buffer class of issue 1212, as the record above concludes.
+
+What was not measured: the post-move terminal walk on the terminals the
+record names (Ghostty 1.3.1-arch2 and foot 1.28.0) was not run on this
+pass: the spinner face in the Starting window, the pop-in settling on its
+final body, a resize of the terminal mid-stream, the plane's bell on a
+Fault, and a selection over the screen. The screen-reader path is not
+verified. No byte-loss signal stands, the blanket force still stands, and
+the lift is not taken; a skipped required check is not a pass, so the
+section stands as of this pass.

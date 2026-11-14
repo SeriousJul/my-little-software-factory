@@ -12,7 +12,7 @@ import { createElement, createRoot } from "@opentui/react";
 
 import { App } from "./components/app.ts";
 import { createHerdrIdentityReporter } from "./herdr-identity.ts";
-import { createRendererAdapter } from "./renderer-adapter.ts";
+import { createRendererAdapter, installOutsideWriteReporter } from "./renderer-adapter.ts";
 import { errorMessage } from "./runner.ts";
 import { isSupportedBunVersion, unsupportedBunVersionMessage } from "./runtime.ts";
 import { realSessionRecordLookup } from "./session-record.ts";
@@ -85,6 +85,11 @@ const adapter = await createRendererAdapter({
 	blanketForce: () => true,
 });
 const renderer = adapter.renderer;
+// The plane's modules report the writes they make on the terminal outside
+// the renderer (ADR 0145), and the entry wires the report to the adapter it
+// builds. The bell on a Fault paints no cell and moves no cursor, so the
+// policy reads it as the fact it is and forces no rewrite.
+installOutsideWriteReporter((write) => adapter.reportOutsideTerminalWrite(write));
 // Inside a herdr pane the plane gives herdr its own face before the first
 // frame, so herdr's detection of this pane reads the report instead of the
 // process it misreads as a pi agent in some screen states (issue #405,
@@ -132,11 +137,6 @@ createRoot(renderer).render(
 		// (ADR 0144): the real lookup of the machine this run stands on.
 		sessionRecord: realSessionRecordLookup,
 		loopPolicy: { kind: "production" },
-		// The plane's writes on the terminal outside the renderer (ADR
-		// 0145): the bell on a Fault paints no cell, so it forces no
-		// rewrite, and the adapter's policy reads the write as the fact it
-		// is.
-		reportOutsideTerminalWrite: (write) => adapter.reportOutsideTerminalWrite(write),
 		onReady: (ready) => {
 			appStop.current = ready.stop;
 		},

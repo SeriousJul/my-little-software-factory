@@ -20,7 +20,7 @@
  */
 import type { FactoryConfig } from "./config.ts";
 import { type Logger, NOOP_LOGGER } from "./logging.ts";
-import type { OutsideTerminalWrite } from "./renderer-adapter.ts";
+import { reportOutsideTerminalWrite } from "./renderer-adapter.ts";
 import { type CommandRunner, commandFailureText, errorMessage } from "./runner.ts";
 
 /** The severities a desktop notification carries. */
@@ -58,14 +58,6 @@ export interface AttentionServiceOptions {
 	platform?: string;
 	/** The record a failed send leaves a line in. Default: no record. */
 	logger?: Logger;
-	/**
-	 * Receives the writes the service makes on the terminal outside the
-	 * renderer, as the facts they are (ADR 0145): the bell paints no cell
-	 * and moves no cursor, so it forces no rewrite of the renderer's next
-	 * frame. The entry binds it to the renderer adapter, so the adapter's
-	 * repaint policy reads the write as the fact it is.
-	 */
-	reportTerminalWrite?: (write: OutsideTerminalWrite) => void;
 }
 
 export class AttentionService {
@@ -73,7 +65,6 @@ export class AttentionService {
 	private readonly runner: CommandRunner;
 	private readonly platform: string;
 	private readonly logger: Logger;
-	private readonly reportTerminalWrite: ((write: OutsideTerminalWrite) => void) | undefined;
 	/** The last fact the service notified, or none before the first send. */
 	private lastNotified: AttentionFact | null = null;
 
@@ -90,7 +81,6 @@ export class AttentionService {
 		this.runner = runner;
 		this.platform = options.platform ?? process.platform;
 		this.logger = options.logger ?? NOOP_LOGGER;
-		this.reportTerminalWrite = options.reportTerminalWrite;
 	}
 
 	/**
@@ -106,8 +96,10 @@ export class AttentionService {
 		process.stdout.write("\u0007");
 		// The bell lands on the terminal outside the renderer. It paints no
 		// cell and moves no cursor, so the renderer adapter's repaint policy
-		// (ADR 0145) reads it as the fact it is and forces no rewrite.
-		this.reportTerminalWrite?.({ kind: "bell" });
+		// (ADR 0145) reads it as the fact it is and forces no rewrite. The
+		// entry wired the report to the adapter; a boot that stands no
+		// adapter reports nowhere, and the bell still lands.
+		reportOutsideTerminalWrite({ kind: "bell" });
 	}
 
 	/**

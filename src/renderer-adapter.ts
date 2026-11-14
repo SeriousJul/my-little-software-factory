@@ -106,8 +106,46 @@ export function repaintScope(facts: RepaintFrameFacts): RewriteScope {
  * rewrite.
  * `bell`: the plane's bell on a Fault. It paints no cell and moves no
  * cursor, so it forces no rewrite of the renderer's next frame.
+ *
+ * The plane's modules report the write they make through
+ * `reportOutsideTerminalWrite`, and the entry wires that report to the
+ * adapter it builds (ADR 0145).
  */
 export type OutsideTerminalWrite = { kind: "paint" } | { kind: "bell" };
+
+/**
+ * The reporter the outside writes reach, or none on a boot that stands no
+ * renderer adapter: the plane's modules report the writes they make, and
+ * the entry wires the report to the adapter it builds.
+ */
+let outsideWriteReporter: ((write: OutsideTerminalWrite) => void) | undefined;
+
+/**
+ * Wire the report of the plane's writes on the terminal outside the
+ * renderer to the renderer adapter (ADR 0145).
+ *
+ * The entry stands beside both the terminal's transport and the adapter,
+ * so the entry makes the wiring, once, beside the adapter's construction.
+ * The entry's wiring is the one stand-in for the entry's own knowledge of
+ * the writes: the plane's modules report the write they make, and the
+ * adapter's policy answers the fact.
+ */
+export function installOutsideWriteReporter(reporter: (write: OutsideTerminalWrite) => void): void {
+	outsideWriteReporter = reporter;
+}
+
+/**
+ * Report one write the plane makes on the terminal outside the renderer.
+ *
+ * The write's fact stands in the adapter's repaint policy: a write that
+ * could paint or move a cell forces the next frame's full rewrite, and the
+ * bell stands as the fact it is, and forces nothing. On a boot that stands
+ * no adapter the report reaches nowhere, and the write still lands on the
+ * terminal.
+ */
+export function reportOutsideTerminalWrite(write: OutsideTerminalWrite): void {
+	outsideWriteReporter?.(write);
+}
 
 /**
  * The renderer's private full-repaint request, as it stands in the
