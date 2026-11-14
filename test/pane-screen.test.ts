@@ -52,7 +52,7 @@ describe("PaneScreenReads", () => {
 
 	test("a read that differs from the previous read moves the revision, even back to an older body", () => {
 		const reads = new PaneScreenReads();
-		const first = reads.read("herdr", "pane-1", "visible", "first 0");
+		reads.read("herdr", "pane-1", "visible", "first 0");
 		reads.read("herdr", "pane-1", "visible", "first 0\nsecond 1");
 		// The comparison stands against the previous read, so a body that
 		// returns to an older one is a change of the read, and it moves.
@@ -62,7 +62,7 @@ describe("PaneScreenReads", () => {
 
 	test("the reads of two panes, of two hosts, and of two kinds keep their revision lines", () => {
 		const reads = new PaneScreenReads();
-		const paneOne = reads.read("herdr", "pane-1", "visible", "first 0");
+		reads.read("herdr", "pane-1", "visible", "first 0");
 		const paneTwo = reads.read("herdr", "pane-2", "visible", "first 0");
 		expect(paneTwo.revision).toBe(1);
 		const hostTwo = reads.read("herdr-core", "pane-1", "visible", "first 0");
@@ -94,7 +94,7 @@ describe("TurnLogReads", () => {
 
 	test("a read that differs moves the revision, and the logs of two tickets keep their revision lines", () => {
 		const reads = new TurnLogReads();
-		const first = reads.read("ticket-1", entries);
+		reads.read("ticket-1", entries);
 		const changed = reads.read("ticket-1", [
 			...entries,
 			{ kind: "text", text: "The last line stands." },
@@ -144,7 +144,7 @@ describe("shaping a screen fact at a width", () => {
 	});
 
 	test("a width the fact has not stood on shapes the body once at that width, and the stored lines stand beside it", () => {
-		const screen = visibleScreen("a".repeat(90) + " " + "b".repeat(90), 1);
+		const screen = visibleScreen(`${"a".repeat(90)} ${"b".repeat(90)}`, 1);
 		const wide = visibleScreenLines(screen, 60);
 		expect(wide.length).toBeGreaterThan(2);
 		expect(visibleScreenLines(screen, 60)).toBe(wide);
