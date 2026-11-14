@@ -15,6 +15,7 @@ import {
 	HerdrAgentReader,
 	MergedAgentReader,
 	ObservationCoordinator,
+	type ObservationReport,
 	STARTUP_GRACE_MS,
 	stripAnsi,
 } from "../src/observation.ts";
@@ -1121,7 +1122,7 @@ describe("the observation cycle", () => {
 		state.sourceFact.applyFetch(source, success([fetched()]));
 		handOut(state, "github:github.com:I_5");
 		const statuses: string[] = [];
-		let changes = 0;
+		const reports: ObservationReport[] = [];
 		const coordinator = new ObservationCoordinator({
 			state,
 			herdr: {
@@ -1145,8 +1146,8 @@ describe("the observation cycle", () => {
 			onCycleEnd: () => undefined,
 			log: NOOP_LOGGER,
 			turnLogs: { read: async () => ({ kind: "unavailable" }) },
-			onChanged: () => {
-				changes += 1;
+			onReport: (report) => {
+				reports.push(report);
 			},
 			onStatus: (_kind, text) => {
 				statuses.push(text);
@@ -1160,7 +1161,17 @@ describe("the observation cycle", () => {
 		expect(statuses).toEqual([
 			"herdr is unreachable: no herdr session; the observation is holding",
 		]);
-		expect(changes).toBe(1);
+		// The failure marker appears without any other change, and the second
+		// failing probe reports the same object: the standing the plane already
+		// holds costs nothing (issue #422, ADR 0146).
+		expect(reports).toHaveLength(2);
+		expect(reports[1]).toBe(reports[0]);
+		expect(reports[0]).toEqual({
+			agents: null,
+			movedAgents: [],
+			ticketsMoved: false,
+			consultationsMoved: false,
+		});
 		expect(coordinator.lastAgents()).toBeNull();
 		state.close();
 	});
@@ -4804,7 +4815,7 @@ describe("the injectable clock", () => {
 			onCycleEnd: () => undefined,
 			log: NOOP_LOGGER,
 			turnLogs: { read: async () => ({ kind: "unavailable" }) },
-			onChanged: () => undefined,
+			onReport: () => undefined,
 			onStatus: () => undefined,
 		});
 		coordinator.start();
@@ -5637,7 +5648,7 @@ describe("an agent that outlives its work cycle", () => {
 			onCycleEnd: () => undefined,
 			log: NOOP_LOGGER,
 			turnLogs: { read: async () => ({ kind: "unavailable" }) },
-			onChanged: () => {},
+			onReport: () => {},
 			onStatus: (kind, text) => {
 				statuses.push({ kind, text });
 			},
@@ -8274,5 +8285,196 @@ describe("the fresh-work walk's per-candidate waits name their facts (issue #231
 			}),
 		]);
 		state.close();
+	});
+});
+
+/**
+ * The report the seam hands over for a completed cycle (issue #422, ADR
+ * 0146): the probe's roster, null while the probe fails; the Agents that
+ * moved between the two consecutive probes; and the cycle's movement of the
+ * Ticket states and the Consultation states. The report's identity is stable
+ * on its content: the same object stands while nothing the operator can read
+ * off the screen moves, and a movement earns a new one. These tests assert
+ * that rule at the coordinator's seam, from the probe sequence and the state
+ * file the reports name.
+ */
+describe("the observation report (issue #422, ADR 0146)", () => {
+	/** A Consultation with its Agent connected: it stands working until it loses the Agent. */
+	function openingConsultation(state: FactoryState, id: string): void {
+		state.consultationRecord.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			host: "herdr" as const,
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository: { ...fetched().repository, path: "/tmp/factory" },
+			agentName: `consultation-${id}`,
+		});
+		state.consultationRecord.setConsultationAgent(id, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			sessionId: "session-1",
+		});
+	}
+
+	test("hands the same report object while the roster stands, and a new one that names the move when an Agent moves", async () => {
+		const { state, coordinator, setAgents, reports } = rig({
+			agents: [agent("pane-implement", { status: "working" })],
+		});
+		try {
+			await coordinator.tick();
+			await coordinator.tick();
+			await coordinator.tick();
+			// The quiet cycles hand back the object they already applied: the
+			// identity is the fact the plane reads off the no-write.
+			expect(reports).toHaveLength(3);
+			expect(reports[1]).toBe(reports[0]);
+			expect(reports[2]).toBe(reports[0]);
+			expect(reports[0]).toEqual({
+				agents: [agent("pane-implement", { status: "working" })],
+				movedAgents: [],
+				ticketsMoved: false,
+				consultationsMoved: false,
+			});
+
+			setAgents([agent("pane-implement", { status: "done" })]);
+			await coordinator.tick();
+			// A status move earns a new object that names the move, and the
+			// quiet cycle after it hands that object back again.
+			expect(reports[3]).not.toBe(reports[0]);
+			expect(reports[3]).toEqual({
+				agents: [agent("pane-implement", { status: "done" })],
+				movedAgents: [agent("pane-implement", { status: "done" })],
+				ticketsMoved: false,
+				consultationsMoved: false,
+			});
+			await coordinator.tick();
+			expect(reports[4]).toBe(reports[3]);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("names the Ticket move of the cycle that moved it, and the state file answers the new standing", async () => {
+		const { state, coordinator, advance, setAgents, reports } = rig({
+			agents: [agent("pane-implement", { status: "working" })],
+		});
+		try {
+			handOut(state, "github:github.com:I_5");
+			await coordinator.tick();
+			await coordinator.tick();
+			// The standing turn stands: the cycle that read the same facts
+			// hands back the object it already applied.
+			expect(reports[1]).toBe(reports[0]);
+
+			advance(30_001);
+			setAgents([agent("pane-implement", { status: "done" })]);
+			await coordinator.tick();
+			const moved = reports[2];
+			expect(moved).not.toBe(reports[0]);
+			expect(moved.movedAgents).toEqual([agent("pane-implement", { status: "done" })]);
+			expect(moved.ticketsMoved).toBe(true);
+			expect(moved.consultationsMoved).toBe(false);
+			// The screen re-derives from the state file the report names: the
+			// row answers the new standing.
+			expect(state.ticketWorkCycle.ticketsByState(["running"])).toEqual([]);
+			const [ticket] = state.ticketWorkCycle.ticketListViews([], "implement").rows;
+			expect(ticket).toEqual(
+				expect.objectContaining({ identity: "github:github.com:I_5", state: "awaiting" }),
+			);
+			// The movement flag the moved report wore settles, and the quiet
+			// cycle that follows hands the moved object back: no phantom report.
+			await coordinator.tick();
+			expect(reports[3]).toBe(moved);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a failing probe reports the null roster and no movement; a second failure reports the same object; the recovery reports a new one", async () => {
+		let failure: string | null = null;
+		const { state, coordinator, reports, statuses } = rig({
+			agents: [agent("pane-implement", { status: "working" })],
+			probeFailure: () => failure,
+		});
+		try {
+			await coordinator.tick();
+			failure = "no herdr session";
+			await coordinator.tick();
+			const failed = reports[1];
+			expect(failed).not.toBe(reports[0]);
+			expect(failed).toEqual({
+				agents: null,
+				movedAgents: [],
+				ticketsMoved: false,
+				consultationsMoved: false,
+			});
+			// The failure marker states itself once, on the cycle that entered the hold.
+			expect(statuses).toContainEqual(
+				expect.objectContaining({
+					kind: "warning",
+					text: "herdr is unreachable: no herdr session; the observation is holding",
+				}),
+			);
+			await coordinator.tick();
+			// The second failing probe reports the same object, and states nothing new.
+			expect(reports[2]).toBe(failed);
+			expect(statuses).toHaveLength(1);
+			failure = null;
+			await coordinator.tick();
+			const recovered = reports[3];
+			expect(recovered).not.toBe(failed);
+			expect(recovered.agents).toEqual([agent("pane-implement", { status: "working" })]);
+			// The null roster names no per-Agent move: the recovery is the roster's standing.
+			expect(recovered.movedAgents).toEqual([]);
+			expect(statuses).toContainEqual(
+				expect.objectContaining({
+					kind: "info",
+					text: "herdr is reachable again; the observation resumed",
+				}),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("names the Consultation move of the cycle that moved it, and the state file answers the new standing", async () => {
+		const working = agent("pane-1", {
+			status: "working",
+			sessionId: "session-1",
+			stableSessionId: "session-1",
+		});
+		const { state, coordinator, setAgents, reports } = rig({ agents: [working] });
+		try {
+			openingConsultation(state, "consultation-x");
+			await coordinator.tick();
+			await coordinator.tick();
+			// The Consultation with its Agent stands: the cycle hands back the
+			// object it already applied.
+			expect(reports[1]).toBe(reports[0]);
+			expect(reports[0].consultationsMoved).toBe(false);
+
+			setAgents([]);
+			await coordinator.tick();
+			const moved = reports[2];
+			expect(moved).not.toBe(reports[0]);
+			expect(moved.consultationsMoved).toBe(true);
+			expect(moved.agents).toEqual([]);
+			// The left Agent is named by its last known standing.
+			expect(moved.movedAgents).toEqual([working]);
+			expect(state.consultationRecord.consultation("consultation-x")).toMatchObject({
+				state: "missing",
+			});
+			// The missing Consultation stands still: the next quiet cycle hands
+			// the moved object back.
+			await coordinator.tick();
+			expect(reports[3]).toBe(moved);
+		} finally {
+			state.close();
+		}
 	});
 });

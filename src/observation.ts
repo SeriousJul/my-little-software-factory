@@ -753,6 +753,65 @@ export interface ObservationAggregates {
 	workQueue: WorkQueueAggregate;
 }
 
+/**
+ * The report of a completed observation cycle (issue #422, ADR 0146): the
+ * seam's one fact about the cycle.
+ *
+ * The report carries the cycle's facts: the probe's roster, null while the
+ * probe is failing; the Agents that moved between the two consecutive probes
+ * - a status move, an Agent joining or leaving the roster; and the cycle's
+ * movement of the Ticket states and the Consultation states, the same fact
+ * the change callback carried before the report stood in its place.
+ *
+ * The report's identity is stable on its content: while the roster's
+ * standing is unchanged and the cycle moved no Ticket and no Consultation,
+ * the coordinator hands back the same report object as the previous cycle,
+ * and only a change earns a new one. Two consecutive failing probes report
+ * the same object, and the first successful probe after them reports a new
+ * one, because the content moved from the null roster to a roster. The plane
+ * writes on a new object and nothing on the same one, so a quiet poll costs
+ * the plane one identity check and no paint.
+ */
+export interface ObservationReport {
+	/** The probe's roster, null while the probe is failing. */
+	agents: readonly HerdrAgent[] | null;
+	/**
+	 * The Agents that moved between the two consecutive probes: a status
+	 * move, an Agent joining or leaving the roster. The report that carries
+	 * the move names them; an Agent that left stands by its last known
+	 * entry.
+	 */
+	movedAgents: readonly HerdrAgent[];
+	/** The cycle moved a Ticket state: a settle, a restart, a close, a route, a pickup, a top-up. */
+	ticketsMoved: boolean;
+	/** The cycle moved a Consultation state: a settle, a recorded external turn, a snapshot fill. */
+	consultationsMoved: boolean;
+}
+
+/**
+ * The standing of a probe roster: the per-pane normalized status. Two
+ * rosters with the same standing stand for one another under the report's
+ * identity rule (ADR 0146): a status the operator can read off the screen
+ * moved, or it did not. A null roster stands beside a null roster, and a
+ * null to a roster, in either direction, is a standing change.
+ */
+function sameRosterStanding(
+	a: readonly HerdrAgent[] | null,
+	b: readonly HerdrAgent[] | null,
+): boolean {
+	if (a === null || b === null) return a === null && b === null;
+	const standing = (list: readonly HerdrAgent[]) => {
+		const byPane = new Map<string, string>();
+		for (const agent of list) byPane.set(agent.paneId, normalizeAgentStatus(agent.status));
+		return byPane;
+	};
+	const aStanding = standing(a);
+	const bStanding = standing(b);
+	if (aStanding.size !== bStanding.size) return false;
+	for (const [paneId, status] of aStanding) if (bStanding.get(paneId) !== status) return false;
+	return true;
+}
+
 interface ObservationOptions {
 	state: ObservationAggregates;
 	herdr: AgentReader;
@@ -799,14 +858,28 @@ interface ObservationOptions {
 	 * module's own Startup grace. A test that names a zero grace names it here.
 	 */
 	startupGraceMs?: number;
-	/** One UI frame changed: the tickets and the Consultations re-read. */
-	onChanged: () => void;
 	/**
-	 * The agent list of a completed cycle: the probe's list on success, null
-	 * while the probe is failing. Fires on every cycle, not only on state
-	 * changes, so a failure marker can appear without any state change.
+	 * The completed cycle's report (issue #422, ADR 0146), the seam's one
+	 * fact about a cycle: the probe's roster, null while the probe is
+	 * failing; the Agents that moved between the two consecutive probes; and
+	 * the cycle's movement of the Ticket states and the Consultation states.
+	 *
+	 * The report's identity is stable on its content: while the roster's
+	 * standing is unchanged and the cycle moved no Ticket and no
+	 * Consultation, the coordinator hands back the same report object as the
+	 * previous cycle; a movement, or the roster's standing moving - the null
+	 * roster to a roster, in either direction - earns a new one. Two
+	 * consecutive failing probes report the same object, and the first
+	 * successful probe after them reports a new one.
+	 *
+	 * The plane writes on a new object and nothing on the same one: the roster
+	 * into its screen state, the host facts re-derived from it, and the Ticket
+	 * and Consultation lists re-derived where the report names the movement. A
+	 * matching report costs the plane one identity check and no paint, so the
+	 * screen stands still while the Agents work and nothing moves, and a
+	 * failure marker can appear without any other change to the screen.
 	 */
-	onAgents?: (agents: readonly HerdrAgent[] | null) => void;
+	onReport: (report: ObservationReport) => void;
 	/** An operational message fact for the Message line. */
 	onStatus: (
 		kind: "info" | "warning" | "error",
@@ -876,8 +949,7 @@ export class ObservationCoordinator {
 	private readonly clock: RefreshClock;
 	private readonly pollIntervalMs?: number;
 	private readonly startupGraceMs: number;
-	private readonly onChanged: () => void;
-	private readonly onAgents?: (agents: readonly HerdrAgent[] | null) => void;
+	private readonly onReport: (report: ObservationReport) => void;
 	private readonly onConsultationAttention?: (consultationId: string) => void;
 	private startupReconciliation = true;
 	private suppressConsultationAttention = false;
@@ -972,6 +1044,13 @@ export class ObservationCoordinator {
 	 * pane is missing".
 	 */
 	private lastAgentsList: readonly HerdrAgent[] | null = null;
+	/**
+	 * The report the seam last handed over, the coordinator's own standing
+	 * for the identity rule (ADR 0146): this module is the only place two
+	 * consecutive cycles meet, so the comparison rides on this field by
+	 * locality. No other module sees the before and the after.
+	 */
+	private lastReport: ObservationReport | null = null;
 	/** In-flight tickets the loop already restarted this episode. */
 	private readonly restarted = new Set<string>();
 	/**
@@ -999,8 +1078,7 @@ export class ObservationCoordinator {
 		this.clock = options.clock;
 		this.pollIntervalMs = options.pollIntervalMs;
 		this.startupGraceMs = options.startupGraceMs ?? STARTUP_GRACE_MS;
-		this.onChanged = options.onChanged;
-		this.onAgents = options.onAgents;
+		this.onReport = options.onReport;
 		this.onConsultationAttention = options.onConsultationAttention;
 		this.onStatus = options.onStatus;
 		this.log = options.log;
@@ -1083,7 +1161,6 @@ export class ObservationCoordinator {
 				"warning",
 				`observation cycle failed: ${error instanceof Error ? error.message : String(error)}`,
 			);
-			this.onChanged();
 		} finally {
 			this.cycleInFlight = false;
 		}
@@ -1238,14 +1315,12 @@ export class ObservationCoordinator {
 					"warning",
 					`herdr is unreachable: ${probe.reason}; the observation is holding`,
 				);
-				this.onChanged();
 			}
 			return;
 		}
 		if (this.holdingHerdrError) {
 			this.holdingHerdrError = false;
 			this.onStatus("info", "herdr is reachable again; the observation resumed", "herdr-recovered");
-			this.onChanged();
 		}
 		// The run's own host answered, but on a run that reads both the other
 		// host's half of the merged list did not (ADR 0142): the list stands
@@ -1260,7 +1335,6 @@ export class ObservationCoordinator {
 					"warning",
 					`herdr-core is unreachable: ${coreHostFailure}; the merged list holds the herdr half only`,
 				);
-				this.onChanged();
 			}
 			return;
 		}
@@ -1271,7 +1345,6 @@ export class ObservationCoordinator {
 				"herdr-core is reachable again; the merged list holds both hosts",
 				"herdr-core-recovered",
 			);
-			this.onChanged();
 		}
 	}
 
@@ -1289,12 +1362,22 @@ export class ObservationCoordinator {
 		// state or the UI anymore.
 		if (this.stopped) return;
 		if (probe.kind === "error") {
-			// A failed probe carries no list: drop the markers until it holds.
-			this.onAgents?.(null);
+			// A failed probe carries no list: the report hands its null roster
+			// over, and the host error line states the holding beside it. The
+			// probe moved the roster's standing from a roster to null, so the
+			// report is a new object and the plane writes the stale standing
+			// marker; a second failing probe reports the same object and
+			// writes nothing (issue #422, ADR 0146).
+			this.sendReport(null, [], false, false);
 			this.stateHostErrors(probe);
 			return;
 		}
-		this.lastAgentsList = probe.agents;
+		// The probe's roster is the reader's own memory: the module takes its
+		// own copy, so the report's identity comparison stands on the module's
+		// standing and never on a buffer the reader may reuse or move
+		// (issue #422, ADR 0146).
+		const roster = [...probe.agents];
+		this.lastAgentsList = roster;
 		// The startup reconciliation's attention silence is the module's own
 		// standing: the App, the cycle's only caller, always runs reconcile-only.
 		this.suppressConsultationAttention = this.startupReconciliation;
@@ -1306,7 +1389,7 @@ export class ObservationCoordinator {
 		// fact the operator's key writes.
 		const autoOn = this.state.handoff.autoHandoffMode();
 		const byPane = new Map<string, HerdrAgent>();
-		for (const agent of probe.agents) byPane.set(agent.paneId, agent);
+		for (const agent of roster) byPane.set(agent.paneId, agent);
 
 		// An agent can outlive the cycle that started it. Re-claim the live ones
 		// before the parallel count is taken: a reclaimed agent is real work.
@@ -1354,7 +1437,7 @@ export class ObservationCoordinator {
 		// mode runs no automatic rule, so it reads no pile for one.
 		changed = await this.runCycleStep(changed, () => this.walkAwaitingRows(autoOn));
 
-		await this.finishCycle(probe.agents, byPane, changed);
+		await this.finishCycle(roster, byPane, changed);
 	}
 
 	/**
@@ -1417,7 +1500,6 @@ export class ObservationCoordinator {
 		// A Consultation in `opening` or `working` already holds its seat in
 		// the shared count above (ADR 0034).
 		const consultationChanged = await this.observeConsultations(agents);
-		walked = consultationChanged || walked;
 
 		// The wake arm (ADR 0084): every working agent the probe shows on an
 		// in-flight ticket or a working Consultation holds a `herdr agent
@@ -1426,8 +1508,85 @@ export class ObservationCoordinator {
 		// keeps its standing: a wake only runs the same cycle on the same facts.
 		this.armAgentWaits(byPane);
 		this.reportDispatchPause();
-		if (walked) this.onChanged();
-		this.onAgents?.(agents);
+		// The cycle's report (issue #422, ADR 0146): the roster, the Agents
+		// that moved between the two consecutive probes, and the cycle's
+		// movement of the Ticket states and the Consultation states, in the
+		// one object whose identity the module's own standing carries.
+		this.sendReport(
+			agents,
+			this.movedAgentsSince(this.lastReport?.agents ?? null, agents),
+			walked,
+			consultationChanged,
+		);
+	}
+
+	/**
+	 * The report the seam takes for the completed cycle (issue #422, ADR
+	 * 0146), under the identity rule the module's own standing carries: the
+	 * report's identity is stable on its content, and this module is the only
+	 * place two consecutive cycles meet.
+	 *
+	 * While the roster's standing is unchanged and the cycle moved no Ticket
+	 * and no Consultation, the coordinator hands back the same report object
+	 * as the previous cycle, and the plane that compares identities writes
+	 * nothing: no state write, no commit, no paint. A movement of either
+	 * kind, or the roster's standing moving - the null roster to a roster,
+	 * in either direction - earns a new object. Two consecutive failing
+	 * probes report the same object, and the first successful probe after
+	 * them reports a new one.
+	 */
+	private sendReport(
+		agents: readonly HerdrAgent[] | null,
+		movedAgents: readonly HerdrAgent[],
+		ticketsMoved: boolean,
+		consultationsMoved: boolean,
+	): ObservationReport {
+		const previous = this.lastReport;
+		if (
+			previous !== null &&
+			!ticketsMoved &&
+			!consultationsMoved &&
+			sameRosterStanding(previous.agents, agents)
+		) {
+			this.onReport(previous);
+			return previous;
+		}
+		const report: ObservationReport = { agents, movedAgents, ticketsMoved, consultationsMoved };
+		this.lastReport = report;
+		this.onReport(report);
+		return report;
+	}
+
+	/**
+	 * The Agents that moved between the two consecutive probes: a status
+	 * move, an Agent joining or leaving the roster. The before side is the
+	 * roster the previous cycle's report carried, and a null roster there
+	 * names no move: the standing change a null to a roster carries is the
+	 * roster field's, not an Agent's.
+	 */
+	private movedAgentsSince(
+		previous: readonly HerdrAgent[] | null,
+		current: readonly HerdrAgent[],
+	): readonly HerdrAgent[] {
+		if (previous === null) return [];
+		const before = new Map<string, HerdrAgent>();
+		for (const agent of previous) before.set(agent.paneId, agent);
+		const after = new Set<string>();
+		const moved: HerdrAgent[] = [];
+		for (const agent of current) {
+			after.add(agent.paneId);
+			const prior = before.get(agent.paneId);
+			if (
+				prior === undefined ||
+				normalizeAgentStatus(prior.status) !== normalizeAgentStatus(agent.status)
+			) {
+				moved.push(agent);
+			}
+		}
+		for (const prior of previous) {
+			if (!after.has(prior.paneId)) moved.push(prior);
+		}
+		return moved;
 	}
 
 	/**
@@ -1861,7 +2020,6 @@ export class ObservationCoordinator {
 				this.state.consultationRecord.fillConsultationSnapshot(consultation.id, output)
 			) {
 				changed = true;
-				this.onChanged();
 			}
 		}
 		return changed;
@@ -1931,7 +2089,6 @@ export class ObservationCoordinator {
 			},
 		);
 		if (!settled) return false;
-		this.onChanged();
 		if (!this.suppressConsultationAttention) this.onConsultationAttention?.(consultation.id);
 		// A turn that failed or aborted is named on the Message line, so the
 		// operator reads why it did not answer. Any other cause settles quiet.
