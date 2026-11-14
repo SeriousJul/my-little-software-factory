@@ -8545,7 +8545,9 @@ function useAppSourceFacts(props: AppProps, prev: AppTicketFactsStage) {
 	// the app creates once per run from the config and the command runner.
 	// The config getter keeps both gates reading the config the app holds
 	// current, and the logger, where there is one, is the record a failed
-	// send leaves a line in.
+	// send leaves a line in. The service reports the bell it puts on the
+	// terminal outside the renderer through the plane's report, which the
+	// entry wires to the renderer adapter (ADR 0145).
 	const attention = useMemo(
 		() => new AttentionService(() => configRef.current, commandRunner, { logger }),
 		[commandRunner, logger, configRef],
