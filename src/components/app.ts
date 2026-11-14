@@ -125,6 +125,7 @@ import {
 } from "../plane-action-registry.ts";
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
 import { RefreshCoordinator, SYSTEM_CLOCK } from "../refresh.ts";
+import type { OutsideTerminalWrite } from "../renderer-adapter.ts";
 import type { RepositoryMapping } from "../repo.ts";
 import { repositoryInitCheckoutPath } from "../repo.ts";
 import {
@@ -482,6 +483,15 @@ export interface AppProps {
 	 * then changes nothing, and the owner's ordering stays one rule.
 	 */
 	onReady: (ready: AppTeardown) => void;
+	/**
+	 * Receives the writes the plane makes on the terminal outside the
+	 * renderer (ADR 0145), reported as the facts they are: the bell on a
+	 * Fault paints no cell and moves no cursor, so it forces no rewrite of
+	 * the renderer's next frame. The entry binds the renderer adapter's
+	 * report, so the adapter's repaint policy reads the write as the fact
+	 * it is; a boot that stands no such writer passes none.
+	 */
+	reportOutsideTerminalWrite?: (write: OutsideTerminalWrite) => void;
 }
 
 export interface AppTeardown {
@@ -8545,10 +8555,17 @@ function useAppSourceFacts(props: AppProps, prev: AppTicketFactsStage) {
 	// the app creates once per run from the config and the command runner.
 	// The config getter keeps both gates reading the config the app holds
 	// current, and the logger, where there is one, is the record a failed
-	// send leaves a line in.
+	// send leaves a line in. The write report, where the entry binds one,
+	// tells the renderer adapter's repaint policy (ADR 0145) what the bell
+	// put on the terminal outside the renderer.
+	const reportOutsideTerminalWrite = props.reportOutsideTerminalWrite;
 	const attention = useMemo(
-		() => new AttentionService(() => configRef.current, commandRunner, { logger }),
-		[commandRunner, logger, configRef],
+		() =>
+			new AttentionService(() => configRef.current, commandRunner, {
+				logger,
+				reportTerminalWrite: reportOutsideTerminalWrite,
+			}),
+		[commandRunner, logger, configRef, reportOutsideTerminalWrite],
 	);
 	// A stale source is a failed refresh the operator must answer to. A
 	// removed source is the operator's own config decision: the plane stops

@@ -831,8 +831,11 @@ strings to stable references (20, 30, 30, 29, 29) all landed inside or
 above the 0.5.11 baseline range (0-30); none reduced the rate, and the
 stable-reference change made the worst runs worse, so it was reverted.
 Consolidating the body into one text element rendered wrong and was
-reverted. The force-full-repaint in `src/factory.ts` stays: it is the
-recorded workaround for the drift class of OpenTUI issue 1187.
+reverted. The force-full-repaint stays: it is the recorded workaround for
+the drift class of OpenTUI issue 1187. Since issue #421 (ADR 0145) it
+stands in the renderer adapter module (`src/renderer-adapter.ts`) as the
+blanket-force fact the entry passes to the repaint policy on every frame,
+and the entry marks no renderer private.
 
 This is recorded as an open upstream defect, not as a pass. The
 `bun run lint`, `bun run typecheck`, and `bun test` checks pass in full on
