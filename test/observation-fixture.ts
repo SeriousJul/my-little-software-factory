@@ -23,6 +23,7 @@ import {
 	type AgentReader,
 	type AgentWaitResult,
 	ObservationCoordinator,
+	type ObservationReport,
 	stripAnsi,
 } from "../src/observation.ts";
 import { type SessionRecordLookup, UNAVAILABLE_SESSION_RECORD } from "../src/session-record.ts";
@@ -76,6 +77,12 @@ function stubDefaultHerdr(runner: FakeRunner, checkout: string): void {
 export interface RigOptions {
 	/** The agents the probe lists, or a function that answers the probe itself. */
 	agents?: HerdrAgent[] | (() => HerdrAgent[]);
+	/**
+	 * The probe failure the probe reports while it stands: the reason of the
+	 * error probe. Absent: the probe answers its list, the standing the suite
+	 * runs on.
+	 */
+	probeFailure?: () => string | null;
 	/** The config over the base the suite builds. */
 	config?: Partial<FactoryConfig>;
 	/** The auto-handoff mode the state file starts with. */
@@ -116,8 +123,8 @@ export interface RigOptions {
 	refireRecordedSkips?: () => Promise<RefiredSkip[]>;
 	/** The cycle end the app re-reads the ticket's sources on; absent: none. */
 	onCycleEnd?: (identity: string) => void;
-	/** The agent list of a completed cycle, on every cycle. */
-	onAgents?: (agents: readonly HerdrAgent[] | null) => void;
+	/** The completed cycle's report, the seam's one fact about the cycle. */
+	onReport?: (report: ObservationReport) => void;
 	/** A Consultation the shared monitor names for attention. */
 	onConsultationAttention?: (consultationId: string) => void;
 	/** The loop's own calls and dispatches in order. */
@@ -172,6 +179,13 @@ export interface Rig {
 	}>;
 	/** The tickets a cycle ended, in order. */
 	cycleEnds: string[];
+	/**
+	 * The reports the seam handed over, in order. The identity rule stands on
+	 * the object itself (issue #422, ADR 0146): a quiet cycle lands the same
+	 * object as the cycle before it, so the test compares the objects, not
+	 * their copies.
+	 */
+	reports: ObservationReport[];
 	/** The loop's own calls and dispatches in order. */
 	order: string[];
 	/** The Message line facts the module and the cycle report, in order. */
@@ -206,7 +220,11 @@ export interface Rig {
  */
 function fixtureReader(options: RigOptions, probeAgents: () => HerdrAgent[]): AgentReader {
 	return {
-		listAgents: async () => ({ kind: "ok", agents: probeAgents() }),
+		listAgents: async () => {
+			const failure = options.probeFailure?.() ?? null;
+			if (failure !== null) return { kind: "error", reason: failure };
+			return { kind: "ok", agents: probeAgents() };
+		},
 		// The AgentReader contract: pane output comes back ANSI stripped.
 		readPane:
 			options.readPane ??
@@ -249,6 +267,7 @@ export function rig(options: RigOptions, baseConfig: FactoryConfig): Rig {
 	const planeAsks: PlaneActionIntent[] = [];
 	const cleanups: Rig["cleanups"] = [];
 	const cycleEnds: string[] = [];
+	const reports: ObservationReport[] = [];
 	const order = options.order ?? [];
 	const statuses: Rig["statuses"] = [];
 	const lines: RecordedLine[] = [];
@@ -328,8 +347,10 @@ export function rig(options: RigOptions, baseConfig: FactoryConfig): Rig {
 		},
 		pollIntervalMs: options.pollIntervalMs,
 		startupGraceMs: options.startupGraceMs,
-		onChanged: () => undefined,
-		onAgents: options.onAgents,
+		onReport: (report) => {
+			reports.push(report);
+			options.onReport?.(report);
+		},
 		onConsultationAttention: options.onConsultationAttention,
 		log: options.log ?? recordLogger(lines),
 		turnLogs: {
@@ -391,6 +412,7 @@ export function rig(options: RigOptions, baseConfig: FactoryConfig): Rig {
 		planeAsks,
 		cleanups,
 		cycleEnds,
+		reports,
 		order,
 		statuses,
 		lines,

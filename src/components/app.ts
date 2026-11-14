@@ -105,6 +105,7 @@ import {
 	MergedAgentReader,
 	matchConsultationAgent,
 	ObservationCoordinator,
+	type ObservationReport,
 	SESSION_TURN_LOGS,
 	STARTUP_GRACE_MS,
 } from "../observation.ts";
@@ -5716,6 +5717,13 @@ function observationCoordinatorBase(
 	// recorded for its name. The read's host answer is the poll's own, and the
 	// cycle arms no wait before its first poll answers.
 	const hostByReference = { current: new Map<string, AgentHost>() };
+	// The report the plane last applied (issue #422, ADR 0146): the identity
+	// check the report's standing earns. On the same object the cycle writes
+	// nothing - no state write, no commit, no paint; on a new one, the plane
+	// writes the facts the report names: the roster into the screen state, the
+	// host facts re-derived from it, and the Ticket and Consultation lists
+	// re-derived where the report names the movement.
+	let lastAppliedReport: ObservationReport | null = null;
 	const herdr = new MergedAgentReader({
 		runner: f.commandRunner,
 		runHost: agentHost.host,
@@ -5749,21 +5757,22 @@ function observationCoordinatorBase(
 			f.refreshTicketSources(identity);
 			f.closeCycleEndDraft(identity);
 		},
-		onChanged: () => {
-			f.replaceTickets();
-			f.replaceConsultations();
-		},
-		onAgents: (agents) => {
+		onReport: (report) => {
+			// On the report the plane already applied, the cycle writes nothing.
+			if (report === lastAppliedReport) return;
+			lastAppliedReport = report;
 			// The poll's own host answer: a wait the cycle arms routes to the
 			// host the agent stands on, by the name and the handle the record
 			// names it by (issue #410).
 			const hosts = new Map<string, AgentHost>();
-			for (const agent of agents ?? []) {
+			for (const agent of report.agents ?? []) {
 				hosts.set(agent.paneId, agent.host);
 				if (agent.name !== undefined) hosts.set(agent.name, agent.host);
 			}
 			hostByReference.current = hosts;
-			f.setAgents(agents);
+			f.setAgents(report.agents);
+			if (report.ticketsMoved) f.replaceTickets();
+			if (report.consultationsMoved) f.replaceConsultations();
 		},
 		onConsultationAttention: (_id) => {
 			// The flash stays here; the bell write and its attention-bell gate
