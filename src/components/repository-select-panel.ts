@@ -28,10 +28,11 @@ import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import type { InitableRepository } from "../repository-list.ts";
-import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
+import type { ControlHandler } from "./control-dispatch.ts";
 import { availabilityFacts, type StandingFacts } from "./controls.ts";
 import type { MessageFact } from "./messages.ts";
 import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
+import { type ScreenSlot, useSlotDispatch } from "./screen-stack.ts";
 import { TextField } from "./shared/fields.ts";
 import { controlInk } from "./shared/presentation.ts";
 import { useDecisionRegion } from "./shared/region.ts";
@@ -80,6 +81,13 @@ interface RepositorySelectPanelProps {
 	 * for the same reason.
 	 */
 	onAutoHandoff: () => void;
+	/**
+	 * The stack's slot for the panel's screen (ADR 0150): the key bus holds
+	 * the slot's one stable wrapper while the screen is active, and the slot's
+	 * record preserves the marked rows, the search, and the list's cursor
+	 * while the screen is suspended.
+	 */
+	slot?: ScreenSlot;
 }
 
 /** The content column stops at 60 cells, the launcher's width. */
@@ -102,24 +110,33 @@ const QUEUED_BADGE = " queued";
 export function RepositorySelectPanel(props: RepositorySelectPanelProps): ReactElement {
 	const { width: terminalWidth } = useTerminalDimensions();
 	const status = useRepositorySelectFetch(props.fetchRepositories);
-	const [query, setQuery] = useState("");
-	// The rows the operator marked for the queue (ADR 0083). The mark is the
-	// panel's own state: the list keeps no draft, so a close discards it.
-	const [pending, setPending] = useState<ReadonlySet<string>>(
-		() => new Set(props.initialPending ?? []),
+	const repositories = status.state === "ready" ? status.repositories : [];
+	const [query, setQuery] = useState(() =>
+		typeof props.slot?.facts.query === "string" ? (props.slot.facts.query as string) : "",
 	);
-	const list = useRepositorySelectList(status.state === "ready" ? status.repositories : [], query);
-	const ink = controlInk();
-
+	// The rows the operator marked for the queue (ADR 0083). The mark is the
+	// panel's own state: the list keeps no draft, so a close discards it. A
+	// suspended panel keeps it in the stack's slot (ADR 0150), so a guide over
+	// the panel never unmarks a row.
+	const [pending, setPending] = useState<ReadonlySet<string>>(() => {
+		const saved = props.slot?.facts.pending;
+		return new Set(
+			typeof saved === "string"
+				? [saved]
+				: Array.isArray(saved)
+					? saved
+					: (props.initialPending ?? []),
+		);
+	});
+	const list = useRepositorySelectList(
+		repositories,
+		query,
+		(props.slot?.facts.regionAt as number | undefined) ?? 0,
+	);
 	// The panel states the facts its own list produces: the rows it holds, the
 	// search's text, and the rows the operator marked for the queue.
-	const facts = availabilityFacts("repository-select", props.standing, {
-		listCanMove: list.filtered.length > 0,
-		repositoryCount: list.filtered.length,
-		searchText: query,
-		pendingCount: pending.size,
-	});
-	useControlDispatch({
+	const facts = repositorySelectFacts(props.standing, { list, query, pending });
+	useSlotDispatch(props.slot, {
 		facts,
 		active: props.inputActive,
 		onUnavailable: props.onUnavailable,
@@ -127,21 +144,19 @@ export function RepositorySelectPanel(props: RepositorySelectPanelProps): ReactE
 		handlers: repositorySelectHandlers(props, {
 			region: list.region,
 			rows: list.rows,
-			repositories: status.state === "ready" ? status.repositories : [],
+			repositories,
 			pending,
 			setPending,
 			setQuery,
 		}),
 	});
+	useRepositorySelectSlotMirror(props.slot, { pending, query, region: list.region });
 
-	const note = repositorySelectNote(list.region, list.frame);
 	const above = repositorySelectAbove({
 		status,
 		list,
 		pending,
-		ink,
 		query,
-		note,
 		inputActive: props.inputActive ?? true,
 		setQuery,
 	});
@@ -154,6 +169,45 @@ export function RepositorySelectPanel(props: RepositorySelectPanelProps): ReactE
 		message: props.message,
 		bar: { mode: "repository-select", facts },
 		queuePaused: props.standing.queuePaused,
+	});
+}
+
+/** The facts the catalogue gates on, stated by the list the panel holds. */
+function repositorySelectFacts(
+	standing: StandingFacts,
+	fields: {
+		list: ReturnType<typeof useRepositorySelectList>;
+		query: string;
+		pending: ReadonlySet<string>;
+	},
+) {
+	const { list, query, pending } = fields;
+	return availabilityFacts("repository-select", standing, {
+		listCanMove: list.filtered.length > 0,
+		repositoryCount: list.filtered.length,
+		searchText: query,
+		pendingCount: pending.size,
+	});
+}
+
+/**
+ * The stack's record is the one place the panel's marks, its search, and its
+ * cursor stand while the screen is suspended (ADR 0150).
+ */
+function useRepositorySelectSlotMirror(
+	slot: ScreenSlot | undefined,
+	fields: {
+		pending: ReadonlySet<string>;
+		query: string;
+		region: ReturnType<typeof useRepositorySelectList>["region"];
+	},
+) {
+	const { pending, query, region } = fields;
+	useEffect(() => {
+		if (slot === undefined) return;
+		slot.facts.pending = Array.from(pending);
+		slot.facts.query = query;
+		slot.facts.regionAt = region.at;
 	});
 }
 
@@ -187,7 +241,11 @@ function useRepositorySelectFetch(
 }
 
 /** The list: the search filter, the frame, the region, the rows. */
-function useRepositorySelectList(repositories: readonly InitableRepository[], query: string) {
+function useRepositorySelectList(
+	repositories: readonly InitableRepository[],
+	query: string,
+	initialCursor = 0,
+) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	// The search filters the list by substring, the way the shared type-ahead
 	// matches: containment of the whole query, case-insensitive.
@@ -208,7 +266,7 @@ function useRepositorySelectList(repositories: readonly InitableRepository[], qu
 		key: item.identity,
 		label: item.displayName,
 	}));
-	const region = useDecisionRegion(rows, visibleRows);
+	const region = useDecisionRegion(rows, visibleRows, initialCursor);
 	return { filtered, frame, visibleRows, rows, region };
 }
 
@@ -291,13 +349,13 @@ function repositorySelectAbove(fields: {
 	status: RepositorySelectStatus;
 	list: ReturnType<typeof useRepositorySelectList>;
 	pending: ReadonlySet<string>;
-	ink: ReturnType<typeof controlInk>;
 	query: string;
-	note: string;
 	inputActive: boolean;
 	setQuery: (query: string) => void;
 }): ReactElement[] {
-	const { status, list, pending, ink, query, note, inputActive, setQuery } = fields;
+	const { status, list, pending, query, inputActive, setQuery } = fields;
+	const ink = controlInk();
+	const note = repositorySelectNote(list.region, list.frame);
 	const bodyRows = repositorySelectBodyRows({ status, list, pending, ink, query });
 	return [
 		createElement(TextField, {

@@ -2450,17 +2450,16 @@ describe("the decision modal", () => {
 				await guideKey(setup, "override", "e", { quiet: true });
 				await waitFor(setup, { shows: "Override" });
 				await settle(setup);
-				// Esc drops the edit and returns to the decision still being made.
-				// The returned modal pops in again, and the first frame that sheds
-				// the panel is mid-convergence: drive the pop to rest by the named
-				// tick and read the settled decision frame (ADR 0149).
-				await closeSurface(
+				// Esc drops the edit and returns to the decision still being
+				// made, on the row the cursor stood on before the edit (ADR 0150):
+				// the panel stands suspended beneath the edit and never re-opens
+				// from row zero.
+				const back = await closeSurface(
 					setup,
 					"the decision modal",
 					(f) => !f.includes("Override") && f.includes("Decision:"),
 				);
-				const settled = await tickAnimation(setup, "rest");
-				expect(frameText(settled)).toContain("❯ Close");
+				expect(frameText(back)).toContain("❯ Handoff: review");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},

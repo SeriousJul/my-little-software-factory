@@ -26,7 +26,7 @@
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	AGENT_HOSTS,
 	type AgentHost,
@@ -40,13 +40,14 @@ import {
 	validateConsultationInput,
 } from "../consultation/response-draft.ts";
 import { utf8ByteLength } from "../text-bounds.ts";
-import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
+import type { ControlHandler } from "./control-dispatch.ts";
 import type { InteractionMode, StandingFacts } from "./controls.ts";
 
 import type { MessageFact } from "./messages.ts";
 import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
+import { type ScreenSlot, useSlotDispatch } from "./screen-stack.ts";
 import { ActionItem, ChoiceRow, useChoice } from "./shared/choices.ts";
-import { DraftField, type FieldHandle } from "./shared/fields.ts";
+import { DraftField, type FieldEditingState, type FieldHandle } from "./shared/fields.ts";
 import { copySelectionWith, type FormFocus, moveFieldWith, useFormSlots } from "./shared/form.ts";
 import { controlInk, STATE_WORDS } from "./shared/presentation.ts";
 import { truncateToWidth } from "./text.ts";
@@ -107,6 +108,13 @@ interface ConsultationLauncherProps {
 	 * the F5 alias: required for the same reason.
 	 */
 	onAutoHandoff: () => void;
+	/**
+	 * The stack's slot for the launcher's screen (ADR 0150): the key bus holds
+	 * the slot's one stable wrapper while the screen is active, and the slot's
+	 * record preserves the form's draft, its slot values, the slot under the
+	 * cursor, and the field's editing state while the screen is suspended.
+	 */
+	slot?: ScreenSlot;
 }
 
 /** The launcher's slots, in the order Tab walks them. */
@@ -144,10 +152,22 @@ function launcherColumns(contentWidth: number): { labelWidth: number; valueWidth
 
 export function ConsultationLauncher(props: ConsultationLauncherProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const choices = useLauncherChoices(props.types, props.repositories, props.draft, props.standing);
-	const form = useLauncherForm(props, choices);
+	// The form the operator left: the shell's kept draft, or the stack's
+	// preserved record when the screen resumes mid-launch (ADR 0150), so a
+	// guide opened over the launcher never moves the draft or the slot under
+	// the cursor.
+	const seededDraft: LauncherDraft | null | undefined =
+		(props.slot?.facts.draft as LauncherDraft | undefined) ?? props.draft;
+	const seededFocusIndex =
+		typeof props.slot?.facts.focusId === "string"
+			? Math.max(
+					0,
+					SLOTS.findIndex((item) => item.id === (props.slot?.facts.focusId as string)),
+				)
+			: 0;
+	const choices = useLauncherChoices(props.types, props.repositories, seededDraft, props.standing);
+	const form = useLauncherForm(props, choices, seededDraft, seededFocusIndex);
 	const formFacts = launcherFormFacts(props, form);
-	const modeFacts = formFacts();
 	const frameFacts = useLauncherFrame({
 		draftSize: form.draftSize,
 		focus: form.focus,
@@ -156,17 +176,26 @@ export function ConsultationLauncher(props: ConsultationLauncherProps) {
 		terminalWidth,
 		terminalHeight,
 	});
-	useControlDispatch({
+	useSlotDispatch(props.slot, {
 		facts: formFacts,
 		active: props.inputActive,
 		onUnavailable: props.onUnavailable,
 		onEmergencyExit: props.onEmergencyExit,
 		// The arrows inside a Draft field belong to its caret, so only the
 		// selector and action slots let the form move.
-		handlers: launcherHandlers(props, { form, mode: modeFacts.mode }),
+		handlers: launcherHandlers(props, { form, mode: formFacts().mode }),
+	});
+	// The stack's record is the one place the form stands while the screen is
+	// suspended: the draft, the slot values, the slot under the cursor, and
+	// the field's editing state.
+	useEffect(() => {
+		const slot = props.slot;
+		if (slot === undefined) return;
+		slot.facts.draft = form.formOf();
+		slot.facts.focusId = form.focus.current()?.id ?? SLOTS[0].id;
 	});
 
-	const rows = launcherRows(props, form, frameFacts);
+	const rows = launcherRows(props, form, frameFacts, seededDraft);
 	const ink = controlInk();
 
 	return createElement(ModalSurface, {
@@ -186,7 +215,7 @@ export function ConsultationLauncher(props: ConsultationLauncherProps) {
 			minRows: FIXED_ROWS + MINIMUM_DRAFT_ROWS,
 		},
 		message: props.message,
-		bar: { mode: modeFacts.mode, facts: modeFacts },
+		bar: { mode: formFacts().mode, facts: formFacts() },
 		queuePaused: props.standing.queuePaused,
 	});
 }
@@ -219,13 +248,15 @@ function useLauncherChoices(
 function useLauncherForm(
 	props: ConsultationLauncherProps,
 	choices: ReturnType<typeof useLauncherChoices>,
+	seededDraft: LauncherDraft | null | undefined,
+	seededFocusIndex = 0,
 ) {
 	const { names, typeChoice, repositoryChoice, hostChoice } = choices;
-	const { repositories, draft, onLaunch } = props;
-	const inputRef = useRef(draft?.input ?? "");
+	const { repositories, onLaunch } = props;
+	const inputRef = useRef(seededDraft?.input ?? "");
 	const selectionRef = useRef(false);
 	const field = useRef<FieldHandle | null>(null);
-	const focus: FormFocus = useFormSlots(SLOTS);
+	const focus: FormFocus = useFormSlots(SLOTS, seededFocusIndex);
 	const [draftSize, setDraftSize] = useState(inputRef.current);
 
 	const currentType = () => typeChoice.value();
@@ -379,12 +410,22 @@ function launcherRows(
 	props: ConsultationLauncherProps,
 	form: ReturnType<typeof useLauncherForm>,
 	frameFacts: ReturnType<typeof useLauncherFrame>,
+	seededDraft: LauncherDraft | null | undefined,
 ): ReactElement[] {
 	const { frame, columns, draftHeight, draftError, actionError } = frameFacts;
 	const inputActive = props.inputActive ?? true;
 	return [
 		...launcherChoiceRows(props, form, columns, inputActive),
-		launcherDraftRow({ props, form, columns, draftHeight, draftError, inputActive }),
+		launcherDraftRow({
+			props,
+			form,
+			columns,
+			draftHeight,
+			draftError,
+			inputActive,
+			value: seededDraft?.input ?? "",
+			seed: props.slot?.facts.inputState as FieldEditingState | null | undefined,
+		}),
 		launcherActionRows(form, frame, actionError, inputActive),
 	];
 }
@@ -442,19 +483,31 @@ function launcherDraftRow(fields: {
 	draftHeight: number;
 	draftError: string | undefined;
 	inputActive: boolean;
+	/**
+	 * The text the field stands on: the shell's kept draft, or the stack's
+	 * preserved record on a resume (ADR 0150).
+	 */
+	value: string;
+	/**
+	 * The editing state the screen's record holds (ADR 0150): the caret and the
+	 * selection the field stood on when the screen last suspended. A fresh open
+	 * carries no record, so the field takes its opening caret.
+	 */
+	seed: FieldEditingState | null | undefined;
 }): ReactElement {
-	const { props, form, columns, draftHeight, draftError, inputActive } = fields;
+	const { props, form, columns, draftHeight, draftError, inputActive, value, seed } = fields;
 	const bytes = utf8ByteLength(form.draftSize);
 	return createElement(DraftField, {
 		key: "input",
 		label: "Initial input",
-		value: props.draft?.input ?? "",
+		value,
 		focused: form.focus.paints("input") && inputActive,
 		inputActive,
 		width: columns.valueWidth,
 		labelWidth: columns.labelWidth,
 		height: draftHeight,
 		fieldRef: form.field,
+		seed,
 		hint: `UTF-8 bytes: ${bytes}/${CONSULTATION_INPUT_LIMIT}`,
 		// The size reason belongs on the field, because the field is where the
 		// oversized text is: the text stays editable so the operator can shorten
@@ -464,6 +517,13 @@ function launcherDraftRow(fields: {
 			form.inputRef.current = facts.value;
 			form.selectionRef.current = facts.selection !== "";
 			form.setDraftSize(facts.value);
+			// The stack's record stands on the field's editing state while the
+			// screen is suspended: the value, the caret, and the selection
+			// (ADR 0150). A caret move reports like a change, so the record is
+			// never behind the operator's last key.
+			const slot = props.slot;
+			const editing = form.field.current?.editingState();
+			if (slot !== undefined && editing !== null) slot.facts.inputState = editing;
 		},
 		onRefuse: (reason: string) => props.onUnavailable?.(reason),
 	});

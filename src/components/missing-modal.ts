@@ -14,8 +14,8 @@
  * catalogs them. While it is open, the keys of the app below are disabled.
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import { type ReactElement, useState } from "react";
-import type { StandingFacts } from "./controls.ts";
+import type { ReactElement } from "react";
+import type { AvailabilityFacts, StandingFacts } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
 import {
@@ -26,6 +26,7 @@ import {
 	scrollbarRows,
 	useActionChromeDispatch,
 } from "./modal-chrome.ts";
+import { type ScreenSlot, useSlotFact, useSlotRegionMirror } from "./screen-stack.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { type DecisionRegion, useDecisionRegion } from "./shared/region.ts";
 import { wrapToWidth } from "./text.ts";
@@ -63,6 +64,12 @@ interface MissingModalProps {
 	 * same reach as the Queue pause's: required for the same reason.
 	 */
 	onAutoHandoff: () => void;
+	/**
+	 * The stack's slot for this modal's screen (ADR 0150): the key bus holds
+	 * the slot's one stable wrapper while the screen is active, and the slot's
+	 * record preserves the modal's facts while it is suspended.
+	 */
+	slot?: ScreenSlot;
 }
 
 /** The message column stops at 80 cells: a line that wide is hard to read. */
@@ -161,19 +168,23 @@ export function MissingModal({
 	onEmergencyExit,
 	onQueuePause,
 	onAutoHandoff,
+	slot,
 }: MissingModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const body = bodyLines ?? [];
 	const layout = missingModalLayout(body, actions.length, terminalWidth, terminalHeight);
 	// A completed turn ends with its conclusion, so open the panel at the
-	// newest message row. The current position stays stable while the
-	// operator uses j and k.
-	const [bodyScroll, setBodyScroll] = useState(layout.maxBodyScroll);
+	// newest row. The view stands in the stack's slot, so a resume stands on it.
+	const [bodyScroll, setBodyScroll] = useSlotFact<number>(slot, "bodyScroll", layout.maxBodyScroll);
 	// The panel's rows are the region's: the shared selection, its wrap, and
 	// its window, with every row shown, the way the decision's region does.
-	const selection = useDecisionRegion(actions, actions.length);
+	const selection = useDecisionRegion(
+		actions,
+		actions.length,
+		(slot?.facts.regionAt as number | undefined) ?? 0,
+	);
+	useSlotRegionMirror(slot, selection.at);
 	const scroll = Math.min(bodyScroll, layout.maxBodyScroll);
-
 	// The modal owns one fact: the rows its Decision region holds.
 	const facts = useActionChromeDispatch({
 		mode: "missing-modal",
@@ -193,15 +204,35 @@ export function MissingModal({
 			),
 		queuePause: onQueuePause,
 		autoHandoff: onAutoHandoff,
+		slot,
 	});
 
+	return missingModalElement(
+		{ title, message, queuePaused: standing.queuePaused },
+		{ width: terminalWidth, layout, scroll, selection, actions, facts },
+	);
+}
+
+/** The modal's one surface: the body's window, its rows, and the bar it states. */
+function missingModalElement(
+	shell: { title: string; message: MessageFact | null; queuePaused: boolean },
+	parts: {
+		width: number;
+		layout: ReturnType<typeof missingModalLayout>;
+		scroll: number;
+		selection: ReturnType<typeof useDecisionRegion>;
+		actions: readonly ActionRow[];
+		facts: AvailabilityFacts;
+	},
+) {
+	const { width, layout, scroll, selection, actions, facts } = parts;
 	const thumbRows = layout.hasScrollbar
 		? scrollbarRows(layout.wrapped.length, layout.bodyRows, scroll)
 		: null;
 	return createElement(ModalSurface, {
 		frame: layout.frame,
-		width: terminalWidth,
-		title,
+		width,
+		title: shell.title,
 		// Every action row: without one of them the modal has no way out, so
 		// it holds itself back at that size.
 		body: {
@@ -218,8 +249,8 @@ export function MissingModal({
 			}),
 			minRows: actions.length,
 		},
-		message,
+		message: shell.message,
 		bar: { mode: "missing-modal", facts },
-		queuePaused: standing.queuePaused,
+		queuePaused: shell.queuePaused,
 	});
 }

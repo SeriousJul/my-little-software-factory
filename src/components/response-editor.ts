@@ -20,7 +20,7 @@ import type { StandingFacts } from "./controls.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
 import { type ActionRow, MARKER_WIDTH } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
-import { DraftField, type FieldHandle } from "./shared/fields.ts";
+import { DraftField, type FieldEditingState, type FieldHandle } from "./shared/fields.ts";
 import { copySelectionWith, type FormFocus, moveFieldWith, useFormSlots } from "./shared/form.ts";
 import { controlInk } from "./shared/presentation.ts";
 import { truncateToWidth } from "./text.ts";
@@ -44,6 +44,19 @@ interface ResponseEditorProps {
 	onDiscard: () => void;
 	/** Store the draft as it stands, on every change and again on close. */
 	onDraftChange: (text: string) => void;
+	/**
+	 * Record the field's editing state - the text, the caret, and the selection
+	 * - on every change and every caret move, so the screen that owns this
+	 * editor suspends with the place the operator left (ADR 0150).
+	 */
+	onEditingStateChange?: (state: FieldEditingState) => void;
+	/**
+	 * The editing state the screen recorded when this editor last suspended
+	 * (ADR 0150): the field stands on the same caret and selection when the
+	 * screen resumes. A fresh open carries no record, so the field takes its
+	 * opening caret.
+	 */
+	seed?: FieldEditingState | null;
 	/** Close the editor. The draft it leaves is the one already stored. */
 	onClose: () => void;
 	onHelp?: () => void;
@@ -231,7 +244,8 @@ function responseEditorElement(
 ): ReactElement {
 	const { ink, contentWidth, draftHeight, focus, field, refusal, text, selection, inputActive } =
 		fields;
-	const { draft, rows, focused, onDraftChange, onUnavailable, message } = props;
+	const { draft, rows, focused, onDraftChange, onEditingStateChange, onUnavailable, message } =
+		props;
 	return createElement(
 		"box",
 		{
@@ -249,6 +263,7 @@ function responseEditorElement(
 			width: Math.max(1, contentWidth - MARKER_WIDTH),
 			height: draftHeight,
 			fieldRef: field,
+			seed: props.seed,
 			error: null,
 			hint: "Closing keeps the draft saved; Discard deletes it",
 			oversize: (value: string) => responseOversize(value) ?? null,
@@ -256,6 +271,12 @@ function responseEditorElement(
 				text.current = facts.value;
 				selection.current = facts.selection !== "";
 				onDraftChange(facts.value);
+				// The screen's record stands on the field's editing state while the
+				// screen is suspended: the text, the caret, and the selection
+				// (ADR 0150). A caret move reports like a change, so the record is
+				// never behind the operator's last key.
+				const editing = field.current?.editingState();
+				if (editing !== null && editing !== undefined) onEditingStateChange?.(editing);
 			},
 			onRefuse: (reason: string) => onUnavailable?.(reason),
 		}),

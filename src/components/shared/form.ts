@@ -100,9 +100,14 @@ function slotMode(kind: FormSlotKind): InteractionMode {
  * must act on the slot the first one moved to rather than on the slot the last
  * render painted.
  */
-export function useFormSlots(slots: readonly FormSlot[]): FormFocus {
-	const [at, setAt] = useState(0);
-	const ref = useRef(0);
+export function useFormSlots(slots: readonly FormSlot[], initialIndex = 0): FormFocus {
+	// A form that resumes from a suspended screen (ADR 0150) stands on the
+	// slot the operator left: the stack hands the index back, and the form
+	// starts there.
+	const [at, setAt] = useState(() =>
+		Math.max(0, Math.min(initialIndex, Math.max(0, slots.length - 1))),
+	);
+	const ref = useRef(initialIndex);
 	const count = slots.length;
 	const clamp = useCallback(
 		(index: number) => Math.max(0, Math.min(index, Math.max(0, count - 1))),

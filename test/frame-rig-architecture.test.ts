@@ -67,6 +67,7 @@ const OWNED_SURFACES = [
 	"test/repository-select-panel.test.ts",
 	"test/reserved-rows.test.ts",
 	"test/resize-subscriptions.test.ts",
+	"test/screen-stack-frame.test.ts",
 	"test/shared-controls.test.ts",
 	"test/shared-presentation.test.ts",
 	"test/shared-field-editing.test.ts",

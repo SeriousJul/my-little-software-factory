@@ -57,6 +57,21 @@ export interface DecisionRegion {
 }
 
 /**
+ * The window top that shows the row: the highest window that fits the
+ * region, slid so the row stands inside the window. A screen that resumes
+ * seeds its region's window from this, so the window it stood on stands again.
+ */
+export function regionTopFor(row: number, count: number, visibleRows: number): number {
+	const limit = Math.max(0, Math.floor(visibleRows));
+	if (limit === 0) return 0;
+	const maxTop = Math.max(0, count - limit);
+	let top = Math.min(Math.max(0, row), maxTop);
+	if (row - top + 1 > limit) top = row - limit + 1;
+	if (top < 0) top = 0;
+	return top;
+}
+
+/**
  * The bounded scrolling selection over one region's rows.
  *
  * `visibleRows` is the cap the box has room for once the body has paid its
@@ -65,12 +80,18 @@ export interface DecisionRegion {
  * key before React re-renders, and the step must count from the row they
  * landed on rather than from the row last painted. Selecting wraps, so
  * every row stays one step away in either direction, and the window follows
- * the cursor when the step would leave it.
+ * the cursor when the step would leave it. A screen that resumes seeds the
+ * selection and the window from the row the stack preserved, so the region
+ * stands on the row it was suspended on.
  */
-export function useDecisionRegion(rows: readonly ActionRow[], visibleRows: number): DecisionRegion {
-	const [selected, setSelected] = useState(0);
-	const [top, setTop] = useState(0);
-	const ref = useRef(0);
+export function useDecisionRegion(
+	rows: readonly ActionRow[],
+	visibleRows: number,
+	initialSelected = 0,
+): DecisionRegion {
+	const [selected, setSelected] = useState(initialSelected);
+	const [top, setTop] = useState(() => regionTopFor(initialSelected, rows.length, visibleRows));
+	const ref = useRef(initialSelected);
 	const count = rows.length;
 	const last = Math.max(0, count - 1);
 	const limit = Math.max(0, Math.floor(visibleRows));

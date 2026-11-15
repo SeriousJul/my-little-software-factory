@@ -77,6 +77,12 @@ export interface TypeAheadRowProps {
 	typeAheadRef?: { current: TypeAheadHandle | null };
 	/** The field handle for selection and Copy selection. */
 	fieldRef?: { current: FieldHandle | null };
+	/**
+	 * The search the row stands on when it mounts, for a screen that resumes
+	 * from the stack's preserved record (ADR 0150). A row that opens fresh
+	 * leaves it out.
+	 */
+	initialQuery?: string;
 	/** Every change of the search text, match, caret, and selection. */
 	onQueryChange?: (query: string, match: TypeAheadMatch, facts: FieldFacts) => void;
 	/** The presentation's ink the row paints in. Default: the active control ink. */
@@ -144,8 +150,8 @@ function typeAheadSearchBox(fields: {
 
 /** The shared Type-ahead row: the value, and the editable search under it. */
 export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
-	const [query, setQuery] = useState("");
-	const queryRef = useRef("");
+	const [query, setQuery] = useState(props.initialQuery ?? "");
+	const queryRef = useRef(props.initialQuery ?? "");
 	// The handle is one stable object, and it is published after the render
 	// commits: a render React discards would otherwise hand a surface a search
 	// that was never painted, and a surface that reached it would clear text
