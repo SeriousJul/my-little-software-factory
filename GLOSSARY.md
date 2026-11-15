@@ -738,7 +738,7 @@ The rule that answers which Agent host one start runs on: the operator's config 
 _Avoid_: auto-detect, host detection, fallback host
 
 **Adoption label**:
-The Herdr space label the plane copies onto a herdr-core terminal it starts, taken from the plane's own terminal when that terminal carries it, so the Herdr desktop adopts the Agent into that space and gives it its own tab there. The plane copies no tab label: with one, the desktop would split the terminal into that tab beside the plane's own terminal. A terminal without the label stays out of the desktop's screens, and the plane writes it only when its own terminal has it (ADR 0141, ADR 0148).
+The Herdr space label the plane writes onto a herdr-core terminal it starts, so the Herdr desktop adopts the terminal into a space and gives it its own tab there. A terminal that stands in the checkout the run resolved into takes the label the plane's own terminal carries, when that terminal has one; a terminal that stands in a git worktree the plane built takes its own name as the label, and the desktop creates the space in that worktree, where the desktop's worktree view shows it under the checkout's space. The plane writes no tab label: with one, the desktop would split the terminal into that tab beside the plane's own terminal. A terminal without the label stays out of the desktop's screens (ADR 0141, ADR 0148, ADR 0162).
 _Avoid_: herdr integration, takeover, adoption mode
 
 **herdr view**:

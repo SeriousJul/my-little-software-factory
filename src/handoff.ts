@@ -3121,13 +3121,15 @@ function recordRefusedName(search: NameSearchState, facts: RefusalFacts): boolea
 }
 
 /**
- * The Adoption label the plane's own terminal carries, for the terminal a
- * herdr-core start takes (ADR 0141, ADR 0148). The plane reads its own
- * terminal's record once per start and copies the space label the desktop
- * adopted that terminal into. It copies no tab label: with one, the desktop
- * splits the start's terminal into that tab beside the plane, and with the
- * space label alone the desktop gives it its own tab in that space. A run
- * outside a herdr-core terminal - or one whose record the host does not
+ * The space Adoption label the plane's own terminal carries, for a start that
+ * stands in the checkout the run resolved into (ADR 0141, ADR 0148). The
+ * plane reads its own terminal's record once per start and copies the space
+ * label the desktop adopted that terminal into. It copies no tab label: with
+ * one, the desktop splits the start's terminal into that tab beside the
+ * plane, and with the space label alone the desktop gives it its own tab in
+ * that space. A start that stands in another checkout - the worktree - reads
+ * no label here and writes its own space label of its own name (ADR 0162). A
+ * run outside a herdr-core terminal - or one whose record the host does not
  * return - carries no adoption label, and the start writes none. The label is
  * written at the start and never rewritten by a later command.
  */
@@ -3146,9 +3148,11 @@ async function coreAdoptionLabels(ctx: HandoffContext): Promise<Record<string, s
 /**
  * The invocation one candidate's herdr-core start issues (issue #410, ADR
  * 0141): the plane's start labels name the run, the Ticket, the Handoff, and
- * the repository the terminal runs in, and the Adoption labels the plane's
- * own terminal carries ride with them. The labels are written at the start
- * and never rewritten by a later command.
+ * the repository the terminal runs in, and the space Adoption label the start
+ * writes for the terminal - the plane's own space for a start in the
+ * checkout, the terminal's own name for a start in the worktree (ADR 0148,
+ * ADR 0162) - rides with them. The labels are written at the start and never
+ * rewritten by a later command.
  */
 function coreStartInvocation(options: {
 	ctx: HandoffContext;
@@ -3198,11 +3202,20 @@ async function startCoreAgentUnderAvailableName(
 	// The merged live-name check runs over both hosts before the first ask
 	// (ADR 0142): the own host's refusal answers about its own host alone.
 	const heldElsewhere = await otherHostNameHolders(ctx);
-	// The plane's own terminal carries the space Adoption label its desktop
-	// adopted it with, and the labels the start writes are stated once for
-	// every candidate it asks: the candidate the host takes is the terminal
-	// the labels name (ADR 0141, ADR 0148).
-	const adoption = await coreAdoptionLabels(ctx);
+	// The space Adoption label the start writes (ADR 0141, ADR 0148, ADR
+	// 0162): a terminal that stands in the checkout the start resolved into
+	// copies the space label the plane's own terminal carries, and the
+	// desktop gives it its own tab in that space. A terminal that stands in
+	// another checkout - on this host the git worktree the plane built -
+	// writes its own space label, named after the terminal, and the desktop
+	// creates the space in that worktree, where the desktop's worktree view
+	// shows it under the checkout's space. Either way the labels are stated
+	// once for every candidate it asks: the candidate the host takes is the
+	// terminal the labels name.
+	const ownSpace = cwd !== ctx.checkout;
+	const copiedSpace = ownSpace ? {} : await coreAdoptionLabels(ctx);
+	const adoptionOf = (name: string) =>
+		ownSpace ? { [CORE_ADOPTION_LABEL_SPACE]: name } : copiedSpace;
 	const search: NameSearchState = {
 		nameHeld: false,
 		collision: undefined,
@@ -3220,7 +3233,7 @@ async function startCoreAgentUnderAvailableName(
 		}
 		result = await runInvocation(
 			ctx.runner,
-			coreStartInvocation({ ctx, agent, args, cwd, name, adoption }),
+			coreStartInvocation({ ctx, agent, args, cwd, name, adoption: adoptionOf(name) }),
 		);
 		if (result.code === 0) {
 			return {

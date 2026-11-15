@@ -11,7 +11,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { AgentHostResolution } from "../src/agent-host.ts";
+import type {
+	AgentHostMarks,
+	AgentHostResolution,
+	CoreStartLabelFacts,
+} from "../src/agent-host.ts";
 import type { FactoryConfig, TicketSourceConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { withHeadBranch } from "../src/domain/ticket.ts";
@@ -156,6 +160,8 @@ async function handoffRun(
 		names?: OwnNameKnowledge;
 		onStage?: (stage: string) => void;
 		agentHost?: AgentHostResolution;
+		agentHostMarks?: AgentHostMarks;
+		coreStartLabels?: CoreStartLabelFacts;
 	} = {},
 ): Promise<HandoffOutcome> {
 	return handOffTicket(over.ticket ?? ticket, choice, {
@@ -163,12 +169,13 @@ async function handoffRun(
 		runner,
 		home,
 		agentHost: over.agentHost ?? RUN_AGENT_HOST,
-		agentHostMarks: RUN_AGENT_HOST_MARKS,
+		agentHostMarks: over.agentHostMarks ?? RUN_AGENT_HOST_MARKS,
 		onStage: over.onStage,
 		names: over.names,
 		claim: over.claim ?? "open",
 		previous: over.previous,
 		previousMessage: over.previousMessage,
+		...(over.coreStartLabels === undefined ? {} : { coreStartLabels: over.coreStartLabels }),
 	});
 }
 
@@ -5993,6 +6000,121 @@ describe("the herdr-core host: start, Close, and residue (issue #409)", () => {
 			`hc send --json ${AGENT} ${PROMPT}`,
 		]);
 		expectNoCommand(runner.commands(), "herdr ");
+	});
+
+	test("a start in a worktree writes its own space label, named after the terminal, not the plane's space", async () => {
+		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
+		stubBranchList(runner, repoPath(p.home), BRANCH, "");
+		stubRemoteDefaultBranch(runner, repoPath(p.home));
+		// The plane's own terminal carries the space label its desktop adopted it into.
+		runner.set("hc", ["get", "--json", "t12"], {
+			stdout: JSON.stringify({
+				address: "t12",
+				name: null,
+				state: "live",
+				status: "working",
+				labels: { "herdr.space": "sp-plane", "herdr.tab": "tb-plane" },
+			}),
+		});
+
+		const outcome = await handoffRun(runner, p.home, coreWorktreeChoice, {
+			agentHost: CORE_AGENT_HOST,
+			agentHostMarks: { herdrEnv: undefined, hcTerminalId: "t12" },
+			coreStartLabels: {
+				runIdentity: "t12",
+				ticketIdentity: ticket.identity,
+				repositoryIdentity: ticket.repositoryRef.identity,
+			},
+		});
+
+		expect(outcome.status).toBe("ok");
+		const coreWt = worktreePath(p.home);
+		// The terminal stands in the worktree the plane built, not in the
+		// checkout: it writes its own space label, named after the terminal
+		// (ADR 0162), so the desktop creates the space in the worktree and
+		// shows it under the checkout's space. The plane's space and tab
+		// labels are not copied, and the plane's own terminal's record is not
+		// read for it.
+		const start = runner.calls.find((call) => call.command === "hc" && call.args[0] === "run");
+		expect(start?.args).toEqual([
+			"run",
+			"--bg",
+			"--outlive-parent",
+			"--no-notify",
+			"--name",
+			AGENT,
+			"--cwd",
+			coreWt,
+			"--label",
+			"factory.run=t12",
+			"--label",
+			`factory.ticket=${ticket.identity}`,
+			"--label",
+			`factory.handoff=${AGENT}`,
+			"--label",
+			`factory.repository=${ticket.repositoryRef.identity}`,
+			"--label",
+			`herdr.space=${AGENT}`,
+			"--",
+			"pi",
+		]);
+		expect(runner.commands()).not.toContain("hc get --json t12");
+	});
+
+	test("a start in the checkout copies the space label the plane's terminal carries, and no tab label", async () => {
+		const runner = new FakeRunner();
+		const p = await modulePlane(runner);
+		// The plane's own terminal carries the space label its desktop adopted it into.
+		runner.set("hc", ["get", "--json", "t12"], {
+			stdout: JSON.stringify({
+				address: "t12",
+				name: null,
+				state: "live",
+				status: "working",
+				labels: { "herdr.space": "sp-plane", "herdr.tab": "tb-plane" },
+			}),
+		});
+
+		const outcome = await handoffRun(runner, p.home, coreChoice, {
+			agentHost: CORE_AGENT_HOST,
+			agentHostMarks: { herdrEnv: undefined, hcTerminalId: "t12" },
+			coreStartLabels: {
+				runIdentity: "t12",
+				ticketIdentity: ticket.identity,
+				repositoryIdentity: ticket.repositoryRef.identity,
+			},
+		});
+
+		expect(outcome.status).toBe("ok");
+		// The terminal stands in the checkout the run resolved into: it copies
+		// the space label the plane's own terminal carries (ADR 0148), so the
+		// desktop gives it its own tab in that space. The plane's tab label is
+		// not copied: with it the desktop would split the terminal into the
+		// plane's tab.
+		const start = runner.calls.find((call) => call.command === "hc" && call.args[0] === "run");
+		expect(start?.args).toEqual([
+			"run",
+			"--bg",
+			"--outlive-parent",
+			"--no-notify",
+			"--name",
+			AGENT,
+			"--cwd",
+			repoPath(p.home),
+			"--label",
+			"factory.run=t12",
+			"--label",
+			`factory.ticket=${ticket.identity}`,
+			"--label",
+			`factory.handoff=${AGENT}`,
+			"--label",
+			`factory.repository=${ticket.repositoryRef.identity}`,
+			"--label",
+			"herdr.space=sp-plane",
+			"--",
+			"pi",
+		]);
 	});
 
 	test("a start the core host refuses removes the checkout and the branch it created", async () => {

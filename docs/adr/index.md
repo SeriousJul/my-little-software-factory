@@ -170,3 +170,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0159: The plane stands the key owner as a fact the rig's key windows read](./0159-the-plane-stands-the-key-owner-as-a-fact-the-rigs-key-windows-read.md)
 - [ADR 0160: The plane's boot call stands the Stub herdr world by default](./0160-the-planes-boot-call-stands-the-stub-herdr-world-by-default.md)
 - [ADR 0161: The herdr-core derivation bounds the session record by the host's terminal creation time](./0161-the-herdr-core-derivation-bounds-the-session-record-by-the-hosts-terminal-creation-time.md)
+- [ADR 0162: A herdr-core start that stands in a worktree writes its own space label](./0162-a-herdr-core-start-that-stands-in-a-worktree-writes-its-own-space-label.md)

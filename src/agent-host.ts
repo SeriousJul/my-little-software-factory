@@ -965,14 +965,18 @@ export function herdrCoreRecord(result: CommandResult): HerdrCoreRecord | null {
  *
  * The plane's own namespace carries the run, the Ticket, the Handoff, and the
  * repository, which is what scopes the roster read and keeps a dead run's rows
- * readable. Beside those the plane copies the space Adoption label
- * `herdr.space` from its own herdr-core terminal when that terminal carries
- * it, and writes no such label when it does not. It copies no tab label:
- * with one the desktop splits the terminal into that tab beside the plane,
- * and with the space label alone the desktop gives the terminal its own tab
- * in that space (ADR 0148). The labels are written at the start and never
- * rewritten by a later command, and a roster read is scoped by them only for
- * forensics, never to hide the other host (ADR 0142).
+ * readable. Beside those the start writes the space Adoption label
+ * `herdr.space`: a terminal that stands in the checkout the run resolved into
+ * copies it from the plane's own herdr-core terminal when that terminal
+ * carries it, and writes no such label when it does not (ADR 0148); a
+ * terminal that stands in another checkout - on this host the git worktree
+ * the plane built - writes its own name, and the desktop creates the space in
+ * that worktree (ADR 0162). The plane copies no tab label: with one the
+ * desktop splits the terminal into that tab beside the plane, and with the
+ * space label alone the desktop gives the terminal its own tab in that space.
+ * The labels are written at the start and never rewritten by a later command,
+ * and a roster read is scoped by them only for forensics, never to hide the
+ * other host (ADR 0142).
  */
 export const CORE_START_LABEL_RUN = "factory.run";
 export const CORE_START_LABEL_TICKET = "factory.ticket";
