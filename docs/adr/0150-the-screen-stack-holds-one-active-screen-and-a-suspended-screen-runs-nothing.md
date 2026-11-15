@@ -65,8 +65,12 @@ which is never suspended.
 - The transitions: open puts the opened screen on top and suspends the
   screen that was active; an open of the screen that is already active
   updates that screen's fact in place (the guide's captured Interaction
-  mode), never a second entry; an open of a screen the stack already holds
-  at a lower level is refused, one entry per screen. Close removes the
+  mode), never a second entry; the in-place update gives back no keys, because
+  the screen's slot wrapper stands on the key bus through the update and the
+  keys the screen holds are the screen's: the surface that leaves the frame by
+  the update (the repository init's queue moving to its next marked row) is a
+  change of the screen's fact, not a close. An open of a screen the stack
+  already holds at a lower level is refused, one entry per screen. Close removes the
   active screen and resumes the screen beneath it. Replace, the open of a
   screen that takes the place of the screen the record holds in the same
   slot, in the same transition pass: the guide and the Message view share one
