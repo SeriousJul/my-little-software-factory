@@ -2,9 +2,11 @@
  * The scoped ticket read suite (issue #428, ADR 0151): the ticket work
  * cycle's scoped read answers the same row value the full projection makes
  * for the identity, in every state the plane decides on, and it answers the
- * ticket's pull request link. The read costs a constant number of statements
- * that does not grow with the record's ticket count, and the full projection
- * keeps its statement count.
+ * ticket's pull request link. The link's rows are the pull request rows the
+ * ticket's repositories list, and the suite pins the split that restriction
+ * causes beside the full-array rule (ADR 0151). The read costs a constant
+ * number of statements that does not grow with the record's ticket count, and
+ * the full projection keeps its statement count.
  *
  * Every case runs on the shared state harness: real state on a real store.
  * The statement-count pins count the statements a read prepares, the outside
@@ -232,7 +234,7 @@ describe("the ticket's pull request link", () => {
 		state.close();
 	});
 
-	test("a pull request on another repository stands off the link", () => {
+	test("a cross-repository closing reference withholds the ticket in the list but stands off the link", () => {
 		const { state } = seeded();
 		state.sourceFact.initializeSources([sourceA, pulls]);
 		state.sourceFact.applyFetch(sourceA, success([fetched()]));
@@ -244,7 +246,25 @@ describe("the ticket's pull request link", () => {
 				}),
 			]),
 		);
+		// The full-array rule answers in any watched repository: its
+		// closing-reference half matches the reference identity, and that
+		// identity carries no repository. The rule covers the ticket, and the
+		// list withholds it.
+		const projected = state.ticketWorkCycle.projectedTickets([], "implement");
+		const item = projected.find((ticket) => ticket.identity === issueIdentity);
+		if (item === undefined) throw new Error("the ticket is missing from the projection");
+		const fullArray = fixingPullRequests(projected, item);
+		expect(fullArray.map((ticket) => ticket.identity)).toEqual([pullIdentity]);
+		expect(isCoveredByFixingPullRequest(item, fullArray)).toBe(true);
+		expect(
+			state.ticketWorkCycle.ticketListViews([], "implement").rows.map((ticket) => ticket.identity),
+		).toEqual([pullIdentity]);
+		// The scoped read answers the row the rule withholds, beside the link
+		// that answers no fixing pull request: the restriction is the decision
+		// of ADR 0151, and the two reads split in this world.
 		const read = state.ticketWorkCycle.ticketOf(issueIdentity, [], "implement");
+		if (read.ticket === null)
+			throw new Error("the scoped read answers no row for the withheld ticket");
 		expect(read.pullRequestLink.fixing).toEqual([]);
 		expect(read.pullRequestLink.opened).toBeNull();
 		state.close();

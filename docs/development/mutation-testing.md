@@ -178,16 +178,15 @@ One module and seven test files stay out of the campaign on purpose:
   names, and the shapes the graph is built with. Instrumentation rewrites the
   method bodies and the query strings it reads, so it would kill every mutant in
   the nine state modules for the wrong reason. It stays in `bun run test` too.
-- `test/record-lines-doc.test.ts` (issue #223 review) holds that the
-  configuration reference states the same record lines the code writes, and for
-  the lines that live only in a module's source it reads them out of that
-  source: the dispatch's refusal facts out of `src/handoff-dispatch.ts`, the
-  checkout hold's lines out of `src/checkout-hold.ts`, and the rest out of the
-  domain modules. Instrumentation rewrites those string literals in the files it
-  mutates, so it would fail on a text change rather than a behavior change.
-  Measured on this branch: with `src/handoff-dispatch.ts` in the scope, the
-  campaign's initial run died on `every refusal shape the dispatch writes is on
-  the page`. It stays in `bun run test` too.
+- `test/record-name-architecture.test.ts` (issue #295 review) is the source
+  tripwire of the record name rule, re-homed by the scoped-read branch's
+  review from `test/record-name.test.ts`, which the unit layer removal took.
+  It reads the `src` modules as text and asks each line for both halves of the
+  name pair: the title in quotes and the identity fallback. Instrumentation
+  rewrites exactly those string shapes, so under mutation the scan finds no
+  restatement and fails on a text change rather than on a behavior change. Its
+  behavior half stands in the app-boot suites, inside the campaign. It stays in
+  `bun run test` too.
 - `test/quality-audit.test.ts` (ADR 0120) runs `bun run audit` as a child, and
   the audit measures the duplication of `src` against the baseline the clean
   tree sets in `.quality-baseline.json`. Instrumentation rewrites the source

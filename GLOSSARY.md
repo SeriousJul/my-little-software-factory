@@ -253,7 +253,7 @@ _Avoid_: linked issue, dependent PR, parent ticket, child PR
 
 **Ticket's pull request link**:
 The cross-cutting fact a scoped ticket read carries: the open pull requests that fix the ticket, and the listed pull request the ticket opened, or its absence.
-The ticket's own row cannot answer it: a pull request that rests the ticket is another ticket, and the fire's position stands on the identity of a listed pull request. The source fact aggregate answers the link's rows for the one identity, and the ticket work cycle composes them through the domain's fix rule (ADR 0151).
+The ticket's own row cannot answer it: a pull request that rests the ticket is another ticket, and the fire's position stands on the identity of a listed pull request. The source fact aggregate answers the link's rows for the one identity, and the ticket work cycle composes them through the domain's fix rule. The link's rows are the pull request rows the ticket's repositories list: the rule's closing-reference half answers in any watched repository, so a pull request on another repository that closes the ticket by reference withholds the ticket from the list while it stands off the link, and the two reads split in that world (ADR 0151).
 _Avoid_: PR link, linked pull request, pull request association
 
 **Work cycle**:

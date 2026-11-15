@@ -74,9 +74,21 @@ ticket read, and the per-ticket work stands on it.
   operation that answers the pull request link: the open pull request rows
   that fix the identity, found by the same rule the domain already states, a
   closing reference to the ticket or a factory head branch prefix on the
-  ticket's key, restricted to pull request rows, and the listed pull request
-  the identity opened, found by the repository identity and the factory head
-  branch. The handoff aggregate gains the per-identity form of its
+  ticket's key, restricted to pull request rows the ticket's repositories
+  list, and the listed pull request the identity opened, found by the
+  repository identity and the factory head branch. The restriction stands by
+  decision: the rule's closing-reference half matches the reference identity
+  the source writes into the reference, and that identity carries no
+  repository, so a pull request on another watched repository that closes the
+  ticket by reference fixes the ticket under the rule the list applies to the
+  full array, and the list withholds the ticket, while the link answers no
+  fixing pull request for it. In that world the per-ticket work stands on the
+  link: a queued start the rule covers is not cancelled, and the plane-action
+  merge refuses where the full-array read aimed at the cross-repository pull
+  request. The split is pinned on both sides in the scoped read's suite, and
+  making the rule's reference half repository-local so the two reads answer
+  alike is a separate change. The handoff aggregate gains the per-identity
+  form of its
   unresolved-attempt fact, beside the global form the list keeps. ADR 0095
   already mandates this shape for cross-aggregate calls: the caller sees one
   interface, and the borrowing sits inside the aggregate.
@@ -130,8 +142,14 @@ ticket read, and the per-ticket work stands on it.
 
 ## Consequences
 
-- The operator sees no change: the same rows, the same names, the same
-  holds, the same starts, and the same lines.
+- The operator sees no change, beside the one world the Decision records:
+  where a pull request on another watched repository closes the ticket by
+  reference, the full-array rule covers the ticket and the list withholds it,
+  while the scoped link answers no fixing pull request, so a queued start the
+  rule covers is not cancelled, and the plane-action merge refuses where the
+  full-array read aimed at the cross-repository pull request. Beside that
+  world: the same rows, the same names, the same holds, the same starts, and
+  the same lines.
 - The machine: the cycle's state-side cost scales with the tickets that
   moved this cycle, and the record size enters the cycle's cost through the
   two list passes alone. On a record of a thousand tickets where two move,

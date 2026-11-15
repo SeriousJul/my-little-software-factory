@@ -105,6 +105,16 @@ export default {
 		// test layer; the tripwire stands alone in this file, out of the campaign,
 		// and in `bun run test`.
 		"test/attempt-hold-architecture.test.ts",
+		// The record name rule's source tripwire (issue #295 review), re-homed by
+		// the scoped-read branch's review from `test/record-name.test.ts`, which the
+		// unit layer removal took. It reads `src` as text and asks each line for
+		// both halves of the name pair: the title in quotes and the identity
+		// fallback. Instrumentation rewrites exactly those string shapes, so under
+		// mutation the scan finds no restatement and fails on a text change rather
+		// than on a behavior change. The rule's behavior half stands in the
+		// app-boot suites, inside the campaign; the tripwire stays in `bun run
+		// test`, which reads the uninstrumented tree.
+		"test/record-name-architecture.test.ts",
 		// Not an exclusion, and the note stands here because the file looks like one:
 		// `test/config-write-architecture.test.ts` (ADR 0103, issue #222) also reads
 		// production source as text, but it counts call names - `writeConfigFile(`,
