@@ -165,6 +165,14 @@ export interface HandoffAggregate {
 	} | null;
 	handoffHandles(identity: string): { paneIds: string[]; workspaceIds: string[] };
 	openAttemptTickets(): string[];
+	/**
+	 * The unresolved-attempt fact of one ticket, beside the global form the
+	 * list keeps in `openAttemptTickets` (issue #428, ADR 0151): whether the
+	 * ticket has a Handoff attempt that has not settled, in one read of the
+	 * attempt table. The ticket work cycle's scoped read asks it for the one
+	 * identity it acts on, where the list asks the global form of every ticket.
+	 */
+	hasUnresolvedAttempt(identity: string): boolean;
 	reclaimHandoff(
 		identity: string,
 		details: { paneId: string; tabId: string; workspaceId: string; agentName: string },
@@ -315,6 +323,11 @@ export class HandoffModule implements HandoffAggregate {
 		this.db = store.scopeOf("handoff", TABLES_OWNED.handoff);
 		this.graph = graph;
 	}
+	/**
+	 * The unresolved-attempt fact of one ticket (issue #428, ADR 0151): the
+	 * per-identity form the ticket work cycle's scoped read asks beside the
+	 * global form the list keeps.
+	 */
 	hasUnresolvedAttempt(identity: string): boolean {
 		return (
 			this.db

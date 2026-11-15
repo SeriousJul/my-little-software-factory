@@ -7892,7 +7892,10 @@ function appRemoveQueueItem(f: AppConsultationOpsFields, item: WorkQueueItem | n
 	// ticket instead of falling back to the raw identity (ADR 0042, ADR 0060).
 	// The name rule is the shared one the dispatch, the observation cycle, and
 	// the boot read, so one Ticket wears one name (issue #295 review).
-	const name = recordTicketName(f.listViewsRef.current.projection, item.ticketIdentity);
+	const name = recordTicketName(
+		f.listViewsRef.current.projection.rowFor(item.ticketIdentity),
+		item.ticketIdentity,
+	);
 	if (removed) {
 		f.setNoticeMessage(`the waiting start for ${name} was removed`, "info");
 	} else {

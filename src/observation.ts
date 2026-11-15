@@ -3103,17 +3103,18 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The ticket the Message line names: the projection's title, the same words
-	 * the Work queue's row shows. Every queue line in the plane reads the live
-	 * projection this way (ADR 0049), and the projection, not the visible list,
-	 * so a covered ticket is still named by its title. The rule is the shared one
-	 * the dispatch and the boot read, so one Ticket wears one name across the
-	 * record (issue #295 review).
+	 * The ticket the Message line names: the ticket's title, the same words the
+	 * Work queue's row shows. Every queue line in the plane reads the ticket
+	 * this way (ADR 0049), from the scoped read's own row, not the visible
+	 * list, so a covered ticket is still named by its title (ADR 0151). The
+	 * rule is the shared one the dispatch and the boot read, so one Ticket wears
+	 * one name across the record (issue #295 review).
 	 */
 	private ticketName(identity: string): string {
 		const config = this.config();
 		return recordTicketName(
-			this.state.ticketWorkCycle.ticketProjection(config.workflowStates, config.defaultTaskType),
+			this.state.ticketWorkCycle.ticketOf(identity, config.workflowStates, config.defaultTaskType)
+				.ticket,
 			identity,
 		);
 	}

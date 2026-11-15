@@ -52,7 +52,11 @@ import type { ConsultationRecordAggregate } from "./state/consultation-record.ts
 import type { HandoffAggregate, HandoffClaim, HandoffOrigin } from "./state/handoff.ts";
 import type { PlaneActionAggregate } from "./state/plane-action.ts";
 import type { SourceFactAggregate } from "./state/source-fact.ts";
-import type { TicketProjection, TicketWorkCycleAggregate } from "./state/ticket-work-cycle.ts";
+import type {
+	ScopedTicketRead,
+	TicketProjection,
+	TicketWorkCycleAggregate,
+} from "./state/ticket-work-cycle.ts";
 import type {
 	WorkQueueAggregate,
 	WorkQueueConsultationItem,
@@ -1179,21 +1183,23 @@ class HandoffDispatchModule implements HandoffDispatch {
 			);
 			return;
 		}
-		// The projection before the list rule, the way the pickup's covered gate
-		// reads it: the rule withholds exactly the ticket this pickup asked for.
-		const projection = this.state.ticketWorkCycle.projectedTickets(
+		// The scoped read before the list rule, the way the pickup's covered
+		// gate reads it: the rule withholds exactly the ticket this pickup
+		// asked for, and the read costs the identity it names, not the record.
+		const read = this.state.ticketWorkCycle.ticketOf(
+			item.ticketIdentity,
 			config.workflowStates,
 			config.defaultTaskType,
 		);
-		const ticket = projection.find((candidate) => candidate.identity === item.ticketIdentity);
-		if (ticket === undefined) {
+		const ticket = read.ticket;
+		if (ticket === null) {
 			this.refusePlaneAction(item.ticketIdentity, "the ticket is no longer visible");
 			return;
 		}
 		// The merge runs on the ticket's pull request: the position's own pull
 		// request when the position is one, and its fixing pull request when
 		// the position is the ticket the pull request fixes.
-		const pullRequest = mergeTargetPullRequest(projection, ticket);
+		const pullRequest = mergeTargetPullRequest(ticket, read.pullRequestLink.fixing);
 		if (pullRequest === null) {
 			// No attempt for a merge that could not aim: the row drops with its
 			// warning.
@@ -1390,7 +1396,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		item: WorkQueueHandoffItem | WorkQueuePlaneActionItem,
 		checkoutProjection: () => TicketProjection,
 	): CheckoutGate {
-		const gate = this.checkout.cross(item, checkoutProjection);
+		const gate = this.checkout.cross(item, this.checkoutTicketReader(), checkoutProjection);
 		// The ledger decides the refusal and this module performs it, because the row
 		// the refusal drops is the caller's row and not the checkout's (issue #297
 		// review, issue #315).
@@ -1458,6 +1464,22 @@ class HandoffDispatchModule implements HandoffDispatch {
 				this.config().workflowStates,
 				this.config().defaultTaskType,
 			));
+	}
+
+	/**
+	 * The scoped ticket read the checkout gate takes when a row reaches the
+	 * gate (issue #428, ADR 0151): the gate asks the ticket work cycle for the
+	 * row's ticket and its pull request link - a constant number of statements
+	 * on the one identity - where the walk's shared projection read, the
+	 * checkout record's, stands beside it.
+	 */
+	private checkoutTicketReader(): (identity: string) => ScopedTicketRead {
+		return (identity) =>
+			this.state.ticketWorkCycle.ticketOf(
+				identity,
+				this.config().workflowStates,
+				this.config().defaultTaskType,
+			);
 	}
 
 	/**
@@ -1949,19 +1971,21 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 */
 	private cancelCoveredItem(item: WorkQueueHandoffItem): boolean {
 		if (item.origin !== "open") return false;
-		// The covered gate (ADR 0042): a queued start whose open ticket gained
+		// A covered gate (ADR 0042): a queued start whose open ticket gained
 		// an open fixing pull request while it waited is cancelled, and the
 		// ticket keeps the state it wears while it waited: the list rule
 		// withholds the ticket's task, and the start would hand the work to a
-		// second agent. The ticket is read from the projection before the list
-		// rule, because the rule withholds exactly the ticket this gate
-		// refuses.
-		const projection = this.state.ticketWorkCycle.projectedTickets(
+		// second agent. The ticket is read from the scoped read before the
+		// list rule, because the rule withholds exactly the ticket this gate
+		// refuses (ADR 0151).
+		const read = this.state.ticketWorkCycle.ticketOf(
+			item.ticketIdentity,
 			this.config().workflowStates,
 			this.config().defaultTaskType,
 		);
-		const waiting = projection.find((candidate) => candidate.identity === item.ticketIdentity);
-		if (waiting === undefined || !isCoveredByFixingPullRequest(projection, waiting)) return false;
+		const waiting = read.ticket;
+		if (waiting === null || !isCoveredByFixingPullRequest(waiting, read.pullRequestLink.fixing))
+			return false;
 		this.removeQueueRow(item.ticketIdentity);
 		this.reports.refresh();
 		// A covered outcome, not a Fault (ADR 0118): the open fixing pull
@@ -2039,15 +2063,18 @@ class HandoffDispatchModule implements HandoffDispatch {
 				`(mode ${mode}, origin ${item.origin}, ${queueStagingOf(item.automatic)}, ${seats})`,
 		);
 		this.reports.starting(item.ticketIdentity, true);
-		const ticket = this.state.ticketWorkCycle
-			// The ignore is an automatic gate and never a hard start gate (ADR 0060):
-			// the only item an ignored Ticket can hold is one the operator asked for by
-			// hand, so the Pickup starts it. This read resolves a Ticket by identity, so
-			// it takes the whole projection: the operator's List filter and ADR 0042's
-			// covered rule say nothing about which Ticket the queue asked for.
-			.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
-			.find((candidate) => candidate.identity === item.ticketIdentity);
-		if (ticket === undefined) {
+		// The ignore is an automatic gate and never a hard start gate (ADR 0060):
+		// the only item an ignored Ticket can hold is one the operator asked for by
+		// hand, so the Pickup starts it. The scoped read answers the Ticket by
+		// identity (ADR 0151): the operator's List filter and ADR 0042's covered
+		// rule say nothing about which Ticket the queue asked for, and the read
+		// costs the identity it names, not the record it lives in.
+		const ticket = this.state.ticketWorkCycle.ticketOf(
+			item.ticketIdentity,
+			this.config().workflowStates,
+			this.config().defaultTaskType,
+		).ticket;
+		if (ticket === null) {
 			// The claim's hard checks passed but the projection holds no ticket
 			// to run: settle the claim and name it; the item's fate is the
 			// caller's, like every other refusal above.
@@ -2263,13 +2290,16 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * is the shared one, so the boot's line for a claim this run left unsettled
 	 * names the Ticket the way this module named it (issue #295 review). */
 	private ticketName(identity: string): string {
-		// The projection, not the visible list: a covered ticket is hidden
-		// from the list while its queued start is still naming it (ADR 0042).
+		// The scoped read, not the visible list: a covered ticket is hidden
+		// from the list while its queued start is still naming it (ADR 0042),
+		// and the read answers the ticket's own row, or its absence, on the one
+		// identity it names (ADR 0151).
 		return recordTicketName(
-			this.state.ticketWorkCycle.ticketProjection(
+			this.state.ticketWorkCycle.ticketOf(
+				identity,
 				this.config().workflowStates,
 				this.config().defaultTaskType,
-			),
+			).ticket,
 			identity,
 		);
 	}
@@ -2926,14 +2956,17 @@ class HandoffDispatchModule implements HandoffDispatch {
 				this.drainHandoffDrop(next, currentState);
 				continue;
 			}
-			// The fresh projection when the ticket is still in it, else the claim's
-			// snapshot: the handoff runs on the ticket it claimed. This is an identity
-			// read, so it takes the whole projection - the operator's List filter and
-			// the list rule's two causes say nothing about which Ticket the claim made.
+			// The fresh scoped read when the ticket is still in the record,
+			// else the claim's snapshot: the handoff runs on the ticket it
+			// claimed. This is an identity read, so it takes the ticket's own
+			// row (ADR 0151) - the operator's List filter and the list rule's
+			// two causes say nothing about which Ticket the claim made.
 			const snapshot =
-				this.state.ticketWorkCycle
-					.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
-					.find((candidate) => candidate.identity === next.ticket.identity) ?? next.ticket;
+				this.state.ticketWorkCycle.ticketOf(
+					next.ticket.identity,
+					this.config().workflowStates,
+					this.config().defaultTaskType,
+				).ticket ?? next.ticket;
 			this.runClaimedHandoff({ ...next, ticket: snapshot }, next.onStarted);
 		}
 	}

@@ -23,8 +23,6 @@
  * ask herdr for the same name.
  */
 
-import type { Ticket } from "./domain/ticket.ts";
-
 /**
  * Reduce a title to a slug: lowercase, runs of non-alphanumerics collapse
  * to one hyphen, no leading or trailing hyphen.
@@ -61,9 +59,13 @@ export function ticketBranchKey(externalKey: string): string {
  * workspace. A pull request ticket's statement resolves to the branch its
  * pull request holds through `pullRequestBranchFor`, and falls back to this
  * own name when the head branch is missing or stands in neither copy.
+ *
+ * The input is the ticket's external key and title, whatever read carries
+ * them: the full projection's row, or the scoped read's row for the one
+ * identity the reader acts on (ADR 0151).
  */
-export function branchNameFor(ticket: Ticket): string {
-	return `factory/${ticketBranchKey(ticket.externalKey)}-${titleSlug(ticket.title)}`;
+export function branchNameFor(facts: { externalKey: string; title: string }): string {
+	return `factory/${ticketBranchKey(facts.externalKey)}-${titleSlug(facts.title)}`;
 }
 
 /**

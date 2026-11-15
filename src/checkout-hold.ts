@@ -31,7 +31,7 @@
 
 import type { FactoryConfig } from "./config.ts";
 import { recordConsultationName, recordTicketName } from "./domain/record-name.ts";
-import type { RepositoryRef, Ticket } from "./domain/ticket.ts";
+import type { RepositoryRef } from "./domain/ticket.ts";
 import type { Logger } from "./logging.ts";
 import { repositoryOperationKey } from "./operation-serializer.ts";
 import {
@@ -40,7 +40,7 @@ import {
 	planeActionSettingOf,
 } from "./plane-action-registry.ts";
 import { COMMAND_TIMEOUT_MS } from "./runner.ts";
-import type { TicketProjection } from "./state/ticket-work-cycle.ts";
+import type { ScopedTicketRead, TicketProjection } from "./state/ticket-work-cycle.ts";
 import type { WorkQueueHandoffItem, WorkQueuePlaneActionItem } from "./state/work-queue.ts";
 import { newestMembership } from "./task-selection.ts";
 import { mergeTargetPullRequest } from "./workflow.ts";
@@ -231,18 +231,24 @@ export function checkoutStartOf(
  * in for a worktree start. A start works one checkout, so the gate and the hold
  * name that one Repository and nothing else: a Ticket listed in two
  * Repositories holds the checkout its start works, not the pair of them. A
- * Ticket the projection no longer holds, and a merge with no pull request to
+ * ticket the scoped read no longer holds, and a merge with no pull request to
  * aim at, name no checkout: their start crosses the gate, takes no hold, and
  * the run's own gates refuse it.
+ *
+ * The gate asks the ticket work cycle for the row's ticket and its pull
+ * request link through the scoped read, on the row's one identity, when the
+ * row reaches the gate (issue #428, ADR 0151): the key is a fact of the row's
+ * one identity, read on the identity it names, not of the record the row lives
+ * in.
  */
 function checkoutKeyOf(
 	item: WorkQueueHandoffItem | WorkQueuePlaneActionItem,
-	projection: TicketProjection,
+	read: ScopedTicketRead,
 ): string | null {
-	const ticket = projection.rowFor(item.ticketIdentity);
-	if (ticket === undefined) return null;
+	const ticket = read.ticket;
+	if (ticket === null) return null;
 	const repository =
-		item.kind === "plane-action" ? mergeTargetRepository(projection, ticket) : ticket.repositoryRef;
+		item.kind === "plane-action" ? mergeTargetRepository(read) : ticket.repositoryRef;
 	if (repository === undefined) return null;
 	const key = repositoryOperationKey(repository.identity);
 	return key === "" ? null : key;
@@ -253,13 +259,14 @@ function checkoutKeyOf(
  * position is one, and its fixing pull request when the position is the ticket
  * the pull request fixes - the resolution the run aims with, through
  * `mergeTargetPullRequest`, so the hold names the Repository the merge's
- * commands work through and the two cannot drift apart.
+ * commands work through and the two cannot drift apart. The resolution reads
+ * the scoped ticket read the gate took (ADR 0151), so the hold and the run
+ * resolve the target on the same rows.
  */
-function mergeTargetRepository(
-	projection: TicketProjection,
-	ticket: Ticket,
-): RepositoryRef | undefined {
-	const pullRequest = mergeTargetPullRequest(projection.rows, ticket);
+function mergeTargetRepository(read: ScopedTicketRead): RepositoryRef | undefined {
+	const ticket = read.ticket;
+	if (ticket === null) return undefined;
+	const pullRequest = mergeTargetPullRequest(ticket, read.pullRequestLink.fixing);
 	if (pullRequest === null) return undefined;
 	const membership = newestMembership(pullRequest.memberships);
 	return membership === undefined ? undefined : membership.repository;
@@ -396,20 +403,23 @@ export class CheckoutHoldLedger {
 	 * The gate is not the Parallel limit and does not read it: the Plane action
 	 * takes no seat, and the wait belongs to the checkout (ADR 0068 unchanged).
 	 *
-	 * The projection is the caller's read, asked only when the row reaches the
-	 * gate, and handed down by the pass that walks the rows (issue #297 review):
-	 * the gate runs no query of its own, and a row that works no checkout reads
-	 * nothing.
+	 * The gate asks the ticket work cycle for the row's ticket and its pull
+	 * request link through the scoped read, on the row's one identity, when the
+	 * row reaches the gate (issue #428, ADR 0151): a start that works no
+	 * checkout reads nothing, and a start that works one reads its row, not the
+	 * record. The projection the record names the holder by is the walk's
+	 * shared read, the way the checkout record keeps naming from the projection
+	 * it holds (ADR 0151).
 	 */
 	cross(
 		item: WorkQueueHandoffItem | WorkQueuePlaneActionItem,
-		checkoutProjection: () => TicketProjection,
+		readTicket: (identity: string) => ScopedTicketRead,
+		readProjection: () => TicketProjection,
 	): CheckoutGate {
 		const start = checkoutStartOf(item, this.facts.config());
 		if (start === null) return { ok: true, checkoutKey: null };
-		const projection = checkoutProjection();
-		const key = checkoutKeyOf(item, projection);
-		return this.gateFor(start, item.ticketIdentity, key, projection);
+		const key = checkoutKeyOf(item, readTicket(item.ticketIdentity));
+		return this.gateFor(start, item.ticketIdentity, key, readProjection);
 	}
 
 	/**
@@ -423,11 +433,11 @@ export class CheckoutHoldLedger {
 	 * only the start that works a worktree, the way the gate above answers null
 	 * for a live-worktree Handoff. The key is the record's Repository through the
 	 * facts, so a consultation whose record the state no longer holds crosses
-	 * with no key and takes no hold, the way a ticket the projection dropped does
-	 * in the gate above. The projection is the caller's read, and it runs
-	 * whenever the record names a Repository with a key, a held checkout or a
-	 * free one: the holder line a budget may leave names the holder's own start,
-	 * and only a consultation that works no checkout reads no projection.
+	 * with no key and takes no hold, the way a ticket the scoped read dropped does
+	 * in the gate above. The projection is the caller's read (ADR 0151), and the
+	 * record names from it only the lines it writes: the wait line, the waiting
+	 * fact, the holder the budget ends. A consultation that works no checkout
+	 * reads nothing, and a free checkout nothing names reads nothing either.
 	 */
 	crossConsultation(
 		consultationId: string,
@@ -437,12 +447,11 @@ export class CheckoutHoldLedger {
 		if (repository === undefined) return { ok: true, checkoutKey: null };
 		const key = repositoryOperationKey(repository);
 		if (key === "") return { ok: true, checkoutKey: null };
-		const projection = checkoutProjection();
 		return this.gateFor(
 			{ side: "consultation", channel: "consultation" },
 			consultationId,
 			key,
-			projection,
+			checkoutProjection,
 		);
 	}
 
@@ -456,10 +465,10 @@ export class CheckoutHoldLedger {
 		start: CheckoutStart,
 		identity: string,
 		key: string | null,
-		projection: TicketProjection,
+		readProjection: () => TicketProjection,
 	): CheckoutGate {
 		if (key === null) return { ok: true, checkoutKey: null };
-		const holder = this.holderOf(key, projection);
+		const holder = this.holderOf(key, readProjection);
 		if (holder === null) {
 			this.waits.delete(identity);
 			return { ok: true, checkoutKey: key };
@@ -492,6 +501,7 @@ export class CheckoutHoldLedger {
 			// (issue #315) - waits on no entry and leaves no line, because the wait
 			// is the row's and the queue holds no row for it.
 			if (this.facts.rowStands(identity)) {
+				const projection = readProjection();
 				this.waits.set(identity, {
 					since: stated?.since ?? this.facts.now(),
 					holder: holder.identity,
@@ -505,7 +515,7 @@ export class CheckoutHoldLedger {
 				);
 			}
 		}
-		return { ok: false, outcome: "waiting", fact: this.waitFact(holder, projection) };
+		return { ok: false, outcome: "waiting", fact: this.waitFact(holder, readProjection()) };
 	}
 
 	/**
@@ -652,7 +662,7 @@ export class CheckoutHoldLedger {
 	private nameOf(side: CheckoutSide, identity: string, projection: TicketProjection): string {
 		if (side === "consultation")
 			return recordConsultationName(this.facts.consultationTypeName(identity), identity);
-		return recordTicketName(projection, identity);
+		return recordTicketName(projection.rowFor(identity), identity);
 	}
 
 	/**
@@ -671,7 +681,7 @@ export class CheckoutHoldLedger {
 	 * plane ran. The age that says the holder is gone ends the hold instead, and the
 	 * next start crosses.
 	 */
-	private holderOf(key: string, projection: TicketProjection): CheckoutHold | null {
+	private holderOf(key: string, readProjection: () => TicketProjection): CheckoutHold | null {
 		const hold = this.holds.get(key);
 		if (hold === undefined) return null;
 		if (this.facts.holderStands(hold.side, hold.identity)) {
@@ -680,7 +690,7 @@ export class CheckoutHoldLedger {
 			this.facts.log?.warn(
 				checkoutHoldDropLine(
 					hold.channel,
-					this.nameOf(hold.side, hold.identity, projection),
+					this.nameOf(hold.side, hold.identity, readProjection()),
 					CHECKOUT_HOLD_OVER_BUDGET_FACT,
 				),
 			);

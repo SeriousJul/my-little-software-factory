@@ -387,7 +387,7 @@ function recoveredAttemptLines(
 	for (const attempt of opened.recovered) {
 		logger.warn(
 			handoffStartFailedLine(
-				recordTicketName(projection, attempt.ticketIdentity),
+				recordTicketName(projection.rowFor(attempt.ticketIdentity), attempt.ticketIdentity),
 				attempt.failureReason,
 			),
 		);
