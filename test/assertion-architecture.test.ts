@@ -40,9 +40,7 @@ describe("no test asserts with a matcher a negated toContain can never see", () 
 		for (const required of [
 			"test/handoff.test.ts",
 			"test/handoff-frame.test.ts",
-			"test/handoff-dispatch.test.ts",
 			"test/consultation-frame.test.ts",
-			"test/consultation-operations.test.ts",
 			"test/command-assertions.ts",
 		]) {
 			expect(tests, `${required} must be in the scanned set`).toContain(required);

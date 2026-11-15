@@ -67,7 +67,7 @@ export function nameCollisionStands(facts: NameCollisionFacts): boolean {
 }
 
 /** The prefix the collision's Message-line fact wears. */
-export const NAME_COLLISION_PREFIX = "agent name held:";
+const NAME_COLLISION_PREFIX = "agent name held:";
 
 /**
  * Where a name is held, in the handles the host named. This is the one wording

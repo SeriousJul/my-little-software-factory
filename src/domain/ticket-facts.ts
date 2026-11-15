@@ -143,7 +143,7 @@ export interface TicketRowFacts {
  * lines' `turnTaskType`. The deviation is recorded in
  * `docs/operation/main-view.md` and on issue #201.
  */
-export function rowTaskType(ticket: Ticket): TaskTypeFact {
+function rowTaskType(ticket: Ticket): TaskTypeFact {
 	// A ticket that is open holds no cycle: its handoff record is the closed
 	// cycle's history, so the row names the next handoff - the suggestion. The
 	// machine offers no task for an open ticket that suggests nothing, so the
@@ -190,7 +190,7 @@ export function turnTaskType(ticket: Ticket, defaultTaskType: string): string {
  * (issue #379, ADR 0021). An unparseable start time stands past the grace, the
  * way the observation reads it.
  */
-export function failureMarker(
+function failureMarker(
 	ticket: Ticket,
 	poll: AgentPoll | null,
 	now: number,
@@ -222,7 +222,7 @@ export function inFlight(ticket: Ticket): boolean {
  * of the state badge. A failure marker rules the face out before it is read, so
  * a dead or blocked Agent is never hidden behind the motion.
  */
-export function startingWindow(ticket: Ticket, claimHeld: boolean): boolean {
+function startingWindow(ticket: Ticket, claimHeld: boolean): boolean {
 	return claimHeld || (!ticket.handoffRecoveryRequired && ticket.state === "handed-off");
 }
 
@@ -235,7 +235,7 @@ export function startingWindow(ticket: Ticket, claimHeld: boolean): boolean {
  * `queued` badge in place of its state badge while the item stands. The Ticket
  * keeps its state, so the counts and the state file never learn the badge.
  */
-export function queueWait(ticket: Ticket, queue: readonly WorkQueueItem[]): boolean {
+function queueWait(ticket: Ticket, queue: readonly WorkQueueItem[]): boolean {
 	return queue.some(
 		(item) =>
 			(item.kind === "handoff" || item.kind === "plane-action") &&

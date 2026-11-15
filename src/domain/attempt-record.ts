@@ -26,7 +26,7 @@
  */
 
 /** The prefix the failed-start line wears. */
-export const HANDOFF_START_FAILED_PREFIX = "handoff start failed:";
+const HANDOFF_START_FAILED_PREFIX = "handoff start failed:";
 
 /**
  * The words the line states when the attempt's row stores no reason at all.
@@ -41,7 +41,7 @@ export const HANDOFF_START_FAILED_PREFIX = "handoff start failed:";
  * it, and the suite holds both doors: the settle that stores none, and the line
  * it earns.
  */
-export const NO_FAILURE_RECORDED_FACT = "the attempt recorded no reason";
+const NO_FAILURE_RECORDED_FACT = "the attempt recorded no reason";
 
 /**
  * The one line one failed Handoff start leaves: the prefix, the Ticket the

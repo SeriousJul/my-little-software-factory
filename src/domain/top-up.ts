@@ -32,7 +32,7 @@ import { handoffLimitReached, type TicketState } from "./ticket.ts";
  * are the walks' own gates, in the order the walks read them, and the awaiting
  * walk's gate stands last.
  */
-export const AUTOMATIC_HOLD_REASONS = [
+const AUTOMATIC_HOLD_REASONS = [
 	"auto-handoff-off",
 	"queue-paused",
 	"dispatch-pause",
@@ -67,7 +67,7 @@ export type AutomaticHoldReason = (typeof AUTOMATIC_HOLD_REASONS)[number];
  * that a hold happened (issue #223 review). The other holds state a bare fact:
  * where their gate stands no row is picked and none is known.
  */
-export const AUTOMATIC_ROW_HOLD_REASONS = [
+const AUTOMATIC_ROW_HOLD_REASONS = [
 	"continuation-standing",
 	"operator-row-standing",
 ] as const;
@@ -89,7 +89,7 @@ export type AutomaticRowHoldReason = (typeof AUTOMATIC_ROW_HOLD_REASONS)[number]
  * candidates and adds nothing states the fact each candidate rested on, and the
  * record has to say which candidate it left resting the same way.
  */
-export const AUTOMATIC_CANDIDATE_HOLD_REASONS = [
+const AUTOMATIC_CANDIDATE_HOLD_REASONS = [
 	"agent-name-held",
 	"handoff-failure-park",
 	"ticket-ignored",
@@ -118,7 +118,7 @@ export type AutomaticCandidateHoldReason = (typeof AUTOMATIC_CANDIDATE_HOLD_REAS
  * itself, and the gate that holds it - four facts the record line states and
  * the key carries.
  */
-export const AUTOMATIC_NEXT_STEP_HOLD_REASONS = ["next-step-held"] as const;
+const AUTOMATIC_NEXT_STEP_HOLD_REASONS = ["next-step-held"] as const;
 
 export type AutomaticNextStepHoldReason = (typeof AUTOMATIC_NEXT_STEP_HOLD_REASONS)[number];
 
@@ -217,7 +217,7 @@ export type AutomaticHold =
  * gate's own sentence stands in parentheses at the end (`automaticHoldLine`)
  * (issue #232).
  */
-export const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>> = {
+const AUTOMATIC_HOLD_LINES: Readonly<Record<AutomaticHoldReason, string>> = {
 	"auto-handoff-off": "automatic walks hold: auto-handoff is off",
 	"queue-paused": "automatic walks hold: the Work queue is paused",
 	"dispatch-pause": "automatic walks hold: a failed turn waits for the operator",

@@ -20,7 +20,7 @@ import { agentNameFor, type HandoffAgentIdentity, identifyHandoffAgentName } fro
 import type { Ticket } from "./ticket.ts";
 
 /** The standard Thinking levels, from no reasoning to the deepest. */
-export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /** One Thinking level of the standard set. */
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];

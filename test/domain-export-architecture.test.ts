@@ -25,11 +25,14 @@
  *    list can only shrink. A type is a module's interface vocabulary, and the
  *    seams `docs/agents/shape.md` documents lean on it, so this class is held
  *    still rather than cleaned here. Issue #301 answered each of the 14 names the
- *    branch that added the check measured, and the list stands empty: 13 are
- *    reached through a value the plane calls, and the suite that drives that value
- *    now names the type at the seam (the module map names the call site); one,
+ *    branch that added the check measured, and the list stood empty: 13 were
+ *    reached through a value the plane calls, and the suite that drove that value
+ *    named the type at the seam (the module map names the call site); one,
  *    `UnreachedOutcome` in `attempt-hold.ts`, types a field of its own module's
- *    record and is module-private now. A domain type neither side names is
+ *    record and is module-private. The unit test layer went 2026-11-15, and with
+ *    it the readers that named most of the domain's type vocabulary: the 23
+ *    names below stand in the list beside the reason each stays exported, and
+ *    several are named in the module map. A domain type neither side names is
  *    therefore refused outright until it is read, made private, or written into
  *    the list with the reason it stays exported. Each entry carries that reason
  *    as a field the check reads, so an entry without one is refused too: the
@@ -53,16 +56,136 @@ const DOMAIN = "src/domain";
  * exported with no reader, and the list can only shrink: a name that stops
  * being unread fails the check until it is removed.
  *
- * The list stands empty since issue #301 answered the 14 names the branch that
- * added the check measured. It stays as the ratchet: a new domain type neither
- * side names goes red until a reader asks for it by name, until the module keeps
- * it privately, or until it is written here with its reason. A caller can hold
- * such a type without naming it, because the value it reads carries the shape,
- * so an unread type name is not proof of a dead export the way an unread value
- * is. That is why the list is the escape hatch and the two rules above stay the
- * strict ones.
+ * The list stood empty after issue #301 answered the 14 names the branch that
+ * added the check measured. The unit test layer stood as the reader of most of
+ * the domain's type vocabulary, and its removal, 2026-11-15, filled the list
+ * with the 23 names the removed suite asked for by name: each stays the module's
+ * interface vocabulary, several are named in the module map, and each entry
+ * carries the reason it stays exported. The list stays the ratchet: a new
+ * domain type neither side names goes red until a reader asks for it by name,
+ * until the module keeps it privately, or until it is written here with its
+ * reason. A caller can hold such a type without naming it, because the value it
+ * reads carries the shape, so an unread type name is not proof of a dead export
+ * the way an unread value is. That is why the list is the escape hatch and the
+ * two rules above stay the strict ones.
  */
-const UNREAD_TYPE_BASELINE: readonly { readonly name: string; readonly reason: string }[] = [];
+const UNREAD_TYPE_BASELINE: readonly { readonly name: string; readonly reason: string }[] = [
+	{
+		name: "src/domain/attempt-hold.ts :: AttemptHoldFacts (interface)",
+		reason:
+			"the record the attempt-hold module hands out; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/decision-facts.ts :: DecisionFactInputs (interface)",
+		reason:
+			"the inputs `decisionFacts` reads before it answers; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/decision-facts.ts :: DecisionOffer (type)",
+		reason:
+			"`decisionFacts` answers it to the App's Decision region, and the module map names it; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/decision-facts.ts :: DecisionPosition (interface)",
+		reason:
+			"the position a decision fact states; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/queue-staging.ts :: QueueStaging (type)",
+		reason:
+			"the staging `queueStagingOf` answers; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/section-facts.ts :: SectionFactInputs (interface)",
+		reason:
+			"the inputs `sectionFacts` reads before it answers; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/section-facts.ts :: SectionFacts (interface)",
+		reason:
+			"`sectionFacts` answers it to the App and the gallery, and the module map names it; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/ticket.ts :: HoldTurnFact (interface)",
+		reason:
+			"the fact a held turn of a Ticket states; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/ticket.ts :: TicketIgnoreFacts (interface)",
+		reason:
+			"`automaticStartBlocked` and `flagWithholdsRow` read it, and the module map names it; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: AutomaticAddFacts (interface)",
+		reason:
+			"`automaticAddsHold` reads it in `src/observation.ts`, and the module map names it; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: AutomaticBareHold (interface)",
+		reason:
+			"one member of the `AutomaticHold` union the walk answers, and the module map names it; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: AutomaticBareHoldReason (type)",
+		reason:
+			"the reason word the bare hold carries; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: AutomaticCandidateHoldReason (type)",
+		reason:
+			"the reason word the candidate hold carries; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: AutomaticHoldReason (type)",
+		reason:
+			"the key of `AUTOMATIC_HOLD_LINES` and the `reason` of every hold, and the module map names it; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: AutomaticNextStepHoldReason (type)",
+		reason:
+			"the reason word the next-step hold carries; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: AutomaticRowHold (interface)",
+		reason:
+			"one member of the `AutomaticHold` union, answered by `continuationHold`, and the module map names it; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: AutomaticRowHoldReason (type)",
+		reason:
+			"the `reason` of that member and the words of `AUTOMATIC_ROW_HOLD_REASONS`; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: ContinuationRowFacts (interface)",
+		reason:
+			"`continuationHold` reads it in `src/observation.ts`, and the module map names it; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: OpenTicketRowFacts (interface)",
+		reason:
+			"the facts `openTicketRowGate` reads; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: OpenTicketRowGate (type)",
+		reason:
+			"`openTicketRowGate` answers it to `src/observation.ts`, and the module map names it; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: OpenTicketWaitsFacts (interface)",
+		reason:
+			"`openTicketWaitsHold` reads it in `src/observation.ts`, and the module map names it; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: RestartCandidateFacts (interface)",
+		reason:
+			"the facts `restartCandidateGate` reads; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+	{
+		name: "src/domain/top-up.ts :: RestartCandidateGate (type)",
+		reason:
+			"the answer `restartCandidateGate` hands out; the unit suite that named it went with the unit test layer, 2026-11-15",
+	},
+];
 
 /** The value export kinds rule 1 polices. */
 const VALUE_KINDS = new Set(["const", "let", "var", "function", "class"]);
@@ -266,9 +389,10 @@ describe("a domain export is read, or it is not an export", () => {
 	}
 
 	test("the unread domain types stay the list the check already holds", () => {
-		// The list stands empty since issue #301, so this is the strict form of the
-		// ratchet: a domain type neither side names is refused, and a name written
-		// into the list that has a reader is refused the other way.
+		// The list holds the names the removed unit test layer asked for by name, and
+		// both ratchet directions stand: a domain type neither side names is
+		// refused, and a name written into the list that has a reader is refused
+		// the other way.
 		const unread: string[] = [];
 		for (const module of domainFiles) unread.push(...unreadTypeNames(module));
 		expect(unread.sort()).toEqual(UNREAD_TYPE_BASELINE.map((entry) => entry.name).sort());
@@ -316,13 +440,13 @@ describe("a domain export is read, or it is not an export", () => {
  *   rule 2 does not ask whether it has readers.
  * - Probe C, rule 3: add `export interface ABrandNewUnreadType { readonly a: 1 }`
  *   to any file under `src/domain/`. The ratchet case goes red with that one name
- *   added to a list that stands empty, and the only way it turns green is writing
- *   the name into `UNREAD_TYPE_BASELINE`, which is the point.
+ *   beside the list's names, and the only way it turns green is writing the name
+ *   into `UNREAD_TYPE_BASELINE`, which is the point.
  * - Probe D, rule 3 the other way: write
  *   `{ name: "src/domain/top-up.ts :: AutomaticHold (interface)", reason: "the walk holds it" }`
- *   into `UNREAD_TYPE_BASELINE`. `AutomaticHold` has readers, so the ratchet case
- *   goes red with that one name on the list side and nothing on the unread side.
- *   The list can only shrink, and a stale entry is refused with it.
+ *   into `UNREAD_TYPE_BASELINE`. `AutomaticHold` has readers, so it is not on the
+ *   unread side, and the ratchet case goes red with that one stale name on the
+ *   list side. The list can only shrink, and a stale entry is refused with it.
  * - Probe E, the reason field: run probe C's `ABrandNewUnreadType` and write
  *   `{ name: "src/domain/top-up.ts :: ABrandNewUnreadType (interface)", reason: "" }`
  *   into `UNREAD_TYPE_BASELINE`. The ratchet case goes green, because the name is

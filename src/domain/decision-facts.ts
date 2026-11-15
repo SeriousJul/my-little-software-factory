@@ -76,7 +76,7 @@ export interface DecisionFacts {
 }
 
 /** One surface's label write as the decision's fact line. */
-export function transitionFactLine(
+function transitionFactLine(
 	surface: string,
 	write: { added: string[]; removed: string[] },
 ): string {
@@ -94,7 +94,7 @@ export function transitionFactLine(
  * Work queue, starting, or running on its position Ticket - and the live route
  * row stands again the moment the route dies.
  */
-export function routeStandingLine(
+function routeStandingLine(
 	ticket: Ticket,
 	outcome: TransitionOutcome,
 	mergeRoute: boolean,

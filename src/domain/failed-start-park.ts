@@ -34,7 +34,7 @@
  * sets would be a second brake to keep in step with the first. A limit below two
  * parks at one failed start, the earliest the fact can say anything.
  */
-export function failedStartParkAttempts(handoffLimit: number): number {
+function failedStartParkAttempts(handoffLimit: number): number {
 	return Math.max(1, Math.floor(handoffLimit / 2));
 }
 
@@ -71,7 +71,7 @@ export function failedStartParkStands(facts: FailedStartParkFacts): boolean {
 }
 
 /** The prefix the park's Message-line fact wears. */
-export const FAILED_START_PARK_PREFIX = "handoff failure park:";
+const FAILED_START_PARK_PREFIX = "handoff failure park:";
 
 /**
  * The one line the park states on the Message line: the prefix, the Ticket's

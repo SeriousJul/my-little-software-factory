@@ -12,7 +12,7 @@
  * press.
  */
 
-export const GROUPING_AXES = ["none", "repository", "source", "task", "state", "position"] as const;
+const GROUPING_AXES = ["none", "repository", "source", "task", "state", "position"] as const;
 export type GroupingAxis = (typeof GROUPING_AXES)[number];
 
 /**
