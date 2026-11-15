@@ -4,11 +4,12 @@ Status: accepted
 Date: 2026-11-14
 
 Records that the plane holds exactly one active screen at a time. The shell
-owns one screen stack module that owns the stack's record, the open, close,
-and replace transitions, and the per-screen preserved facts. The contract it
-states: a suspended screen runs nothing, it unmounts, it holds no timer, no
-read, no spinner frame, and no key claim, and it resumes from the store plus
-the stack's preserved facts on the same frame it was suspended on.
+owns one screen stack module that owns the stack's record and the open, close,
+and replace transitions. The screens' screen-local facts stand in the shell's
+stage, which is never suspended, so they outlive every screen's unmount. The
+contract the module states: a suspended screen runs nothing, it unmounts, it
+holds no timer, no read, no spinner frame, and no key claim, and it resumes
+from the store plus the shell's stage on the same frame it was suspended on.
 
 ## Context
 
@@ -44,10 +45,11 @@ on resume.
 
 ## Decision
 
-The shell gains one screen stack module. It owns three things and nothing
+The shell gains one screen stack module. It owns two things and nothing
 else: the stack's record (the ordered suspended screens, the Main view at the
-bottom, the active screen at the top, one entry per screen), the transitions,
-and the per-screen preserved facts.
+bottom, the active screen at the top, one entry per screen) and the
+transitions. The screens' screen-local facts stand in the shell's stage,
+which is never suspended.
 
 - The screens of the stack are the Main view and the screens that open above
   it: the Consultation launcher, with the Replacement Consultation as the
@@ -65,12 +67,16 @@ and the per-screen preserved facts.
   updates that screen's fact in place (the guide's captured Interaction
   mode), never a second entry; an open of a screen the stack already holds
   at a lower level is refused, one entry per screen. Close removes the
-  active screen and resumes the screen beneath it. Replace, the close of one
-  screen immediately followed, in the same transition pass, by the open of a
-  different screen (the decision route confirm that opens the routed ticket's
-  Live view, the repository select's confirm that opens the repository
-  init), swaps the top without resuming the screen beneath, so a screen that
-  would be suspended again in the same pass is never remounted for nothing.
+  active screen and resumes the screen beneath it. Replace, the open of a
+  screen that takes the place of the screen the record holds in the same
+  slot, in the same transition pass: the guide and the Message view share one
+  entry of the record, and the open of one over the other stands the new
+  screen with the screen beneath the slot suspended through the pass, so a
+  screen that would be suspended again in the same pass is never remounted
+  for nothing. A confirm that moves the ticket to its next work cycle is a
+  close, not a replace: the screen that stood on the cycle it left is stale
+  on that write, the root's stale release closes it, and the screen beneath
+  it resumes.
 
 - Suspension is an unmount: the suspended screen's tree comes down, so its
   timers, its pane reads, its spinner frames, and its key wrappers stop by
@@ -81,7 +87,11 @@ and the per-screen preserved facts.
   decision across every screen's hooks and leaves a second shallow seam into
   the stack that a screen can drift from.
 
-- The preserved facts are the screen-local facts the store does not hold:
+- The preserved facts are the screen-local facts the store does not hold.
+  They stand in the shell's stage, which is never suspended: a screen edits
+  the shell's state while it is active, the state outlives the screen's
+  unmount, and the screen resumes on the same state it wrote, building the
+  rest of itself from the store.
   the Main view's selection, selected row, detail scroll, list filters,
   focused pane, section expansions, grouping folds, response draft and editor
   standing, Agent terminal standing, and the presented Consultation detail
@@ -96,12 +106,14 @@ and the per-screen preserved facts.
   and the message history, stand in the shell through every transition, so a
   screen resumed after a long suspend shows the factory's current state.
 
-- Stale resume: a screen the stack resumes is checked against the store
-  before it stands. A Live view whose ticket left the work cycle its screen
-  stands on (ADR 0110) closes instead of resuming, the stack form of the
-  rule ADR 0110 decided for the work cycle, and a resumed screen whose
-  selected item left the factory's lists stands on the fact the store now
-  answers, the same fallbacks the screen already derives today.
+- Stale resume: a screen that records the work cycle it stands on, the Live
+  view and the decision modal, is checked against the store before it stands
+  or resumes. The ticket moved to the next cycle by a confirm on the
+  screen's own surface or a route, and the screen closes instead of standing
+  or resuming (ADR 0110), whether it stands active or resumes from a
+  suspend. A resumed screen whose selected item left the factory's lists
+  stands on the fact the store now answers, the same fallbacks the screen
+  already derives today.
 
 - The key-ownership contract: the active screen owns the keys, and a
   suspended screen claims none. The shell keeps its own base key

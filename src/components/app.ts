@@ -272,7 +272,14 @@ interface StatusMessage {
 /** The action modal open above the panes, if any. */
 export type Panel =
 	| null
-	| { kind: "decision"; identity: string }
+	/**
+	 * The decision modal, and the work cycle it opened on. A confirm that
+	 * moves the ticket to the next work cycle - a route, or the Close that
+	 * ends the cycle on the modal's own surface - leaves the screen stale,
+	 * and the root's stale release closes it, the way the Live view's work
+	 * cycle bounds that screen (ADR 0110).
+	 */
+	| { kind: "decision"; identity: string; workCycle: number }
 	| { kind: "missing"; identity: string }
 	| { kind: "ticket-close"; identity: string }
 	| { kind: "consultation-close"; identity: string }
@@ -328,38 +335,20 @@ const TICKET_GROUP_SECTION = "tickets" as const;
  * Ticket, and which Origin of its dispatch. Only the two routes the panel
  * opens from appear here: an open Ticket's own handoff, and a workflow route
  * the operator edited from its decision row, in the decision modal or in the
- * Live view's decision sub-mode. The workflow route also carries which
- * ticket panel it opened from, so an Esc and a confirmed route return there
- * instead of guessing. A Restart or an automatic route never opens the
- * panel, so neither Origin reaches it. The prompt's previous message is not
- * carried here: the confirm reads it from the Ticket it claims, so an edit
- * can never send a message another Ticket left behind.
+ * Live view's decision sub-mode. A Restart or an automatic route never opens
+ * the panel, so neither Origin reaches it. The screen the panel opened over
+ * is not carried here: it stands suspended beneath the panel (ADR 0150), and
+ * the root's stale release closes it, on the cycle the panel stood on, when
+ * the confirm moves the ticket to its next work cycle (ADR 0110). The
+ * prompt's previous message is not carried either: the confirm reads it from
+ * the Ticket it claims, so an edit can never send a message another Ticket
+ * left behind.
  */
-export type PendingOverride =
-	| {
-			ticketIdentity: string;
-			origin: "open";
-			choice: HandoffChoice;
-	  }
-	| {
-			ticketIdentity: string;
-			origin: "workflow";
-			/**
-			 * The ticket panel the route row was on: Esc and a confirmed route return
-			 * there. It is stored as the panel itself, not as the fields that panel
-			 * happens to have today, so the Live view's work cycle - the fact that
-			 * screen is bounded by (ADR 0110) - travels with it and a field the Live
-			 * panel grows later is carried here by the compiler.
-			 */
-			returnTo: RouteReturnPanel;
-			choice: HandoffChoice;
-	  };
-
-/**
- * The ticket panel a route override returns to: the screen the route row stood
- * on when the edit opened the panel, the Decision modal or the Live view.
- */
-type RouteReturnPanel = Extract<Panel, { kind: "decision" | "live" }>;
+export type PendingOverride = {
+	ticketIdentity: string;
+	origin: "open" | "workflow";
+	choice: HandoffChoice;
+};
 
 export type AppKey =
 	| "j"
@@ -1359,7 +1348,7 @@ function useAppRangeDecision(prev: AppRefreshNowStage) {
 		// operator's key opens the screen on the settled turn in every case: the
 		// screen reads the turn's derived Next step and states the gate that
 		// holds it.
-		setPanel({ kind: "decision", identity: ticket.identity });
+		setPanel({ kind: "decision", identity: ticket.identity, workCycle: ticket.workCycle });
 	};
 	return { ...prev, moveRange, decideCompletion };
 }
@@ -1873,6 +1862,35 @@ function useAppPanelDecision(prev: AppOpenPanelStage) {
 }
 type AppPanelDecisionStage = ReturnType<typeof useAppPanelDecision>;
 
+/**
+ * Whether the open ticket panel has nothing left to show.
+ *
+ * Each ticket panel kind names the fact it draws from, and that fact is what
+ * can run out from under it: the ticket that leaves the projection, the
+ * decision the observation takes, the work cycle the screen stood on (the
+ * decision modal and the Live view each record the cycle they opened on, and
+ * the write that ends the cycle leaves them stale, ADR 0110), and the close
+ * of a ticket whose work in flight has ended.
+ */
+function ticketPanelHasNothingToShow(fields: {
+	ticketPanel: AppOpenPanelStage["ticketPanel"];
+	panelTicket: Ticket | undefined;
+	decision: AppPanelDecisionStage["decision"];
+	liveMode: AppPanelDecisionStage["liveMode"];
+}): boolean {
+	const { ticketPanel, panelTicket, decision, liveMode } = fields;
+	if (ticketPanel === null) return false;
+	if (panelTicket === undefined) return true;
+	if (ticketPanel.kind === "decision")
+		return decision === undefined || panelTicket.workCycle !== ticketPanel.workCycle;
+	if (ticketPanel.kind === "live") return liveMode === "closed";
+	if (ticketPanel.kind === "ticket-close")
+		// The Close confirmation is drawn from work in flight: a cycle that
+		// ended from under the dialog leaves the panel with nothing to show.
+		return panelTicket.state === "open";
+	return false;
+}
+
 /** The mode one open Live panel shows, from the ticket's current facts. */
 function livePanelMode(fields: {
 	panel: Panel;
@@ -1935,13 +1953,12 @@ function useAppPanelRelease(prev: AppPanelDecisionStage) {
 		panel?.kind === "consultation-recovery" &&
 		(panelConsultation === undefined || recoveryPanel === undefined);
 	const panelHasNothingToShow =
-		(ticketPanel !== null &&
-			(panelTicket === undefined ||
-				(ticketPanel.kind === "decision" && decision === undefined) ||
-				(ticketPanel.kind === "live" && liveMode === "closed") ||
-				// The Close confirmation is drawn from work in flight: a cycle that
-				// ended from under the dialog leaves the panel with nothing to show.
-				(ticketPanel.kind === "ticket-close" && panelTicket.state === "open"))) ||
+		ticketPanelHasNothingToShow({
+			ticketPanel,
+			panelTicket,
+			decision,
+			liveMode,
+		}) ||
 		closePanelHasNothingToShow ||
 		recoveryPanelHasNothingToShow;
 	// The reason the guard stands on the Message line when it drops an open
@@ -6478,8 +6495,11 @@ function appConfirmOverride(f: AppTicketOpsFields, choice: HandoffChoice): void 
 	}
 	if (pending.origin === "workflow") {
 		// The panel the route row was on stands suspended beneath the override
-		// (ADR 0150): a confirmed route that moves the work cycle is closed
-		// by the root's stale release, like every other stale panel (ADR 0110).
+		// (ADR 0150). A confirmed route moves the ticket to its next work
+		// cycle, and the panel the ticket stands on - the Live view, and the
+		// decision modal with the cycle it opened on - is stale on that write,
+		// so the root's stale release closes it and the screen beneath resumes
+		// (ADR 0110).
 		appRunRouteHandoff(f, ticket, ticket.lastCompletion?.transition ?? null, choice);
 		return;
 	}
@@ -7224,18 +7244,13 @@ function appOpenRouteOverride(f: AppTicketOpsFields, ticket: Ticket, key: string
 	if (choice === null) return;
 	// The panel opens on this choice's agent: fetch its Model list (ADR 0010).
 	appRequestModelList(f, choice.agentType);
-	// The panel the route row was on stands beneath the override: it is a
-	// suspended screen, and the facts it keeps stand when the override ends.
-	// The decision modal, or the Live view's decision sub-mode on the work
-	// cycle that screen opened on (ADR 0110).
-	const returnTo: RouteReturnPanel =
-		f.panel?.kind === "live"
-			? { kind: "live", identity: ticket.identity, workCycle: ticket.workCycle }
-			: { kind: "decision", identity: ticket.identity };
+	// The panel the route row was on stands suspended beneath the override
+	// (ADR 0150): dropping the edit returns to it, and a confirmed route
+	// moves the ticket to its next work cycle, where the root's stale release
+	// closes the panel and the screen beneath resumes (ADR 0110).
 	f.setOverride({
 		ticketIdentity: ticket.identity,
 		origin: "workflow",
-		returnTo,
 		choice,
 	});
 }

@@ -15,9 +15,12 @@
  * record of the stack.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Setup } from "./app-harness.ts";
 import {
+	emergencyExit,
 	frameText,
 	frameUntil,
 	guideKey,
@@ -80,6 +83,10 @@ function ticketRow(frame: string, title = DEFAULT_TICKET_TITLE): string {
 	if (row === undefined) throw new Error(`no ticket row for ${title} in frame:\n${frame}`);
 	return row;
 }
+
+/** The blank frame the destroyed renderer stands on: the exit's outcome. */
+const destroyed = (setup: Setup) =>
+	frameUntil(setup, "the renderer to destroy", (frame) => frame.trim() === "");
 
 /** The seeded Consultation the close-panel test stands on. */
 const CLOSE_ID = uid("6");
@@ -435,5 +442,136 @@ describe("the suspended screen runs nothing (ADR 0150)", () => {
 			},
 		);
 		await planeRecord.close();
+	});
+
+	test("the emergency exit from the guide over the Live view: the suspended view holds no key that takes it", async () => {
+		const planeRecord = await seededPlane();
+		const fake = planeRecord.fakeRunner;
+		fake.set("herdr", ["agent", "list"], { stdout: twoPaneAgentList("working", "working") });
+		await withApp(
+			async (setup) => {
+				planeRecord.settleFirstFetch();
+				await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
+				const base = keyBase(setup);
+				await pressControl(setup, "live-view", { quiet: true });
+				await waitFor(setup, { shows: "Live:" });
+				const liveWrapper = leftKeyHandler(setup, base);
+				// The guide opens over the view and suspends it: the view's
+				// wrapper leaves the key bus, and its stream read stops.
+				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
+				const guideWrapper = leftKeyHandler(setup, base);
+				expect(guideWrapper).not.toBe(liveWrapper);
+				const frozenCommands = fake.commands().length;
+				await sleep(1200);
+				expect(fake.commands().length).toBe(frozenCommands);
+				// The plane's one always-available key stands on the shell's
+				// base subscription, which never leaves the bus: from the
+				// screen above, the exit destroys the renderer, and the
+				// suspended view holds no key that could take it.
+				await emergencyExit(setup);
+				await destroyed(setup);
+			},
+			{
+				width: 120,
+				height: 30,
+				plane: planeRecord,
+				loopPolicy: { kind: "held" },
+			},
+		);
+	});
+
+	test("the guide over the Message view: the round trip keeps the guide's mode and the base's place, never a second entry", async () => {
+		// The herdr config names a theme the resolver does not know, so the
+		// boot lands on the built-in default and writes its info notice to
+		// the message history: the Message view opens on a history that is
+		// not empty.
+		const savedEnv = {
+			herdrEnv: process.env.HERDR_ENV,
+			herdrConfigPath: process.env.HERDR_CONFIG_PATH,
+		};
+		const dir = mkdtempSync(join(tmpdir(), "factory-stack-utility-"));
+		process.env.HERDR_ENV = "1";
+		process.env.HERDR_CONFIG_PATH = join(dir, "config.toml");
+		writeFileSync(process.env.HERDR_CONFIG_PATH, '[theme]\nname = "vaporwave"\n');
+		const planeRecord = await seededPlane();
+		const fake = planeRecord.fakeRunner;
+		fake.set("herdr", ["agent", "list"], { stdout: onePaneAgentList("working") });
+		fake.set("herdr", [...READ("pane-1")], { stdout: "the layout math is fixed\n" });
+		try {
+			await withApp(
+				async (setup) => {
+					planeRecord.settleFirstFetch();
+					await waitFor(setup, { shows: DEFAULT_TICKET_TITLE });
+					const base = keyBase(setup);
+					// The guide opens over the Main view and suspends it.
+					await pressControl(setup, "help", { via: "?", opens: "Key guide" });
+					const guideWrapper = leftKeyHandler(setup, base);
+					await settle(setup);
+					const guideFrame = setup.captureCharFrame();
+					const frozenCommands = fake.commands().length;
+					// The Message view opens over the guide: the one utility
+					// slot holds one entry, so the view takes the top and the
+					// guide leaves the stack, the Main view suspended beneath
+					// the whole time. The boot notice stands in the view's
+					// history.
+					await pressControl(setup, "message", {
+						via: "F2",
+						opens: "Message view",
+					});
+					const messageWrapper = leftKeyHandler(setup, base);
+					expect(messageWrapper).not.toBe(guideWrapper);
+					const overFrame = await settle(setup);
+					expect(frameText(overFrame)).toContain(
+						`unknown theme name "vaporwave" in herdr's config`,
+					);
+					expect(overFrame).not.toBe(guideFrame);
+					// While the operator reads the view, the closed guide and
+					// the suspended Main view run nothing: over the window the
+					// frame and the command list stand.
+					await sleep(1600);
+					expect(setup.captureCharFrame()).toBe(overFrame);
+					expect(fake.commands().length).toBe(frozenCommands);
+					// The guide opens again over the view: the same screen in
+					// the mode the utility carried it in, one entry in the
+					// stack, never a second. The slot re-attaches the guide's
+					// own wrapper to the bus, the same identity it held before
+					// the swap.
+					await pressControl(setup, "help", { via: "?", opens: "Key guide" });
+					expect(leftKeyHandler(setup, base)).toBe(guideWrapper);
+					await settle(setup);
+					// The screen stands on the exact frame it held before the
+					// swap: the suspended base never ran, and the guide
+					// repaints in the same mode over the same base, so the
+					// return reads as a return, not a re-opening.
+					expect(setup.captureCharFrame()).toBe(guideFrame);
+					expect(fake.commands().length).toBe(frozenCommands);
+					// Closing the guide resumes the Main view: the one utility
+					// slot holds no suspended screen beneath the guide. The
+					// list stands on its place, and the Message line shows the
+					// factory's boot notice from the view's history, a fact of
+					// the shell that the suspended base never lost.
+					await pressControl(setup, "guide-close", { closes: "Key guide" });
+					const listBack = await settle(setup);
+					expect(frameText(listBack)).toContain(DEFAULT_TICKET_TITLE);
+					expect(frameText(listBack)).toContain("using the built-in default catppuccin");
+					await releaseKeys(setup, base, "the list to release the keys");
+				},
+				{
+					width: 120,
+					height: 30,
+					plane: planeRecord,
+					loopPolicy: { kind: "held" },
+				},
+			);
+			await planeRecord.close();
+		} finally {
+			// The sibling walks boot standalone: the process's theme env goes
+			// back the way it stood.
+			if (savedEnv.herdrEnv === undefined) delete process.env.HERDR_ENV;
+			else process.env.HERDR_ENV = savedEnv.herdrEnv;
+			if (savedEnv.herdrConfigPath === undefined) delete process.env.HERDR_CONFIG_PATH;
+			else process.env.HERDR_CONFIG_PATH = savedEnv.herdrConfigPath;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
