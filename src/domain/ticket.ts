@@ -762,4 +762,3 @@ export function ticketListRank(ticket: Ticket): number {
 export function holdsDecision(ticket: Ticket): boolean {
 	return ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion);
 }
-

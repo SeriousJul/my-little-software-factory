@@ -67,10 +67,7 @@ export type AutomaticHoldReason = (typeof AUTOMATIC_HOLD_REASONS)[number];
  * that a hold happened (issue #223 review). The other holds state a bare fact:
  * where their gate stands no row is picked and none is known.
  */
-const AUTOMATIC_ROW_HOLD_REASONS = [
-	"continuation-standing",
-	"operator-row-standing",
-] as const;
+const AUTOMATIC_ROW_HOLD_REASONS = ["continuation-standing", "operator-row-standing"] as const;
 
 export type AutomaticRowHoldReason = (typeof AUTOMATIC_ROW_HOLD_REASONS)[number];
 
