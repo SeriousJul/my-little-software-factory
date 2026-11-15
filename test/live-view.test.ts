@@ -44,6 +44,7 @@ import {
 	spanColors,
 	staleKeyClaim,
 	startingFaceOf,
+	tickAnimation,
 	WIDTH,
 	waitFor,
 	waitUntil,
@@ -320,8 +321,11 @@ describe("the Live view on the ticket list", () => {
 
 				await pressControl(setup, "live-view", { quiet: true });
 				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
-				// The pop-in settles before the geometry is measured.
-				await sleep(250);
+				// The pop-in settles before the geometry is measured: the named
+				// tick hands the frame module the pop's budget on its own clock,
+				// so the box stands at its settled size when the frame is read
+				// (ADR 0149).
+				await tickAnimation(setup, "rest");
 				// Near-fullscreen: the box's border sits one cell in from the
 				// terminal's edge on top, and the shared chrome keeps the box
 				// above its own Message line, so the bottom border stands two
@@ -362,8 +366,10 @@ describe("the Live view on the ticket list", () => {
 				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
 				const frame = await waitFor(setup, { shows: "line one of the agent work" });
 				expect(frame).toContain("line two of the agent work");
-				// The pop-in settles before the color is measured.
-				await sleep(250);
+				// The pop-in settles before the color is measured: the named tick
+				// hands the frame module the pop's budget on its own clock (ADR
+				// 0149).
+				await tickAnimation(setup, "rest");
 				// Plain text in the palette's prose voice: no ANSI, no styling.
 				expect(spanColors(setup, "line one of the agent work")).toContainEqual(
 					rgb(roleColor("text")),
@@ -436,7 +442,11 @@ describe("the Live view on the ticket list", () => {
 				await pressControl(setup, "live-view", { quiet: true });
 				await waitFor(setup, { shows: "Live: Fix pan drift in split panes" });
 				await waitFor(setup, { shows: "second tick" });
-				const still = frameText(setup.captureCharFrame());
+				// The stream line can show while the box still grows, and a
+				// snapshot mid-pop would not stand against the frame the tick
+				// takes to rest: drive the pop to rest by the named tick, and the
+				// snapshot stands on the settled frame (ADR 0149).
+				const still = frameText(await tickAnimation(setup, "rest"));
 				// The stream keeps its one-second cadence: the ticks read the
 				// same pane, the read answers unchanged, and the stream stands
 				// on the stored screen fact - the same frame the tick before.
@@ -677,14 +687,19 @@ describe("the Live view on the ticket list", () => {
 		await withApp(
 			async (setup) => {
 				await pressControl(setup, "live-view", { quiet: true });
-				const frame = await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
-				expect(frame).toContain("no agent pane is recorded for this ticket");
+				await waitFor(setup, { shows: `Live: ${DEFAULT_TICKET_TITLE}` });
+				// The box pops to its settled size in the module's own time: the
+				// body is wrapped once at the settled width, so the intermediate
+				// frames clip it. The below-pane content is asserted on the frame
+				// at rest, where it stands in full (ADR 0149).
+				const settled = await tickAnimation(setup, "rest");
+				expect(settled).toContain("no agent pane is recorded for this ticket");
 				// The context line names the repository, the task type, and the
 				// agent: the handoff's own choice stands behind the row.
-				expect(frame).toContain("acme/factory · implement · pi");
+				expect(settled).toContain("acme/factory · implement · pi");
 				// The bar names the Goto confirm, once.
-				expect(frame.match(/Goto/g)?.length).toBe(1);
-				expect(frame).toContain("Enter Goto");
+				expect(settled.match(/Goto/g)?.length).toBe(1);
+				expect(settled).toContain("Enter Goto");
 				// No pane to read: the runner was never asked for one.
 				expect(planeRecord.fakeRunner.calls).toHaveLength(0);
 			},

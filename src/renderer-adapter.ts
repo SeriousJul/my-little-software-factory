@@ -23,6 +23,18 @@
  * drift class of OpenTUI issue 1187: every frame rewrites the whole
  * screen, and a lost byte is overwritten within one frame.
  *
+ * The adapter also stands the shared frame module's tick port (ADR 0149):
+ * the renderer's per-frame callback hands the module the frame's time, and
+ * the module advances the clocks of the animation's frame owners and paints
+ * the frames that changed. The module's liveness is ref-counted: the
+ * adapter asks the renderer to run its frame loop when the first frame
+ * owner registers and stops it when the last owner leaves, so a resting
+ * plane keeps its one-frame-per-commit economy exactly as it does without
+ * the module. The tick port and the repaint policy stand on the renderer's
+ * two sides of the same per-frame callback, and their landing order is the
+ * order the module's owners arrive in: a policy callback first, then the
+ * tick, both before the frame's render.
+ *
  * The renderer's private full-repaint request is the one private this
  * module owns. The renderer exposes no public ask for a full rewrite, so
  * the adapter sets it, and only when the policy answers full. The entry
@@ -40,6 +52,8 @@ import {
 	type CliRendererConfig,
 	createCliRenderer,
 } from "@opentui/core";
+
+import { installFrameLiveness, tickFrame } from "./components/shared/frame.ts";
 
 /** How much of the screen a frame rewrites. */
 export type RewriteScope = "diff" | "full";
@@ -285,14 +299,29 @@ export interface RendererAdapter {
 }
 
 /**
- * Construct the renderer from the entry's boot facts and stand the repaint
- * policy on it.
+ * Construct the renderer from the entry's boot facts, stand the repaint
+ * policy on it, and wire the shared frame module's tick port to it (ADR
+ * 0149): the renderer's per-frame callback hands the module the frame's
+ * time, and the module's liveness asks the renderer for its frame loop on
+ * the first frame owner and stops it when the last owner leaves.
  */
 export async function createRendererAdapter(
 	options: RendererAdapterOptions,
 ): Promise<RendererAdapter> {
 	const renderer = await createCliRenderer(options.rendererConfig);
 	const policy = installRepaintPolicy(renderer, options);
+	// The frame module's tick port: one side of the renderer's per-frame
+	// callback. The module advances the frame owners' clocks and paints the
+	// frames that changed; a tick that changes no painted fact paints
+	// nothing, and the frame it paints stands in the same loop pass's
+	// render.
+	renderer.setFrameCallback(async (deltaTime: number) => {
+		tickFrame(deltaTime);
+	});
+	installFrameLiveness({
+		request: () => renderer.requestLive(),
+		drop: () => renderer.dropLive(),
+	});
 	return {
 		renderer,
 		get lastRewriteScope() {
@@ -300,6 +329,9 @@ export async function createRendererAdapter(
 		},
 		reportOutsideTerminalWrite: policy.reportOutsideTerminalWrite,
 		destroy(): void {
+			// The module's liveness leaves before the renderer it asked, so the
+			// adapter's destroy owns the renderer's loop start to end.
+			installFrameLiveness(null);
 			renderer.destroy();
 		},
 	};

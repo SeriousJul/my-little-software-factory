@@ -51,7 +51,6 @@ import {
 	PANE_BORDERS,
 	TURN_LOG_PANE,
 	turnLogPane,
-	useModalPopScale,
 } from "./modal-chrome.ts";
 import { logScreenLines, type PaneScreen } from "./pane-screen.ts";
 import { bodyPaneFacts, type DecisionRegion, useDecisionRegion } from "./shared/region.ts";
@@ -186,20 +185,19 @@ export function decisionBodyLayout(
 
 export function DecisionModal(props: DecisionModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	// The pop-in: a short fade with the box growing to its final size, the
-	// one the shared chrome owns for every surface it boxes.
-	const { pop, scale } = useModalPopScale();
 	// The modal is a near-fullscreen surface: it takes the room the terminal
 	// offers above its Action bar, and the body scrolls inside it. The shared
 	// chrome keeps the box above the bar's row, so its border can never draw
-	// through the bar at a short size.
-	const frame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN, scale });
+	// through the bar at a short size. The frame is the settled one: the
+	// chrome's pop owner grows the box into it on the shared frame module's
+	// clock, and the body is wrapped once at its width, so an intermediate
+	// frame clips the settled body instead of re-wrapping it (ADR 0149).
+	const frame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN });
 	// A held turn shows its cause in the region, above the rows it refuses
 	// (ADR 0016): one row the log yields to, so the operator reads why the
 	// turn is held before the rows that decide it.
 	const held = props.cause !== null && isHeldCause(props.cause);
-	const unscaled = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN });
-	const bodyFacts = useDecisionBodyFacts(props, frame, held, unscaled.contentRows);
+	const bodyFacts = useDecisionBodyFacts(props, frame, held, frame.contentRows);
 	// The region's selection, its wrap, its auto-scroll, its visible window,
 	// and its range text are the shared region's, beside the field, the
 	// selector row, and the form (ADR 0039 and ADR 0040).
@@ -252,7 +250,13 @@ export function DecisionModal(props: DecisionModalProps) {
 		frame,
 		width: terminalWidth,
 		title: decisionTitle(props.title),
-		opacity: pop,
+		// The box the operator sees is the settled one: the chrome's pop owner
+		// steps it from its opening scale to this frame on the shared frame
+		// module's clock (ADR 0149).
+		popsIn: {
+			frameAt: (scale: number) =>
+				modalFrame(terminalWidth, terminalHeight, { margin: MARGIN, scale }),
+		},
 		body: modalBody,
 		message: props.message,
 		bar: {
@@ -274,8 +278,8 @@ function useDecisionBodyFacts(
 	const { screen, actions, factLines = [] } = props;
 	// The pane's chrome yields before the log yields rows: padding first,
 	// border second, and only then does the surface stand down to the size
-	// message. The scrollbar is decided at the final size, so the thumb does
-	// not flicker in and out while the pop-in grows the box.
+	// message. The scrollbar is decided at the settled size, so the thumb
+	// does not flicker in and out while the pop-in grows the box.
 	// The transition's fact lines stand above the action rows, like the
 	// held-cause row: the rows decide on the facts, so the log yields to
 	// them (ADR 0027).
@@ -300,8 +304,9 @@ function useDecisionBodyFacts(
 	);
 	const hasScrollbar = finalLayout !== null && fullWidthBody.length > finalLayout.paneRows;
 	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
-	// Wrap at the width the box has right now, so a line is never wider
-	// than the frame being drawn while the pop-in grows the box.
+	// Wrap once at the settled width the box grows into, so the pop-in clips
+	// the settled body instead of re-wrapping it at an intermediate width
+	// (ADR 0149).
 	const renderedBody = useMemo(
 		() =>
 			emptyLog

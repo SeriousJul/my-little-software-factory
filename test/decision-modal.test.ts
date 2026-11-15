@@ -19,7 +19,7 @@ import {
 	rgb,
 	roleColor,
 	rowsOf,
-	sleep,
+	tickAnimation,
 	waitFor,
 	withApp,
 } from "./app-harness.ts";
@@ -286,16 +286,15 @@ describe("the decision modal's nested border at the declared minimum", () => {
 	const MIN_WIDTH = 40;
 	const MIN_HEIGHT = 27;
 
-	/** Open the modal at the minimum and wait for the pop-in to rest. */
+	/** Open the modal at the minimum and rest the pop-in by its named tick. */
 	async function atRestAtMinimum(setup: AppSetup): Promise<string> {
 		// The bar packs the Decide hint away at the declared minimum, so the
 		// key goes out beside the guide, which names the control and its key.
 		await guideKey(setup, "decide-completion", "Enter", { shows: "Select action" });
-		// The pop-in is budgeted to 120 ms, so a grace of 250 ms stands
-		// over the budget: when it has run, the box is at its final place,
-		// the frame above may not hold it there yet.
-		await sleep(250);
-		return setup.captureCharFrame();
+		// The named tick to rest hands the frame module the pop's own budget
+		// on the module's clock: when it has run, the box stands at its
+		// final place, on the local runner and the CI runner alike (ADR 0149).
+		return await tickAnimation(setup, "rest");
 	}
 
 	test("the pane keeps its full chrome inside the box, and the region keeps its rows", async () => {
@@ -395,8 +394,10 @@ async function modalAtRest(setup: AppSetup): Promise<string> {
 	// the key goes out beside the guide, which names the control and its
 	// key.
 	await guideKey(setup, "decide-completion", "Enter", { shows: "Turn log" });
-	await sleep(250);
-	return setup.captureCharFrame();
+	// The named tick to rest stands the pop-in on the settled frame on the
+	// module's clock, where a wall-clock grace over its budget used to
+	// (ADR 0149).
+	return await tickAnimation(setup, "rest");
 }
 
 /**

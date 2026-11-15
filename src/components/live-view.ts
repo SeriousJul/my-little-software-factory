@@ -12,7 +12,10 @@
  * region's rows and their keys come in, and the border re-titles `Live:` to
  * `Decision:` in place - one screen, one pop-in per opening, the prefix the
  * shared chrome owns, so Enter on an `awaiting` ticket and a turn settling
- * under an open Live view end at one screen with one name. A settled turn
+ * under an open Live view end at one screen with one name. The shared frame
+ * module steps the pop-in on its own clock (ADR 0149): the view holds the
+ * settled frame in React state, and the module paints the box it grows.
+ * A settled turn
  * the factory decides for itself (auto-close) keeps streaming, because the
  * factory keeps working.
  *
@@ -48,7 +51,6 @@ import {
 	PANE_BORDERS,
 	TURN_LOG_PANE,
 	turnLogPane,
-	useModalPopScale,
 } from "./modal-chrome.ts";
 import { logScreenLines, type PaneScreen, visibleScreenLines } from "./pane-screen.ts";
 import { bodyPaneFacts, type DecisionRegion, useDecisionRegion } from "./shared/region.ts";
@@ -149,18 +151,20 @@ export function LiveView(props: LiveViewProps) {
 	// The decision sub-mode, from the body the pane holds: a turn settling
 	// for the operator flips it in place, without a second pop-in.
 	const decideable = props.body.kind === "turn-log";
-	const { pop, scale } = useModalPopScale();
-	const frame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN, scale });
+	// The frame is the settled one: the chrome's pop owner grows the box into
+	// it on the shared frame module's clock, and the body is shaped once at
+	// its width, so an intermediate frame clips the settled body instead of
+	// re-wrapping it (ADR 0149).
+	const frame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN });
 	// A held turn shows its cause in the region, above the rows it refuses
 	// (ADR 0016): one row the body yields to, so the operator reads why the
 	// turn is held before the rows that decide it.
 	const held = decideable && props.cause !== null && isHeldCause(props.cause);
 	const regionRows = decideable ? props.actions.length : 0;
 	// The regions of the box: the pane's chrome, the body's rows, the
-	// region's visible rows. The layout is decided at the final size, so
+	// region's visible rows. The layout is decided at the settled size, so
 	// the scrollbar never flickers in and out while the pop-in grows the box.
-	const unscaled = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN });
-	const bodyFacts = useLiveBodyFacts(props, { frame, decideable, held, contentFrame: unscaled });
+	const bodyFacts = useLiveBodyFacts(props, { frame, decideable, held, contentFrame: frame });
 	// The region's selection, its wrap, its auto-scroll, its visible window,
 	// and its range text are the shared region's, beside the field, the
 	// selector row, and the form (ADR 0039 and ADR 0040).
@@ -206,7 +210,13 @@ export function LiveView(props: LiveViewProps) {
 		// for the operator: the prefix is the chrome's, so both paths into
 		// the decision end at one screen with one name (ADR 0040).
 		title: decideable ? decisionTitle(props.title) : liveTitle(props.title),
-		opacity: pop,
+		// The box the operator sees is the settled one: the chrome's pop owner
+		// steps it from its opening scale to this frame on the shared frame
+		// module's clock (ADR 0149).
+		popsIn: {
+			frameAt: (scale: number) =>
+				modalFrame(terminalWidth, terminalHeight, { margin: MARGIN, scale }),
+		},
 		body: liveBody,
 		message: props.message,
 		bar: {
@@ -262,9 +272,10 @@ function useLiveBodyFacts(
 	);
 	const hasScrollbar = finalLayout !== null && fullWidthBody.length > finalLayout.paneRows;
 	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
-	// Shape at the width the box has right now, so a line is never wider
-	// than the frame being drawn while the pop-in grows the box. A width the
-	// fact already stood on reads the stored lines (ADR 0147).
+	// Shape once at the settled width the box grows into, so the pop-in clips
+	// the settled body instead of re-wrapping it at an intermediate width
+	// (ADR 0149). A width the fact already stood on reads the stored lines
+	// (ADR 0147).
 	const renderedBody = useMemo(
 		() =>
 			props.body.kind === "turn-log"

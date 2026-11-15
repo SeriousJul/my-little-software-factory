@@ -23,6 +23,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import type { FactoryConfig, TicketSourceConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
@@ -38,6 +39,7 @@ import {
 	settle,
 	spanColorAt,
 	startingFaceOf,
+	tickAnimation,
 	WIDTH,
 	waitFor,
 	waitSourceHealthy,
@@ -312,10 +314,20 @@ describe("the Starting window's timeline", () => {
 					(f) => face(f) !== null && messageRowOf(f).includes("Working: handing off"),
 				);
 				expect(inFlight).not.toContain("[handed-off]");
+				// The frame read at the window's open holds the first frame: the
+				// owner stands on its opening frame before the first tick can
+				// move it (ADR 0149).
+				expect(face(inFlight)).toBe(SPINNER_FRAMES[0]);
 				// The row and the detail header wear the same face.
 				expect(faceCount(inFlight)).toBe(2);
 				// The counts keep the resting rule: the claim is not a step yet.
 				expect(inFlight).toContain("open: 1  running: 0  awaiting: 0");
+				// The named tick stands the face on the frame it names: one step
+				// of the face's 100 ms budget lands it on the second frame, and
+				// the row shows that frame the tick sent - never wall-clock luck
+				// (ADR 0149).
+				const stepped = await tickAnimation(setup, 100);
+				expect(face(stepped)).toBe(SPINNER_FRAMES[1]);
 				// The start settles into `handed-off`: the face stays, and the
 				// first observation steps the ticket to running in its place.
 				await releaseHeld(gate);

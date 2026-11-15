@@ -18,9 +18,9 @@
  *   body that overflowed would paint through the border and the bar: every
  *   surface counts its rows against `contentRows` and drops the rest.
  */
-import { RGBA } from "@opentui/core";
+import { type BoxRenderable, RGBA } from "@opentui/core";
 import { createElement } from "@opentui/react";
-import { Fragment, type ReactElement, useEffect, useState } from "react";
+import { Fragment, type ReactElement, useRef } from "react";
 
 import type { TurnEndCause } from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
@@ -35,6 +35,7 @@ import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MdLine } from "./markdown.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
 import { ActionItem } from "./shared/choices.ts";
+import { useFrameOwner } from "./shared/frame.ts";
 import { controlInk, LAMP_GLYPHS, turnEndCauseLine } from "./shared/presentation.ts";
 import type { DecisionRegion } from "./shared/region.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
@@ -275,8 +276,20 @@ interface ModalSurfaceProps {
 	 * itself.
 	 */
 	queuePaused?: boolean;
-	opacity?: number;
 	zIndex?: number;
+	/**
+	 * The pop-in of the surface's opening: while the surface is open, the shared
+	 * frame module steps the box from its opening scale to its settled size, and
+	 * the settled frame the surface draws is the one the pop rests on. The
+	 * module is the one writer of the box's per-frame cells: it paints the box's
+	 * size, its padding, its border title, and its fade, and the body the surface
+	 * hands the box is wrapped once at the settled width, so an intermediate
+	 * frame clips the settled body instead of re-wrapping it (ADR 0149).
+	 *
+	 * `frameAt` hands the chrome the box's geometry at an intermediate scale:
+	 * the surface measured the terminal, and the chrome paints the box it grows.
+	 */
+	popsIn?: { frameAt: (scale: number) => ModalFrame };
 }
 
 /**
@@ -309,6 +322,60 @@ function borderLamp(title: string, fullWidth: number, queuePaused: boolean): str
  * the operator reads why nothing is there, and the surface's own keys still
  * close it.
  */
+/**
+ * The region's one child: the bordered box the surface holds, or the size
+ * notice that takes the region when the box stands down below the rows the
+ * surface needs.
+ *
+ * The box and the pane paint one ink: the control ink's indicator. No
+ * surface states a border color, so the no-color presentation and the
+ * inherited theme reach every border at once (ADR 0040). The title runs the
+ * border's inner width minus two, the renderer's own title ceiling: a title
+ * that fills the inner width is dropped whole, and a box that gave its
+ * padding up would fill it (issue #319, ADR 0111). The Queue pause's lamp
+ * stands at the title's right end: the border's row is the surface's one
+ * always visible row, so the standing brake reads on every surface the
+ * chrome owns.
+ */
+function regionChildElement(fields: {
+	frame: ModalFrame;
+	width: number;
+	title: string;
+	queuePaused: boolean;
+	body: ModalBody;
+	innerBoxRef: { current: BoxRenderable | null };
+}): ReactElement {
+	const held = fields.frame.contentRows < fields.body.minRows || fields.frame.boxHeight < 2;
+	if (held) {
+		return sizeNoticeElement(fields.width, fields.frame.regionRows);
+	}
+	return createElement(
+		"box",
+		{
+			border: true,
+			borderColor: controlInk().indicator.fg ?? undefined,
+			title: borderLamp(
+				fields.title,
+				Math.max(0, fields.frame.boxWidth - BORDERS - 2),
+				fields.queuePaused,
+			),
+			padding: fields.frame.padding,
+			ref: fields.innerBoxRef,
+			style: {
+				width: fields.frame.boxWidth,
+				height: fields.frame.boxHeight,
+				flexDirection: "column",
+				overflow: "hidden",
+			},
+		},
+		...fields.body.above,
+		...(fields.body.pane !== undefined
+			? [paneElement(fields.body.pane, fields.frame.contentWidth)]
+			: []),
+		...fields.body.below,
+	);
+}
+
 export function ModalSurface({
 	frame,
 	width,
@@ -317,10 +384,24 @@ export function ModalSurface({
 	message,
 	bar,
 	queuePaused = false,
-	opacity,
 	zIndex = 10,
+	popsIn,
 }: ModalSurfaceProps) {
-	const held = frame.contentRows < body.minRows || frame.boxHeight < 2;
+	const innerBoxRef = useRef<BoxRenderable | null>(null);
+	// One name per surface instance: surfaces stack (a key guide over a modal),
+	// and a shared name would make the module replace the lower surface's owner.
+	const popIdRef = useRef<string | null>(null);
+	if (popIdRef.current === null) {
+		popIdRef.current = `modal-surface-pop-${++modalSurfaceSerial}`;
+	}
+	const lastPaddingRef = useRef(Number.NaN);
+	useModalPopOwner(popsIn, {
+		id: popIdRef.current as string,
+		title,
+		queuePaused,
+		innerBoxRef,
+		lastPaddingRef,
+	});
 	return createElement(
 		"box",
 		{ style: overlaySurfaceStyle(zIndex) },
@@ -342,39 +423,7 @@ export function ModalSurface({
 			// size: a clipped pane is not an answer to a small terminal. The
 			// notice is handed no more lines than the region holds, so it cannot
 			// reach the Message line or the bar either.
-			held
-				? sizeNoticeElement(width, frame.regionRows)
-				: createElement(
-						"box",
-						{
-							border: true,
-							// The box and the pane paint one ink: the control ink's
-							// indicator. No surface states a border color, so the
-							// no-color presentation and the inherited theme reach
-							// every border at once (ADR 0040).
-							borderColor: controlInk().indicator.fg ?? undefined,
-							// The title runs the border's inner width minus two,
-							// the renderer's own title ceiling: a title that
-							// fills the inner width is dropped whole, and a box
-							// that gave its padding up would fill it (issue #319,
-							// ADR 0111). The Queue pause's lamp stands at the
-							// title's right end: the border's row is the surface's
-							// one always visible row, so the standing brake reads
-							// on every surface the chrome owns.
-							title: borderLamp(title, Math.max(0, frame.boxWidth - BORDERS - 2), queuePaused),
-							padding: frame.padding,
-							style: {
-								width: frame.boxWidth,
-								height: frame.boxHeight,
-								flexDirection: "column",
-								overflow: "hidden",
-								opacity,
-							},
-						},
-						...body.above,
-						...(body.pane !== undefined ? [paneElement(body.pane, frame.contentWidth)] : []),
-						...body.below,
-					),
+			regionChildElement({ frame, width, title, queuePaused, body, innerBoxRef }),
 		),
 		messageLineRow(message, width, frame),
 		bar === undefined
@@ -389,31 +438,107 @@ export function ModalSurface({
 }
 
 /** The pop-in: a short fade with the box growing to its final size. */
-const POP_MS = 120;
-const POP_TICK_MS = 16;
+export const POP_MS = 120;
+/** The named tick quantum the frame module steps the pop-in on, in the frame rig. */
+export const POP_TICK_MS = 16;
 /** The box's size at the pop-in's start, of its final size. */
-const POP_START = 0.94;
+export const POP_START = 0.94;
+/** The opening serial a stacked surface's pop owner takes. */
+let modalSurfaceSerial = 0;
 
 /**
- * The modal pop-in's progress, shared by every surface the chrome owns.
+ * The pop-in's paint on one tick: the box's border title, its size, its
+ * padding, its fade at the tick the module's clock reached, and the scale
+ * the box's size grows on. The module is the box's one writer (ADR 0149), so
+ * the paint guards each cell it does not change: a cell the last paint
+ * already set stands, and the render is owed only when a cell moves.
  *
- * A self-driven progress keeps it deterministic in the test renderer, where
- * the animation engine never ticks. One hook per opening: a surface that
- * switches sub-modes under the operator keeps the one it opened with, so
- * the switch is in place, without a second pop-in (ADR 0040).
+ * `fade` is the tick's fact, the box's opacity on the tick the box grows;
+ * `scale` is the size the box grows to on it: the fade climbs the pop's full
+ * budget, the size starts at the opening scale and grows to one. Both climb
+ * to the box's settled values, which the tree paints when the owner rests.
+ *
+ * `lastPadding` is the padding the last paint set: the box's padding has no
+ * reader, so the paint keeps the last value it wrote and hands it back.
  */
-export function useModalPopScale(): { pop: number; scale: number } {
-	const [pop, setPop] = useState(0);
-	useEffect(() => {
-		const startedAt = performance.now();
-		const id = setInterval(() => {
-			const t = Math.min(1, (performance.now() - startedAt) / POP_MS);
-			setPop(1 - (1 - t) ** 3);
-			if (t >= 1) clearInterval(id);
-		}, POP_TICK_MS);
-		return () => clearInterval(id);
-	}, []);
-	return { pop, scale: POP_START + (1 - POP_START) * pop };
+function paintPopBox(fields: {
+	box: BoxRenderable;
+	frameAt: (scale: number) => ModalFrame;
+	title: string;
+	queuePaused: boolean;
+	lastPadding: number;
+	fade: number;
+	scale: number;
+}): number {
+	const grown = fields.frameAt(fields.scale);
+	fields.box.title = borderLamp(
+		fields.title,
+		Math.max(0, grown.boxWidth - BORDERS - 2),
+		fields.queuePaused,
+	);
+	if (fields.box.width !== grown.boxWidth) fields.box.width = grown.boxWidth;
+	if (fields.box.height !== grown.boxHeight) fields.box.height = grown.boxHeight;
+	let padding = fields.lastPadding;
+	if (padding !== grown.padding) {
+		padding = grown.padding;
+		fields.box.padding = grown.padding;
+	}
+	if (fields.box.opacity !== fields.fade) fields.box.opacity = fields.fade;
+	return padding;
+}
+
+/**
+ * The surface's pop owner, registered with the shared frame module while the
+ * surface's pop-in runs (ADR 0149). The module steps the box from its
+ * opening scale to its settled one on the renderer's frame callback, and the
+ * module is the box's one writer for the cells the pop moves.
+ */
+function useModalPopOwner(
+	popsIn: { frameAt: (scale: number) => ModalFrame } | undefined,
+	facts: {
+		id: string;
+		title: string;
+		queuePaused: boolean;
+		innerBoxRef: { current: BoxRenderable | null };
+		lastPaddingRef: { current: number };
+	},
+): void {
+	useFrameOwner(popsIn !== undefined, () => ({
+		id: facts.id,
+		restMs: POP_MS,
+		factAt: popProgressAt,
+		paint: (fact: number) => {
+			const box = facts.innerBoxRef.current;
+			if (box === null || popsIn === undefined) return;
+			const scale = POP_START + (1 - POP_START) * fact;
+			facts.lastPaddingRef.current = paintPopBox({
+				box,
+				frameAt: popsIn.frameAt,
+				title: facts.title,
+				queuePaused: facts.queuePaused,
+				lastPadding: facts.lastPaddingRef.current,
+				fade: fact,
+				scale,
+			});
+		},
+	}));
+}
+
+/**
+ * The modal pop-in's progress, the fact the pop owner's frame holds, at a
+ * number of elapsed milliseconds into the pop-in's budget.
+ *
+ * The shared frame module owns the clock the pop steps on (ADR 0149): a
+ * surface that opens a surface of the chrome registers one pop owner for the
+ * opening, and the module paints the box's size, its padding, its border
+ * title, and its fade as the owner's fact climbs to one, where the box stands
+ * settled. One owner per opening: a surface that switches sub-modes under the
+ * operator keeps the one it opened with, so the switch is in place, without a
+ * second pop-in (ADR 0040).
+ */
+export function popProgressAt(elapsedMs: number): number {
+	const t = Math.min(1, elapsedMs / POP_MS);
+	return 1 - (1 - t) ** 3;
 }
 
 /**

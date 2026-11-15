@@ -49,6 +49,7 @@ import {
 	sleep,
 	spanColors,
 	startingFaceOf,
+	tickAnimation,
 	toggleAutoHandoff,
 	typeText,
 	WIDTH,
@@ -1159,10 +1160,13 @@ describe("the failure markers", () => {
 				// The stream shows the pane output under the ticket's context,
 				// and the blocked status stands on the context line.
 				await waitFor(setup, { shows: "the agent is waiting on a build" });
-				expect(frameText(setup.captureCharFrame())).toContain("acme/factory · implement · pi");
-				// The pop-in fades in for a little while, so wait it out before
-				// reading the painted colors: mid-fade they are blended.
-				await sleep(250);
+				// The stream line shows while the pop-in still runs, and the
+				// context line below the pane clips out of the intermediate box:
+				// drive the pop to rest by the named tick and read the settled
+				// frame, so the check is deterministic on any runner (ADR 0149).
+				const settled = await tickAnimation(setup, "rest");
+				expect(frameText(settled)).toContain("acme/factory · implement · pi");
+				// The pop stands at rest: the painted colors no longer blend.
 				expect(spanColors(setup, "blocked")).toContainEqual(rgb(roleColor("yellow")));
 				// Enter confirms the Goto: the focus runs, the view closes, and
 				// the ticket stays in flight with the blocked badge standing.
@@ -2447,12 +2451,16 @@ describe("the decision modal", () => {
 				await waitFor(setup, { shows: "Override" });
 				await settle(setup);
 				// Esc drops the edit and returns to the decision still being made.
-				const back = await closeSurface(
+				// The returned modal pops in again, and the first frame that sheds
+				// the panel is mid-convergence: drive the pop to rest by the named
+				// tick and read the settled decision frame (ADR 0149).
+				await closeSurface(
 					setup,
 					"the decision modal",
 					(f) => !f.includes("Override") && f.includes("Decision:"),
 				);
-				expect(frameText(back)).toContain("❯ Close");
+				const settled = await tickAnimation(setup, "rest");
+				expect(frameText(settled)).toContain("❯ Close");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},
