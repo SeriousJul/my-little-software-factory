@@ -16,7 +16,31 @@ _Avoid_: dashboard, UI
 
 **Main view**:
 The always-present base surface of the control plane. It holds three list sections (Ticket, Consultation, and Work) on the left, and one context-dependent detail pane on the right that shows the detail of the currently selected item.
-_Avoid_: dashboard, home, screen, primary view
+It is the bottom of the screen stack: every screen that opens stands above it, and it suspends when one does.
+_Avoid_: dashboard, home, primary view
+
+**Screen**:
+A surface of the control plane that stands in the screen stack: the Main view at the bottom, and the screens that open above it in the order they opened. The top of the stack is the active screen, and it owns the operator's keys.
+The response editor and the Agent terminal are not screens: they are the Interaction modes of the Main view's detail pane, they suspend with the Main view, and their drafts and editing positions are preserved facts of the Main view. The Live view's sub-modes switch in place on the same screen (ADR 0040, ADR 0150).
+_Avoid_: view, overlay, pane
+
+**Screen stack**:
+The ordered record the plane's shell owns: the Main view at the bottom, the screens that opened above it in the order they opened, and the active screen at the top, one entry per screen.
+It owns the open, close, and replace transitions, and the contract that a suspended screen runs nothing.
+It changes which screens stand and when; it never changes how a screen presents, how its controls dispatch, or what its controls mean. The plane's loops run through every transition, untouched by the stack (ADR 0150).
+_Avoid_: view stack, overlay stack, modal stack
+
+**Suspended screen**:
+A screen below the active screen in the screen stack. It is unmounted: it holds no timer, it sends no read through the runner, its spinner faces owe no step, and it claims no key. It keeps its place in the stack, and its preserved facts stand in the shell, which is never suspended.
+Closing the active screen resumes it: the screen remounts, it reads the factory's facts fresh from the store, it takes its navigation and its presented lines back from the shell's stage, and it stands on the same frame it was suspended on, with no re-pop-in, until its next tick moves it.
+A suspended screen whose stored fact no longer stands closes instead of resuming: a screen that records the work cycle it stands on, the Live view and the decision modal, whose ticket moved to the next cycle (ADR 0110, ADR 0150).
+_Avoid_: background screen, hidden screen, dormant view
+
+**Preserved screen facts**:
+The screen-local facts a screen stands on across a suspend: the facts the store does not hold. They stand in the shell's stage, which is never suspended, so a suspended screen's unmount loses nothing and its resume takes the same facts back.
+They are the Main view's selection, selected row, detail scroll, list filters, focused pane, section expansions, grouping folds, response draft and response editor standing, Agent terminal standing, and the presented Consultation detail facts; the Live view's presented stream lines, stale note, body scroll, and ticket identity with its work cycle; the launcher's form draft, slot values, and replacement identity; the override panel's pending ticket, origin, and form values under the cursor; the panels' body scroll and row under the cursor; the repository panels' marked choices and body scroll; the Key guide's and the Message view's captured mode.
+Factory state is never a preserved fact: it comes from the store on resume, and the shell's standing facts, the last polled agents, the Auto-handoff mode, the config, and the message history, stand in the shell through every transition (ADR 0150).
+_Avoid_: screen state cache, session state, view cache
 
 **Section**:
 An independently collapsable list in the Main view. The Ticket section holds the ticket list, the Consultation section holds the Consultation list, and the Work section holds the Work queue. All three can be expanded at the same time. A collapsed section shrinks to its header row, and the cursor's step crosses over it to the next section the terminal shows. No section is ever hidden: the Work section keeps its header row while it is empty (ADR 0049). A Group is inside a section's list, never a section itself.
@@ -98,6 +122,7 @@ _Avoid_: copy-on-select, select-to-copy, clipboard selection
 The near-fullscreen Interaction mode above an awaiting ticket: the turn log, the label facts the Transition wrote, and the rows the operator confirms: close, goto, and, when the ticket's new position offers a task, the handoff of that task, or its Plane action (ADR 0068).
 The route row stands live while its route is dead and reads as a fact line while the route lives: waiting in the Work queue, starting, or running on its position ticket (ADR 0064). The route confirm ends the ticket's cycle on the confirm's own surface, and the screen falls back to the list, which shows the position the route waits on (ADR 0072).
 `e` on a handoff row edits that route's settings before it starts.
+The modal records the work cycle it opened on: a confirm that moves the ticket to the next cycle - a route, or the close that ends the cycle on the modal's own surface - closes the modal, and the list shows the ticket's new state, the same rule the Live view runs (ADR 0110).
 _Avoid_: action panel, decision popup
 
 **Body pane**:

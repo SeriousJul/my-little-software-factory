@@ -15,7 +15,11 @@ settled turn above the choice rows, with the repository, task type, agent,
 and completion time named under the border. `Up` and `Down` move between the
 rows, `j` and `k` scroll the log, `Enter` chooses the selected row, `e` edits
 the selected Handoff row's settings before it starts, and `Esc` closes the
-modal: nothing runs, and the ticket stays awaiting.
+modal: nothing runs, and the ticket stays awaiting. The modal records the
+work cycle it opened on: a confirm that moves the ticket to the next cycle -
+a route, or the Close that ends the cycle - closes the modal on the spot, and
+the list shows the ticket's new state, the same rule the Live view runs
+(ADR 0110).
 
 The rows the modal offers:
 

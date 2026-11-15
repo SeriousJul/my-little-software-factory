@@ -54,7 +54,7 @@ export function refusalText(control: ControlDefinition, availability: ControlAva
 export const refusalReason = (control: ControlDefinition, facts: AvailabilityFacts): string =>
 	refusalText(control, availabilityFor(control, facts));
 
-interface ControlDispatchSpec {
+export interface ControlDispatchSpec {
 	/**
 	 * The Availability facts the mode's controls are gated on.
 	 *

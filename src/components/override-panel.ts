@@ -86,7 +86,14 @@
  */
 
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import { type ReactElement, type RefObject, useEffect, useRef, useState } from "react";
+import {
+	type ReactElement,
+	type RefObject,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import type { AgentHostResolution } from "../agent-host.ts";
 import { AGENT_HOSTS, agentHostReachable, agentHostUnreachableLine } from "../agent-host.ts";
 import type { AgentTypeConfig } from "../config.ts";
@@ -101,10 +108,11 @@ import {
 	type UnfitVerdict,
 } from "../setting-fit.ts";
 import type { TaskProfileStart } from "../setting-resolution.ts";
-import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
+import type { ControlHandler } from "./control-dispatch.ts";
 import { type AvailabilityFacts, availabilityFacts, type StandingFacts } from "./controls.ts";
 import type { MessageFact } from "./messages.ts";
 import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
+import { type ScreenSlot, slotText, useSlotDispatch } from "./screen-stack.ts";
 import { ChoiceRow, cycleChoice } from "./shared/choices.ts";
 import { type FieldFacts, type FieldHandle, TextField } from "./shared/fields.ts";
 import { copySelectionWith, useFormSlots } from "./shared/form.ts";
@@ -266,6 +274,13 @@ interface OverridePanelProps {
 	 * F5 alias: required for the same reason.
 	 */
 	onAutoHandoff: () => void;
+	/**
+	 * The stack's slot for the panel's screen (ADR 0150): the key bus holds
+	 * the slot's one stable wrapper while the screen is active, and the slot's
+	 * record preserves the form's values under the cursor's row while the
+	 * screen is suspended.
+	 */
+	slot?: ScreenSlot;
 }
 
 /** The desired label column: the widest label plus a gap. */
@@ -362,29 +377,24 @@ export function panelNoteCells(width: number, height: number): number {
 
 export function OverridePanel(props: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const choiceState = useOverrideChoice(props.initial, props.onAgentChange, props.profiles);
+	// A panel that resumes stands on the values and the touched rows the
+	// stack preserved, over the values the plane resolved (ADR 0150).
+	const choiceState = useOverrideChoice(
+		props.initial,
+		props.onAgentChange,
+		props.profiles,
+		props.slot,
+	);
 	const fieldRefs = useOverrideFieldRefs();
 	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
 		rowsFor(value, overrideSurface(props, value));
 	const allRows = rowsForChoice(choiceState.choice);
-	// The shared form route owns the selected row. Its ref keeps two keys in one
-	// renderer tick on the row the first key reached, while its state repaints
-	// the viewport around that row.
-	const focus = useFormSlots(
-		allRows.map((item, index) => ({
-			id: `${item.key}-${index}`,
-			kind:
-				item.kind === "text" || item.kind === "type-ahead"
-					? ("field" as const)
-					: ("selector" as const),
-			label: item.label,
-		})),
-	);
+	const focus = useOverrideFormSlots(allRows, props.slot);
 	const cursor = useOverrideCursor(focus, fieldRefs, choiceState.choiceRef, rowsForChoice);
 	const edits = useOverrideEdits(choiceState, cursor, fieldRefs);
 	const viewport = useOverrideViewport(terminalWidth, terminalHeight, focus.at, allRows);
 	const panelFacts = overridePanelFacts(props, cursor);
-	useControlDispatch({
+	useSlotDispatch(props.slot, {
 		// The Copy control is gated on a fact only this panel knows, so the
 		// panel states it and the catalogue decides. The record names the mode
 		// the cursor's row owns, and one key can move that cursor.
@@ -403,6 +413,11 @@ export function OverridePanel(props: OverridePanelProps) {
 			choiceRef: choiceState.choiceRef,
 		}),
 	});
+	useOverrideSlotMirror(props.slot, {
+		choiceState,
+		focus,
+		fieldRefs,
+	});
 	const mode = cursor.currentMode();
 	return createElement(ModalSurface, {
 		frame: viewport.frame,
@@ -416,6 +431,7 @@ export function OverridePanel(props: OverridePanelProps) {
 				cursor,
 				fieldRefs,
 				edits,
+				initialSearch: slotText(props.slot, "modelSearch"),
 			}),
 			// One row is enough to be a panel: the rows that do not fit scroll.
 			minRows: 1,
@@ -423,6 +439,53 @@ export function OverridePanel(props: OverridePanelProps) {
 		message: props.message,
 		bar: { mode, facts: panelFacts(mode) },
 		queuePaused: props.standing.queuePaused,
+	});
+}
+
+/**
+ * The shared form route's selected row, seeded from the stack's record when
+ * the panel resumes (ADR 0150). The slot's ref keeps two keys in one renderer
+ * tick on the row the first key reached, while its state repaints the
+ * viewport around that row.
+ */
+function useOverrideFormSlots(allRows: PanelRow[], slot: ScreenSlot | undefined) {
+	return useFormSlots(
+		allRows.map((item, index) => ({
+			id: `${item.key}-${index}`,
+			kind:
+				item.kind === "text" || item.kind === "type-ahead"
+					? ("field" as const)
+					: ("selector" as const),
+			label: item.label,
+		})),
+		typeof slot?.facts.focusIndex === "number" ? (slot.facts.focusIndex as number) : 0,
+	);
+}
+
+/**
+ * The stack's record is the one place the panel's form stands while the
+ * screen is suspended (ADR 0150): the values under the rows, the rows the
+ * operator touched, the row under the cursor, and the Model search it held.
+ * The mirror is a layout effect, per the stack module's contract: a
+ * suspended screen unmounts in the next commit after its last paint, and a
+ * passive effect can still be owed at that commit, so the facts the paint
+ * stood on stand in the record the resume seeds from.
+ */
+function useOverrideSlotMirror(
+	slot: ScreenSlot | undefined,
+	fields: {
+		choiceState: ReturnType<typeof useOverrideChoice>;
+		focus: ReturnType<typeof useOverrideFormSlots>;
+		fieldRefs: ReturnType<typeof useOverrideFieldRefs>;
+	},
+) {
+	const { choiceState, focus, fieldRefs } = fields;
+	useLayoutEffect(() => {
+		if (slot === undefined) return;
+		slot.facts.choice = { ...choiceState.choiceRef.current };
+		slot.facts.touched = choiceState.touched();
+		slot.facts.focusIndex = focus.index();
+		slot.facts.modelSearch = fieldRefs.typeAhead.current?.query() ?? "";
 	});
 }
 
@@ -466,25 +529,32 @@ function overrideSurface(props: OverridePanelProps, value: HandoffChoice): Panel
 
 /**
  * The panel's choice: its value, the ref the keys read, the operator's
- * touches, and the commit that moves them.
+ * touches, and the commit that moves them. A panel that resumes from the
+ * stack's preserved record (ADR 0150) stands on the values and the touched
+ * rows the record holds, over the values the plane resolved.
  */
 function useOverrideChoice(
 	initial: HandoffChoice,
 	onAgentChange: (agentType: string) => void,
 	profiles: Readonly<Record<string, TaskProfileStart>>,
+	slot: ScreenSlot | undefined,
 ) {
-	const [choice, setChoice] = useState<HandoffChoice>({ ...initial });
+	const [choice, setChoice] = useState<HandoffChoice>(() => {
+		const kept = slot?.facts.choice as Partial<HandoffChoice> | undefined;
+		return kept !== undefined ? { ...initial, ...kept } : { ...initial };
+	});
 	const choiceRef = useRef<HandoffChoice>(choice);
 	// An untouched Task-profile setting follows a Task type change. Once an
 	// operator changes or clears it, their one-shot override stays in force.
 	// One record holds every setting the rule covers, so the next profile
 	// setting is a key on it rather than a new ref, a new branch, and a new
-	// spread.
+	// spread. A panel that resumes keeps the rows the operator touched.
 	const touchedRef = useRef<Record<DerivedKey, boolean>>({
 		agentType: false,
 		model: false,
 		thinking: false,
 		contextWindow: false,
+		...(slot?.facts.touched as Partial<Record<DerivedKey, boolean>> | undefined),
 	});
 	/** Move to another agent: its Model list is the one the row must offer. */
 	const selectAgent = (next: HandoffChoice, previous: HandoffChoice) => {
@@ -518,7 +588,9 @@ function useOverrideChoice(
 	const touch = (key: DerivedKey) => {
 		touchedRef.current[key] = true;
 	};
-	return { choice, choiceRef, commit, touch, reDerive };
+	/** The rows the operator touched, as the stack's record hands them. */
+	const touched = (): Record<DerivedKey, boolean> => ({ ...touchedRef.current });
+	return { choice, choiceRef, commit, touch, touched, reDerive };
 }
 
 /** The panel's field handles: the text fields, the Model search. */
@@ -742,9 +814,11 @@ function overridePanelRows(
 		cursor: OverrideCursor;
 		fieldRefs: ReturnType<typeof useOverrideFieldRefs>;
 		edits: OverrideEdits;
+		/** The Model search the panel stood on before a suspension (ADR 0150). */
+		initialSearch: string;
 	},
 ): ReactElement[] {
-	const { choice, viewport, cursor, fieldRefs, edits } = fields;
+	const { choice, viewport, cursor, fieldRefs, edits, initialSearch } = fields;
 	const { geometry, rows, row } = viewport;
 	return rows.map((r) =>
 		rowElement(r, {
@@ -758,6 +832,7 @@ function overridePanelRows(
 			fields: fieldRefs.fields,
 			searchField: fieldRefs.searchField,
 			reportSelection: cursor.setHasSelection,
+			initialSearch,
 		}),
 	);
 }
@@ -988,6 +1063,8 @@ interface RowElementSurface {
 	fields: Record<TextKey, RefObject<FieldHandle | null>>;
 	searchField: RefObject<FieldHandle | null>;
 	reportSelection: (has: boolean) => void;
+	/** The Model search the panel stood on before a suspension (ADR 0150). */
+	initialSearch: string;
 }
 
 function rowElement(r: PanelRow, surface: RowElementSurface): ReactElement {
@@ -1039,6 +1116,7 @@ function rowTypeAhead(r: PanelRow, surface: RowElementSurface): ReactElement {
 		typeAhead,
 		searchField,
 		reportSelection,
+		initialSearch,
 	} = surface;
 	return createElement(TypeAheadRow, {
 		key: r.key,
@@ -1050,6 +1128,7 @@ function rowTypeAhead(r: PanelRow, surface: RowElementSurface): ReactElement {
 		width: geometry.valueWidth,
 		labelWidth: geometry.labelWidth,
 		placeholder: r.placeholder ?? STATE_WORDS.unset,
+		initialQuery: initialSearch,
 		// The shared verdict owns whether the Model reaches the Agent, so an
 		// empty value is fit even when the runtime reports no Models, and the
 		// row writes the sentence the Handoff would answer with.

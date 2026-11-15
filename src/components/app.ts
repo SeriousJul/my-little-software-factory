@@ -221,8 +221,16 @@ import { ansiScreenLines, type PaneScreen, TurnLogReads } from "./pane-screen.ts
 import { repositoryInitPanel } from "./repository-init-panel.ts";
 import { RepositorySelectPanel } from "./repository-select-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
+import {
+	type ScreenSlot,
+	type ScreenStack,
+	ScreenStackProvider,
+	useScreenStack,
+	useSlotQuiet,
+	useStackContext,
+} from "./screen-stack.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
-import { COPY_REFUSED_REASON } from "./shared/fields.ts";
+import { COPY_REFUSED_REASON, type FieldEditingState } from "./shared/fields.ts";
 import {
 	cursorRowCount,
 	type GroupFolds,
@@ -262,9 +270,16 @@ interface StatusMessage {
 	text: string;
 }
 /** The action modal open above the panes, if any. */
-type Panel =
+export type Panel =
 	| null
-	| { kind: "decision"; identity: string }
+	/**
+	 * The decision modal, and the work cycle it opened on. A confirm that
+	 * moves the ticket to the next work cycle - a route, or the Close that
+	 * ends the cycle on the modal's own surface - leaves the screen stale,
+	 * and the root's stale release closes it, the way the Live view's work
+	 * cycle bounds that screen (ADR 0110).
+	 */
+	| { kind: "decision"; identity: string; workCycle: number }
 	| { kind: "missing"; identity: string }
 	| { kind: "ticket-close"; identity: string }
 	| { kind: "consultation-close"; identity: string }
@@ -320,38 +335,20 @@ const TICKET_GROUP_SECTION = "tickets" as const;
  * Ticket, and which Origin of its dispatch. Only the two routes the panel
  * opens from appear here: an open Ticket's own handoff, and a workflow route
  * the operator edited from its decision row, in the decision modal or in the
- * Live view's decision sub-mode. The workflow route also carries which
- * ticket panel it opened from, so an Esc and a confirmed route return there
- * instead of guessing. A Restart or an automatic route never opens the
- * panel, so neither Origin reaches it. The prompt's previous message is not
- * carried here: the confirm reads it from the Ticket it claims, so an edit
- * can never send a message another Ticket left behind.
+ * Live view's decision sub-mode. A Restart or an automatic route never opens
+ * the panel, so neither Origin reaches it. The screen the panel opened over
+ * is not carried here: it stands suspended beneath the panel (ADR 0150), and
+ * the root's stale release closes it, on the cycle the panel stood on, when
+ * the confirm moves the ticket to its next work cycle (ADR 0110). The
+ * prompt's previous message is not carried either: the confirm reads it from
+ * the Ticket it claims, so an edit can never send a message another Ticket
+ * left behind.
  */
-type PendingOverride =
-	| {
-			ticketIdentity: string;
-			origin: "open";
-			choice: HandoffChoice;
-	  }
-	| {
-			ticketIdentity: string;
-			origin: "workflow";
-			/**
-			 * The ticket panel the route row was on: Esc and a confirmed route return
-			 * there. It is stored as the panel itself, not as the fields that panel
-			 * happens to have today, so the Live view's work cycle - the fact that
-			 * screen is bounded by (ADR 0110) - travels with it and a field the Live
-			 * panel grows later is carried here by the compiler.
-			 */
-			returnTo: RouteReturnPanel;
-			choice: HandoffChoice;
-	  };
-
-/**
- * The ticket panel a route override returns to: the screen the route row stood
- * on when the edit opened the panel, the Decision modal or the Live view.
- */
-type RouteReturnPanel = Extract<Panel, { kind: "decision" | "live" }>;
+export type PendingOverride = {
+	ticketIdentity: string;
+	origin: "open" | "workflow";
+	choice: HandoffChoice;
+};
 
 export type AppKey =
 	| "j"
@@ -380,7 +377,7 @@ export type AppKey =
  * another. Every surface of the Main view opens the catalog's own Key guide
  * and Message view, captured from the mode the operator pressed the key in.
  */
-type Utility =
+export type Utility =
 	| null
 	| { kind: "guide"; mode: InteractionMode }
 	| { kind: "message"; mode: InteractionMode };
@@ -1141,6 +1138,8 @@ function useAppConsultationOpsFields(prev: AppHandoffStartFieldsStage) {
 		setNewOutput: prev.setNewOutput,
 		responseDraftRef: prev.responseDraftRef,
 		setResponseDraft: prev.setResponseDraft,
+		responseEditing: prev.responseEditing,
+		setResponseEditing: prev.setResponseEditing,
 		setResponseEditor: prev.setResponseEditor,
 		selectedConsultation: prev.selectedConsultation,
 		ticketAtCursor: prev.ticketAtCursor,
@@ -1349,7 +1348,7 @@ function useAppRangeDecision(prev: AppRefreshNowStage) {
 		// operator's key opens the screen on the settled turn in every case: the
 		// screen reads the turn's derived Next step and states the gate that
 		// holds it.
-		setPanel({ kind: "decision", identity: ticket.identity });
+		setPanel({ kind: "decision", identity: ticket.identity, workCycle: ticket.workCycle });
 	};
 	return { ...prev, moveRange, decideCompletion };
 }
@@ -1484,57 +1483,55 @@ function useAppKeyHandlers(props: AppProps, prev: AppRangeDecisionStage) {
 }
 type AppKeyHandlersStage = ReturnType<typeof useAppKeyHandlers>;
 
-/** The Consultation session's refresh: the output, the entries, and the follow (ADR 0025). */
-function useAppSessionRefresh(props: AppProps, prev: AppKeyHandlersStage) {
-	const consultationSessionFields = useMemo<AppConsultationSessionFields>(
+/**
+ * The Consultation detail's body read (ADR 0025), in the Main screen's tree:
+ * a suspended Main view unmounts and its read stops, and a resume re-reads the
+ * factory's facts fresh from the store (ADR 0150). The written lines, the
+ * session entries, and the follow mark stand in the shell, so the resume shows
+ * what stood on the suspended frame until its first tick moves it.
+ */
+function useAppConsultationSessionRead(appProps: AppProps, o: AppRenderModesStage) {
+	const sessionFields = useMemo<AppConsultationSessionFields>(
 		() => ({
-			state: props.state,
-			selection: prev.selection,
-			selectedConsultation: prev.selectedConsultation,
-			setLiveOutput: prev.setLiveOutput,
-			setSessionEntries: prev.setSessionEntries,
-			agentsRef: prev.agentsRef,
-			configRef: prev.configRef,
-			commandRunner: prev.commandRunner,
-			sessionRecord: props.sessionRecord,
-			consultationOperations: prev.consultationOperations,
-			interaction: prev.interaction,
-			consultationFollowRef: prev.consultationFollowRef,
-			setConsultationScroll: prev.setConsultationScroll,
-			setNewOutput: prev.setNewOutput,
-			outputRefreshRef: prev.outputRefreshRef,
+			state: appProps.state,
+			selection: o.selection,
+			selectedConsultation: o.selectedConsultation,
+			setLiveOutput: o.setLiveOutput,
+			setSessionEntries: o.setSessionEntries,
+			agentsRef: o.agentsRef,
+			configRef: o.configRef,
+			commandRunner: o.commandRunner,
+			sessionRecord: appProps.sessionRecord,
+			consultationOperations: o.consultationOperations,
+			interaction: o.interaction,
+			consultationFollowRef: o.consultationFollowRef,
+			setConsultationScroll: o.setConsultationScroll,
+			setNewOutput: o.setNewOutput,
+			outputRefreshRef: o.outputRefreshRef,
 		}),
 		[
-			props.state,
-			prev.selection,
-			prev.selectedConsultation,
-			prev.setLiveOutput,
-			prev.setSessionEntries,
-			prev.agentsRef,
-			prev.configRef,
-			prev.commandRunner,
-			props.sessionRecord,
-			prev.consultationOperations,
-			prev.interaction,
-			prev.consultationFollowRef,
-			prev.setConsultationScroll,
-			prev.setNewOutput,
-			prev.outputRefreshRef,
+			appProps.state,
+			o.selection,
+			o.selectedConsultation,
+			o.setLiveOutput,
+			o.setSessionEntries,
+			o.agentsRef,
+			o.configRef,
+			o.commandRunner,
+			appProps.sessionRecord,
+			o.consultationOperations,
+			o.interaction,
+			o.consultationFollowRef,
+			o.setConsultationScroll,
+			o.setNewOutput,
+			o.outputRefreshRef,
 		],
 	);
-	useEffect(
-		() => appConsultationSessionRefresh(consultationSessionFields),
-		[consultationSessionFields],
-	);
-	return { ...prev, consultationSessionFields };
+	useEffect(() => appConsultationSessionRefresh(sessionFields), [sessionFields]);
 }
-type AppSessionRefreshStage = ReturnType<typeof useAppSessionRefresh>;
 
 /** The fields the observation loop reads and writes (ADR 0034). */
-function observationLoopFields(
-	props: AppProps,
-	prev: AppSessionRefreshStage,
-): AppObservationFields {
+function observationLoopFields(props: AppProps, prev: AppKeyHandlersStage): AppObservationFields {
 	return {
 		state: props.state,
 		handoffDispatch: prev.handoffDispatch,
@@ -1563,7 +1560,7 @@ function observationLoopFields(
 }
 
 /** The observation loop's fields: the poll's inputs and the writes its tick makes (ADR 0034). */
-function useAppObservationFields(props: AppProps, prev: AppSessionRefreshStage) {
+function useAppObservationFields(props: AppProps, prev: AppKeyHandlersStage) {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the fields below are listed one by one; `prev` is a stage object rebuilt each render, and the memo must track its fields, not the object
 	const observationFields = useMemo<AppObservationFields>(
 		() => observationLoopFields(props, prev),
@@ -1865,6 +1862,35 @@ function useAppPanelDecision(prev: AppOpenPanelStage) {
 }
 type AppPanelDecisionStage = ReturnType<typeof useAppPanelDecision>;
 
+/**
+ * Whether the open ticket panel has nothing left to show.
+ *
+ * Each ticket panel kind names the fact it draws from, and that fact is what
+ * can run out from under it: the ticket that leaves the projection, the
+ * decision the observation takes, the work cycle the screen stood on (the
+ * decision modal and the Live view each record the cycle they opened on, and
+ * the write that ends the cycle leaves them stale, ADR 0110), and the close
+ * of a ticket whose work in flight has ended.
+ */
+function ticketPanelHasNothingToShow(fields: {
+	ticketPanel: AppOpenPanelStage["ticketPanel"];
+	panelTicket: Ticket | undefined;
+	decision: AppPanelDecisionStage["decision"];
+	liveMode: AppPanelDecisionStage["liveMode"];
+}): boolean {
+	const { ticketPanel, panelTicket, decision, liveMode } = fields;
+	if (ticketPanel === null) return false;
+	if (panelTicket === undefined) return true;
+	if (ticketPanel.kind === "decision")
+		return decision === undefined || panelTicket.workCycle !== ticketPanel.workCycle;
+	if (ticketPanel.kind === "live") return liveMode === "closed";
+	if (ticketPanel.kind === "ticket-close")
+		// The Close confirmation is drawn from work in flight: a cycle that
+		// ended from under the dialog leaves the panel with nothing to show.
+		return panelTicket.state === "open";
+	return false;
+}
+
 /** The mode one open Live panel shows, from the ticket's current facts. */
 function livePanelMode(fields: {
 	panel: Panel;
@@ -1927,13 +1953,12 @@ function useAppPanelRelease(prev: AppPanelDecisionStage) {
 		panel?.kind === "consultation-recovery" &&
 		(panelConsultation === undefined || recoveryPanel === undefined);
 	const panelHasNothingToShow =
-		(ticketPanel !== null &&
-			(panelTicket === undefined ||
-				(ticketPanel.kind === "decision" && decision === undefined) ||
-				(ticketPanel.kind === "live" && liveMode === "closed") ||
-				// The Close confirmation is drawn from work in flight: a cycle that
-				// ended from under the dialog leaves the panel with nothing to show.
-				(ticketPanel.kind === "ticket-close" && panelTicket.state === "open"))) ||
+		ticketPanelHasNothingToShow({
+			ticketPanel,
+			panelTicket,
+			decision,
+			liveMode,
+		}) ||
 		closePanelHasNothingToShow ||
 		recoveryPanelHasNothingToShow;
 	// The reason the guard stands on the Message line when it drops an open
@@ -2010,15 +2035,17 @@ async function refreshLivePane(options: {
 	}
 }
 
-/** The Live view's stream: the one-second read of the pane the ticket's handoff records. */
-function useAppLivePanel(prev: AppPanelReleaseStage) {
-	const { commandRunner, configRef, findTicket, liveMode, opsFields, panel, setLiveStream } = prev;
-	// The Live view's stream: while the view shows the stream, a dedicated
-	// refresh reads the pane the ticket's current handoff records at the
-	// one-second cadence, the cadence the Consultation agent view uses
-	// outside of interaction. A routed handoff moves the stream to the new
-	// pane on its next tick. A failed read stands the last lines under a
-	// stale note, and the refresh continues.
+/**
+ * The Live view's stream read (ADR 0150): the one-second read of the pane the
+ * ticket's handoff records, in the Live screen's tree. A suspended Live view
+ * unmounts and its read stops, so no herdr pane is read for a screen no one
+ * sees; a resume re-reads the pane fresh, standing the last lines it showed
+ * until the first tick moves it. A routed handoff moves the stream to the new
+ * pane on its next tick. A failed read stands the last lines under a stale
+ * note, and the refresh continues.
+ */
+function useAppLiveStreamRead(o: AppRenderModesStage) {
+	const { commandRunner, configRef, findTicket, liveMode, opsFields, panel, setLiveStream } = o;
 	useEffect(() => {
 		if (panel?.kind !== "live" || liveMode !== "stream") {
 			setLiveStream(null);
@@ -2059,12 +2086,10 @@ function useAppLivePanel(prev: AppPanelReleaseStage) {
 		setLiveStream,
 		opsFields.agentHost.host,
 	]);
-	return { ...prev };
 }
-type AppLivePanelStage = ReturnType<typeof useAppLivePanel>;
 
 /** The Message line's facts: the empty list's message, the color, and the lines the size box holds. */
-function useAppRenderMessages(props: AppProps, prev: AppLivePanelStage) {
+function useAppRenderMessages(props: AppProps, prev: AppPanelReleaseStage) {
 	const { config, groupingAxis, healths, ignoredCount, mutedCount, ticketFilter } = prev;
 	const { state } = props;
 	// An empty grouped list names the axis in its message, so "no tickets" says
@@ -2287,8 +2312,11 @@ function useAppOpsStages(
 	const o25 = useAppRefreshNow(o24);
 	const o26 = useAppRangeDecision(o25);
 	const o27 = useAppKeyHandlers(props, o26);
-	const o28 = useAppSessionRefresh(props, o27);
-	const o29a = useAppObservationFields(props, o28);
+	// The screens' own reads (the Consultation detail's body, the Live view's
+	// stream) live in the screen tree under the stack (ADR 0150), not in this
+	// chain: a suspended screen unmounts, and its timer stops with it. The
+	// plane's loops keep their cadence through every transition.
+	const o29a = useAppObservationFields(props, o27);
 	const o29 = useAppObservation(o29a, props.agentHostResolution);
 	const o30 = useAppInitBoot(props, o29);
 	const o31 = useAppInitNote(props, o30);
@@ -2297,8 +2325,7 @@ function useAppOpsStages(
 	const o34 = useAppOpenPanel(o33);
 	const o35 = useAppPanelDecision(o34);
 	const o36 = useAppPanelRelease(o35);
-	const o37 = useAppLivePanel(o36);
-	const o38 = useAppRenderMessages(props, o37);
+	const o38 = useAppRenderMessages(props, o36);
 	const o39 = useAppRenderLaunch(props, o38);
 	const oFinal = useAppRenderModes(o39);
 	return oFinal;
@@ -2709,6 +2736,8 @@ function appConsultationResponseEditorElement(o: AppRenderModesStage): React.Rea
 			onDiscard: o.discardResponseDraft,
 			onDraftChange: o.storeResponseDraft,
 			onClose: o.closeResponseEditor,
+			seed: o.responseEditing,
+			onEditingStateChange: o.setResponseEditing,
 			onHelp: () => o.openGuide("form-field"),
 			onMessage: () => o.openMessage("form-field"),
 			onUnavailable: (reason: string) => o.setWarningMessage(reason),
@@ -2732,7 +2761,7 @@ function appConsultationDetailPane(o: AppRenderModesStage): React.ReactElement {
 }
 
 /** The Consultation launcher's form: its fields and its writes. */
-function appLauncherProps(o: AppRenderModesStage) {
+function appLauncherProps(o: AppRenderModesStage, slot: ScreenSlot | undefined) {
 	return {
 		types: o.config.consultationTypes,
 		repositories: o.repositoryOptions,
@@ -2771,13 +2800,50 @@ function appLauncherProps(o: AppRenderModesStage) {
 		onEmergencyExit: () => o.renderer.destroy(),
 		onQueuePause: o.toggleQueuePause,
 		onAutoHandoff: o.toggleAutoHandoff,
+		slot,
 	};
 }
 
-/** The Consultation launcher: the form, the Replacement context, and its writes. */
-function appLauncher(o: AppRenderModesStage): React.ReactElement | false {
-	const { launcher } = o;
-	return launcher ? createElement(ConsultationLauncher, appLauncherProps(o)) : false;
+/**
+ * The screens of the stack take the plane's props and the shell's final stage.
+ * Their slot, their preserved facts, and their resume flag stand in the stack
+ * the shell provides (ADR 0150).
+ */
+interface AppScreenProps {
+	appProps: AppProps;
+	o: AppRenderModesStage;
+}
+
+/**
+ * The Main view: the bottom of the screen stack (ADR 0150). Its one frame is
+ * the body and the two permanent bottom rows. The body's left column stacks
+ * the two sections - each header row, and its list box while the section is
+ * expanded - and its right column holds the one detail pane for the selected
+ * item (ADR 0019). The detail pane's modes - the response editor and the
+ * Agent terminal - are not screens of the stack: they stand in this screen's
+ * tree and suspend with it. The Consultation detail's body read stands in the
+ * screen's tree too, so a suspended Main view sends no read through the
+ * runner, and a resume re-reads the factory's facts fresh from the store.
+ */
+function MainScreen({ appProps, o }: AppScreenProps): React.ReactElement {
+	useAppConsultationSessionRead(appProps, o);
+	return createElement(
+		"box",
+		{ style: { width: "100%", height: "100%", flexDirection: "column" } },
+		o.tooSmall ? appSizeBox(o) : appMainBodyBox(o),
+		o.terminalHeight >= 2 && appMessageRow(o),
+		appActionBar(o),
+	);
+}
+
+/** The Consultation launcher screen: the form, the Replacement context, and its writes. */
+function LauncherScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
+	const slot = stack.slotFor("launcher");
+	const canStand = o.launcher;
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(ConsultationLauncher, appLauncherProps(o, slot));
 }
 
 /** The Message line: the visible message, drawn when the frame has a row for it. */
@@ -2797,15 +2863,14 @@ function appActionBar(o: AppRenderModesStage): React.ReactElement {
 	});
 }
 
-/** The Override panel: the agents, the task types, and the Model list the operator picks. */
-function appOverridePanel(o: AppRenderModesStage): React.ReactElement | false {
+/** The Override panel's screen: the agents, the task types, and the Model list the operator picks. */
+function OverrideScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
 	const {
 		cancelOverride,
 		config,
 		confirmOverride,
 		modelList,
-		openGuide,
-		openMessage,
 		override,
 		profiles,
 		renderer,
@@ -2818,43 +2883,47 @@ function appOverridePanel(o: AppRenderModesStage): React.ReactElement | false {
 		toggleQueuePause,
 		utility,
 		visibleMessage,
+		openGuide,
+		openMessage,
 	} = o;
-	return (
-		override !== null &&
-		createElement(OverridePanel, {
-			// One element per Handoff the override edits: the ticket and the route
-			// that opened it, so an override on another ticket or route remounts
-			// the panel instead of reusing the other one's edits and key handlers.
-			key: `override:${override.ticketIdentity}:${override.origin}`,
-			agents: config.agents,
-			environments: HANDOFF_ENVIRONMENT_KINDS,
-			taskTypes: Object.keys(config.taskTypes),
-			profiles,
-			taskPlacements: taskPlacementsFor(override),
-			planeActionTaskTypes: Object.keys(config.taskTypes).filter((name) =>
-				isPlaneActionTaskType(config.taskTypes, name),
-			),
-			onCopy: reportMessage,
-			modelList,
-			onAgentChange: requestModelList,
-			initial: override.choice,
-			standing,
-			inputActive: utility === null,
-			onHelp: (mode) => openGuide(mode),
-			onMessage: (mode) => openMessage(mode),
-			onUnavailable: setWarningMessage,
-			message: visibleMessage,
-			onEmergencyExit: () => renderer.destroy(),
-			onConfirm: confirmOverride,
-			onCancel: cancelOverride,
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+	const slot = stack.slotFor("override");
+	useSlotQuiet(slot, override === null);
+	if (override === null) return null;
+	return createElement(OverridePanel, {
+		// One element per Handoff the override edits: the ticket and the route
+		// that opened it, so an override on another ticket or route remounts
+		// the panel instead of reusing the other one's edits and key handlers.
+		key: `override:${override.ticketIdentity}:${override.origin}`,
+		agents: config.agents,
+		environments: HANDOFF_ENVIRONMENT_KINDS,
+		taskTypes: Object.keys(config.taskTypes),
+		profiles,
+		taskPlacements: taskPlacementsFor(override),
+		planeActionTaskTypes: Object.keys(config.taskTypes).filter((name) =>
+			isPlaneActionTaskType(config.taskTypes, name),
+		),
+		onCopy: reportMessage,
+		modelList,
+		onAgentChange: requestModelList,
+		initial: override.choice,
+		standing,
+		inputActive: utility === null,
+		onHelp: (mode) => openGuide(mode),
+		onMessage: (mode) => openMessage(mode),
+		onUnavailable: setWarningMessage,
+		message: visibleMessage,
+		onEmergencyExit: () => renderer.destroy(),
+		onConfirm: confirmOverride,
+		onCancel: cancelOverride,
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+	});
 }
 
-/** The decision modal on a settled turn: the decision's rows and its actions. */
-function appDecisionModal(o: AppRenderModesStage): React.ReactElement | false {
+/** The decision modal's screen on a settled turn: the decision's rows and its actions. */
+function DecisionScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
 	const {
 		decision,
 		openGuide,
@@ -2872,42 +2941,52 @@ function appDecisionModal(o: AppRenderModesStage): React.ReactElement | false {
 		utility,
 		visibleMessage,
 	} = o;
-	// Each ticket panel kind renders its own modal: a decision is neither a
-	// live view nor a missing-agent choice, and must not fall through to one.
-	return (
+	// The screen is the decision kind of the ticket's panel. It is quiet while
+	// the surface cannot stand: a decision on a ticket the store no longer
+	// answers for claims no key, and the plane's release closes the screen in
+	// the commit that draws the resumed frame.
+	const canStand =
 		panel !== null &&
-		panelTicket !== undefined &&
 		panel.kind === "decision" &&
-		decision !== undefined &&
-		createElement(DecisionModal, {
-			// One element per ticket: a decision on another ticket remounts fresh
-			// instead of inheriting the first ticket's cursor and key handlers.
-			key: `decision:${panel.identity}`,
-			title: panelTicket.title,
-			contextLine: decision.contextLine,
-			screen: decision.screen,
-			actions: decision.actions,
-			factLines: decision.factLines,
-			cause: decision.cause,
-			detail: decision.detail,
-			onAction: (key) => runDecisionAction(panelTicket, key),
-			onEditAction: (key) => openRouteOverride(panelTicket, key),
-			onCancel: () => setPanel(null),
-			standing,
-			inputActive: utility === null,
-			onHelp: () => openGuide("decision-modal"),
-			onMessage: () => openMessage("decision-modal"),
-			onUnavailable: setWarningMessage,
-			message: visibleMessage,
-			onEmergencyExit: () => renderer.destroy(),
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+		panelTicket !== undefined &&
+		decision !== undefined;
+	const slot = stack.slotFor("decision");
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(DecisionModal, {
+		// One element per ticket: a decision on another ticket remounts fresh
+		// instead of inheriting the first ticket's cursor and key handlers.
+		key: `decision:${panel.identity}`,
+		title: panelTicket.title,
+		contextLine: decision.contextLine,
+		screen: decision.screen,
+		actions: decision.actions,
+		factLines: decision.factLines,
+		cause: decision.cause,
+		detail: decision.detail,
+		onAction: (key) => runDecisionAction(panelTicket, key),
+		onEditAction: (key) => openRouteOverride(panelTicket, key),
+		onCancel: () => setPanel(null),
+		standing,
+		inputActive: utility === null,
+		onHelp: () => openGuide("decision-modal"),
+		onMessage: () => openMessage("decision-modal"),
+		onUnavailable: setWarningMessage,
+		message: visibleMessage,
+		onEmergencyExit: () => renderer.destroy(),
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+		resuming: slot?.resumed === true,
+	});
 }
 
 /** The Live view's stream: the title, the body, and the pane's state. */
-function appLiveViewProps(o: AppRenderModesStage, panelTicket: Ticket) {
+function appLiveViewProps(
+	o: AppRenderModesStage,
+	panelTicket: Ticket,
+	slot: ScreenSlot | undefined,
+) {
 	return {
 		title: panelTicket.title,
 		contextLine: liveContextLine(panelTicket, o.configRef.current.defaultTaskType),
@@ -2949,40 +3028,22 @@ function appLiveViewProps(o: AppRenderModesStage, panelTicket: Ticket) {
 		onEmergencyExit: () => o.renderer.destroy(),
 		onQueuePause: o.toggleQueuePause,
 		onAutoHandoff: o.toggleAutoHandoff,
+		slot,
 	};
 }
 
-/** The Live view: the stream, the decision sub-mode, and the pane's state. */
-function appLiveView(o: AppRenderModesStage): React.ReactElement | false {
-	// The Live view streams the agent's terminal while the ticket is in
-	// flight. When the turn settles and the factory waits for the
-	// operator, the same box carries the decision sub-mode: the turn
-	// log in the pane, the decision's rows in the region, and their keys,
-	// the border re-titled by the shared chrome.
-	const { panel, panelTicket, liveMode } = o;
-	return panel !== null &&
-		panel.kind === "live" &&
-		panelTicket !== undefined &&
-		liveMode !== "closed" &&
-		liveMode !== "missing"
-		? createElement(LiveView, {
-				...appLiveViewProps(o, panelTicket),
-				// The cycle is part of the panel (ADR 0110): the next cycle's view
-				// is a new screen, and the key says so to the reconciler.
-				key: `live:${panel.identity}:${panel.workCycle}`,
-			})
-		: false;
-}
-
-/** The missing-agent choice: the pane is gone, and the restart or abandon. */
-function appMissingModal(o: AppRenderModesStage): React.ReactElement | false {
+/**
+ * The missing-agent face: the pane is gone, and the restart or abandon. It is
+ * the Live view's missing sub-mode (ADR 0040) and the screen of the panel the
+ * list opens on a missing ticket; both stand on the face's one surface.
+ */
+function missingFace(
+	o: AppRenderModesStage,
+	panelTicket: Ticket,
+	slot: ScreenSlot | undefined,
+): React.ReactElement {
 	const {
 		config,
-		liveMode,
-		openGuide,
-		openMessage,
-		panel,
-		panelTicket,
 		renderer,
 		runMissingAction,
 		setPanel,
@@ -2992,39 +3053,79 @@ function appMissingModal(o: AppRenderModesStage): React.ReactElement | false {
 		toggleQueuePause,
 		utility,
 		visibleMessage,
+		openGuide,
+		openMessage,
 	} = o;
-	return (
-		panel !== null &&
-		panelTicket !== undefined &&
-		(panel.kind === "missing" || liveMode === "missing") &&
-		createElement(MissingModal, {
-			key: `missing:${panelTicket.identity}`,
-			title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
-			bodyLines: [
-				"The agent's pane is not in herdr's agent list.",
-				`Handoff attempts: ${panelTicket.handoffCount} of ${config.maxHandoffsPerTicket}`,
-			],
-			actions: [
-				{ key: "restart", label: "Restart", detail: "same task type, same workspace" },
-				{ key: "abandon", label: "Abandon", detail: "end the work cycle" },
-			],
-			onAction: (key) => runMissingAction(panelTicket, key),
-			onCancel: () => setPanel(null),
-			standing,
-			inputActive: utility === null,
-			onHelp: () => openGuide("missing-modal"),
-			onMessage: () => openMessage("missing-modal"),
-			onUnavailable: setWarningMessage,
-			message: visibleMessage,
-			onEmergencyExit: () => renderer.destroy(),
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+	return createElement(MissingModal, {
+		key: `missing:${panelTicket.identity}`,
+		title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
+		bodyLines: [
+			"The agent's pane is not in herdr's agent list.",
+			`Handoff attempts: ${panelTicket.handoffCount} of ${config.maxHandoffsPerTicket}`,
+		],
+		actions: [
+			{ key: "restart", label: "Restart", detail: "same task type, same workspace" },
+			{ key: "abandon", label: "Abandon", detail: "end the work cycle" },
+		],
+		onAction: (key) => runMissingAction(panelTicket, key),
+		onCancel: () => setPanel(null),
+		standing,
+		inputActive: utility === null,
+		onHelp: () => openGuide("missing-modal"),
+		onMessage: () => openMessage("missing-modal"),
+		onUnavailable: setWarningMessage,
+		message: visibleMessage,
+		onEmergencyExit: () => renderer.destroy(),
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+	});
 }
 
-/** The repository init's confirm: the plan's rows and the instruction file's choice (ADR 0075). */
-function appRepoInitPanel(o: AppRenderModesStage): React.ReactElement | false {
+/**
+ * The Live view's screen: the stream, the decision sub-mode, and the missing
+ * face, in place on the view's one surface (ADR 0040). The stream's own read
+ * stands in the screen's tree, so a suspended Live view sends no read through
+ * the runner, and a resume re-reads and re-stands the stream lines it showed.
+ */
+function LiveScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
+	const { liveMode, panel, panelTicket } = o;
+	const slot = stack.slotFor("live");
+	// The closed mode is the view's stale stand (ADR 0110): the ticket left the
+	// work cycle the screen stands on, and the plane's release closes the
+	// screen instead of resuming it.
+	const canStand =
+		panel !== null && panel.kind === "live" && panelTicket !== undefined && liveMode !== "closed";
+	useSlotQuiet(slot, !canStand);
+	useAppLiveStreamRead(o);
+	if (!canStand) return null;
+	if (liveMode === "missing") return missingFace(o, panelTicket, slot);
+	return createElement(LiveView, {
+		...appLiveViewProps(o, panelTicket, slot),
+		// The cycle is part of the panel (ADR 0110): the next cycle's view
+		// is a new screen, and the key says so to the reconciler. A resume of
+		// this screen stands at full size, with no re-pop-in (ADR 0150): the
+		// record stands on the screen's slot, for the instance's whole life.
+		resuming: slot?.resumed === true,
+		key: `live:${panel.identity}:${panel.workCycle}`,
+	});
+}
+
+/** The missing modal's screen: the list's own view of a ticket whose pane is gone. */
+function MissingScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
+	const { panel, panelTicket } = o;
+	const slot = stack.slotFor("missing");
+	const canStand = panel !== null && panel.kind === "missing" && panelTicket !== undefined;
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return missingFace(o, panelTicket, slot);
+}
+
+/** The repository init's screen: the confirm, the plan's rows, and the instruction file's choice (ADR 0075). */
+function RepositoryInitScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
 	const {
 		openGuide,
 		openMessage,
@@ -3040,52 +3141,49 @@ function appRepoInitPanel(o: AppRenderModesStage): React.ReactElement | false {
 		utility,
 		visibleMessage,
 	} = o;
-	return (
-		panel !== null &&
-		panel.kind === "repository-init" &&
-		// One element per repository entry: the queue's confirm is a fresh
-		// panel per entry, and the key says so to the reconciler. Without it a
-		// merged pass from one entry's panel to the next reuses the instance,
-		// and the panel's key handlers never leave the bus - the close the rig
-		// waits on never stands, and the wait runs to its deadline (issue #302).
-		createElement(ActionPanel, {
-			key: `repository-init:${panel.identity}`,
-			message: visibleMessage,
-			...repositoryInitPanel(panel.plan),
-			onAction: (key) => {
-				setPanel(null);
-				if (key === "init")
-					void repoInit
-						.runRepositoryInitConfirm(panel.repository, panel.plan)
-						.catch((error) => setErrorMessage(errorMessage(error)));
-				// The repository owes the choice of which instruction file to create
-				// (ADR 0075, story 12): the pick is the file the act stands the block in.
-				else if (key === "init-claude")
-					void repoInit
-						.runRepositoryInitConfirm(panel.repository, panel.plan, "CLAUDE.md")
-						.catch((error) => setErrorMessage(errorMessage(error)));
-				else if (key === "init-agents")
-					void repoInit
-						.runRepositoryInitConfirm(panel.repository, panel.plan, "AGENTS.md")
-						.catch((error) => setErrorMessage(errorMessage(error)));
-				// The cancel of a queued entry skips it and moves on (ADR 0083).
-				else repoInit.skipRepositoryInitEntry();
-			},
-			onCancel: () => repoInit.skipRepositoryInitEntry(),
-			standing,
-			inputActive: utility === null,
-			onHelp: () => openGuide("action-panel"),
-			onMessage: () => openMessage("action-panel"),
-			onUnavailable: setWarningMessage,
-			onEmergencyExit: () => renderer.destroy(),
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+	const slot = stack.slotFor("repository-init");
+	const canStand = panel !== null && panel.kind === "repository-init";
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(ActionPanel, {
+		key: `repository-init:${panel.identity}`,
+		message: visibleMessage,
+		...repositoryInitPanel(panel.plan),
+		onAction: (key) => {
+			setPanel(null);
+			if (key === "init")
+				void repoInit
+					.runRepositoryInitConfirm(panel.repository, panel.plan)
+					.catch((error) => setErrorMessage(errorMessage(error)));
+			// The repository owes the choice of which instruction file to create
+			// (ADR 0075, story 12): the pick is the file the act stands the block in.
+			else if (key === "init-claude")
+				void repoInit
+					.runRepositoryInitConfirm(panel.repository, panel.plan, "CLAUDE.md")
+					.catch((error) => setErrorMessage(errorMessage(error)));
+			else if (key === "init-agents")
+				void repoInit
+					.runRepositoryInitConfirm(panel.repository, panel.plan, "AGENTS.md")
+					.catch((error) => setErrorMessage(errorMessage(error)));
+			// The cancel of a queued entry skips it and moves on (ADR 0083).
+			else repoInit.skipRepositoryInitEntry();
+		},
+		onCancel: () => repoInit.skipRepositoryInitEntry(),
+		standing,
+		inputActive: utility === null,
+		onHelp: () => openGuide("action-panel"),
+		onMessage: () => openMessage("action-panel"),
+		onUnavailable: setWarningMessage,
+		onEmergencyExit: () => renderer.destroy(),
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+	});
 }
 
-/** The repository select: the fetchable repositories and the queued start. */
-function appRepoSelectPanel(o: AppRenderModesStage): React.ReactElement | false {
+/** The repository select's screen: the fetchable repositories and the queued start. */
+function RepositorySelectScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
 	const {
 		fetchInitableRepositories,
 		openGuide,
@@ -3101,31 +3199,33 @@ function appRepoSelectPanel(o: AppRenderModesStage): React.ReactElement | false 
 		utility,
 		visibleMessage,
 	} = o;
-	return (
-		panel !== null &&
-		panel.kind === "repository-select" &&
-		createElement(RepositorySelectPanel, {
-			fetchRepositories: fetchInitableRepositories,
-			onSelect: (queue) => {
-				setPanel(null);
-				repoInit.startRepositoryInitQueue(queue);
-			},
-			onCancel: () => setPanel(null),
-			standing,
-			inputActive: utility === null,
-			onHelp: () => openGuide("repository-select"),
-			onMessage: () => openMessage("repository-select"),
-			onUnavailable: setWarningMessage,
-			message: visibleMessage,
-			onEmergencyExit: () => renderer.destroy(),
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+	const slot = stack.slotFor("repository-select");
+	const canStand = panel !== null && panel.kind === "repository-select";
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(RepositorySelectPanel, {
+		fetchRepositories: fetchInitableRepositories,
+		onSelect: (queue) => {
+			setPanel(null);
+			repoInit.startRepositoryInitQueue(queue);
+		},
+		onCancel: () => setPanel(null),
+		standing,
+		inputActive: utility === null,
+		onHelp: () => openGuide("repository-select"),
+		onMessage: () => openMessage("repository-select"),
+		onUnavailable: setWarningMessage,
+		message: visibleMessage,
+		onEmergencyExit: () => renderer.destroy(),
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+	});
 }
 
-/** The Ticket close's confirm: the cycle's state and the close's act. */
-function appTicketClosePanel(o: AppRenderModesStage): React.ReactElement | false {
+/** The Ticket close's screen: the confirm, the cycle's state, and the close's act. */
+function TicketCloseScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
 	const {
 		factsFor,
 		openGuide,
@@ -3142,95 +3242,104 @@ function appTicketClosePanel(o: AppRenderModesStage): React.ReactElement | false
 		utility,
 		visibleMessage,
 	} = o;
-	return (
-		panel !== null &&
-		panel.kind === "ticket-close" &&
-		panelTicket !== undefined &&
-		createElement(ActionPanel, {
-			key: `ticket-close:${panel.identity}`,
-			message: visibleMessage,
-			...ticketCloseDialog(panelTicket, factsFor(panelTicket).failure),
-			onAction: (key) => {
-				setPanel(null);
-				if (key === "close") runTicketClose(panelTicket);
-			},
-			// Cancel is the way out with nothing changed: the Ticket, its cycle,
-			// and its Agent stay exactly where the dialog found them.
-			onCancel: () => setPanel(null),
-			standing,
-			inputActive: utility === null,
-			onHelp: () => openGuide("action-panel"),
-			onMessage: () => openMessage("action-panel"),
-			onUnavailable: setWarningMessage,
-			onEmergencyExit: () => renderer.destroy(),
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+	const slot = stack.slotFor("ticket-close");
+	const canStand = panel !== null && panel.kind === "ticket-close" && panelTicket !== undefined;
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(ActionPanel, {
+		key: `ticket-close:${panel.identity}`,
+		message: visibleMessage,
+		...ticketCloseDialog(panelTicket, factsFor(panelTicket).failure),
+		onAction: (key) => {
+			setPanel(null);
+			if (key === "close") runTicketClose(panelTicket);
+		},
+		// Cancel is the way out with nothing changed: the Ticket, its cycle,
+		// and its Agent stay exactly where the dialog found them.
+		onCancel: () => setPanel(null),
+		standing,
+		inputActive: utility === null,
+		onHelp: () => openGuide("action-panel"),
+		onMessage: () => openMessage("action-panel"),
+		onUnavailable: setWarningMessage,
+		onEmergencyExit: () => renderer.destroy(),
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+	});
 }
 
-/** The Consultation safety's confirm: the live checkout's conflicts (ADR 0103). */
-function appConsultationSafetyPanel(o: AppRenderModesStage): React.ReactElement | false {
-	const {
-		consultationOperations,
-		consultationSafety,
-		panel,
-		panelConsultation,
-		setConsultationSafety,
-		setPanel,
-		setWarningMessage,
-		standing,
-		state,
-		toggleAutoHandoff,
-		toggleQueuePause,
-		visibleMessage,
-	} = o;
-	return (
+/** The Consultation safety's screen: the confirm, the live checkout's conflicts (ADR 0103). */
+function ConsultationSafetyScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
+	const { panel, panelConsultation, consultationSafety } = o;
+	const slot = stack.slotFor("consultation-safety");
+	const canStand =
 		panel !== null &&
 		panel.kind === "consultation-safety" &&
 		panelConsultation !== undefined &&
-		consultationSafety?.consultationId === panelConsultation.id &&
-		createElement(ActionPanel, {
-			key: `consultation-safety:${panel.identity}`,
-			message: visibleMessage,
-			standing,
-			title: `Live checkout conflict ${panelConsultation.id.slice(0, 8)}`,
-			bodyLines: [
-				...(consultationSafety.safety.warning === undefined
-					? []
-					: [consultationSafety.safety.warning]),
-				...consultationSafety.safety.conflicts.map((conflict) => `Conflict: ${conflict.label}`),
-				"Confirm once to share this live checkout, or cancel and recover later.",
-			],
-			actions: [
-				{ key: "confirm", label: "Confirm", detail: "allow this Consultation once" },
-				{ key: "cancel", label: "Cancel", detail: "do not start the Agent" },
-			],
-			onAction: (key) => {
-				setPanel(null);
-				setConsultationSafety(null);
-				if (key === "confirm") {
-					const current = state.consultationRecord.consultation(panelConsultation.id);
-					if (current !== undefined && consultationSafety !== null)
-						void consultationOperations?.confirmSafetyConflict(
-							current,
-							consultationSafety.safety.conflicts,
-						);
-				}
-			},
-			onCancel: () => {
-				setPanel(null);
-				setConsultationSafety(null);
-				setWarningMessage("Consultation launch cancelled; recover or close it explicitly");
-			},
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+		consultationSafety !== null &&
+		consultationSafety.consultationId === panelConsultation.id;
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(ActionPanel, {
+		...consultationSafetyPanelProps(o, panelConsultation, consultationSafety),
+		key: `consultation-safety:${panel.identity}`,
+		slot,
+	});
 }
 
-/** The Consultation recovery: the record's state names its rows. */
-function appConsultationRecoveryPanel(o: AppRenderModesStage): React.ReactElement | false {
+/**
+ * The safety panel's one props: the rows and the actions the record's facts
+ * state (ADR 0103). The confirm once shares the live checkout, the cancel
+ * leaves the record to recover or close explicitly.
+ */
+function consultationSafetyPanelProps(
+	o: AppRenderModesStage,
+	panelConsultation: NonNullable<AppRenderModesStage["panelConsultation"]>,
+	consultationSafety: NonNullable<AppRenderModesStage["consultationSafety"]>,
+) {
+	const { consultationOperations, setConsultationSafety, setPanel, setWarningMessage, state } = o;
+	return {
+		message: o.visibleMessage,
+		standing: o.standing,
+		title: `Live checkout conflict ${panelConsultation.id.slice(0, 8)}`,
+		bodyLines: [
+			...(consultationSafety.safety.warning === undefined
+				? []
+				: [consultationSafety.safety.warning]),
+			...consultationSafety.safety.conflicts.map((conflict) => `Conflict: ${conflict.label}`),
+			"Confirm once to share this live checkout, or cancel and recover later.",
+		],
+		actions: [
+			{ key: "confirm", label: "Confirm", detail: "allow this Consultation once" },
+			{ key: "cancel", label: "Cancel", detail: "do not start the Agent" },
+		],
+		onAction: (key: string) => {
+			setPanel(null);
+			setConsultationSafety(null);
+			if (key === "confirm") {
+				const current = state.consultationRecord.consultation(panelConsultation.id);
+				if (current !== undefined)
+					void consultationOperations?.confirmSafetyConflict(
+						current,
+						consultationSafety.safety.conflicts,
+					);
+			}
+		},
+		onCancel: () => {
+			setPanel(null);
+			setConsultationSafety(null);
+			setWarningMessage("Consultation launch cancelled; recover or close it explicitly");
+		},
+		onQueuePause: o.toggleQueuePause,
+		onAutoHandoff: o.toggleAutoHandoff,
+	};
+}
+
+/** The Consultation recovery's screen: the record's state names its rows. */
+function ConsultationRecoveryScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
 	const {
 		openReplacementLauncher,
 		panel,
@@ -3249,41 +3358,45 @@ function appConsultationRecoveryPanel(o: AppRenderModesStage): React.ReactElemen
 	// interrupted opening and the replacement of a record with no Agent.
 	// A `closing` record never reaches this element: its Enter opens the
 	// close panel below, which already carries its recovery rows.
-	return (
+	const slot = stack.slotFor("consultation-recovery");
+	const canStand =
 		panel !== null &&
 		panel.kind === "consultation-recovery" &&
 		panelConsultation !== undefined &&
-		recoveryPanel !== undefined &&
-		createElement(ActionPanel, {
-			key: `consultation-recovery:${panel.identity}`,
-			message: visibleMessage,
-			standing,
-			title: recoveryPanel.title,
-			bodyLines: recoveryPanel.bodyLines,
-			actions: recoveryPanel.actions,
-			onAction: (key) => {
-				if (key === "recover") {
-					setPanel(null);
-					recoverConsultationOpening(panelConsultation);
-				} else if (key === "replace") {
-					openReplacementLauncher(panelConsultation);
-				} else if (key === "close") {
-					// The close path owns the dialog: an interrupted opening
-					// still holds a live Agent and confirms, and a record with
-					// no Agent closes on this action alone.
-					setPanel(null);
-					runConsultationClose(panelConsultation);
-				}
-			},
-			onCancel: () => setPanel(null),
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+		recoveryPanel !== undefined;
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(ActionPanel, {
+		key: `consultation-recovery:${panel.identity}`,
+		message: visibleMessage,
+		standing,
+		title: recoveryPanel.title,
+		bodyLines: recoveryPanel.bodyLines,
+		actions: recoveryPanel.actions,
+		onAction: (key) => {
+			if (key === "recover") {
+				setPanel(null);
+				recoverConsultationOpening(panelConsultation);
+			} else if (key === "replace") {
+				openReplacementLauncher(panelConsultation);
+			} else if (key === "close") {
+				// The close path owns the dialog: an interrupted opening
+				// still holds a live Agent and confirms, and a record with
+				// no Agent closes on this action alone.
+				setPanel(null);
+				runConsultationClose(panelConsultation);
+			}
+		},
+		onCancel: () => setPanel(null),
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+	});
 }
 
-/** The Consultation close: the record's state names its rows. */
-function appConsultationClosePanel(o: AppRenderModesStage): React.ReactElement | false {
+/** The Consultation close's screen: the record's state names its rows. */
+function ConsultationCloseScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
 	const {
 		closeConsultation,
 		closePanel,
@@ -3299,39 +3412,43 @@ function appConsultationClosePanel(o: AppRenderModesStage): React.ReactElement |
 	// selects the shape through consultationClosePanel, the recovery rows
 	// while the record is closing and the confirmation rows while a close
 	// would stop a live Agent. A state with no shape never reaches the
-	// render: the guard above already dropped the panel.
-	return (
+	// render: the plane's release already dropped the panel.
+	const slot = stack.slotFor("consultation-close");
+	const canStand =
 		panel !== null &&
 		panelConsultation !== undefined &&
 		panel.kind === "consultation-close" &&
-		closePanel !== undefined &&
-		createElement(ActionPanel, {
-			key: `consultation-close:${panel.identity}`,
-			message: visibleMessage,
-			standing,
-			title: closePanel.title,
-			bodyLines: closePanel.bodyLines,
-			actions: closePanel.actions,
-			onAction: (key) => {
-				if (key === "retry") {
-					setPanel(null);
-					closeConsultation(panelConsultation);
-				} else if (key === "force") {
-					setPanel({ kind: "consultation-force", identity: panelConsultation.id });
-				} else if (key === "close") {
-					setPanel(null);
-					closeConsultation(panelConsultation);
-				}
-			},
-			onCancel: () => setPanel(null),
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+		closePanel !== undefined;
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(ActionPanel, {
+		key: `consultation-close:${panel.identity}`,
+		message: visibleMessage,
+		standing,
+		title: closePanel.title,
+		bodyLines: closePanel.bodyLines,
+		actions: closePanel.actions,
+		onAction: (key) => {
+			if (key === "retry") {
+				setPanel(null);
+				closeConsultation(panelConsultation);
+			} else if (key === "force") {
+				setPanel({ kind: "consultation-force", identity: panelConsultation.id });
+			} else if (key === "close") {
+				setPanel(null);
+				closeConsultation(panelConsultation);
+			}
+		},
+		onCancel: () => setPanel(null),
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+	});
 }
 
-/** The Consultation force-close: the owned resources that would remain. */
-function appConsultationForcePanel(o: AppRenderModesStage): React.ReactElement | false {
+/** The Consultation force-close's screen: the owned resources that would remain. */
+function ConsultationForceScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
 	const {
 		forceCloseConsultation,
 		panel,
@@ -3343,45 +3460,47 @@ function appConsultationForcePanel(o: AppRenderModesStage): React.ReactElement |
 		toggleQueuePause,
 		visibleMessage,
 	} = o;
-	return (
-		panel !== null &&
-		panel.kind === "consultation-force" &&
-		panelConsultation !== undefined &&
-		createElement(ActionPanel, {
-			key: `consultation-force:${panel.identity}`,
-			message: visibleMessage,
-			standing,
-			title: `Force-close Consultation ${panelConsultation.id.slice(0, 8)}?`,
-			bodyLines: [
-				"Force-close stops the cleanup and closes the record. These owned",
-				"resources remain in herdr and stay recorded for later recovery:",
-				...state.consultationRecord
-					.consultationResources(panelConsultation.id)
-					.filter((item) => item.owned && !item.confirmedClosed)
-					.map((item) => `${item.kind} ${item.resourceId} - ${item.details}`),
-				...(state.consultationRecord
-					.consultationResources(panelConsultation.id)
-					.filter((item) => item.owned && !item.confirmedClosed).length === 0
-					? ["No owned resources are recorded."]
-					: []),
-			],
-			actions: [
-				{ key: "force", label: "Force-close", detail: "record the remaining resources" },
-				{ key: "cancel", label: "Cancel", detail: "stay in closing state" },
-			],
-			onAction: (key) => {
-				setPanel(null);
-				if (key === "force") forceCloseConsultation(panelConsultation);
-			},
-			onCancel: () => setPanel(null),
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+	const slot = stack.slotFor("consultation-force");
+	const canStand =
+		panel !== null && panel.kind === "consultation-force" && panelConsultation !== undefined;
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(ActionPanel, {
+		key: `consultation-force:${panel.identity}`,
+		message: visibleMessage,
+		standing,
+		title: `Force-close Consultation ${panelConsultation.id.slice(0, 8)}?`,
+		bodyLines: [
+			"Force-close stops the cleanup and closes the record. These owned",
+			"resources remain in herdr and stay recorded for later recovery:",
+			...state.consultationRecord
+				.consultationResources(panelConsultation.id)
+				.filter((item) => item.owned && !item.confirmedClosed)
+				.map((item) => `${item.kind} ${item.resourceId} - ${item.details}`),
+			...(state.consultationRecord
+				.consultationResources(panelConsultation.id)
+				.filter((item) => item.owned && !item.confirmedClosed).length === 0
+				? ["No owned resources are recorded."]
+				: []),
+		],
+		actions: [
+			{ key: "force", label: "Force-close", detail: "record the remaining resources" },
+			{ key: "cancel", label: "Cancel", detail: "stay in closing state" },
+		],
+		onAction: (key) => {
+			setPanel(null);
+			if (key === "force") forceCloseConsultation(panelConsultation);
+		},
+		onCancel: () => setPanel(null),
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+	});
 }
 
-/** The Consultation delete's confirm: the record's id and the delete's act. */
-function appConsultationDeletePanel(o: AppRenderModesStage): React.ReactElement | false {
+/** The Consultation delete's screen: the confirm, the record's id, and the delete's act. */
+function ConsultationDeleteScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
 	const {
 		deleteConsultation,
 		panel,
@@ -3392,28 +3511,30 @@ function appConsultationDeletePanel(o: AppRenderModesStage): React.ReactElement 
 		toggleQueuePause,
 		visibleMessage,
 	} = o;
-	return (
-		panel !== null &&
-		panelConsultation !== undefined &&
-		panel.kind === "consultation-delete" &&
-		createElement(ActionPanel, {
-			key: `consultation-delete:${panel.identity}`,
-			message: visibleMessage,
-			standing,
-			...consultationDeletePanel(panelConsultation.id),
-			onAction: (key) => {
-				setPanel(null);
-				if (key === "delete") deleteConsultation(panelConsultation);
-			},
-			onCancel: () => setPanel(null),
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+	const slot = stack.slotFor("consultation-delete");
+	const canStand =
+		panel !== null && panel.kind === "consultation-delete" && panelConsultation !== undefined;
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(ActionPanel, {
+		key: `consultation-delete:${panel.identity}`,
+		message: visibleMessage,
+		standing,
+		...consultationDeletePanel(panelConsultation.id),
+		onAction: (key) => {
+			setPanel(null);
+			if (key === "delete") deleteConsultation(panelConsultation);
+		},
+		onCancel: () => setPanel(null),
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+	});
 }
 
-/** The Key guide: the mode's facts and the Message line. */
-function appUtilityGuide(o: AppRenderModesStage): React.ReactElement | false {
+/** The Key guide's screen: the mode's facts and the Message line. */
+function GuideScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
 	const {
 		openMessage,
 		renderer,
@@ -3424,22 +3545,29 @@ function appUtilityGuide(o: AppRenderModesStage): React.ReactElement | false {
 		utilityFacts,
 		visibleMessage,
 	} = o;
-	return (
-		utility?.kind === "guide" &&
-		createElement(KeyGuide, {
-			message: visibleMessage,
-			facts: utilityFacts,
-			onClose: () => setUtility(null),
-			onMessage: () => openMessage(utilityFacts.mode),
-			onEmergencyExit: () => renderer.destroy(),
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+	const slot = stack.slotFor("guide");
+	// The guide's content re-derives from the Control catalogue for the
+	// captured mode, so an in-place change of the mode (the guide over the
+	// guide) stands on the new mode's rows without a second entry in the
+	// stack or a re-pop-in (ADR 0150).
+	const canStand = utility !== null && utility.kind === "guide";
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(KeyGuide, {
+		message: visibleMessage,
+		facts: utilityFacts,
+		onClose: () => setUtility(null),
+		onMessage: () => openMessage(utilityFacts.mode),
+		onEmergencyExit: () => renderer.destroy(),
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+	});
 }
 
-/** The Message view: the history and the standing facts. */
-function appUtilityMessage(o: AppRenderModesStage): React.ReactElement | false {
+/** The Message view's screen: the history and the standing facts. */
+function MessageScreen({ o }: AppScreenProps): React.ReactElement | null {
+	const stack = useStackContext();
 	const {
 		messageHistory,
 		openGuide,
@@ -3452,56 +3580,95 @@ function appUtilityMessage(o: AppRenderModesStage): React.ReactElement | false {
 		utilityFacts,
 		visibleMessage,
 	} = o;
-	return (
-		utility?.kind === "message" &&
-		createElement(MessageView, {
-			message: visibleMessage,
-			history: messageHistory,
-			facts: standing,
-			onClose: () => setUtility(null),
-			onHelp: () => openGuide(utilityFacts.mode),
-			onEmergencyExit: () => renderer.destroy(),
-			onQueuePause: toggleQueuePause,
-			onAutoHandoff: toggleAutoHandoff,
-		})
-	);
+	const slot = stack.slotFor("message");
+	const canStand = utility !== null && utility.kind === "message";
+	useSlotQuiet(slot, !canStand);
+	if (!canStand) return null;
+	return createElement(MessageView, {
+		message: visibleMessage,
+		history: messageHistory,
+		facts: standing,
+		onClose: () => setUtility(null),
+		onHelp: () => openGuide(utilityFacts.mode),
+		onEmergencyExit: () => renderer.destroy(),
+		onQueuePause: toggleQueuePause,
+		onAutoHandoff: toggleAutoHandoff,
+		slot,
+	});
+}
+
+/** The one active screen the stack stands on the plane, by the stack's record. */
+function activeScreenElement(
+	appProps: AppProps,
+	o: AppRenderModesStage,
+	stack: ScreenStack,
+): React.ReactElement {
+	const screenProps: AppScreenProps = { appProps, o };
+	switch (stack.active) {
+		case "launcher":
+			return createElement(LauncherScreen, screenProps);
+		case "guide":
+			return createElement(GuideScreen, screenProps);
+		case "message":
+			return createElement(MessageScreen, screenProps);
+		case "decision":
+			return createElement(DecisionScreen, screenProps);
+		case "missing":
+			return createElement(MissingScreen, screenProps);
+		case "live":
+			return createElement(LiveScreen, screenProps);
+		case "ticket-close":
+			return createElement(TicketCloseScreen, screenProps);
+		case "consultation-close":
+			return createElement(ConsultationCloseScreen, screenProps);
+		case "consultation-safety":
+			return createElement(ConsultationSafetyScreen, screenProps);
+		case "consultation-recovery":
+			return createElement(ConsultationRecoveryScreen, screenProps);
+		case "consultation-force":
+			return createElement(ConsultationForceScreen, screenProps);
+		case "consultation-delete":
+			return createElement(ConsultationDeleteScreen, screenProps);
+		case "repository-select":
+			return createElement(RepositorySelectScreen, screenProps);
+		case "repository-init":
+			return createElement(RepositoryInitScreen, screenProps);
+		case "override":
+			return createElement(OverrideScreen, screenProps);
+		default:
+			return createElement(MainScreen, screenProps);
+	}
 }
 
 /**
- * The plane's one root element: the Main frame, the two bottom rows, and the surfaces that stand over them.
+ * The plane's one root element: the one active screen, under the stack the
+ * shell stands. The screens beneath the active one unmount, and the stack
+ * holds their place and their preserved facts (ADR 0150).
  */
-function appElement(o: AppRenderModesStage): React.ReactElement {
-	const { tooSmall, terminalHeight } = o;
+function appElement(
+	appProps: AppProps,
+	o: AppRenderModesStage,
+	stack: ScreenStack,
+): React.ReactElement {
 	return createElement(
 		"box",
 		{ style: { width: "100%", height: "100%", flexDirection: "column" } },
-		// One Main frame: the body and the two permanent bottom rows. The body's
-		// left column stacks the two sections - each header row, and its list box
-		// while the section is expanded - and its right column holds the one
-		// detail pane for the selected item (ADR 0019).
-		tooSmall ? appSizeBox(o) : appMainBodyBox(o),
-		appLauncher(o),
-		terminalHeight >= 2 && appMessageRow(o),
-		appActionBar(o),
-		appOverridePanel(o),
-		appDecisionModal(o),
-		appLiveView(o),
-		appMissingModal(o),
-		appRepoInitPanel(o),
-		appRepoSelectPanel(o),
-		appTicketClosePanel(o),
-		appConsultationSafetyPanel(o),
-		appConsultationRecoveryPanel(o),
-		appConsultationClosePanel(o),
-		appConsultationForcePanel(o),
-		appConsultationDeletePanel(o),
-		appUtilityGuide(o),
-		appUtilityMessage(o),
+		createElement(ScreenStackProvider, { value: stack }, activeScreenElement(appProps, o, stack)),
 	);
 }
 
 export function App(props: AppProps) {
-	return appElement(useAppOpsStages(props, useAppBaseStages(props)));
+	const o = useAppOpsStages(props, useAppBaseStages(props));
+	// The shell owns the stack: its record derives from the shell's four
+	// screen states, its slots hold the one stable wrapper per screen, and the
+	// one active screen stands alone on the plane (ADR 0150).
+	const stack = useScreenStack({
+		launcher: o.launcher,
+		panel: o.panel,
+		override: o.override,
+		utility: o.utility,
+	});
+	return appElement(props, o, stack);
 }
 
 /** The fields the unified cursor's moves read and write. */
@@ -6329,16 +6496,12 @@ function appConfirmOverride(f: AppTicketOpsFields, choice: HandoffChoice): void 
 		return;
 	}
 	if (pending.origin === "workflow") {
-		// A route confirmed from the Live view keeps the screen open, like
-		// the direct route: the stream moves to the new pane on the next
-		// tick. A refused claim comes back to the decision sub-mode, where
-		// the route row still stands.
-		if (pending.returnTo.kind === "live") {
-			// The screen returns to the cycle the operator left, and the route's
-			// ask ends that cycle: the view goes back to the list when the
-			// cycle's number moves (ADR 0072, ADR 0110).
-			f.setPanel(pending.returnTo);
-		}
+		// The panel the route row was on stands suspended beneath the override
+		// (ADR 0150). A confirmed route moves the ticket to its next work
+		// cycle, and the panel the ticket stands on - the Live view, and the
+		// decision modal with the cycle it opened on - is stale on that write,
+		// so the root's stale release closes it and the screen beneath resumes
+		// (ADR 0110).
 		appRunRouteHandoff(f, ticket, ticket.lastCompletion?.transition ?? null, choice);
 		return;
 	}
@@ -6354,11 +6517,11 @@ function appConfirmOverride(f: AppTicketOpsFields, choice: HandoffChoice): void 
  * it started.
  */
 function appCancelOverride(f: AppTicketOpsFields): void {
-	const pending = f.overrideRef.current;
 	f.setOverride(null);
-	if (pending?.origin === "workflow") {
-		f.setPanel(pending.returnTo);
-	}
+	// A workflow edit stands over the panel it opened from: that panel is
+	// suspended beneath the override (ADR 0150), so dropping the edit
+	// returns to that screen with its row, its scroll, and its facts,
+	// with no re-pop-in.
 }
 
 /**
@@ -7083,18 +7246,13 @@ function appOpenRouteOverride(f: AppTicketOpsFields, ticket: Ticket, key: string
 	if (choice === null) return;
 	// The panel opens on this choice's agent: fetch its Model list (ADR 0010).
 	appRequestModelList(f, choice.agentType);
-	// The panel the route row was on is where an Esc and a confirmed route
-	// return: the decision modal, or the Live view's decision sub-mode on the
-	// work cycle that screen opened on (ADR 0110).
-	const returnTo: RouteReturnPanel =
-		f.panel?.kind === "live"
-			? { kind: "live", identity: ticket.identity, workCycle: ticket.workCycle }
-			: { kind: "decision", identity: ticket.identity };
-	f.setPanel(null);
+	// The panel the route row was on stands suspended beneath the override
+	// (ADR 0150): dropping the edit returns to it, and a confirmed route
+	// moves the ticket to its next work cycle, where the root's stale release
+	// closes the panel and the screen beneath resumes (ADR 0110).
 	f.setOverride({
 		ticketIdentity: ticket.identity,
 		origin: "workflow",
-		returnTo,
 		choice,
 	});
 }
@@ -7117,6 +7275,8 @@ interface AppConsultationOpsFields extends AppTicketOpsFields {
 	setNewOutput: (fresh: boolean) => void;
 	responseDraftRef: RefObject<string>;
 	setResponseDraft: (draft: string) => void;
+	responseEditing: FieldEditingState | null;
+	setResponseEditing: (editing: FieldEditingState | null) => void;
 	setResponseEditor: (open: boolean) => void;
 	selectedConsultation: Consultation | undefined;
 	ticketAtCursor: () => Ticket | undefined;
@@ -7294,6 +7454,8 @@ function appBeginResponse(f: AppConsultationOpsFields, consultation: Consultatio
 	}
 	f.responseDraftRef.current = consultation.draft;
 	f.setResponseDraft(consultation.draft);
+	// A fresh editor session stands at the draft's end: no selection is kept.
+	f.setResponseEditing(null);
 	f.setResponseEditor(true);
 }
 
@@ -7354,6 +7516,7 @@ function appDiscardResponseDraft(f: AppConsultationOpsFields): void {
 	const selected = f.selectedConsultation;
 	f.responseDraftRef.current = "";
 	f.setResponseDraft("");
+	f.setResponseEditing(null);
 	if (selected !== undefined) state.consultationRecord.setConsultationDraft(selected.id, "");
 	f.setResponseEditor(false);
 	f.setNoticeMessage("the saved Response draft was discarded", "info");
@@ -8020,6 +8183,11 @@ function useAppLauncherState(prev: AppSelectionStateStage) {
 	const [responseEditor, setResponseEditor] = useState(false);
 	const [responseDraft, setResponseDraft] = useState("");
 	const responseDraftRef = useRef("");
+	// The response field's editing state - its draft, caret, and selection -
+	// stands in the shell, never in the field: the field unmounts with the
+	// screens above it, and the shell hands the state back on re-open, so the
+	// field stands on the same work it left (ADR 0150).
+	const [responseEditing, setResponseEditing] = useState<FieldEditingState | null>(null);
 	return {
 		...prev,
 		listViewsRef,
@@ -8037,6 +8205,8 @@ function useAppLauncherState(prev: AppSelectionStateStage) {
 		setResponseEditor,
 		responseDraft,
 		setResponseDraft,
+		responseEditing,
+		setResponseEditing,
 		responseDraftRef,
 	};
 }

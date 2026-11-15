@@ -15,9 +15,9 @@
  * are disabled.
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import { type ReactElement, useState } from "react";
+import type { ReactElement } from "react";
 
-import type { StandingFacts } from "./controls.ts";
+import type { AvailabilityFacts, StandingFacts } from "./controls.ts";
 import { windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
 import {
@@ -26,6 +26,7 @@ import {
 	modalFrame,
 	useActionChromeDispatch,
 } from "./modal-chrome.ts";
+import { type ScreenSlot, useSlotFact, useSlotRegionMirror } from "./screen-stack.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { type DecisionRegion, useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
@@ -60,6 +61,12 @@ interface ActionPanelProps {
 	 * same reach as the Queue pause's: required for the same reason.
 	 */
 	onAutoHandoff: () => void;
+	/**
+	 * The stack's slot for this panel's screen (ADR 0150): the key bus holds
+	 * the slot's one stable wrapper while the screen is active, and the slot's
+	 * record preserves the panel's facts while it is suspended.
+	 */
+	slot?: ScreenSlot;
 }
 
 /** The message column stops at 60 cells: a confirmation line is short. */
@@ -153,17 +160,23 @@ export function ActionPanel({
 	onEmergencyExit = () => undefined,
 	onQueuePause,
 	onAutoHandoff,
+	slot,
 }: ActionPanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const body = bodyLines ?? [];
 	const layout = actionPanelLayout(body, actions.length, terminalWidth, terminalHeight);
-	const [bodyScroll, setBodyScroll] = useState(0);
+	// The body's view and the row under the cursor stand in the stack's slot,
+	// so a resume stands on the panel the operator left.
+	const [bodyScroll, setBodyScroll] = useSlotFact<number>(slot, "bodyScroll", 0);
 	// The panel's rows are the region's: the shared selection, its wrap, and
 	// its window, with every row shown, the way the decision's region does.
-	const selection = useDecisionRegion(actions, actions.length);
-	// The panel owns one fact: the rows its Decision region holds. The plane's
-	// standing facts come to it as they are, and it states nothing it does not
-	// own.
+	const selection = useDecisionRegion(
+		actions,
+		actions.length,
+		(slot?.facts.regionAt as number | undefined) ?? 0,
+	);
+	useSlotRegionMirror(slot, selection.at);
+	// The panel owns one fact: the rows its Decision region holds.
 	const facts = useActionChromeDispatch({
 		mode: "action-panel",
 		standing,
@@ -182,6 +195,7 @@ export function ActionPanel({
 			),
 		queuePause: onQueuePause,
 		autoHandoff: onAutoHandoff,
+		slot,
 	});
 	const scroll = Math.min(bodyScroll, layout.maxBodyScroll);
 	const shownBody = windowOf(layout.wrapped, scroll, layout.shownBodyRows);
@@ -191,10 +205,29 @@ export function ActionPanel({
 			? [...shownBody, `+${hiddenRows} more (j/k)`]
 			: shownBody;
 
+	return actionPanelElement(
+		{ title, message, queuePaused: standing.queuePaused },
+		{ width: terminalWidth, layout, bodyShown, selection, actions, facts },
+	);
+}
+
+/** The panel's one surface: the body's window, its rows, and the bar it states. */
+function actionPanelElement(
+	shell: { title: string; message: MessageFact | null; queuePaused: boolean },
+	parts: {
+		width: number;
+		layout: ReturnType<typeof actionPanelLayout>;
+		bodyShown: string[];
+		selection: ReturnType<typeof useDecisionRegion>;
+		actions: readonly ActionRow[];
+		facts: AvailabilityFacts;
+	},
+) {
+	const { width, layout, bodyShown, selection, actions, facts } = parts;
 	return createElement(ModalSurface, {
 		frame: layout.frame,
-		width: terminalWidth,
-		title,
+		width,
+		title: shell.title,
 		// Every action row plus one line of body: without them the panel states a
 		// problem with no way to answer it.
 		body: {
@@ -207,8 +240,8 @@ export function ActionPanel({
 			}),
 			minRows: actions.length + 1,
 		},
-		message,
+		message: shell.message,
 		bar: { mode: "action-panel", facts },
-		queuePaused: standing.queuePaused,
+		queuePaused: shell.queuePaused,
 	});
 }

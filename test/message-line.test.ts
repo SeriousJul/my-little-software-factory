@@ -20,6 +20,7 @@ import type { EnvironmentKind, FetchedTicket, Ticket } from "../src/domain/ticke
 import type { CommandRunner } from "../src/runner.ts";
 import {
 	actionBarRowOf,
+	detailPaneText,
 	fieldKey,
 	frameText,
 	frameUntil,
@@ -32,6 +33,7 @@ import {
 	rgb,
 	roleColor,
 	rowsOf,
+	settle,
 	spanColorAt,
 	tabUntilSlot,
 	toggleAutoHandoff,
@@ -41,6 +43,14 @@ import {
 	waitSourceHealthy,
 	withApp,
 } from "./app-harness.ts";
+import {
+	ConsultationRunner,
+	consultationAgentListJson,
+	grillTypes,
+	seed,
+	stubPaneReadText,
+	uid,
+} from "./consultation-world.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
 import {
 	fetchRateLimited,
@@ -700,6 +710,82 @@ describe("the permanent Message line", () => {
 				loopPolicy: { kind: "held" },
 			},
 		);
+	});
+
+	test("F2 opens the view from inside the response field, and the field keeps its work", async () => {
+		// The Consultation's response editor owns its draft field like the
+		// launcher's does: F2 is the field mode's own alias, so the Message view
+		// opens from inside the field, not only from the base panes. The view
+		// suspends the screen the field stands on, and closing it resumes that
+		// screen on the same draft, caret and selection (ADR 0150).
+		let runner: ConsultationRunner;
+		const id = uid("7");
+		const state = wrappedState();
+		const planeRecord = await plane({
+			existing: state,
+			sources: [],
+			config: { consultationTypes: grillTypes },
+			repos: { "github.com/acme/factory": "src/factory" },
+			commands: (fake: FakeRunner, home: string) => {
+				const _checkout = join(home, "src", "factory");
+				stubPaneReadText(fake, `pane-${id.slice(0, 8)}`, "Agent: waiting");
+			},
+			runner: (fake: FakeRunner) =>
+				(runner = new ConsultationRunner(fake, consultationAgentListJson([]))),
+			agentHostEnv: { herdrEnv: "1" },
+		});
+		const checkout = join(planeRecord.home, "src", "factory");
+		seed(state, id, checkout);
+		state.consultationRecord.settleConsultationTurn(id, null, "first answer", {
+			settledStatus: "idle",
+		});
+		state.consultationRecord.setConsultationDraft(id, "follow up");
+		try {
+			await withApp(
+				async (setup) => {
+					await planeRecord.settleFirstFetch();
+					// The Consultation is the only section with a row: one down-press
+					// crosses the empty Ticket section into it.
+					for (let step = 0; step < 8; step += 1) {
+						await pressControl(setup, "move-list", { via: "↓", quiet: true });
+						const frame = await settle(setup, 50);
+						if (detailPaneText(frame).includes("State: awaiting-response")) break;
+					}
+					// The world records no message yet, and the Message view opens
+					// only over a history that holds an entry: a refused refresh
+					// earns the record the F2 opens.
+					await pressControl(setup, "refresh", { quiet: true });
+					await pressControl(setup, "consultation-respond", { opens: "Response draft" });
+					const editor = await waitFor(setup, { shows: "follow up" });
+					expect(frameText(editor)).toContain("❯ Response draft");
+					// Select the draft's opening, then open the view over the work.
+					fieldKey(setup, "home");
+					fieldKey(setup, "shift+right");
+					fieldKey(setup, "shift+right");
+					const view = await pressControl(setup, "message", {
+						via: "F2",
+						opens: "Message view",
+					});
+					expect(view).toContain("Message view");
+					// Esc closes the view, and the screen behind it resumes on the
+					// field it left: the marker is back on the draft.
+					await pressControl(setup, "message-close", { closes: "Message view" });
+					await waitFor(setup, { shows: "❯ Response draft" });
+					// The field kept the draft, the caret, and the selection: asking
+					// to read a Message changed nothing about the operator's work.
+					typeText(setup, "q");
+					await waitFor(setup, { shows: "qllow up" });
+				},
+				{
+					width: WIDTH,
+					height: 32,
+					plane: planeRecord,
+					loopPolicy: { kind: "held" },
+				},
+			);
+		} finally {
+			state.close();
+		}
 	});
 
 	test("the working is no fact, and the record shows the turn it covered", async () => {

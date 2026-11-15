@@ -4,11 +4,12 @@ Status: accepted
 Date: 2026-11-14
 
 Records that the plane holds exactly one active screen at a time. The shell
-owns one screen stack module that owns the stack's record, the open, close,
-and replace transitions, and the per-screen preserved facts. The contract it
-states: a suspended screen runs nothing, it unmounts, it holds no timer, no
-read, no spinner frame, and no key claim, and it resumes from the store plus
-the stack's preserved facts on the same frame it was suspended on.
+owns one screen stack module that owns the stack's record and the open, close,
+and replace transitions. The screens' screen-local facts stand in the shell's
+stage, which is never suspended, so they outlive every screen's unmount. The
+contract the module states: a suspended screen runs nothing, it unmounts, it
+holds no timer, no read, no spinner frame, and no key claim, and it resumes
+from the store plus the shell's stage on the same frame it was suspended on.
 
 ## Context
 
@@ -44,10 +45,11 @@ on resume.
 
 ## Decision
 
-The shell gains one screen stack module. It owns three things and nothing
+The shell gains one screen stack module. It owns two things and nothing
 else: the stack's record (the ordered suspended screens, the Main view at the
-bottom, the active screen at the top, one entry per screen), the transitions,
-and the per-screen preserved facts.
+bottom, the active screen at the top, one entry per screen) and the
+transitions. The screens' screen-local facts stand in the shell's stage,
+which is never suspended.
 
 - The screens of the stack are the Main view and the screens that open above
   it: the Consultation launcher, with the Replacement Consultation as the
@@ -63,14 +65,22 @@ and the per-screen preserved facts.
 - The transitions: open puts the opened screen on top and suspends the
   screen that was active; an open of the screen that is already active
   updates that screen's fact in place (the guide's captured Interaction
-  mode), never a second entry; an open of a screen the stack already holds
-  at a lower level is refused, one entry per screen. Close removes the
-  active screen and resumes the screen beneath it. Replace, the close of one
-  screen immediately followed, in the same transition pass, by the open of a
-  different screen (the decision route confirm that opens the routed ticket's
-  Live view, the repository select's confirm that opens the repository
-  init), swaps the top without resuming the screen beneath, so a screen that
-  would be suspended again in the same pass is never remounted for nothing.
+  mode), never a second entry; the in-place update gives back no keys, because
+  the screen's slot wrapper stands on the key bus through the update and the
+  keys the screen holds are the screen's: the surface that leaves the frame by
+  the update (the repository init's queue moving to its next marked row) is a
+  change of the screen's fact, not a close. An open of a screen the stack
+  already holds at a lower level is refused, one entry per screen. Close removes the
+  active screen and resumes the screen beneath it. Replace, the open of a
+  screen that takes the place of the screen the record holds in the same
+  slot, in the same transition pass: the guide and the Message view share one
+  entry of the record, and the open of one over the other stands the new
+  screen with the screen beneath the slot suspended through the pass, so a
+  screen that would be suspended again in the same pass is never remounted
+  for nothing. A confirm that moves the ticket to its next work cycle is a
+  close, not a replace: the screen that stood on the cycle it left is stale
+  on that write, the root's stale release closes it, and the screen beneath
+  it resumes.
 
 - Suspension is an unmount: the suspended screen's tree comes down, so its
   timers, its pane reads, its spinner frames, and its key wrappers stop by
@@ -81,7 +91,23 @@ and the per-screen preserved facts.
   decision across every screen's hooks and leaves a second shallow seam into
   the stack that a screen can drift from.
 
-- The preserved facts are the screen-local facts the store does not hold:
+- The resume stands without the pop-in of an opening, and the stack makes
+  that decision too: it records on the screen's slot, in the commit that
+  resumes the screen, that the opening is a resume, and it hands the record
+  to the screens that take a pop-in, the Live view and the Decision modal.
+  The record stands for the screen instance's life, so the resumed screen's
+  later renders re-decide nothing, and a close of the screen clears it, so
+  the next open of the screen pops in once. Rejected: the per-render read
+  that the previous screen set held the screen, which stands true only on
+  the resume commit and flips on the screen's next render, so that render
+  re-opens the box from its opening fact, and the screen goes invisible for
+  the span of the pop-in it owes.
+
+- The preserved facts are the screen-local facts the store does not hold.
+  They stand in the shell's stage, which is never suspended: a screen edits
+  the shell's state while it is active, the state outlives the screen's
+  unmount, and the screen resumes on the same state it wrote, building the
+  rest of itself from the store.
   the Main view's selection, selected row, detail scroll, list filters,
   focused pane, section expansions, grouping folds, response draft and editor
   standing, Agent terminal standing, and the presented Consultation detail
@@ -96,12 +122,20 @@ and the per-screen preserved facts.
   and the message history, stand in the shell through every transition, so a
   screen resumed after a long suspend shows the factory's current state.
 
-- Stale resume: a screen the stack resumes is checked against the store
-  before it stands. A Live view whose ticket left the work cycle its screen
-  stands on (ADR 0110) closes instead of resuming, the stack form of the
-  rule ADR 0110 decided for the work cycle, and a resumed screen whose
-  selected item left the factory's lists stands on the fact the store now
-  answers, the same fallbacks the screen already derives today.
+- The field's undo history is not a preserved fact: the renderer's buffer
+  exposes only its undo and redo operations, and no history a resume could
+  reseed. A field whose screen suspends under the guide resumes its draft,
+  its caret, and its selection, and its undo history restarts. The shared
+  standard's rule for opening and closing Help states the same.
+
+- Stale resume: a screen that records the work cycle it stands on, the Live
+  view and the decision modal, is checked against the store before it stands
+  or resumes. The ticket moved to the next cycle by a confirm on the
+  screen's own surface or a route, and the screen closes instead of standing
+  or resuming (ADR 0110), whether it stands active or resumes from a
+  suspend. A resumed screen whose selected item left the factory's lists
+  stands on the fact the store now answers, the same fallbacks the screen
+  already derives today.
 
 - The key-ownership contract: the active screen owns the keys, and a
   suspended screen claims none. The shell keeps its own base key
@@ -149,8 +183,8 @@ and the per-screen preserved facts.
 ## Consequences
 
 - The operator: the same screens, the same keys, the same written words. A
-  resume stands on the suspended frame without the pop-in of an opening, and
-  a suspended screen owes no motion and no read.
+  resume stands on the suspended frame without the pop-in of an opening, for
+  the screen's life, and a suspended screen owes no motion and no read.
 - The machine: the plane's cadence is the active screen's cadence plus the
   loops' cadence, never the sum of the screens behind it. A suspended screen
   owes no wake, no herdr read, no spinner step, and no background commit
@@ -161,8 +195,12 @@ and the per-screen preserved facts.
   frame rig's seam exposes, the runner's command list standing across a
   window longer than the suspended screen's tick period, and the painted
   frame standing across the same window. A resume is proven alive by the
-  runner's list growing again and the frame showing the preserved lines. The
-  rig's owned-surface floor grows with the new stack-behavior suites and
+  runner's list growing again and the frame showing the preserved lines, and
+  the frame the renderer paints after the resumed screen's first re-render,
+  through one frame of its clock and the clock's rest, stands on the settled
+  frame it stood on, so the resume owes no re-pop that a later render would
+  paint. The rig's owned-surface floor grows with the new stack-behavior
+  suites and
   never shrinks.
 - The deepening is complementary with ADR 0149: after both land, the plane's
   paint cadence is a function of the one active screen plus the loops, and

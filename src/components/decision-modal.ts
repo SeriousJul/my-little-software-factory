@@ -31,10 +31,10 @@
  * app below are disabled.
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import { type Dispatch, type SetStateAction, useMemo, useState } from "react";
+import { type Dispatch, type SetStateAction, useMemo } from "react";
 
 import { isHeldCause, type TurnEndCause } from "../turn-log.ts";
-import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
+import type { ControlHandler } from "./control-dispatch.ts";
 import { availabilityFacts, type StandingFacts } from "./controls.ts";
 import { maxScrollOf } from "./geometry.ts";
 import type { MdLine } from "./markdown.ts";
@@ -53,6 +53,12 @@ import {
 	turnLogPane,
 } from "./modal-chrome.ts";
 import { logScreenLines, type PaneScreen } from "./pane-screen.ts";
+import {
+	type ScreenSlot,
+	useSlotDispatch,
+	useSlotFact,
+	useSlotRegionMirror,
+} from "./screen-stack.ts";
 import { bodyPaneFacts, type DecisionRegion, useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
@@ -103,6 +109,14 @@ interface DecisionModalProps {
 	 * same reach as the Queue pause's: required for the same reason.
 	 */
 	onAutoHandoff: () => void;
+	/**
+	 * The stack's slot for this screen (ADR 0150): the key bus holds this
+	 * slot's one stable wrapper while the screen is active, and the slot's
+	 * record preserves the screen's facts while it is suspended.
+	 */
+	slot?: ScreenSlot;
+	/** True on a resume: the box stands at full size, with no re-pop-in. */
+	resuming?: boolean;
 }
 
 /** The modal leaves one cell of margin on every side. */
@@ -197,11 +211,22 @@ export function DecisionModal(props: DecisionModalProps) {
 	// (ADR 0016): one row the log yields to, so the operator reads why the
 	// turn is held before the rows that decide it.
 	const held = props.cause !== null && isHeldCause(props.cause);
-	const bodyFacts = useDecisionBodyFacts(props, frame, held, frame.contentRows);
+	const bodyFacts = useDecisionBodyFacts(props, {
+		frame,
+		held,
+		slot: props.slot,
+	});
 	// The region's selection, its wrap, its auto-scroll, its visible window,
 	// and its range text are the shared region's, beside the field, the
-	// selector row, and the form (ADR 0039 and ADR 0040).
-	const region = useDecisionRegion(props.actions, bodyFacts.layout?.regionVisible ?? 0);
+	// selector row, and the form (ADR 0039 and ADR 0040). A screen that
+	// resumes seeds the region from the row the stack preserved, and the row
+	// under the cursor stands back in the slot's record.
+	const region = useDecisionRegion(
+		props.actions,
+		bodyFacts.layout?.regionVisible ?? 0,
+		(props.slot?.facts.regionAt as number | undefined) ?? 0,
+	);
+	useSlotRegionMirror(props.slot, region.at);
 	// The fact the gate and the bar share: the row under the cursor carries
 	// settings to edit, and this surface can open the panel for them. Close
 	// and Goto decide about the turn that ended, so their rows leave the
@@ -225,7 +250,7 @@ export function DecisionModal(props: DecisionModalProps) {
 		bodyFacts.setBodyScroll,
 	);
 	const { visibleBody, thumbRows } = bodyScrollWindow(bodyFacts);
-	useControlDispatch({
+	useSlotDispatch(props.slot, {
 		facts,
 		active: props.inputActive,
 		onUnavailable: props.onUnavailable,
@@ -237,26 +262,49 @@ export function DecisionModal(props: DecisionModalProps) {
 		}),
 	});
 
-	const modalBody = decisionModalBody(props, {
-		frame,
-		held,
-		region,
-		bodyFacts,
-		visibleBody,
-		thumbRows,
-	});
-
-	return createElement(ModalSurface, {
+	return decisionModalElement(props, {
 		frame,
 		width: terminalWidth,
+		height: terminalHeight,
+		modalBody: decisionModalBody(props, { frame, held, region, bodyFacts, visibleBody, thumbRows }),
+		facts,
+		region,
+	});
+}
+
+/** The modal's one element: the chrome, the body, and the bar's facts. */
+function decisionModalElement(
+	props: DecisionModalProps,
+	{
+		frame,
+		width,
+		height,
+		modalBody,
+		facts,
+		region,
+	}: {
+		frame: ReturnType<typeof modalFrame>;
+		width: number;
+		height: number;
+		modalBody: ReturnType<typeof decisionModalBody>;
+		facts: ReturnType<typeof availabilityFacts>;
+		region: DecisionRegion;
+	},
+) {
+	return createElement(ModalSurface, {
+		frame,
+		width,
 		title: decisionTitle(props.title),
 		// The box the operator sees is the settled one: the chrome's pop owner
 		// steps it from its opening scale to this frame on the shared frame
-		// module's clock (ADR 0149).
-		popsIn: {
-			frameAt: (scale: number) =>
-				modalFrame(terminalWidth, terminalHeight, { margin: MARGIN, scale }),
-		},
+		// module's clock (ADR 0149). A resume stands at full size, with no
+		// re-pop-in (ADR 0150).
+		popsIn:
+			props.resuming === true
+				? undefined
+				: {
+						frameAt: (scale: number) => modalFrame(width, height, { margin: MARGIN, scale }),
+					},
 		body: modalBody,
 		message: props.message,
 		bar: {
@@ -271,10 +319,13 @@ export function DecisionModal(props: DecisionModalProps) {
 /** The body pane's facts: the layout, the body, the scroll's range. */
 function useDecisionBodyFacts(
 	props: DecisionModalProps,
-	frame: ReturnType<typeof modalFrame>,
-	held: boolean,
-	contentRows: number,
+	inputs: {
+		frame: ReturnType<typeof modalFrame>;
+		held: boolean;
+		slot: ScreenSlot | undefined;
+	},
 ): DecisionBodyFacts {
+	const { frame, held, slot } = inputs;
 	const { screen, actions, factLines = [] } = props;
 	// The pane's chrome yields before the log yields rows: padding first,
 	// border second, and only then does the surface stand down to the size
@@ -283,7 +334,6 @@ function useDecisionBodyFacts(
 	// The transition's fact lines stand above the action rows, like the
 	// held-cause row: the rows decide on the facts, so the log yields to
 	// them (ADR 0027).
-	const finalLayout = decisionBodyLayout(contentRows, actions.length, held, factLines.length);
 	const layout = decisionBodyLayout(frame.contentRows, actions.length, held, factLines.length);
 	// An empty turn log states its reason as one row inside the pane, and
 	// the pane keeps its chrome.
@@ -302,7 +352,7 @@ function useDecisionBodyFacts(
 				: logScreenLines(screen, paneInnerWidth),
 		[screen, emptyLog, paneInnerWidth],
 	);
-	const hasScrollbar = finalLayout !== null && fullWidthBody.length > finalLayout.paneRows;
+	const hasScrollbar = layout !== null && fullWidthBody.length > layout.paneRows;
 	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
 	// Wrap once at the settled width the box grows into, so the pop-in clips
 	// the settled body instead of re-wrapping it at an intermediate width
@@ -319,7 +369,9 @@ function useDecisionBodyFacts(
 	// A settled turn ends with its conclusion: open at the bottom, with the
 	// newest line in view. `null` pins the view to the bottom until the
 	// operator scrolls: the bottom's index moves while the box grows in.
-	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
+	// The pin or the offset stands in the stack's slot, so a resume stands on
+	// the view the body was suspended on.
+	const [bodyScroll, setBodyScroll] = useSlotFact<number | null>(slot, "bodyScroll", null);
 	return {
 		layout,
 		emptyLog,

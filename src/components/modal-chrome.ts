@@ -24,7 +24,7 @@ import { Fragment, type ReactElement, useRef } from "react";
 
 import type { TurnEndCause } from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
-import { type ControlCall, type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
+import type { ControlCall, ControlHandler } from "./control-dispatch.ts";
 import {
 	type AvailabilityFacts,
 	availabilityFacts,
@@ -34,6 +34,7 @@ import {
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MdLine } from "./markdown.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
+import { type ScreenSlot, useSlotDispatch } from "./screen-stack.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { useFrameOwner } from "./shared/frame.ts";
 import { controlInk, LAMP_GLYPHS, turnEndCauseLine } from "./shared/presentation.ts";
@@ -795,11 +796,17 @@ export function useActionChromeDispatch(input: {
 	scrollMessage: (direction: 1 | -1) => void;
 	queuePause: () => void;
 	autoHandoff: () => void;
+	/**
+	 * The stack's slot for the screen this surface stands on (ADR 0150). A
+	 * surface rendered outside the stack passes none and subscribes its own
+	 * wrapper the way the shared dispatch always did.
+	 */
+	slot?: ScreenSlot;
 }): AvailabilityFacts {
 	const facts = availabilityFacts(input.mode, input.standing, {
 		actionRowCount: input.actionRows,
 	});
-	useControlDispatch({
+	useSlotDispatch(input.slot, {
 		facts,
 		active: input.active,
 		onUnavailable: input.onUnavailable,

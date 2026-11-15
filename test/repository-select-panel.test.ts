@@ -553,7 +553,10 @@ describe("the repository select panel", () => {
 				// The queue runs in list order: the first marked row opens first.
 				await pressControl(setup, "select-repository", { opens: "Init acme/factory" });
 				// Cancel skips the entry, and the next row's panel stands in its place.
-				await pressControl(setup, "cancel-action", { closes: "Init acme/factory" });
+				// The queue moving to the next row changes the init screen's fact in
+				// place (ADR 0150): the screen keeps its keys, so the swap is proved
+				// on the frame, not on a key release.
+				await pressControl(setup, "cancel-action", { hides: "Init acme/factory" });
 				await waitFor(setup, { shows: "Init acme/billing" });
 				// The drained queue leaves its settled line on the Message line.
 				await pressControl(setup, "cancel-action", {

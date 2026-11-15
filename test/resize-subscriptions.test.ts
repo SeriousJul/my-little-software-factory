@@ -8,6 +8,13 @@
  * component and hands the width down to the chrome and the Action bar it
  * renders. Each test counts the live renderer's listeners, so a nested
  * component that subscribes again fails here (issue #9).
+ *
+ * The screen stack (ADR 0150) sharpens the arithmetic: only the active
+ * screen stands, and a suspended screen unmounts, so it gives back its
+ * subscriptions with its timers. A screen opened over the base frame drops
+ * the count to the screen's own single listener instead of adding to the
+ * base frame's, and a stack of screens stands on the top screen's one
+ * listener, never on the sum of the screens behind it.
  */
 import { describe, expect, test } from "bun:test";
 import {
@@ -74,19 +81,21 @@ describe("the renderer's resize listeners", () => {
 				const base = await settledListeners(setup);
 				expect(base).toBeGreaterThan(0);
 
-				// The Key guide over the base frame: one component, one listener.
+				// The Key guide over the base frame: the suspended frame gives back
+				// its subscriptions, and the guide's tree costs one listener.
 				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
-				expect(await settledListeners(setup)).toBe(base + 1);
+				const oneScreen = await settledListeners(setup);
+				expect(oneScreen).toBeLessThan(base);
+				expect(oneScreen).toBeLessThan(10);
 				await pressControl(setup, "guide-close", { closes: "Key guide" });
 				await settle(setup);
 				expect(await settledListeners(setup)).toBe(base);
 
-				// The override panel borrows the same chrome and bar. The panel
-				// hands off an open Ticket, so the walk moves off the live rows
-				// to the open band first.
+				// The override panel: the suspended frame stands off the bus, and
+				// the panel's tree costs the one listener any screen's tree costs.
 				await toFirstOpenTicket(setup);
 				await pressControl(setup, "override", { opens: "❯ Agent" });
-				expect(await settledListeners(setup)).toBe(base + 1);
+				expect(await settledListeners(setup)).toBe(oneScreen);
 				await pressControl(setup, "cancel", { closes: "❯ Agent" });
 				await settle(setup);
 				expect(await settledListeners(setup)).toBe(base);
@@ -102,15 +111,18 @@ describe("the renderer's resize listeners", () => {
 				await pressControl(setup, "move-list", { via: "k", quiet: true });
 				await frameUntil(setup, "the awaiting Ticket", (f) => markerRowOf(f) === 3);
 				await pressControl(setup, "decide-completion", { opens: "Decision:" });
-				expect(await settledListeners(setup)).toBe(base + 1);
+				expect(await settledListeners(setup)).toBe(oneScreen);
 				await pressControl(setup, "help", { via: "?", opens: "Key guide" });
 				const deepest = await settledListeners(setup);
-				expect(deepest).toBe(base + 2);
+				expect(deepest).toBe(oneScreen);
 				// Node warns at an eleventh listener of one emitter, and the
 				// warning lands in the frame the operator is reading.
 				expect(deepest).toBeLessThan(10);
 
+				// The decision resumes on its own single listener, and the base
+				// frame takes its subscriptions back on its resume.
 				await pressControl(setup, "guide-close", { closes: "Key guide" });
+				expect(await settledListeners(setup)).toBe(oneScreen);
 				await pressControl(setup, "cancel-action", { closes: "Decision:" });
 				await settle(setup);
 				expect(await settledListeners(setup)).toBe(base);

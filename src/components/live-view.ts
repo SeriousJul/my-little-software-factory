@@ -28,10 +28,10 @@
  * its scroll, and its box, and no in-box hint row stands in the box.
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import { type Dispatch, type SetStateAction, useMemo, useState } from "react";
+import { type Dispatch, type SetStateAction, useMemo } from "react";
 import type { Ticket } from "../domain/ticket.ts";
 import { isHeldCause, type TurnEndCause } from "../turn-log.ts";
-import { type ControlHandler, useControlDispatch } from "./control-dispatch.ts";
+import type { ControlHandler } from "./control-dispatch.ts";
 import { availabilityFacts, type StandingFacts } from "./controls.ts";
 import { decisionBodyLayout } from "./decision-modal.ts";
 import { maxScrollOf } from "./geometry.ts";
@@ -53,6 +53,12 @@ import {
 	turnLogPane,
 } from "./modal-chrome.ts";
 import { logScreenLines, type PaneScreen, visibleScreenLines } from "./pane-screen.ts";
+import {
+	type ScreenSlot,
+	useSlotDispatch,
+	useSlotFact,
+	useSlotRegionMirror,
+} from "./screen-stack.ts";
 import { bodyPaneFacts, type DecisionRegion, useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth, widthOf } from "./text.ts";
 import { paint } from "./theme.ts";
@@ -121,6 +127,14 @@ interface LiveViewProps {
 	 * reach as the Queue pause's: required for the same reason.
 	 */
 	onAutoHandoff: () => void;
+	/**
+	 * The stack's slot for this screen (ADR 0150): the key bus holds this
+	 * slot's one stable wrapper while the screen is active, and the slot's
+	 * record preserves the screen's facts while it is suspended.
+	 */
+	slot?: ScreenSlot;
+	/** True on a resume: the box stands at full size, with no re-pop-in. */
+	resuming?: boolean;
 }
 
 /**
@@ -152,9 +166,7 @@ export function LiveView(props: LiveViewProps) {
 	// for the operator flips it in place, without a second pop-in.
 	const decideable = props.body.kind === "turn-log";
 	// The frame is the settled one: the chrome's pop owner grows the box into
-	// it on the shared frame module's clock, and the body is shaped once at
-	// its width, so an intermediate frame clips the settled body instead of
-	// re-wrapping it (ADR 0149).
+	// it on the shared frame module's clock (ADR 0149).
 	const frame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN });
 	// A held turn shows its cause in the region, above the rows it refuses
 	// (ADR 0016): one row the body yields to, so the operator reads why the
@@ -164,14 +176,23 @@ export function LiveView(props: LiveViewProps) {
 	// The regions of the box: the pane's chrome, the body's rows, the
 	// region's visible rows. The layout is decided at the settled size, so
 	// the scrollbar never flickers in and out while the pop-in grows the box.
-	const bodyFacts = useLiveBodyFacts(props, { frame, decideable, held, contentFrame: frame });
+	const bodyFacts = useLiveBodyFacts(props, {
+		frame,
+		decideable,
+		held,
+		slot: props.slot,
+	});
 	// The region's selection, its wrap, its auto-scroll, its visible window,
 	// and its range text are the shared region's, beside the field, the
-	// selector row, and the form (ADR 0039 and ADR 0040).
+	// selector row, and the form (ADR 0039 and ADR 0040). A screen that
+	// resumes seeds the region from the row the stack preserved, and the row
+	// under the cursor stands back in the slot's record.
 	const region = useDecisionRegion(
 		decideable ? props.actions : [],
 		bodyFacts.layout?.regionVisible ?? 0,
+		(props.slot?.facts.regionAt as number | undefined) ?? 0,
 	);
+	useSlotRegionMirror(props.slot, region.at);
 	const editableActionSelected =
 		decideable && props.onEditAction !== undefined && props.actions[region.at]?.editable === true;
 	// The plane action's row holds no settings (ADR 0068): the surface states
@@ -193,7 +214,7 @@ export function LiveView(props: LiveViewProps) {
 		pane: bodyFacts.pane,
 	});
 	const scrollBody = useLiveScroll(bodyFacts);
-	useControlDispatch({
+	useSlotDispatch(props.slot, {
 		facts,
 		active: props.inputActive,
 		onUnavailable: props.onUnavailable,
@@ -211,12 +232,15 @@ export function LiveView(props: LiveViewProps) {
 		// the decision end at one screen with one name (ADR 0040).
 		title: decideable ? decisionTitle(props.title) : liveTitle(props.title),
 		// The box the operator sees is the settled one: the chrome's pop owner
-		// steps it from its opening scale to this frame on the shared frame
-		// module's clock (ADR 0149).
-		popsIn: {
-			frameAt: (scale: number) =>
-				modalFrame(terminalWidth, terminalHeight, { margin: MARGIN, scale }),
-		},
+		// steps it on the shared frame module's clock (ADR 0149); a resume
+		// stands at full size, with no re-pop-in (ADR 0150).
+		popsIn:
+			props.resuming === true
+				? undefined
+				: {
+						frameAt: (scale: number) =>
+							modalFrame(terminalWidth, terminalHeight, { margin: MARGIN, scale }),
+					},
 		body: liveBody,
 		message: props.message,
 		bar: {
@@ -249,12 +273,11 @@ function useLiveBodyFacts(
 		frame: ReturnType<typeof modalFrame>;
 		decideable: boolean;
 		held: boolean;
-		contentFrame: ReturnType<typeof modalFrame>;
+		slot: ScreenSlot | undefined;
 	},
 ): LiveBodyFacts {
-	const { frame, decideable, held, contentFrame } = fields;
+	const { frame, decideable, held, slot } = fields;
 	const regionRows = decideable ? props.actions.length : 0;
-	const finalLayout = decisionBodyLayout(contentFrame.contentRows, regionRows, held);
 	const layout = decisionBodyLayout(frame.contentRows, regionRows, held);
 	// The pane's padding is the one its layout decided, on every side: the
 	// body's width is the box's content minus the pane's border and padding,
@@ -270,7 +293,7 @@ function useLiveBodyFacts(
 				: streamBody(props.body.screen, props.body.note, paneInnerWidth),
 		[props.body, paneInnerWidth],
 	);
-	const hasScrollbar = finalLayout !== null && fullWidthBody.length > finalLayout.paneRows;
+	const hasScrollbar = layout !== null && fullWidthBody.length > layout.paneRows;
 	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
 	// Shape once at the settled width the box grows into, so the pop-in clips
 	// the settled body instead of re-wrapping it at an intermediate width
@@ -286,8 +309,10 @@ function useLiveBodyFacts(
 	const bodyRows = layout === null ? 0 : Math.min(renderedBody.length, layout.paneRows);
 	const maxBodyScroll = maxScrollOf(renderedBody.length, bodyRows);
 	// The newest output is in front: the body opens at its bottom and stays
-	// pinned to it until the operator scrolls.
-	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
+	// pinned to it until the operator scrolls. The pin or the offset stands
+	// in the stack's slot, so a resume stands on the view the body was
+	// suspended on.
+	const [bodyScroll, setBodyScroll] = useSlotFact<number | null>(slot, "bodyScroll", null);
 	const bodyEmpty =
 		props.body.kind === "turn-log"
 			? (props.body.screen.entries?.length ?? 0) === 0

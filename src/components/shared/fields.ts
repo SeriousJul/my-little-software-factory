@@ -108,6 +108,13 @@ export interface FieldHandle {
 	blur(): void;
 	/** Replace the whole text, keeping the caret inside it. */
 	setValue(value: string): void;
+	/**
+	 * The field's editing state: its text, the caret's offset, and the selected
+	 * range (null while the caret stands alone). null while the node is
+	 * unconnected. A screen records this while it is active so the field stands
+	 * on the same state again when the screen resumes (ADR 0150).
+	 */
+	editingState(): FieldEditingState | null;
 }
 
 /** Why a Copy selection action ended the way it did, in operator words. */
@@ -124,6 +131,21 @@ export interface FieldFacts {
 	caret: number;
 	/** The whole selected text, or `""` when nothing is selected. */
 	selection: string;
+}
+
+/**
+ * The field's editing state: its text, the caret's offset, and the selected
+ * range (null while the caret stands alone). A screen records this so a field
+ * it suspended stands on the same text, caret, and selection again when the
+ * screen resumes (ADR 0150).
+ *
+ * What it does not hold: the buffer's undo history. That is the native
+ * buffer's own state, and it does not survive a remount.
+ */
+export interface FieldEditingState {
+	value: string;
+	caret: number;
+	selection: { start: number; end: number } | null;
 }
 
 /** The reason a Copy action says what it says. */
@@ -410,6 +432,16 @@ function useFieldHandle(node: RefObject<FieldNode | null>): FieldHandle {
 				field.cursorOffset = Math.min(value.length, field.cursorOffset);
 				field.requestRender();
 			},
+			editingState: (): FieldEditingState | null => {
+				const field = node.current;
+				if (field === null) return null;
+				const range = field.hasSelection() ? field.getSelection() : null;
+				return {
+					value: field.plainText,
+					caret: field.cursorOffset,
+					selection: range === null ? null : { start: range.start, end: range.end },
+				};
+			},
 		}),
 		[node, renderer],
 	);
@@ -609,6 +641,13 @@ export function TextField(props: TextFieldProps): ReactElement {
 export interface DraftFieldProps extends SharedFieldProps {
 	/** The draft the field starts on. */
 	value: string;
+	/**
+	 * The editing state the screen recorded when this field last suspended
+	 * (ADR 0150): the field stands on the same text, caret, and selection when
+	 * it remounts. A fresh open carries no record, so the field takes its
+	 * opening caret.
+	 */
+	seed?: FieldEditingState | null;
 	/** The rows the field paints; its text scrolls inside them. */
 	height: number;
 	/** Why the field's text is too large to send, in the caller's words. */
@@ -721,6 +760,54 @@ function useDraftValueSync(
 }
 
 /**
+ * Stand the field on the editing state the screen recorded when it suspended
+ * (ADR 0150): the text is the draft prop, and the caret and the selection are
+ * the screen's preserved facts. It runs after the opening-caret effect, so a
+ * resume overrides the caret a fresh field would take.
+ */
+function useFieldSeed(
+	node: RefObject<TextareaRenderable | null>,
+	seed: FieldEditingState | null | undefined,
+): void {
+	const renderer = useRenderer();
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the seed is a mount decision, read from the screen's preserved record
+	useEffect(() => {
+		if (seed === undefined || seed === null) return;
+		const field = node.current;
+		if (field === null) return;
+		const apply = (): void => {
+			// A freshly mounted field stands up as the renderer's active editor on
+			// the renderer's next focus pass; forcing the transfer is what makes
+			// the buffer take a seeded selection, and it is a no-op when the field
+			// already is the active editor.
+			field.focus();
+			const selection = seed.selection;
+			if (selection !== null && selection.end > selection.start) {
+				field.setSelection(selection.start, selection.end);
+			}
+			field.cursorOffset = Math.min(Math.max(0, seed.caret), seed.value.length);
+			field.requestRender();
+		};
+		if (seed.selection === null) {
+			// A plain caret takes at mount; only a selection waits for the renderer's
+			// focus pass to stand the buffer up.
+			apply();
+			return;
+		}
+		// The first frame after the commit is that focus pass, and it stands in the
+		// test renderer alike; the seed takes the field there, once.
+		const onFrame = (): void => {
+			apply();
+			renderer.off("frame", onFrame);
+		};
+		renderer.on("frame", onFrame);
+		return (): void => {
+			renderer.off("frame", onFrame);
+		};
+	}, []);
+}
+
+/**
  * The change a field takes, with the refusal it ends and the fold it applies.
  */
 function useFieldChanged(
@@ -822,6 +909,7 @@ export function DraftField(props: DraftFieldProps): ReactElement {
 		reported,
 	});
 	useDraftValueSync(node, props.value, reported, edited);
+	useFieldSeed(node, props.seed);
 	return createElement(
 		Fragment,
 		{},

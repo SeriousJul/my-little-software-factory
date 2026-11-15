@@ -2,7 +2,6 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { Dispatch, ReactElement, SetStateAction } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { useControlDispatch } from "./control-dispatch.ts";
 import {
 	type AvailabilityFacts,
 	availabilityFacts,
@@ -22,6 +21,7 @@ import {
 	modalFrame,
 	scrollbarRows,
 } from "./modal-chrome.ts";
+import { type ScreenSlot, useSlotDispatch } from "./screen-stack.ts";
 import { controlInk } from "./shared/presentation.ts";
 import { bodyPaneFacts, rangeTextOf } from "./shared/region.ts";
 import { padToWidth, truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
@@ -86,11 +86,18 @@ function useUtilityKeys(
 		 */
 		queuePause?: () => void;
 		autoHandoff?: () => void;
+		/**
+		 * The stack's slot for the overlay's screen (ADR 0150): the key bus
+		 * holds the slot's one stable wrapper while the screen is active, and
+		 * a suspended screen's wrapper is off the bus with it. An overlay
+		 * rendered outside the stack passes none and subscribes its own.
+		 */
+		slot?: ScreenSlot;
 	},
 ): void {
 	const guideScroll = handlers.scroll;
 	const bodyScrollHandler = handlers.scrollBody;
-	useControlDispatch({
+	useSlotDispatch(handlers.slot, {
 		facts,
 		onEmergencyExit: handlers.emergencyExit,
 		handlers: {
@@ -132,6 +139,13 @@ interface KeyGuideProps {
 	 * for the same reason.
 	 */
 	onAutoHandoff: () => void;
+	/**
+	 * The stack's slot for the guide's screen (ADR 0150). The guide's content
+	 * re-derives from the Control catalogue, and its captured mode is the
+	 * stack's preserved fact for it, so the slot holds no screen fact of the
+	 * guide's own.
+	 */
+	slot?: ScreenSlot;
 }
 
 export function KeyGuide({
@@ -142,6 +156,7 @@ export function KeyGuide({
 	onEmergencyExit,
 	onQueuePause,
 	onAutoHandoff,
+	slot,
 }: KeyGuideProps) {
 	const { width, height } = useTerminalDimensions();
 	const mode = facts.mode;
@@ -173,6 +188,7 @@ export function KeyGuide({
 		emergencyExit: onEmergencyExit,
 		queuePause: onQueuePause,
 		autoHandoff: onAutoHandoff,
+		slot,
 	});
 
 	// The compact readout the bar states behind the Scroll hint: the shared
@@ -330,6 +346,13 @@ interface MessageViewProps {
 	 * for the same reason.
 	 */
 	onAutoHandoff: () => void;
+	/**
+	 * The stack's slot for the view's screen (ADR 0150). The history is a fact
+	 * of the plane's shell, and the view's captured mode is the stack's
+	 * preserved fact for it, so the slot holds no screen fact of the view's
+	 * own.
+	 */
+	slot?: ScreenSlot;
 }
 
 export function MessageView({
@@ -341,6 +364,7 @@ export function MessageView({
 	onEmergencyExit,
 	onQueuePause,
 	onAutoHandoff,
+	slot,
 }: MessageViewProps) {
 	const { width, height } = useTerminalDimensions();
 	// The near-fullscreen frame the Decision modal uses: the room the terminal
@@ -378,6 +402,7 @@ export function MessageView({
 		emergencyExit: onEmergencyExit,
 		queuePause: onQueuePause,
 		autoHandoff: onAutoHandoff,
+		slot,
 	});
 
 	const scroll = bodyScroll === null ? maxScroll : Math.min(bodyScroll, maxScroll);
