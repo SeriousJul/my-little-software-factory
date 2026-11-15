@@ -304,8 +304,7 @@ function decisionModalElement(
 			props.resuming === true
 				? undefined
 				: {
-						frameAt: (scale: number) =>
-							modalFrame(width, height, { margin: MARGIN, scale }),
+						frameAt: (scale: number) => modalFrame(width, height, { margin: MARGIN, scale }),
 					},
 		body: modalBody,
 		message: props.message,

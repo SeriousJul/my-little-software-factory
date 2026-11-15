@@ -166,9 +166,7 @@ export function LiveView(props: LiveViewProps) {
 	// for the operator flips it in place, without a second pop-in.
 	const decideable = props.body.kind === "turn-log";
 	// The frame is the settled one: the chrome's pop owner grows the box into
-	// it on the shared frame module's clock, and the body is shaped once at
-	// its width, so an intermediate frame clips the settled body instead of
-	// re-wrapping it (ADR 0149).
+	// it on the shared frame module's clock (ADR 0149).
 	const frame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN });
 	// A held turn shows its cause in the region, above the rows it refuses
 	// (ADR 0016): one row the body yields to, so the operator reads why the
@@ -182,7 +180,6 @@ export function LiveView(props: LiveViewProps) {
 		frame,
 		decideable,
 		held,
-		contentFrame: frame,
 		slot: props.slot,
 	});
 	// The region's selection, its wrap, its auto-scroll, its visible window,
@@ -235,9 +232,8 @@ export function LiveView(props: LiveViewProps) {
 		// the decision end at one screen with one name (ADR 0040).
 		title: decideable ? decisionTitle(props.title) : liveTitle(props.title),
 		// The box the operator sees is the settled one: the chrome's pop owner
-		// steps it from its opening scale to this frame on the shared frame
-		// module's clock (ADR 0149). A resume stands at full size, with no
-		// re-pop-in (ADR 0150).
+		// steps it on the shared frame module's clock (ADR 0149); a resume
+		// stands at full size, with no re-pop-in (ADR 0150).
 		popsIn:
 			props.resuming === true
 				? undefined
@@ -277,13 +273,11 @@ function useLiveBodyFacts(
 		frame: ReturnType<typeof modalFrame>;
 		decideable: boolean;
 		held: boolean;
-		contentFrame: ReturnType<typeof modalFrame>;
 		slot: ScreenSlot | undefined;
 	},
 ): LiveBodyFacts {
-	const { frame, decideable, held, contentFrame, slot } = fields;
+	const { frame, decideable, held, slot } = fields;
 	const regionRows = decideable ? props.actions.length : 0;
-	const finalLayout = decisionBodyLayout(contentFrame.contentRows, regionRows, held);
 	const layout = decisionBodyLayout(frame.contentRows, regionRows, held);
 	// The pane's padding is the one its layout decided, on every side: the
 	// body's width is the box's content minus the pane's border and padding,
@@ -299,7 +293,7 @@ function useLiveBodyFacts(
 				: streamBody(props.body.screen, props.body.note, paneInnerWidth),
 		[props.body, paneInnerWidth],
 	);
-	const hasScrollbar = finalLayout !== null && fullWidthBody.length > finalLayout.paneRows;
+	const hasScrollbar = layout !== null && fullWidthBody.length > layout.paneRows;
 	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
 	// Shape once at the settled width the box grows into, so the pop-in clips
 	// the settled body instead of re-wrapping it at an intermediate width
