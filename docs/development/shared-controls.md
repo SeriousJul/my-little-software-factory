@@ -153,8 +153,11 @@ Essential actions must remain available with ordinary terminal key sequences,
 without an enhanced keyboard protocol.
 
 A modal keeps focus inside itself and restores the previous focus when closed.
-Opening and closing Help must preserve the draft, caret, selection, and undo
-history. Input must not reach a field or screen behind an active modal.
+Opening and closing Help must preserve the draft, the caret, and the
+selection. A screen that suspends under the Help guide unmounts, and the
+renderer's buffer exposes only its undo and redo operations, so the field's
+undo history restarts on resume (ADR 0150). Input must not reach a field or
+screen behind an active modal.
 
 ## Auto copy
 

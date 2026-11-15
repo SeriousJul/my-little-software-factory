@@ -26,7 +26,7 @@
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
 	AGENT_HOSTS,
 	type AgentHost,
@@ -187,8 +187,11 @@ export function ConsultationLauncher(props: ConsultationLauncherProps) {
 	});
 	// The stack's record is the one place the form stands while the screen is
 	// suspended: the draft, the slot values, the slot under the cursor, and
-	// the field's editing state.
-	useEffect(() => {
+	// the field's editing state. The mirror is a layout effect, per the stack
+	// module's contract: the screen unmounts in the next commit after its
+	// last paint, and a passive effect can still be owed at that commit, so
+	// the facts the paint stood on stand in the record the resume seeds from.
+	useLayoutEffect(() => {
 		const slot = props.slot;
 		if (slot === undefined) return;
 		slot.facts.draft = form.formOf();

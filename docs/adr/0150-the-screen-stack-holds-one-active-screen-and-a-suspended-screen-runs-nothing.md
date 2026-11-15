@@ -106,6 +106,12 @@ which is never suspended.
   and the message history, stand in the shell through every transition, so a
   screen resumed after a long suspend shows the factory's current state.
 
+- The field's undo history is not a preserved fact: the renderer's buffer
+  exposes only its undo and redo operations, and no history a resume could
+  reseed. A field whose screen suspends under the guide resumes its draft,
+  its caret, and its selection, and its undo history restarts. The shared
+  standard's rule for opening and closing Help states the same.
+
 - Stale resume: a screen that records the work cycle it stands on, the Live
   view and the decision modal, is checked against the store before it stands
   or resumes. The ticket moved to the next cycle by a confirm on the

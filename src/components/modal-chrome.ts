@@ -462,21 +462,6 @@ let modalSurfaceSerial = 0;
  * `lastPadding` is the padding the last paint set: the box's padding has no
  * reader, so the paint keeps the last value it wrote and hands it back.
  */
-/**
- * The pop-in's paint on one tick: the box's border title, its size, its
- * padding, its fade at the tick the module's clock reached, and the scale
- * the box's size grows on. The module is the box's one writer (ADR 0149), so
- * the paint guards each cell it does not change: a cell the last paint
- * already set stands, and the render is owed only when a cell moves.
- *
- * `fade` is the tick's fact, the box's opacity on the tick the box grows;
- * `scale` is the size the box grows to on it: the fade climbs the pop's full
- * budget, the size starts at the opening scale and grows to one. Both climb
- * to the box's settled values, which the tree paints when the owner rests.
- *
- * `lastPadding` is the padding the last paint set: the box's padding has no
- * reader, so the paint keeps the last value it wrote and hands it back.
- */
 function paintPopBox(fields: {
 	box: BoxRenderable;
 	frameAt: (scale: number) => ModalFrame;

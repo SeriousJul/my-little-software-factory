@@ -219,7 +219,11 @@ export function panelScreen(panel: Panel | null): ScreenId | null {
 		case "repository-init":
 			return "repository-init";
 	}
-	return null;
+	// The switch covers every panel kind. This check keeps a future kind from
+	// escaping the stack unmanaged: rendered, but its timers and keys
+	// unmanaged.
+	const unmanaged: never = panel;
+	throw new Error(`the stack manages no screen for the panel ${unmanaged}`);
 }
 
 /**

@@ -25,7 +25,7 @@
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { InitableRepository } from "../repository-list.ts";
 import type { ControlHandler } from "./control-dispatch.ts";
@@ -192,7 +192,11 @@ function repositorySelectFacts(
 
 /**
  * The stack's record is the one place the panel's marks, its search, and its
- * cursor stand while the screen is suspended (ADR 0150).
+ * cursor stand while the screen is suspended (ADR 0150). The mirror is a
+ * layout effect, per the stack module's contract: a suspended screen
+ * unmounts in the next commit after its last paint, and a passive effect can
+ * still be owed at that commit, so the facts the paint stood on stand in the
+ * record the resume seeds from.
  */
 function useRepositorySelectSlotMirror(
 	slot: ScreenSlot | undefined,
@@ -203,7 +207,7 @@ function useRepositorySelectSlotMirror(
 	},
 ) {
 	const { pending, query, region } = fields;
-	useEffect(() => {
+	useLayoutEffect(() => {
 		if (slot === undefined) return;
 		slot.facts.pending = Array.from(pending);
 		slot.facts.query = query;

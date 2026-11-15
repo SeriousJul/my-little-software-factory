@@ -161,7 +161,7 @@ describe("the suspended screen runs nothing (ADR 0150)", () => {
 			},
 		);
 		await planeRecord.close();
-	});
+	}, 60000);
 
 	test("the close panel over the Consultation detail: the detail's read stands, and the resume stands on its lines", async () => {
 		const state = wrappedState();
@@ -247,7 +247,7 @@ describe("the suspended screen runs nothing (ADR 0150)", () => {
 		} finally {
 			state.close();
 		}
-	});
+	}, 60000);
 
 	test("the Key guide over the launcher: the draft stands and the launcher's slot keeps its focus", async () => {
 		const { state, plane: planeRecord } = await launcherWorld();

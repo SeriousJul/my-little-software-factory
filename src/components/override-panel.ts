@@ -86,7 +86,14 @@
  */
 
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import { type ReactElement, type RefObject, useEffect, useRef, useState } from "react";
+import {
+	type ReactElement,
+	type RefObject,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import type { AgentHostResolution } from "../agent-host.ts";
 import { AGENT_HOSTS, agentHostReachable, agentHostUnreachableLine } from "../agent-host.ts";
 import type { AgentTypeConfig } from "../config.ts";
@@ -459,6 +466,10 @@ function useOverrideFormSlots(allRows: PanelRow[], slot: ScreenSlot | undefined)
  * The stack's record is the one place the panel's form stands while the
  * screen is suspended (ADR 0150): the values under the rows, the rows the
  * operator touched, the row under the cursor, and the Model search it held.
+ * The mirror is a layout effect, per the stack module's contract: a
+ * suspended screen unmounts in the next commit after its last paint, and a
+ * passive effect can still be owed at that commit, so the facts the paint
+ * stood on stand in the record the resume seeds from.
  */
 function useOverrideSlotMirror(
 	slot: ScreenSlot | undefined,
@@ -469,7 +480,7 @@ function useOverrideSlotMirror(
 	},
 ) {
 	const { choiceState, focus, fieldRefs } = fields;
-	useEffect(() => {
+	useLayoutEffect(() => {
 		if (slot === undefined) return;
 		slot.facts.choice = { ...choiceState.choiceRef.current };
 		slot.facts.touched = choiceState.touched();
