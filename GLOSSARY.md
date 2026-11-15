@@ -251,10 +251,25 @@ The open pull request that does a ticket's work: the pull request that closes th
 The plane derives it from source facts on every refresh and never stores it. An `open` ticket that has one leaves the ticket list while it stays open (ADR 0042). The rule reads only the rows the sources fetched: the default Pull request source fetches no unlabeled draft, so the draft a failed Pull request open leaves standing on the factory branch covers nothing (ADR 0076).
 _Avoid_: linked issue, dependent PR, parent ticket, child PR
 
+**Ticket's pull request link**:
+The cross-cutting fact a scoped ticket read carries: the open pull requests that fix the ticket, and the listed pull request the ticket opened, or its absence.
+The ticket's own row cannot answer it: a pull request that rests the ticket is another ticket, and the fire's position stands on the identity of a listed pull request. The source fact aggregate answers the link's rows for the one identity, and the ticket work cycle composes them through the domain's fix rule. The link's rows are the pull request rows the ticket's repositories list: the rule's closing-reference half answers in any watched repository, so a pull request on another repository that closes the ticket by reference withholds the ticket from the list while it stands off the link, and the two reads split in that world (ADR 0151).
+_Avoid_: PR link, linked pull request, pull request association
+
 **Work cycle**:
 One passage of a ticket from `open` through the factory to cycle close.
 A cycle can hold several handoffs. Close or abandon ends the cycle and returns the ticket to `open` with an incremented cycle number. A cycle closed while its Agent still works leaves no Completion trace, and the cycle-end gates read that absence as a cycle end that holds nothing (ADR 0031).
 _Avoid_: ticket generation, run
+
+**Scoped ticket read**:
+The ticket work cycle aggregate's read for one ticket identity: the ticket's own row, or the fact that no row stands, beside the ticket's pull request link.
+The read answers from targeted reads on the one identity, in a constant number of statements that does not grow with the record's size, and it answers the same row value the full projection makes for the identity, before the list rule withholds it (ADR 0151). The per-ticket name, the claim, the cancellation, the merge, and the fire read it. The operator's ticket list keeps the full projection, because its rule is cross-ticket (ADR 0042).
+_Avoid_: ticket lookup, partial projection, ticket fetch
+
+**Ticket's row**:
+The ticket value the full projection makes for one identity: the title, the state, the memberships, the repository, the handoff, and the row's counts and facts.
+The row stands before the list rule withholds a covered ticket, and a ticket the sources stopped listing answers as no row. The scoped ticket read answers the same value from the identity's own rows, so a scoped read and a projection row never name the ticket apart (ADR 0151).
+_Avoid_: ticket entry, projection row
 
 **Ticket state**:
 The position of a ticket in the factory: `open`, `handed-off`, `running`, `awaiting`.

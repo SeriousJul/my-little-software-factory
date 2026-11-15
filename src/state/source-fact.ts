@@ -10,7 +10,8 @@
  */
 
 import type { SourceMembership, TicketState } from "../domain/ticket.ts";
-import { inFlightState } from "../domain/ticket.ts";
+import { headBranchOf, inFlightState } from "../domain/ticket.ts";
+import { branchNameFor } from "../naming.ts";
 import type { FetchOutcome } from "../ticket-source.ts";
 import { identityChunks, placeholders } from "./batch.ts";
 import type { StateGraph } from "./graph.ts";
@@ -65,6 +66,24 @@ export interface SourceFactAggregate {
 		sourceName: string,
 		muted: boolean,
 	): { ok: true; removed: number } | { ok: false; reason: string };
+	/**
+	 * The pull request link facts of one ticket (issue #428, ADR 0151), beside
+	 * the ticket's own memberships: the listed pull request rows in the
+	 * ticket's repositories that stand `open` - the candidates the domain's fix
+	 * rule composes into the ticket's fixing pull requests - and the identity
+	 * of the listed pull request the ticket opened, found by the repository
+	 * identity and the factory head branch the ticket's own branch statement
+	 * gives. The operation queries pull request rows, not every ticket row, so
+	 * the link costs a constant number of statements whatever the record
+	 * holds; the ticket work cycle composes the rows into the link it answers.
+	 */
+	openPullRequestLink(
+		identity: string,
+		state: TicketState,
+	): {
+		pullRequestRows: readonly StoredMembership[];
+		opened: string | null;
+	};
 }
 
 function membershipFromRow(row: MembershipRow): StoredMembership {
@@ -409,5 +428,85 @@ export class SourceFactModule implements SourceFactAggregate {
 			}
 		}
 		return titles;
+	}
+	/**
+	 * The pull request link facts of one ticket (issue #428, ADR 0151), in
+	 * three statements: the ticket's own membership rows, the listed pull
+	 * request rows in the ticket's repositories, and the same read without the
+	 * open restriction, which the factory head branch lookup walks.
+	 *
+	 * The ticket's own rows keep the projection's rule for the state they
+	 * stand in: a resting ticket keeps its active rows, a ticket in flight or
+	 * awaiting keeps the rows a source dropped. The pull request rows it
+	 * answers are the rows the ticket's repositories list, restricted to pull
+	 * request rows, so the link costs the ticket's repositories and not the
+	 * record's ticket count.
+	 */
+	openPullRequestLink(
+		identity: string,
+		state: TicketState,
+	): {
+		pullRequestRows: readonly StoredMembership[];
+		opened: string | null;
+	} {
+		const keepsInactive = inFlightState(state) || state === "awaiting";
+		const rows = (
+			this.db
+				.prepare(
+					`SELECT m.*, h.health, h.muted, h.muted_at FROM memberships m JOIN source_health h ON h.source_name = m.source_name WHERE m.ticket_identity = ?`,
+				)
+				.all(identity) as unknown as MembershipRow[]
+		).filter((row) => keepsInactive || row.active === 1);
+		const newest = [...rows].sort(
+			(a, b) =>
+				b.external_updated_at.localeCompare(a.external_updated_at) ||
+				a.source_name.localeCompare(b.source_name),
+		)[0];
+		if (newest === undefined) return { pullRequestRows: [], opened: null };
+		// Every repository the ticket's rows list in: the fix rule's closing
+		// reference half answers per repository, and its head branch half
+		// answers on the newest row's repository.
+		const repositories = [...new Set(rows.map((row) => row.repository_identity))];
+		const pullRequestRows = (
+			this.db
+				.prepare(
+					`SELECT m.*, h.health, h.muted, h.muted_at FROM memberships m JOIN source_health h ON h.source_name = m.source_name WHERE m.source_kind = 'github-pull-request' AND m.active = 1 AND m.source_state = 'open' AND m.repository_identity IN (${placeholders(repositories.length)})`,
+				)
+				.all(...repositories) as unknown as MembershipRow[]
+		).map(membershipFromRow);
+		// The listed pull request the ticket opened: the newest row of each
+		// listed pull request in the ticket's repositories, on the newest row's
+		// repository, read by the factory head branch the ticket's own branch
+		// statement gives. The open restriction stands off: the position the
+		// fire lands on is the listed pull request, whatever state the source
+		// answers it in.
+		const listed = this.db
+			.prepare(
+				`SELECT m.*, h.health, h.muted, h.muted_at FROM memberships m JOIN source_health h ON h.source_name = m.source_name WHERE m.source_kind = 'github-pull-request' AND m.active = 1 AND m.repository_identity IN (${placeholders(repositories.length)})`,
+			)
+			.all(...repositories) as unknown as MembershipRow[];
+		const branch = branchNameFor({ externalKey: newest.external_key, title: newest.title });
+		const byPullRequest = new Map<string, MembershipRow[]>();
+		for (const row of listed) {
+			const held = byPullRequest.get(row.ticket_identity);
+			if (held === undefined) byPullRequest.set(row.ticket_identity, [row]);
+			else held.push(row);
+		}
+		let opened: string | null = null;
+		for (const newestRows of byPullRequest.values()) {
+			const row = newestRows.sort(
+				(a, b) =>
+					b.external_updated_at.localeCompare(a.external_updated_at) ||
+					a.source_name.localeCompare(b.source_name),
+			)[0];
+			if (
+				row.repository_identity !== newest.repository_identity ||
+				headBranchOf(jsonStringRecord(row.attributes_json)) !== branch
+			)
+				continue;
+			opened = row.ticket_identity;
+			break;
+		}
+		return { pullRequestRows, opened };
 	}
 }

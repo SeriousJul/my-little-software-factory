@@ -769,11 +769,16 @@ export function fixingPullRequests(tickets: readonly Ticket[], ticket: Ticket): 
 
 /**
  * The fixing pull request the machine acts on (ADR 0042): the newest
- * non-draft among the ticket's open fixing pull requests. Null when the
- * ticket has none, or only draft ones.
+ * non-draft among the ticket's fixing pull requests. Null when the ticket
+ * has none, or only draft ones.
+ *
+ * The input is the ticket's fixing pull requests, whatever read carried
+ * them: the full array the list rule walks, or the scoped read's link for
+ * the one identity the action acts on. The judgment is the rule's own
+ * either way (ADR 0151).
  */
-export function findFixingPullRequest(tickets: readonly Ticket[], ticket: Ticket): Ticket | null {
-	const candidates = fixingPullRequests(tickets, ticket).filter((candidate) => !isDraft(candidate));
+export function findFixingPullRequest(fixing: readonly Ticket[]): Ticket | null {
+	const candidates = fixing.filter((candidate) => !isDraft(candidate));
 	if (candidates.length === 0) return null;
 	return candidates.sort(
 		(a, b) =>
@@ -783,19 +788,20 @@ export function findFixingPullRequest(tickets: readonly Ticket[], ticket: Ticket
 }
 
 /**
- * The pull request a merge works (issue #297, ADR 0109): the position's own pull
- * request when the position is one, and its fixing pull request when the
- * position is the ticket that pull request fixes. Null when the position has
- * none to aim at.
+ * The pull request a merge works (issue #297, ADR 0109, ADR 0151): the
+ * position's own pull request when the position is one, and its fixing pull
+ * request when the position is the ticket that pull request fixes. Null when
+ * the position has none to aim at.
  *
- * The merge run aims with this, and the Shared checkout hold names the
- * Repository of the pull request it answers with, so the run and the hold
- * resolve one Repository per merge and cannot drift apart.
+ * The input is the position's fixing pull requests, whatever read carried
+ * them: the full array the list rule walks, or the scoped read's link for
+ * the one identity the merge acts on. The merge run aims with this, and the
+ * Shared checkout hold names the Repository of the pull request it answers
+ * with, so the run and the hold resolve one Repository per merge and cannot
+ * drift apart.
  */
-export function mergeTargetPullRequest(tickets: readonly Ticket[], ticket: Ticket): Ticket | null {
-	return ticket.sourceKind === "github-pull-request"
-		? ticket
-		: findFixingPullRequest(tickets, ticket);
+export function mergeTargetPullRequest(ticket: Ticket, fixing: readonly Ticket[]): Ticket | null {
+	return ticket.sourceKind === "github-pull-request" ? ticket : findFixingPullRequest(fixing);
 }
 
 /**
@@ -804,9 +810,13 @@ export function mergeTargetPullRequest(tickets: readonly Ticket[], ticket: Ticke
  * rule withholds a covered ticket's row, and a draft fixing pull request
  * counts. The in-flight states are never covered: live work stays reachable
  * for its Live view, its Close, and its decision.
+ *
+ * The input is the ticket's fixing pull requests, whatever read carried
+ * them: the full array the list rule walks, or the scoped read's link for
+ * the one identity the action acts on (ADR 0151).
  */
-export function isCoveredByFixingPullRequest(tickets: readonly Ticket[], ticket: Ticket): boolean {
-	return ticket.state === "open" && fixingPullRequests(tickets, ticket).length > 0;
+export function isCoveredByFixingPullRequest(ticket: Ticket, fixing: readonly Ticket[]): boolean {
+	return ticket.state === "open" && fixing.length > 0;
 }
 
 /** The request one transition fire needs. */
@@ -843,19 +853,19 @@ export async function fireTransition(
 	// projection read below is a closed database. The check and the read are
 	// one synchronous step, so a stop between them cannot land.
 	if (request.stopped?.() === true) return null;
-	// The fire reads the projection before the list rule (ADR 0042): the rule
-	// withholds a covered ticket's row from the operator's list, and the
-	// machine's fire must still reach the ticket it acts on.
-	const tickets = request.state.ticketWorkCycle.projectedTickets(
+	// The fire reads the ticket's own row and its pull request link through the
+	// scoped read, before the list rule (ADR 0042, ADR 0151).
+	const scoped = request.state.ticketWorkCycle.ticketOf(
+		request.ticketIdentity,
 		request.config.workflowStates,
 		request.config.defaultTaskType,
 	);
-	const ticket = tickets.find((item) => item.identity === request.ticketIdentity);
-	if (ticket === undefined) return null;
+	const ticket = scoped.ticket;
+	if (ticket === null) return null;
 	const { pullRequest, emptyOwnPullRequest, opensPullRequest } = await resolveFirePullRequest(
 		request,
-		tickets,
 		ticket,
+		scoped.pullRequestLink.fixing,
 	);
 	// The review verdict is the pull request's own post, the place the review
 	// template names for the score: a comment or a review body. It is read
@@ -905,10 +915,7 @@ export async function fireTransition(
 	const surface = pullRequest ?? ticket;
 	const surfaceWrite = pullRequest !== null ? outcome.pullRequestWrite : outcome.ticketWrite;
 	const postLabels = postWriteLabels(surface.labels, surfaceWrite);
-	const pseudo: SourceMembership = {
-		...newestMembershipOf(surface),
-		labels: postLabels,
-	};
+	const pseudo: SourceMembership = { ...newestMembershipOf(surface), labels: postLabels };
 	// The new position: the first state whose match holds on the surface's
 	// post-write labels. A parking state offers no task: the plane does
 	// nothing on it, so the position offers no handoff. A missing fixing
@@ -925,21 +932,21 @@ export async function fireTransition(
 }
 
 /**
- * The pull request the fire acts on: the projection's fixing pull request,
- * or - for a task type that opens a pull request - the ticket's own draft
- * through the direct head-branch read, the work test before the publish
- * (ADR 0076).
+ * The pull request the fire acts on: the ticket's fixing pull request from
+ * the read's link, or - for a task type that opens a pull request - the
+ * ticket's own draft through the direct head-branch read, the work test
+ * before the publish (ADR 0076).
  */
 async function resolveFirePullRequest(
 	request: FireTransitionRequest,
-	tickets: readonly Ticket[],
 	ticket: Ticket,
+	fixing: readonly Ticket[],
 ): Promise<{
 	pullRequest: Ticket | null;
 	emptyOwnPullRequest: boolean;
 	opensPullRequest: boolean;
 }> {
-	let pullRequest = mergeTargetPullRequest(tickets, ticket);
+	let pullRequest = mergeTargetPullRequest(ticket, fixing);
 	// The pull request publish (ADR 0076): a completed turn of a task type
 	// that opens a pull request reaches the ticket's own draft through the
 	// direct head-branch read, because a draft the machine has not labeled
@@ -1170,22 +1177,23 @@ async function deriveFirePosition(
 
 /**
  * The identity the source gives the pull request the fire's direct read
- * synthesized (ADR 0076).
+ * synthesized (ADR 0076, ADR 0151).
  *
  * The direct head-branch read builds the pull request's identity from its
  * own record - a form the Stub source happens to answer, but the source a
  * real host runs answers its own global id. The consumers that look the
- * position up in the projection - the auto top-up's walk, the Decision
- * modal's route and merge rows - read the source's id. The publish's ready
- * mark made the pull request listable, and the fire's refresh lands it, so
- * the identity the read gave resolves to the identity the source gives: the
- * pull request the projection lists on the same repository, read by the head
- * branch the read carried. Null when the fire read its pull request from the
- * projection itself - a task type that opens no pull request, or a position
- * on the ticket - and the position keeps the identity it already carries. Null
- * also when the projection lists no such pull request - a source that still
- * withholds it - or a stop closed the state behind the read: the position
- * keeps the identity the read gave, and the consumers read it as they read it.
+ * position up - the auto top-up's walk, the Decision modal's route and
+ * merge rows - read the source's id. The publish's ready mark made the
+ * pull request listable, and the fire's refresh lands it, so the identity
+ * the read gave resolves to the identity the source gives: the listed pull
+ * request the ticket opened, which the ticket's own scoped read answers by
+ * the repository identity and the factory head branch. Null when the fire
+ * read its pull request from the projection itself - a task type that opens
+ * no pull request, or a position on the ticket - and the position keeps the
+ * identity it already carries. Null also when the read lists no such pull
+ * request - a source that still withholds it - or a stop closed the state
+ * behind the read: the position keeps the identity the read gave, and the
+ * consumers read it as they read it.
  */
 async function sourceIdentityOfOwnPullRequest(
 	request: FireTransitionRequest,
@@ -1194,23 +1202,17 @@ async function sourceIdentityOfOwnPullRequest(
 ): Promise<string | null> {
 	if (!opensPullRequest || pullRequest === null) return null;
 	if (request.stopped?.() === true) return null;
-	const headBranch = headBranchOf(pullRequest.memberships[0]?.attributes ?? {});
-	if (headBranch === null) return null;
 	// The refresh the position waits on: it lists the pull request the
 	// publish made ready, the way the fire's first refresh listed the ticket.
 	await request.refresh?.();
 	if (request.stopped?.() === true) return null;
-	const tickets = request.state.ticketWorkCycle.projectedTickets(
+	const scoped = request.state.ticketWorkCycle.ticketOf(
+		request.ticketIdentity,
 		request.config.workflowStates,
 		request.config.defaultTaskType,
 	);
-	const listed = tickets.find(
-		(item) =>
-			item.sourceKind === "github-pull-request" &&
-			item.repositoryRef.identity === pullRequest.repositoryRef.identity &&
-			headBranchOf(item.memberships[0]?.attributes ?? {}) === headBranch,
-	);
-	return listed === undefined ? null : listed.identity;
+	if (scoped.ticket === null) return null;
+	return scoped.pullRequestLink.opened;
 }
 
 /** The request the plane action's outcome fire needs (ADR 0068). */
@@ -1413,8 +1415,8 @@ async function refireTargetStands(
 	}
 	// The machine acts on the newest non-draft open pull request that
 	// fixes the ticket: without one standing now, the skip stands as
-	// recorded.
-	return findFixingPullRequest(tickets, ticket) !== null;
+	// recorded. The sweep's own read carries the full array it walks.
+	return findFixingPullRequest(fixingPullRequests(tickets, ticket)) !== null;
 }
 
 /**

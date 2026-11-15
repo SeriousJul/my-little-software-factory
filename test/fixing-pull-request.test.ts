@@ -17,7 +17,7 @@ import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket, IssueReference } from "../src/domain/ticket.ts";
 import { withHeadBranch, withIssueReferences } from "../src/domain/ticket.ts";
 
-import { isCoveredByFixingPullRequest } from "../src/workflow.ts";
+import { fixingPullRequests, isCoveredByFixingPullRequest } from "../src/workflow.ts";
 import { frameUntil, HEIGHT, rowsOf, WIDTH, withApp } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { DEFAULT_TICKET_TITLE, fetchSuccess, issueTicket } from "./fact-fixtures.ts";
@@ -146,7 +146,20 @@ describe("the list rule", () => {
 		const projected = state.ticketWorkCycle.projectedTickets([], "implement");
 		const item = projected.find((ticket) => ticket.identity === securityIdentity);
 		if (item === undefined) throw new Error("the security item is missing from the projection");
-		expect(isCoveredByFixingPullRequest(projected, item)).toBe(true);
+		expect(isCoveredByFixingPullRequest(item, fixingPullRequests(projected, item))).toBe(true);
+		// The scoped read's link answers what the full-array rule answered
+		// (issue #428, ADR 0151): the open pull requests that fix the ticket, and
+		// the absence of a pull request the ticket opened.
+		const read = state.ticketWorkCycle.ticketOf(securityIdentity, [], "implement");
+		if (read.ticket === null)
+			throw new Error("the scoped read answers no row for the security item");
+		expect(read.pullRequestLink.fixing.map((ticket) => ticket.identity)).toEqual(
+			fixingPullRequests(projected, item).map((ticket) => ticket.identity),
+		);
+		expect(isCoveredByFixingPullRequest(read.ticket, read.pullRequestLink.fixing)).toBe(true);
+		// The pull request's head branch is the security item's own factory
+		// head branch, so the link names it as the pull request the item opened.
+		expect(read.pullRequestLink.opened).toBe(securityPullIdentity);
 		const visible = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(visible.map((ticket) => ticket.identity)).toEqual([securityPullIdentity]);
 		state.close();
@@ -188,7 +201,14 @@ describe("the list rule", () => {
 		const projected = state.ticketWorkCycle.projectedTickets([], "implement");
 		const item = projected.find((ticket) => ticket.identity === issueIdentity);
 		if (item === undefined) throw new Error("the ticket is missing from the projection");
-		expect(isCoveredByFixingPullRequest(projected, item)).toBe(false);
+		expect(isCoveredByFixingPullRequest(item, fixingPullRequests(projected, item))).toBe(false);
+		// The scoped read's link answers the rule on its narrowed input: no pull
+		// request stands for the branch, so the link holds no fixing pull request
+		// and no opened identity (issue #428, ADR 0151).
+		const read = state.ticketWorkCycle.ticketOf(issueIdentity, [], "implement");
+		if (read.ticket === null) throw new Error("the scoped read answers no row for the ticket");
+		expect(read.pullRequestLink.fixing).toEqual([]);
+		expect(read.pullRequestLink.opened).toBeNull();
 		const visible = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(visible.map((ticket) => ticket.identity)).toEqual([issueIdentity]);
 		state.close();
@@ -215,7 +235,16 @@ describe("the list rule", () => {
 		const projected = state.ticketWorkCycle.projectedTickets([], "implement");
 		const item = projected.find((ticket) => ticket.identity === issueIdentity);
 		if (item === undefined) throw new Error("the ticket is missing from the projection");
-		expect(isCoveredByFixingPullRequest(projected, item)).toBe(true);
+		expect(isCoveredByFixingPullRequest(item, fixingPullRequests(projected, item))).toBe(true);
+		// The draft counts toward the link beside the fixing row it holds
+		// (issue #428, ADR 0151).
+		const read = state.ticketWorkCycle.ticketOf(issueIdentity, [], "implement");
+		if (read.ticket === null) throw new Error("the scoped read answers no row for the ticket");
+		expect(read.pullRequestLink.fixing.map((ticket) => ticket.identity)).toEqual([pullIdentity]);
+		// The draft's head branch carries the ticket's branch prefix, not the
+		// ticket's own factory head branch, so the link holds it as a fixing
+		// row and not as the pull request the ticket opened.
+		expect(read.pullRequestLink.opened).toBeNull();
 		const visible = state.ticketWorkCycle.ticketListViews([], "implement").rows;
 		expect(visible.map((ticket) => ticket.identity)).toEqual([pullIdentity]);
 		state.close();

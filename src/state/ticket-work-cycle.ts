@@ -38,6 +38,7 @@ import { matchState, taskTypeOfMatch } from "../task-selection.ts";
 import type { TurnEndCause, TurnLogEntry } from "../turn-log.ts";
 import {
 	EMPTY_PULL_REQUEST_SKIP,
+	fixingPullRequests,
 	isCoveredByFixingPullRequest,
 	NO_LINKED_PULL_REQUEST_SKIP,
 } from "../workflow.ts";
@@ -138,6 +139,41 @@ export interface TicketProjection {
 }
 
 /**
+ * The pull request link of the ticket a scoped read answers (ADR 0151).
+ *
+ * `fixing` are the open pull requests that fix the ticket - the rows the
+ * domain's fix rule names on the linked rows - and `opened` is the identity
+ * of the listed pull request the ticket opened, or its absence. The link is
+ * the one cross-cutting fact the ticket's own row cannot answer: a ticket
+ * rests behind pull requests that are other tickets, and the fire's position
+ * stands on the identity of a listed pull request that is another row.
+ */
+export interface ScopedTicketPullRequestLink {
+	/** The open pull requests that fix the ticket, the rows the fix rule names. */
+	fixing: Ticket[];
+	/** The identity of the listed pull request the ticket opened, or its absence. */
+	opened: string | null;
+}
+
+/**
+ * The value the ticket work cycle's scoped ticket read answers (issue #428,
+ * ADR 0151).
+ *
+ * `ticket` is the ticket's own row - the same ticket value the full
+ * projection would make for that identity, before the list rule withholds it
+ * - or the fact that no row stands for the identity. The read answers from
+ * targeted reads on that one identity, so it costs a constant number of
+ * statements that does not grow with the size of the record: a per-ticket
+ * action pays for the ticket it acts on, not for the record it lives in.
+ */
+export interface ScopedTicketRead {
+	/** The ticket's own row, the value the full projection makes for it. */
+	ticket: Ticket | null;
+	/** The ticket's pull request link, read with the row. */
+	pullRequestLink: ScopedTicketPullRequestLink;
+}
+
+/**
  * The read value over rows the aggregate just read.
  *
  * Private to this module: the only way to hold a projection is to ask the
@@ -159,7 +195,9 @@ export function listTicketViews(
 			ticketListRank(left) - ticketListRank(right) ||
 			left.identity.localeCompare(right.identity),
 	);
-	const listed = ordered.filter((ticket) => !isCoveredByFixingPullRequest(projection, ticket));
+	const listed = ordered.filter(
+		(ticket) => !isCoveredByFixingPullRequest(ticket, fixingPullRequests(projection, ticket)),
+	);
 	// The pile is every row the ticket flag stands on - the ledger of what the
 	// operator put away ticket by ticket, including a Ticket the list shows
 	// again while its work is live or its decision stays owed, and one the
@@ -198,6 +236,21 @@ export interface TicketWorkCycleAggregate {
 	 * already read the pile hands its own value down.
 	 */
 	ticketProjection(states: readonly WorkflowState[], fallbackTaskType: string): TicketProjection;
+	/**
+	 * The scoped ticket read (issue #428, ADR 0151): the ticket's own row, the
+	 * same value the full projection makes for that identity before the list
+	 * rule withholds it, or the fact that no row stands, beside the ticket's
+	 * pull request link. The read answers from targeted reads on the one
+	 * identity, so it costs a constant number of statements whatever the
+	 * record holds, and every per-ticket action - a name, a claim, a
+	 * cancellation, a merge, a fire - stands on it where it once re-projected
+	 * the whole record per identity.
+	 */
+	ticketOf(
+		identity: string,
+		states: readonly WorkflowState[],
+		fallbackTaskType: string,
+	): ScopedTicketRead;
 	ticketListViews(
 		states: readonly WorkflowState[],
 		fallbackTaskType: string,
@@ -436,11 +489,33 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	 * Ticket. The observation loop runs this read every cycle.
 	 */
 	private projectionReads(rows: Array<{ identity: string; state: TicketState }>): ProjectionReads {
+		return {
+			// The global form of the unresolved-attempt fact: the list keeps the
+			// one scan, the scoped read asks the per-identity form beside it
+			// (issue #428, ADR 0151).
+			pendingTickets: this.graph().handoff.ticketsWithUnresolvedAttempts(),
+			...this.batchedProjectionReads(rows),
+		};
+	}
+	/**
+	 * The batched facts both projection reads take (issue #202, ADR 0095, issue
+	 * #428, ADR 0151): the memberships, the newest handoffs, the start counts,
+	 * the Failed-start streaks, the completion traces, the leftover
+	 * environments, and the Agent name collisions - each one statement per
+	 * chunk of the identities the read touches. The projection read adds the
+	 * global unresolved-attempt scan, and the scoped read the per-identity fact,
+	 * so the batched half is the one both read alike.
+	 */
+	private batchedProjectionReads(
+		rows: Array<{
+			identity: string;
+			state: TicketState;
+		}>,
+	) {
 		const identities = rows.map((row) => row.identity);
 		const memberships = this.graph().sourceFact.membershipsForTickets(
 			rows.map((row) => ({ identity: row.identity, state: row.state })),
 		);
-		const pendingTickets = this.graph().handoff.ticketsWithUnresolvedAttempts();
 		const newestHandoffs = this.graph().handoff.newestHandoffsFor(identities);
 		const handoffCounts = this.graph().handoff.handoffCountsFor(identities);
 		// The Failed-start park counts the run of failed starts the same way, over
@@ -454,7 +529,6 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 		const nameCollisions = this.graph().handoff.nameCollisionsFor(identities);
 		return {
 			memberships,
-			pendingTickets,
 			newestHandoffs,
 			handoffCounts,
 			failedStartStreaks,
@@ -517,6 +591,82 @@ export class TicketWorkCycleModule implements TicketWorkCycleAggregate {
 	 */
 	ticketProjection(states: readonly WorkflowState[], fallbackTaskType: string): TicketProjection {
 		return ticketProjectionOf(this.projectedTickets(states, fallbackTaskType));
+	}
+	/**
+	 * The scoped ticket read (issue #428, ADR 0151): the ticket's own row and
+	 * its pull request link, from targeted reads on that one identity.
+	 *
+	 * The read is a read: it runs on the aggregate's own scoped handle for its
+	 * own row, it asks the owning aggregates for their facts through their
+	 * narrow operations, and it opens no transaction. The row it answers is
+	 * the same value the full projection makes for the identity - the
+	 * projection's own per-row builder over the identity's rows - and the link
+	 * composes the source fact's pull request rows through the domain's fix
+	 * rule, so a scoped read and a projection row never name the ticket apart.
+	 */
+	ticketOf(
+		identity: string,
+		states: readonly WorkflowState[],
+		fallbackTaskType: string,
+	): ScopedTicketRead {
+		const row = this.db
+			.prepare(
+				"SELECT identity, state, work_cycle, ignored, ignored_at FROM tickets WHERE identity = ?",
+			)
+			.get(identity) as TicketRow | undefined;
+		if (row == null) return { ticket: null, pullRequestLink: { fixing: [], opened: null } };
+		// The link's rows come from the source fact, which answers them for the
+		// one identity in a constant number of statements.
+		const link = this.graph().sourceFact.openPullRequestLink(identity, row.state);
+		// The ticket rows the link's rows stand on: without a row in the
+		// tickets table the identity is not in the projection, and the link
+		// carries it not.
+		const linkedIdentities = [
+			...new Set(link.pullRequestRows.map((membership) => membership.identity)),
+		];
+		if (link.opened !== null) linkedIdentities.push(link.opened);
+		const linkedRows =
+			linkedIdentities.length === 0
+				? []
+				: (this.db
+						.prepare(
+							`SELECT identity, state, work_cycle, ignored, ignored_at FROM tickets WHERE identity IN (${placeholders(linkedIdentities.length)})`,
+						)
+						.all(...linkedIdentities) as TicketRow[]);
+		const entries: Array<{ identity: string; state: TicketState }> = [row];
+		for (const linkedRow of linkedRows) entries.push(linkedRow);
+		const reads = this.scopedProjectionReads(entries);
+		const ticket = this.projectedTicketFor(row, reads, states, fallbackTaskType);
+		if (ticket === null) return { ticket: null, pullRequestLink: { fixing: [], opened: null } };
+		// The link's rows stand on the same per-row builder the projection runs,
+		// over the same batched reads: a fixing pull request the read answers is
+		// the row the projection makes for it, nothing the read made up.
+		const linkedTickets = linkedRows
+			.map((linkedRow) => this.projectedTicketFor(linkedRow, reads, states, fallbackTaskType))
+			.filter((built): built is Ticket => built !== null);
+		const linkedRowIdentities = new Set(linkedRows.map((linkedRow) => linkedRow.identity));
+		return {
+			ticket,
+			pullRequestLink: {
+				fixing: fixingPullRequests(linkedTickets, ticket),
+				opened: link.opened !== null && linkedRowIdentities.has(link.opened) ? link.opened : null,
+			},
+		};
+	}
+	/**
+	 * The batched facts the scoped read takes (issue #428, ADR 0151): the
+	 * projection's own batch reads over the identities the read touches, with
+	 * the unresolved-attempt fact asked per identity beside the global form
+	 * the list keeps. The statements follow the identity count the read names,
+	 * not the record's ticket count.
+	 */
+	private scopedProjectionReads(
+		rows: Array<{ identity: string; state: TicketState }>,
+	): ProjectionReads {
+		const pendingTickets = new Set<string>();
+		for (const row of rows)
+			if (this.graph().handoff.hasUnresolvedAttempt(row.identity)) pendingTickets.add(row.identity);
+		return { pendingTickets, ...this.batchedProjectionReads(rows) };
 	}
 	ticketListViews(
 		states: readonly WorkflowState[],

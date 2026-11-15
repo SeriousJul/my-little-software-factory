@@ -3,36 +3,37 @@
  * gives a Consultation (issue #315, ADR 0109).
  *
  * Every line the plane writes to its record names the Ticket it speaks of the
- * same way: the projection's title in quotes, or the identity when the
- * projection holds no row for it. Three surfaces read that name - the Handoff
- * dispatch's queue, start, and refusal lines, the observation cycle's walk and
- * hold lines, and the boot's line for a claim a previous run left unsettled -
- * and one Ticket has to wear one name across them, or a reader cannot follow
- * that Ticket's record from the run that started it to the boot that states how
- * the start ended. The Consultation's wait, refusal, and hold lines wear the
- * same one name as its start line, so the checkout record reads one record per
+ * same way: the row's title in quotes, or the identity when the read holds no
+ * row for it. Three surfaces read that name - the Handoff dispatch's queue,
+ * start, and refusal lines, the observation cycle's walk and hold lines, and
+ * the boot's line for a claim a previous run left unsettled - and one Ticket
+ * has to wear one name across them, or a reader cannot follow that Ticket's
+ * record from the run that started it to the boot that states how the start
+ * ended. The Consultation's wait, refusal, and hold lines wear the same one
+ * name as its start line, so the checkout record reads one record per
  * Consultation the way it reads one per Ticket.
  *
- * The read is the projection, never the visible list: a covered Ticket is held
- * out of the list while its own queued start still names it (ADR 0042).
- *
- * The caller hands over the projection read it already holds, the way the Next
- * step derivation does (ADR 0093), so the name always comes from rows the state
- * actually ran, and a loop that names several Tickets names them out of one
- * read instead of one read per Ticket.
+ * The input is the Ticket's own row, or its absence, never the visible list: a
+ * covered Ticket is held out of the list while its own queued start still
+ * names it (ADR 0042). A surface that holds the projection names from the
+ * projection's row for the identity, the way the boot's line and the checkout
+ * record do (ADR 0093); a surface that acts on one identity asks the ticket
+ * work cycle's scoped read for that row (ADR 0151). Both inputs stand behind
+ * this one rule, so one Ticket wears one name across the record, and a line
+ * never reads a name the read did not answer.
  */
-
-import type { TicketProjection } from "../state/ticket-work-cycle.ts";
 
 /**
- * The name one Ticket wears in the plane's record: its projection title in
- * quotes, or `ticket <identity>` when the projection holds no row for it - the
- * Ticket the sources stopped listing, or the one a previous run's attempt names
- * and this run has fetched nothing about yet.
+ * The name one Ticket wears in the plane's record: its row's title in quotes,
+ * or `ticket <identity>` when the read holds no row for it - the Ticket the
+ * sources stopped listing, or the one a previous run's attempt names and this
+ * run has fetched nothing about yet.
  */
-export function recordTicketName(projection: TicketProjection, identity: string): string {
-	const title = projection.rowFor(identity)?.title;
-	return title === undefined ? `ticket ${identity}` : `"${title}"`;
+export function recordTicketName(
+	row: { title: string } | null | undefined,
+	identity: string,
+): string {
+	return row === null || row === undefined ? `ticket ${identity}` : `"${row.title}"`;
 }
 
 /**
