@@ -214,7 +214,6 @@ export function DecisionModal(props: DecisionModalProps) {
 	const bodyFacts = useDecisionBodyFacts(props, {
 		frame,
 		held,
-		contentRows: frame.contentRows,
 		slot: props.slot,
 	});
 	// The region's selection, its wrap, its auto-scroll, its visible window,
@@ -323,11 +322,10 @@ function useDecisionBodyFacts(
 	inputs: {
 		frame: ReturnType<typeof modalFrame>;
 		held: boolean;
-		contentRows: number;
 		slot: ScreenSlot | undefined;
 	},
 ): DecisionBodyFacts {
-	const { frame, held, contentRows, slot } = inputs;
+	const { frame, held, slot } = inputs;
 	const { screen, actions, factLines = [] } = props;
 	// The pane's chrome yields before the log yields rows: padding first,
 	// border second, and only then does the surface stand down to the size
@@ -336,7 +334,6 @@ function useDecisionBodyFacts(
 	// The transition's fact lines stand above the action rows, like the
 	// held-cause row: the rows decide on the facts, so the log yields to
 	// them (ADR 0027).
-	const finalLayout = decisionBodyLayout(contentRows, actions.length, held, factLines.length);
 	const layout = decisionBodyLayout(frame.contentRows, actions.length, held, factLines.length);
 	// An empty turn log states its reason as one row inside the pane, and
 	// the pane keeps its chrome.
@@ -355,7 +352,7 @@ function useDecisionBodyFacts(
 				: logScreenLines(screen, paneInnerWidth),
 		[screen, emptyLog, paneInnerWidth],
 	);
-	const hasScrollbar = finalLayout !== null && fullWidthBody.length > finalLayout.paneRows;
+	const hasScrollbar = layout !== null && fullWidthBody.length > layout.paneRows;
 	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
 	// Wrap once at the settled width the box grows into, so the pop-in clips
 	// the settled body instead of re-wrapping it at an intermediate width

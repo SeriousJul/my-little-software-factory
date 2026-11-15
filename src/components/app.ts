@@ -2950,7 +2950,8 @@ function DecisionScreen({ o }: AppScreenProps): React.ReactElement | null {
 		panel.kind === "decision" &&
 		panelTicket !== undefined &&
 		decision !== undefined;
-	useSlotQuiet(stack.slotFor("decision"), !canStand);
+	const slot = stack.slotFor("decision");
+	useSlotQuiet(slot, !canStand);
 	if (!canStand) return null;
 	return createElement(DecisionModal, {
 		// One element per ticket: a decision on another ticket remounts fresh
@@ -2975,8 +2976,8 @@ function DecisionScreen({ o }: AppScreenProps): React.ReactElement | null {
 		onEmergencyExit: () => renderer.destroy(),
 		onQueuePause: toggleQueuePause,
 		onAutoHandoff: toggleAutoHandoff,
-		slot: stack.slotFor("decision"),
-		resuming: stack.activeIsResume,
+		slot,
+		resuming: slot?.resumed === true,
 	});
 }
 
@@ -3104,8 +3105,9 @@ function LiveScreen({ o }: AppScreenProps): React.ReactElement | null {
 		...appLiveViewProps(o, panelTicket, slot),
 		// The cycle is part of the panel (ADR 0110): the next cycle's view
 		// is a new screen, and the key says so to the reconciler. A resume of
-		// this screen stands at full size, with no re-pop-in (ADR 0150).
-		resuming: stack.activeIsResume,
+		// this screen stands at full size, with no re-pop-in (ADR 0150): the
+		// record stands on the screen's slot, for the instance's whole life.
+		resuming: slot?.resumed === true,
 		key: `live:${panel.identity}:${panel.workCycle}`,
 	});
 }

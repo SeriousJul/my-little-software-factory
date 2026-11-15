@@ -127,6 +127,16 @@ export interface ScreenSlot {
 	 * preserves. The record stands in the shell, which is never suspended.
 	 */
 	facts: Record<string, unknown>;
+	/**
+	 * The stack's record that the screen's current opening is a resume: the
+	 * screen stands at full size, with no re-pop-in, for its whole life in the
+	 * run. The stack records it on the slot when the screen returns from a
+	 * suspend, and a close of the screen clears it, so the next open of the
+	 * screen pops in once. It stands on the slot, not in a render's
+	 * derivation, so a later render of the resumed screen re-decides nothing:
+	 * its frame stands settled.
+	 */
+	resumed: boolean;
 }
 
 /**
@@ -134,14 +144,12 @@ export interface ScreenSlot {
  *
  * `active` is the screen at the top. `suspended` is the ordered screens
  * beneath it, from the Main view (bottom) up to the screen just under the
- * active one. `activeIsResume` states whether the active screen was suspended
- * in the previous render - a return that stands at full size, with no
- * re-pop-in - as opposed to a fresh opening that pops in once.
+ * active one. Whether a screen's opening is a resume stands on the screen's
+ * slot, recorded by the stack, not in this record.
  */
 export interface StackRecord {
 	readonly active: ScreenId;
 	readonly suspended: readonly ScreenId[];
-	readonly activeIsResume: boolean;
 	readonly slots: ReadonlyMap<ScreenId, ScreenSlot>;
 }
 
@@ -252,6 +260,24 @@ export function deriveStack(states: StackStates): { active: ScreenId; suspended:
 }
 
 /**
+ * The slot for every screen the stack manages, one per screen, built once for
+ * the run's life: the screen's liveness flag, the wrapper that calls the
+ * screen's latest dispatch, and the slot's record of its facts and its resume.
+ * The Main view has no slot: its keys are the shell's own base subscription.
+ */
+function buildSlots(): Map<ScreenId, ScreenSlot> {
+	const map = new Map<ScreenId, ScreenSlot>();
+	for (const id of SCREEN_IDS) {
+		if (id === "main") continue;
+		const live = { current: false };
+		const latest = { current: (_key: KeyEvent) => false };
+		const busKey = (key: KeyEvent) => latest.current(key);
+		map.set(id, { id, live, latest, busKey, facts: {}, resumed: false });
+	}
+	return map;
+}
+
+/**
  * The stack, owned by the plane's shell.
  *
  * It stands the one record the shell's four screen states derive, it owns the
@@ -265,20 +291,9 @@ export function deriveStack(states: StackStates): { active: ScreenId; suspended:
 export function useScreenStack(states: StackStates): ScreenStack {
 	const renderer = useRenderer();
 
-	// The slots stand once, for the run's life. The Main view has no slot: its
-	// keys are the shell's own base subscription.
+	// The slots stand once, for the run's life.
 	const slotsRef = useRef<Map<ScreenId, ScreenSlot> | null>(null);
-	if (slotsRef.current === null) {
-		const map = new Map<ScreenId, ScreenSlot>();
-		for (const id of SCREEN_IDS) {
-			if (id === "main") continue;
-			const live = { current: false };
-			const latest = { current: (_key: KeyEvent) => false };
-			const busKey = (key: KeyEvent) => latest.current(key);
-			map.set(id, { id, live, latest, busKey, facts: {} });
-		}
-		slotsRef.current = map;
-	}
+	if (slotsRef.current === null) slotsRef.current = buildSlots();
 	const slots = slotsRef.current;
 
 	const derived = deriveStack(states);
@@ -287,9 +302,15 @@ export function useScreenStack(states: StackStates): ScreenStack {
 
 	// A screen is a return - it stands at full size, with no re-pop-in - when
 	// it was suspended in the previous render. The previous suspended set
-	// stands in a ref the layout effect updates after the commit.
+	// stands in a ref the layout effect updates after the commit. The record
+	// stands on the slot, for the screen's whole life: the stack records it
+	// here, in the parent's render pass, so the screen's own render in this
+	// commit reads it, and a later render of the resumed screen re-decides
+	// nothing. A close of the screen clears it, so the next open of the
+	// screen pops in once.
 	const prevSuspendedRef = useRef<Set<ScreenId>>(new Set());
-	const activeIsResume = prevSuspendedRef.current.has(active);
+	const activeSlot = prevSuspendedRef.current.has(active) ? slots.get(active) : undefined;
+	if (activeSlot !== undefined) activeSlot.resumed = true;
 
 	useLayoutEffect(() => {
 		prevSuspendedRef.current = new Set(suspended);
@@ -324,7 +345,12 @@ export function useScreenStack(states: StackStates): ScreenStack {
 			// A screen that left the stack is closed, not suspended: its
 			// preserved facts leave with it, so the next open of the screen
 			// stands on the screen's own defaults, not on a run of its past.
-			if (!inStack.has(slot.id)) slot.facts = {};
+			// Its resume record leaves with it, too, so the next open pops in
+			// once.
+			if (!inStack.has(slot.id)) {
+				slot.facts = {};
+				slot.resumed = false;
+			}
 		}
 		// Detach every slot when the shell goes away.
 		return () => {
@@ -340,12 +366,11 @@ export function useScreenStack(states: StackStates): ScreenStack {
 		() => ({
 			active,
 			suspended,
-			activeIsResume,
 			slots,
 			factsFor: (id) => slots.get(id)?.facts ?? {},
 			slotFor: (id) => slots.get(id),
 		}),
-		[active, suspended, activeIsResume, slots],
+		[active, suspended, slots],
 	);
 
 	return value;

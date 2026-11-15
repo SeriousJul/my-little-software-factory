@@ -91,6 +91,18 @@ which is never suspended.
   decision across every screen's hooks and leaves a second shallow seam into
   the stack that a screen can drift from.
 
+- The resume stands without the pop-in of an opening, and the stack makes
+  that decision too: it records on the screen's slot, in the commit that
+  resumes the screen, that the opening is a resume, and it hands the record
+  to the screens that take a pop-in, the Live view and the Decision modal.
+  The record stands for the screen instance's life, so the resumed screen's
+  later renders re-decide nothing, and a close of the screen clears it, so
+  the next open of the screen pops in once. Rejected: the per-render read
+  that the previous screen set held the screen, which stands true only on
+  the resume commit and flips on the screen's next render, so that render
+  re-opens the box from its opening fact, and the screen goes invisible for
+  the span of the pop-in it owes.
+
 - The preserved facts are the screen-local facts the store does not hold.
   They stand in the shell's stage, which is never suspended: a screen edits
   the shell's state while it is active, the state outlives the screen's
@@ -171,8 +183,8 @@ which is never suspended.
 ## Consequences
 
 - The operator: the same screens, the same keys, the same written words. A
-  resume stands on the suspended frame without the pop-in of an opening, and
-  a suspended screen owes no motion and no read.
+  resume stands on the suspended frame without the pop-in of an opening, for
+  the screen's life, and a suspended screen owes no motion and no read.
 - The machine: the plane's cadence is the active screen's cadence plus the
   loops' cadence, never the sum of the screens behind it. A suspended screen
   owes no wake, no herdr read, no spinner step, and no background commit
@@ -183,8 +195,12 @@ which is never suspended.
   frame rig's seam exposes, the runner's command list standing across a
   window longer than the suspended screen's tick period, and the painted
   frame standing across the same window. A resume is proven alive by the
-  runner's list growing again and the frame showing the preserved lines. The
-  rig's owned-surface floor grows with the new stack-behavior suites and
+  runner's list growing again and the frame showing the preserved lines, and
+  the frame the renderer paints after the resumed screen's first re-render,
+  through one frame of its clock and the clock's rest, stands on the settled
+  frame it stood on, so the resume owes no re-pop that a later render would
+  paint. The rig's owned-surface floor grows with the new stack-behavior
+  suites and
   never shrinks.
 - The deepening is complementary with ADR 0149: after both land, the plane's
   paint cadence is a function of the one active screen plus the loops, and

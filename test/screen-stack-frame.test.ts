@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Setup } from "./app-harness.ts";
 import {
+	ANIMATION_TICK_MS,
 	emergencyExit,
 	frameText,
 	frameUntil,
@@ -34,6 +35,7 @@ import {
 	sleep,
 	staleKeyClaim,
 	tabUntilSlot,
+	tickAnimation,
 	typeText,
 	waitCommands,
 	waitFor,
@@ -121,6 +123,12 @@ describe("the suspended screen runs nothing (ADR 0150)", () => {
 				await sleep(1100);
 				expect(setup.captureCharFrame()).not.toBe(liveFrame);
 				expect(fake.commands().length).toBeGreaterThan(liveCommands);
+				// The pane's answer is held, so the resumed view's immediate
+				// read lands in the walk's own window below, where the frame
+				// the renderer paints is the frame the walk reads. The rig's
+				// waits tick the frame module's clock, so they would rest a
+				// re-opened pop before the walk could read it.
+				fake.setDelay("herdr", [...READ("pane-1")], 400);
 				// The guide opens over the view and suspends it: the view's
 				// wrapper leaves the bus, and a window twice the stream's
 				// period stands the frame and the command list.
@@ -142,8 +150,35 @@ describe("the suspended screen runs nothing (ADR 0150)", () => {
 				// suspended on, and the view's first tick moves the frame.
 				await pressControl(setup, "guide-close", { closes: "Key guide" });
 				expect(leftKeyHandler(setup, base)).toBe(liveWrapper);
-				const resumed = await settle(setup);
-				expect(frameText(resumed)).toContain("the layout math is fixed");
+				// The resume stands on the frame the renderer paints, on the
+				// renderer's own clock: the view's first re-render lands
+				// through its immediate read with no frame of the frame module's
+				// clock ticked. A box that re-opened on that render stands on
+				// its opening fact in the frame the renderer paints, and the
+				// rig's own waits would rest the re-opened pop before the walk
+				// could read it. The re-render's pass is the only paint between
+				// the resume frame and the walk's reads, so the buffer standing
+				// changed marks the re-render's landing.
+				const resumedFrame = await tickAnimation(setup, 0);
+				let atRerender = resumedFrame;
+				const landedBy = Date.now() + 3000;
+				while (atRerender === resumedFrame && Date.now() < landedBy) {
+					await sleep(50);
+					atRerender = await tickAnimation(setup, 0);
+				}
+				// A resumed screen owes no pop-in: the frame its first re-render
+				// paints stands settled, the preserved lines beside the line the
+				// view's own read brought back, and one frame of the renderer's
+				// clock, and the clock's rest, paint the same frame while the
+				// renderer's clock moves.
+				expect(frameText(atRerender)).toContain("the layout math is fixed");
+				expect(frameText(atRerender)).toContain("the pass settles");
+				const pumped = await tickAnimation(setup, ANIMATION_TICK_MS);
+				expect(pumped).toBe(atRerender);
+				const rested = await tickAnimation(setup, "rest");
+				expect(rested).toBe(atRerender);
+				// The walk's own reads are not held any more.
+				fake.setDelay("herdr", [...READ("pane-1")], 0);
 				const resumedCommands = fake.commands().length;
 				await fake.set("herdr", [...READ("pane-1")], {
 					stdout: "the second pass lands\n",
