@@ -536,11 +536,16 @@ export class MergedAgentReader implements AgentReader {
 			return { failure };
 		}
 		const wanted = new Set(this.coreNames());
+		const held = rows.filter((row) => wanted.has(row.name));
+		// The record reads of the held rows run as one concurrent batch: every
+		// read starts after the roster settles, and the probe pays the slowest
+		// of them, not the sum (ADR 0152). The rows come back in the roster's
+		// order, so the merged list carries them the way it carries today's
+		// sequential list.
+		const records = await Promise.all(held.map((row) => this.coreRecordOf(row)));
 		const agents: HerdrAgent[] = [];
-		for (const row of rows) {
-			if (!wanted.has(row.name)) continue;
-			const record = await this.coreRecordOf(row);
-			const agent = MergedAgentReader.coreAgentOf(row, record);
+		for (let i = 0; i < held.length; i += 1) {
+			const agent = MergedAgentReader.coreAgentOf(held[i], records[i]);
 			if (agent !== null) agents.push(agent);
 		}
 		return { agents };
@@ -996,6 +1001,20 @@ export class ObservationCoordinator {
 	private readonly fireCompleted?: (ticket: HandoffTicket) => Promise<TransitionOutcome | null>;
 	private readonly refireRecordedSkips?: () => Promise<RefiredSkip[]>;
 	private timer: ReturnType<typeof setTimeout> | null = null;
+	/**
+	 * The grid's anchor (ADR 0152): the start of the cycle the grid's next
+	 * landing stands on, the landing that landing's start plus the interval.
+	 * A fire that meets the in-flight cycle holds that cycle's start, so the
+	 * landing the grid owes stands on it, clamped to now.
+	 */
+	private gridAnchor: number | null = null;
+	/** A grid fire met the in-flight cycle; its completion owes the grid its landing. */
+	private gridOwed = false;
+	/**
+	 * The in-flight cycle's start, so a fire that meets it can hold the start
+	 * as the grid's anchor, the way the landing the fire owed would have.
+	 */
+	private inFlightStart: number | null = null;
 	private stopped = false;
 	private cycleInFlight = false;
 	private holdingHerdrError = false;
@@ -1148,26 +1167,72 @@ export class ObservationCoordinator {
 	/** Begin polling. The first cycle runs immediately. */
 	start(): void {
 		if (this.timer !== null || this.stopped) return;
+		// The boot's start is the grid's anchor: the next cycle stands at the
+		// boot's start plus the interval, whatever the boot cycle costs.
+		this.gridAnchor = this.clock.now();
 		void this.safeCycle();
-		this.scheduleNext();
+		this.armGrid();
 	}
 
-	/** Schedule the next cycle on the clock; a stopped loop schedules none. */
-	private scheduleNext(): void {
+	/**
+	 * Arm the grid's next landing on the clock: the anchor plus the interval.
+	 * The interval derives each arm, so a runtime write-back stays visible,
+	 * the way the config itself does. A pending timer stands on the grid.
+	 */
+	private armGrid(): void {
 		if (this.stopped || this.timer !== null) return;
-		// The interval the config's poll setting derives each cycle, so a
-		// runtime write-back stays visible, the way the config itself does.
 		const intervalMs = this.pollIntervalMs ?? this.config().agentPollIntervalSeconds * 1000;
 		this.timer = this.clock.setTimeout(this.nextCycle, intervalMs);
 	}
 
 	private nextCycle = (): void => {
 		this.timer = null;
-		void this.safeCycle().finally(() => this.scheduleNext());
+		if (this.stopped) return;
+		if (this.cycleInFlight) {
+			// A fire that meets a cycle in flight runs no cycle of its own: it
+			// holds that cycle's start as the grid's anchor, and leaves the grid
+			// owed to the cycle it met.
+			this.gridAnchor = this.inFlightStart ?? this.clock.now();
+			this.gridOwed = true;
+			return;
+		}
+		// The landing lands the cycle: the run that lands re-anchors the grid
+		// on its own start, and arms its next at that start plus the interval.
+		this.gridAnchor = this.clock.now();
+		void this.safeCycle();
+		this.armGrid();
 	};
+
+	/**
+	 * Settle the grid on a cycle's completion (ADR 0152). The grid owes its
+	 * landing when a fire met the cycle that just ran: the landing stands on
+	 * the anchor plus the interval, and the clamp to now stands, so a landing
+	 * in the past runs at once at the pace the probe keeps, and a landing in
+	 * the future arms the clock at it. A cycle that owes nothing reschedules
+	 * nothing: the pending timer stands on the grid.
+	 */
+	private settleGrid(): void {
+		if (this.stopped || !this.gridOwed) return;
+		this.gridOwed = false;
+		const intervalMs = this.pollIntervalMs ?? this.config().agentPollIntervalSeconds * 1000;
+		const target = (this.gridAnchor ?? this.clock.now()) + intervalMs;
+		this.gridAnchor = null;
+		const now = this.clock.now();
+		if (target <= now) {
+			// The landing is in the past: the grid runs at once, and re-anchors
+			// on the run's own start, the way every landing does.
+			this.gridAnchor = now;
+			void this.safeCycle();
+			this.armGrid();
+		} else {
+			this.timer = this.clock.setTimeout(this.nextCycle, target - now);
+		}
+	}
 
 	/** Run one cycle when one is not already running. Returns when it is done. */
 	async tick(): Promise<void> {
+		// A wake: the cycle runs beside the grid and reschedules nothing, the
+		// poll stays the single source of truth (ADR 0084).
 		await this.safeCycle();
 	}
 
@@ -1183,6 +1248,7 @@ export class ObservationCoordinator {
 	private async safeCycle(): Promise<void> {
 		if (this.stopped || this.cycleInFlight) return;
 		this.cycleInFlight = true;
+		this.inFlightStart = this.clock.now();
 		try {
 			await this.cycle();
 		} catch (error) {
@@ -1195,6 +1261,8 @@ export class ObservationCoordinator {
 			);
 		} finally {
 			this.cycleInFlight = false;
+			this.inFlightStart = null;
+			this.settleGrid();
 		}
 	}
 

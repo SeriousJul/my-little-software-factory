@@ -38,6 +38,17 @@ export interface RecordedCommand {
 }
 
 /**
+ * The virtual time seam a clock-backed test stands on: the clock's own time
+ * and the wait on it. A command the fake holds by a delay settles when the
+ * virtual clock passes the command's deadline, the way the real runner's
+ * answer lands on the machine's own time.
+ */
+export interface VirtualTime {
+	now(): number;
+	wait(milliseconds: number): Promise<void>;
+}
+
+/**
  * The herdr commands that move the operator's view: a focus request on a
  * workspace, a tab, a pane, or an Agent.
  *
@@ -67,6 +78,10 @@ export class FakeRunner implements CommandRunner {
 	// A delay holds a command's answer, so a test can watch the window an
 	// in-flight operation leaves open.
 	private delays = new Map<string, number>();
+	// A delay sequence holds one command's answers in call order: the test
+	// names the delay of each call in turn, so one command's cost can move
+	// from call to call, the way a probe that runs long then recovers does.
+	private delaySequences = new Map<string, number[]>();
 	// A default delay holds every command, so a test can watch the commands a
 	// flow issues overlap - or fail to overlap - without naming each one.
 	private defaultDelayMs: number | null = null;
@@ -78,6 +93,9 @@ export class FakeRunner implements CommandRunner {
 	// test can watch the panel's loading state.
 	private modelListGate: Promise<void> = Promise.resolve();
 	private modelListRelease: (() => void) | null = null;
+	// The virtual clock a test stands the fake on; absent: the machine's own
+	// time drives the held commands.
+	private virtualTime: VirtualTime | null = null;
 	private fallback: CommandResult = { code: 0, stdout: "", stderr: "" };
 	// A raised command, the way a CommandRunner adapter raises for a command it
 	// cannot run at all. The production runner maps a spawn-level failure to a
@@ -117,6 +135,11 @@ export class FakeRunner implements CommandRunner {
 		this.defaultDelayMs = delayMs;
 	}
 
+	/** Answer `command args` after per-call delays, in call order. */
+	setDelaySequence(command: string, args: readonly string[], delayMs: readonly number[]): void {
+		this.delaySequences.set(this.key(command, args), [...delayMs]);
+	}
+
 	/** The answer for any command without a specific response. */
 	setDefault(result: Partial<CommandResult>): void {
 		this.fallback = { code: 0, stdout: "", stderr: "", ...result };
@@ -143,6 +166,15 @@ export class FakeRunner implements CommandRunner {
 		this.modelLists.set(kind, { ok: false, reason });
 	}
 
+	/**
+	 * Stand the fake's held commands on a virtual clock: a command held by a
+	 * delay settles when the clock passes its deadline, so a test that moves
+	 * the clock moves the commands with it.
+	 */
+	adoptVirtualClock(time: VirtualTime): void {
+		this.virtualTime = time;
+	}
+
 	/** The commands recorded so far, in order. */
 	commands(): string[] {
 		return this.calls.map((c) => `${c.command} ${c.args.join(" ")}`.trim());
@@ -158,6 +190,15 @@ export class FakeRunner implements CommandRunner {
 		return this.peakRunning;
 	}
 
+	/** The held command's delay in milliseconds, or none. */
+	private delayFor(key: string): number | undefined {
+		const queue = this.delaySequences.get(key);
+		if (queue !== undefined && queue.length > 0) return queue.shift();
+		if (this.delays.has(key)) return this.delays.get(key);
+		if (this.defaultDelayMs !== null) return this.defaultDelayMs;
+		return undefined;
+	}
+
 	async run(
 		command: string,
 		args: readonly string[],
@@ -170,8 +211,11 @@ export class FakeRunner implements CommandRunner {
 		const key = this.key(command, args);
 		this.running += 1;
 		this.peakRunning = Math.max(this.peakRunning, this.running);
-		const delay = this.delays.get(key) ?? this.defaultDelayMs ?? undefined;
-		if (delay !== undefined) await new Promise((resolve) => setTimeout(resolve, delay));
+		const delay = this.delayFor(key);
+		if (delay !== undefined) {
+			if (this.virtualTime !== null) await this.virtualTime.wait(delay);
+			else await new Promise((resolve) => setTimeout(resolve, delay));
+		}
 		const rejection = this.rejections.get(key);
 		if (rejection !== undefined) {
 			this.running -= 1;
