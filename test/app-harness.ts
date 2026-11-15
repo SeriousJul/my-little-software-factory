@@ -845,10 +845,13 @@ export async function awaitFrameChecking(
 		// hands the module one fixed quantum of module time, so a wait that
 		// reads a box interior or a face frame sees the animation move on
 		// module time, never on wall-clock luck, and the pop rests after
-		// exactly its budget of module time on any runner (ADR 0149).
-		if (tickFrame(ANIMATION_TICK_MS)) {
-			await setup.renderOnce();
-		}
+		// exactly its budget of module time on any runner (ADR 0149). The
+		// frame the tick paints lands on the renderer's own ask, the way
+		// every other painted change does: a render-ask hold up in the rig
+		// swallows it like any other ask, so a held buffer stays dark while
+		// the clock steps, and a free renderer paints it within the poll
+		// that follows.
+		tickFrame(ANIMATION_TICK_MS);
 		frame = setup.captureCharFrame();
 	}
 }
@@ -1312,10 +1315,10 @@ export async function settle(setup: Setup, maxMs = 300): Promise<string> {
 		await sleep(FRAME_POLL_MS);
 		// The frame module's clock moves on this poll's quantum, the way the
 		// frame waits move it, so a pop that was still opening rests before
-		// the frame this poll reads (ADR 0149).
-		if (tickFrame(ANIMATION_TICK_MS)) {
-			await setup.renderOnce();
-		}
+		// the frame this poll reads (ADR 0149). The frame the tick paints
+		// lands on the renderer's own ask, so a render-ask hold up in the
+		// rig keeps a held buffer dark while the clock steps.
+		tickFrame(ANIMATION_TICK_MS);
 		const current = setup.captureCharFrame();
 		if (current === last) {
 			stablePolls += 1;
