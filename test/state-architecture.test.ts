@@ -423,6 +423,8 @@ function namedInterfaces(source: string): Set<string> {
  * hole has to be written here to be allowed.
  */
 const NAME_ALLOWANCE: Record<string, string> = {
+	"src/boot-sequence.ts workQueue.setQueuePaused":
+		"the module's own queue-pause write sink, the write the boot read stands beside the queue's read",
 	"src/components/app.ts ticketWorkCycle.closeWorkCycle":
 		"the Handoff dispatch module's own closeWorkCycle, reached through the dispatch field",
 	"src/handoff-dispatch.ts workQueue.enqueueWork":

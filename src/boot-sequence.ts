@@ -41,6 +41,9 @@ import {
 } from "./observation.ts";
 import { TICKET_SEAT_STATES } from "./parallel.ts";
 import { type RefreshClock, RefreshCoordinator } from "./refresh.ts";
+import type { ConsultationRecordAggregate } from "./state/consultation-record.ts";
+import type { TicketWorkCycleAggregate } from "./state/ticket-work-cycle.ts";
+import type { WorkQueueAggregate } from "./state/work-queue.ts";
 import type { FetchOutcome, TicketSource } from "./ticket-source.ts";
 import { fireTransition, refireRecordedSkips } from "./workflow.ts";
 
@@ -135,7 +138,10 @@ export interface BootSequence {
  * runs only over these names, so the poll never reads every terminal on the
  * machine.
  */
-function coreTerminalNames(state: AppProps["state"]): readonly string[] {
+function coreTerminalNames(state: {
+	ticketWorkCycle: TicketWorkCycleAggregate;
+	consultationRecord: ConsultationRecordAggregate;
+}): readonly string[] {
 	const names: string[] = [];
 	for (const ticket of state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES))
 		if (ticket.host === "herdr-core" && ticket.paneId !== null) names.push(ticket.paneId);
@@ -186,6 +192,11 @@ function holdListUntilSettle(
 		replaceConsultations();
 	});
 	return hold;
+}
+
+/** The queue's brake the state holds (ADR 0052): the boot read stands it where the operator left it. */
+function queuePauseOf(state: { workQueue: WorkQueueAggregate }): boolean {
+	return state.workQueue.queuePaused();
 }
 
 /**
@@ -393,7 +404,7 @@ export function startBootSequence(record: AppProps, fields: BootSequenceFields):
 	// operator left it.
 	fields.replaceTickets();
 	fields.replaceConsultations();
-	fields.setQueuePaused(state.workQueue.queuePaused());
+	fields.setQueuePaused(queuePauseOf(state));
 
 	// The refresh coordinator: the sources' first reads, and the polling
 	// schedule under the policies that name one. It owns the load's fact: the
