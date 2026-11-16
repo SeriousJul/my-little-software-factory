@@ -102,6 +102,9 @@ function coreRecordJson(record: {
 	createdMs?: number;
 	reason?: string;
 	exitCode?: number;
+	signal?: number;
+	pid?: number | null;
+	reported?: boolean;
 }): string {
 	return JSON.stringify({
 		address: record.address,
@@ -112,6 +115,9 @@ function coreRecordJson(record: {
 		...(record.createdMs !== undefined && { created_ms: record.createdMs }),
 		...(record.reason !== undefined && { reason: record.reason }),
 		...(record.exitCode !== undefined && { exit_code: record.exitCode }),
+		...(record.signal !== undefined && { signal: record.signal }),
+		...(record.pid !== undefined && { pid: record.pid }),
+		...(record.reported !== undefined && { reported: record.reported }),
 	});
 }
 
@@ -346,6 +352,73 @@ describe("the merged agent reader's batch (ADR 0152)", () => {
 			{
 				record: { address: "t-x", name: "x", state: "finished", reason: "killed" },
 				agent: "dropped",
+			},
+			// A kept terminal whose program died by signal holds no program in
+			// the wait for its replacement shell: the row drops, the way the
+			// terminal's own loss drops (ADR 0163).
+			{
+				record: {
+					address: "t-x",
+					name: "x",
+					state: "live",
+					reason: "signaled",
+					signal: 9,
+					pid: null,
+				},
+				agent: "dropped",
+			},
+			// The shell the host spawns in place of the lost program reports no
+			// status: the row stays dropped while the shell stands in it.
+			{
+				record: {
+					address: "t-x",
+					name: "x",
+					state: "live",
+					reason: "signaled",
+					pid: 4242,
+					reported: false,
+				},
+				agent: "dropped",
+			},
+			// A program the operator restarts in the terminal reports a status:
+			// the row stands present on the report, the session's recovery.
+			{
+				record: {
+					address: "t-x",
+					name: "x",
+					state: "live",
+					reason: "signaled",
+					status: "working",
+					pid: 4242,
+					reported: true,
+				},
+				agent: { host: "herdr-core", name: "x", status: "working" },
+			},
+			// A host that writes no `reported` fact holds the terminal's
+			// standing past the plane's reach: the row stays present, and the
+			// plane declares no loss it cannot read.
+			{
+				record: {
+					address: "t-x",
+					name: "x",
+					state: "live",
+					reason: "signaled",
+					pid: 4242,
+				},
+				agent: { host: "herdr-core", name: "x", status: "unknown" },
+			},
+			// A reason the host uses for no loss: the spawn's pending standing
+			// keeps the row present with an unknown status, the grace the
+			// cycle holds on a just-started terminal.
+			{
+				record: {
+					address: "t-x",
+					name: "x",
+					state: "live",
+					reason: "spawn_pending",
+					pid: null,
+				},
+				agent: { host: "herdr-core", name: "x", status: "unknown" },
 			},
 		];
 		for (const c of cases) {
@@ -903,6 +976,47 @@ describe("the Missing agent's flow (ADR 0152)", () => {
 					taskType: "implement",
 					host: "herdr-core",
 				}),
+			}),
+		]);
+		fake.coordinator.stop();
+		await fake.close();
+	});
+
+	test("a kept terminal whose program is lost reads Missing, and the status moves (ADR 0163)", async () => {
+		const fake = rig({ config, agentHost: CORE_HOST, autoOn: true, startupGraceMs: 1000 });
+		const name = fake.state.ticketWorkCycle.agentNameForTicket(identity);
+		coreHandOut(fake.state, identity, name);
+		coreSeat(fake.runner, name);
+		const restarts = () => fake.intents.filter((intent) => intent.origin === "restart");
+		// The working seat stands: the ticket runs on the record it reads,
+		// and the status the plane keeps is the record's word.
+		await fake.coordinator.tick();
+		await fake.advance(1001);
+		await fake.coordinator.tick();
+		expect(restarts()).toHaveLength(0);
+		expect(inFlight(fake.state)).toBe(true);
+		// The operator kept the terminal the plane started without keep: the
+		// program dies by signal, the host holds the terminal live with no
+		// program in it, and the record's loss reason states the loss.
+		fake.runner.set("hc", ["get", "--json", name], {
+			stdout: coreRecordJson({
+				address: name,
+				name,
+				state: "live",
+				reason: "signaled",
+				signal: 9,
+				pid: null,
+			}),
+		});
+		await fake.coordinator.tick();
+		// The status updates in the control plane: the row reads Missing, and
+		// the top-up's restart stands in for the lost session, the way it
+		// stands in for the terminal's own loss.
+		expect(restarts()).toEqual([
+			expect.objectContaining({
+				automatic: true,
+				ticketIdentity: identity,
+				choice: expect.objectContaining({ taskType: "implement", host: "herdr-core" }),
 			}),
 		]);
 		fake.coordinator.stop();

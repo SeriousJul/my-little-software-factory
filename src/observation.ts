@@ -74,6 +74,7 @@
 
 import type { AgentHost, AgentHostResolution } from "./agent-host.ts";
 import {
+	coreHeldSessionLost,
 	type HerdrCoreRosterRow,
 	herdrAgentList,
 	herdrAgentRead,
@@ -468,6 +469,15 @@ export interface MergedAgentReaderOptions {
  * for, and the row is dropped so it reads Missing, not as a completed turn
  * (ADR 0141). The wake wait maps the same way: `reason` `exit` beside an
  * `exit_code` is the settle, and a timeout or a killed terminal is no settle.
+ *
+ * A kept terminal reads the same way the moment its program is lost, whether
+ * the keep is the operator's or the desktop's, on a terminal the plane
+ * started without keep. The record's loss reason beside no process id, or
+ * beside a program that has reported no status, is the shell the host spawns
+ * in place of the lost program, or the wait for it, and the row drops so it
+ * reads Missing. A program the operator restarts in the terminal reports a
+ * status and stands present on it: the session's recovery, the plane
+ * re-attaching to the record it reads (ADR 0163).
  */
 export class MergedAgentReader implements AgentReader {
 	private readonly runner: CommandRunner;
@@ -622,7 +632,9 @@ export class MergedAgentReader implements AgentReader {
 
 	/**
 	 * One held herdr-core terminal as the merged list's Agent, or null when the
-	 * row is the lost Agent the list drops (the class doc's rule).
+	 * row is the lost Agent the list drops: a finished terminal the host lost,
+	 * and a kept terminal whose started program is lost, the shell or the wait
+	 * for it standing in the terminal (the class doc's rule).
 	 */
 	private static coreAgentOf(
 		row: HerdrCoreRosterRow,
@@ -648,6 +660,11 @@ export class MergedAgentReader implements AgentReader {
 			return agent;
 		}
 		if (record.state === "live") {
+			// A kept terminal whose started program is lost holds the shell, or
+			// the wait for it, not the Agent the plane started: the row drops
+			// and the Missing marker reads it, the way it reads the terminal's
+			// own loss (ADR 0163).
+			if (coreHeldSessionLost(record)) return null;
 			// The record's checkout is the derivation's checkout fact (ADR
 			// 0144): the session record the host names no path of stands under
 			// the checkout the Agent runs in. Its creation time is the

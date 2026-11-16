@@ -228,6 +228,53 @@ interface WorldTerminal {
 	signal?: number;
 	exitCode: number | null;
 	content: string;
+	/**
+	 * Whether the terminal keeps its program's loss: the world's starts take
+	 * no keep, the way the plane's do (ADR 0141), and a test stands keep on
+	 * a terminal the way the operator's `hc keep` does, beside the loss
+	 * fields it moves (ADR 0163).
+	 */
+	keep?: boolean;
+	/**
+	 * The process id of the program the terminal runs. A kept terminal whose
+	 * program is lost holds no program in the wait for its replacement
+	 * shell, and a test stands a shell or a restarted program by naming its
+	 * pid beside the loss.
+	 */
+	pid?: number | null;
+	/**
+	 * Whether the program that stands in the terminal has reported a status.
+	 * The world's programs report on their status move; a test models the
+	 * replacement shell, which never reports, by naming it false.
+	 */
+	reported?: boolean;
+}
+
+/** The standing fields `setTerminalState` moves on a terminal the world holds. */
+interface WorldTerminalStateFields {
+	state: "live" | "finished";
+	status?: string | null;
+	reason?: string;
+	signal?: number;
+	exitCode?: number | null;
+	/** Whether the host keeps the terminal after its program is lost (ADR 0141). */
+	keep?: boolean;
+	/** The process id the program stands under; no program in the shell's wait. */
+	pid?: number | null;
+	/** Whether the program standing in the terminal has reported a status. */
+	reported?: boolean;
+}
+
+/** Move the fields a `setTerminalState` names onto the terminal the world holds. */
+function applyTerminalFields(terminal: WorldTerminal, fields: WorldTerminalStateFields): void {
+	terminal.state = fields.state;
+	if (fields.status !== undefined) terminal.status = fields.status;
+	if (fields.reason !== undefined) terminal.reason = fields.reason;
+	if (fields.signal !== undefined) terminal.signal = fields.signal;
+	if (fields.exitCode !== undefined) terminal.exitCode = fields.exitCode;
+	if (fields.keep !== undefined) terminal.keep = fields.keep;
+	if (fields.pid !== undefined) terminal.pid = fields.pid;
+	if (fields.reported !== undefined) terminal.reported = fields.reported;
 }
 
 interface WorldPane {
@@ -360,21 +407,14 @@ export interface StubHerdrWorld extends CommandRunner {
 	setAgentStatus(name: string, status: string, sessionId?: string): void;
 	/**
 	 * Move one terminal the world holds: the state, status, and settle fields
-	 * the next `hc get` reports. A move to finished releases every `hc wait`
-	 * the world holds on it, the way the real block ends on the terminal
-	 * finishing. A reference the world does not hold is a refusal, not a
-	 * quiet add.
+	 * the next `hc get` reports. Beside them the keep and the program's
+	 * standing - its process id and whether it has reported a status - the
+	 * way the operator's `hc keep` beside the terminal's loss moves them
+	 * (ADR 0163). A move to finished releases every `hc wait` the world holds
+	 * on it, the way the real block ends on the terminal finishing. A
+	 * reference the world does not hold is a refusal, not a quiet add.
 	 */
-	setTerminalState(
-		reference: string,
-		fields: {
-			state: "live" | "finished";
-			status?: string | null;
-			reason?: string;
-			signal?: number;
-			exitCode?: number | null;
-		},
-	): void;
+	setTerminalState(reference: string, fields: WorldTerminalStateFields): void;
 	/**
 	 * Stop holding one Agent the world holds: the next `agent list` no longer
 	 * reports it, the way the real list stops when the Agent's process dies.
@@ -1860,14 +1900,18 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 		die_with_parent: false,
 		exit_code: terminal.exitCode,
 		identity: "stub",
-		keep: false,
+		keep: terminal.keep ?? false,
 		labels: terminal.labels,
 		name: terminal.name,
 		notify: false,
 		parent: null,
-		pid: null,
+		pid: terminal.pid ?? null,
 		reason: terminal.reason ?? null,
 		rm: false,
+		// The world's programs report on their status move: a program that
+		// stands in the terminal without a status - the lost program's
+		// replacement shell - has reported nothing.
+		reported: terminal.reported ?? terminal.status !== null,
 		signal: terminal.signal ?? null,
 		state: terminal.state,
 		status: terminal.status,
@@ -2336,23 +2380,10 @@ export function stubHerdrWorld(description: HerdrWorldDescription): StubHerdrWor
 			if (!agents.has(name)) throw new Error(`the world holds no agent named ${name}`);
 			agents.delete(name);
 		},
-		setTerminalState(
-			reference: string,
-			fields: {
-				state: "live" | "finished";
-				status?: string | null;
-				reason?: string;
-				signal?: number;
-				exitCode?: number | null;
-			},
-		): void {
+		setTerminalState(reference: string, fields: WorldTerminalStateFields): void {
 			const terminal = resolveTerminal(reference);
 			if (terminal === undefined) throw new Error(`the world holds no terminal named ${reference}`);
-			terminal.state = fields.state;
-			if (fields.status !== undefined) terminal.status = fields.status;
-			if (fields.reason !== undefined) terminal.reason = fields.reason;
-			if (fields.signal !== undefined) terminal.signal = fields.signal;
-			if (fields.exitCode !== undefined) terminal.exitCode = fields.exitCode;
+			applyTerminalFields(terminal, fields);
 			if (fields.state === "finished") releaseHeldCoreWaits(terminal.address);
 		},
 		sentTextFor(paneId: string): string[] {

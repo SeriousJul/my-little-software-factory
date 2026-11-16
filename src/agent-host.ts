@@ -867,6 +867,20 @@ export interface HerdrCoreRecord {
 	reason?: string;
 	exitCode?: number;
 	signal?: number;
+	/**
+	 * The process id of the program the terminal runs. A kept terminal whose
+	 * program is lost holds no program in the wait for the shell that
+	 * replaces it, and its record carries no id (ADR 0163).
+	 */
+	pid?: number;
+	/**
+	 * Whether the program that stands in the terminal has reported a status
+	 * since it started. The shell that replaces a kept terminal's lost
+	 * program never reports; a program the operator restarts in the terminal
+	 * does, and it stands present on the report it sends (ADR 0163). A host
+	 * that writes no such fact leaves the field absent.
+	 */
+	reported?: boolean;
 	cwd?: string;
 	/**
 	 * The time the host created the terminal, in ms, when the host reports it
@@ -904,6 +918,12 @@ function recordString(item: Record<string, unknown>, key: string): string | unde
 function recordNumber(item: Record<string, unknown>, key: string): number | undefined {
 	const value = item[key];
 	return typeof value === "number" ? value : undefined;
+}
+
+/** The boolean value a record key holds; absent when the key is absent or the host writes no boolean there. */
+function recordBoolean(item: Record<string, unknown>, key: string): boolean | undefined {
+	const value = item[key];
+	return typeof value === "boolean" ? value : undefined;
 }
 
 /** The label map of an `hc` record, keeping the string values; absent when the record carries no labels. */
@@ -949,10 +969,47 @@ export function herdrCoreRecord(result: CommandResult): HerdrCoreRecord | null {
 		reason: recordString(item, "reason"),
 		exitCode: recordNumber(item, "exit_code"),
 		signal: recordNumber(item, "signal"),
+		pid: recordNumber(item, "pid"),
+		reported: recordBoolean(item, "reported"),
 		cwd: recordString(item, "cwd"),
 		createdMs: recordNumber(item, "created_ms"),
 		labels: recordLabels(item),
 	};
+}
+
+/**
+ * The reasons herdr-core holds a kept terminal live while its started
+ * program is lost: the program died by signal without an exit code, or the
+ * host itself stopped or restarted under it. A program that exits with a
+ * code settles the terminal finished, kept or not, and a terminal the plane
+ * starts takes no keep at all (ADR 0141), so these reasons stand only on a
+ * terminal the operator or the desktop keeps.
+ */
+export const HERDR_CORE_LOST_REASONS: readonly string[] = [
+	"signaled",
+	"holder_lost",
+	"stopped_by_restart",
+	"server_stop",
+	"host_shutdown",
+];
+
+/**
+ * The kept terminal whose started program is lost (ADR 0163): the host
+ * holds it live with no program in it, the wait for the shell that replaces
+ * the loss, or with a program - the shell, or a process the operator
+ * restarted in its place - that has reported no status since it stood in
+ * it. The Agent the plane started is gone, so the plane reads the terminal
+ * as Missing, the way it reads the terminal's own loss. A program that
+ * reports a status stands present on it, the session's recovery the plane
+ * re-attaches to. A host that writes no `reported` fact and no process id
+ * holds the terminal's standing past the plane's reach, and its terminal
+ * stands present: the plane declares no loss it cannot read.
+ */
+export function coreHeldSessionLost(record: HerdrCoreRecord): boolean {
+	if (record.state !== "live") return false;
+	if (record.reason === undefined || !HERDR_CORE_LOST_REASONS.includes(record.reason)) return false;
+	if (record.pid === undefined) return true;
+	return record.reported === false;
 }
 
 // ---------------------------------------------------------------------------
