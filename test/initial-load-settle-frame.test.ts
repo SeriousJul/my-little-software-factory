@@ -33,6 +33,17 @@ import { callsReached, issuesSourceConfig, plane, reopenState, seedInFlightTurn 
  * the roster the settled sources make, not an empty one. An in-flight
  * ticket wears its state face while the load stands, and the Missing
  * marker appears only when a probe after the settle answers it.
+ *
+ * The frames paint at a terminal of 120 columns by 30 rows. The width
+ * keeps the longest pinned row whole: the list pane holds
+ * floor(120 / 2) = 60 columns, and the list's text area holds 60 - 4 =
+ * 56, the pane border and one cell of padding on each side. A row reads
+ * 2 columns of selection marker, 12 of the state badge or its spinner
+ * face, 11 of the task-type badge, 13 of the repository name, and 18 of
+ * the title field, 56 exactly, so the longest title, "Charlie branch"
+ * (14 columns), stands whole with no truncation; no width below 114
+ * keeps it whole. The height gives the list a window of 30 - 4 = 26
+ * rows, and the five settled rows stand inside it, none slides out.
  */
 
 const TITLES = new Map<string, string>([

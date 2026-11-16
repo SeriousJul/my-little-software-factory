@@ -125,7 +125,12 @@ import {
 	planeActionSettingOf,
 } from "../plane-action-registry.ts";
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
-import { RefreshCoordinator, SYSTEM_CLOCK } from "../refresh.ts";
+import {
+	createInitialLoad,
+	type InitialLoad,
+	RefreshCoordinator,
+	SYSTEM_CLOCK,
+} from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
 import { repositoryInitCheckoutPath } from "../repo.ts";
 import {
@@ -839,19 +844,13 @@ function useAppOpsRefs(prev: AppModelListStage) {
 	const handoffStartFieldsRef = useRef<AppHandoffStartFields | null>(null);
 	// The plane's initial-load-settled fact (ADR 0154): the one promise the
 	// shell's first list move and the Observation coordinator's first cycle
-	// both wait on. It stands beside the other refs from this early stage, so
-	// the observation stage that runs before the coordinator stage already
-	// holds the object the coordinator resolves later.
+	// wait on. It stands beside the other refs in this early stage, so the
+	// observation stage, whose effect runs before the coordinator stage's
+	// effect, already holds the pair the coordinator settles later. The pair
+	// outlives every coordinator run: a run's stop settles only a pair the
+	// run owns, and the shell settles this pair on unmount and re-run.
 	const initialLoadRef = useRef<InitialLoad | null>(null);
-	if (initialLoadRef.current === null) {
-		let settle: () => void = () => undefined;
-		initialLoadRef.current = {
-			promise: new Promise<void>((resolve) => {
-				settle = resolve;
-			}),
-			resolve: settle,
-		};
-	}
+	if (initialLoadRef.current === null) initialLoadRef.current = createInitialLoad();
 	// The log's read holder every turn log stands on (ADR 0147): the
 	// Decision modal's log and the Live view's decision sub-mode read the
 	// same ticket's log through it, so the two surfaces hold the same
@@ -1737,37 +1736,22 @@ function appCoordinatorSettled(
 }
 
 /**
- * The plane's initial-load-settled fact (ADR 0154): the one promise the
- * shell's first list move and the Observation coordinator's first cycle
- * wait on, and the resolver the refresh coordinator holds. The shell and
- * the coordinator share the one object, so they wait on the same moment and
- * neither guesses at it.
+ * The shell's hold on the list (ADR 0154): the load still stands, and the run
+ * that stands the load is alive. The settle flips the flag; the run's cleanup
+ * disposes the hold, so a settle that lands after it moves no list.
  */
-interface InitialLoad {
-	promise: Promise<void>;
-	resolve: () => void;
-}
-
-/** The load fact the ref holds, created on the first read if the ref is still empty. */
-function initialLoadOf(ref: RefObject<InitialLoad | null>): InitialLoad {
-	const load = ref.current;
-	if (load !== null) return load;
-	let settle: () => void = () => undefined;
-	const created: InitialLoad = {
-		promise: new Promise<void>((resolve) => {
-			settle = resolve;
-		}),
-		resolve: settle,
-	};
-	ref.current = created;
-	return created;
+interface ListHold {
+	/** The load still stands: the per-settlement moves are suppressed. */
+	loadStanding: boolean;
+	/** Mark the run disposed: a settle that lands now moves no list. */
+	dispose: () => void;
 }
 
 /** The plane's per-settlement work (ADR 0154): the warnings of the read surface while the load stands, and the list, the consultations, and the observation loop wait on the settle, so none of them moves on a partial snapshot. */
 function applySourceSettlement(
 	outcome: FetchOutcome | undefined,
 	fields: {
-		loadStanding: { current: boolean };
+		hold: ListHold;
 		setFaultWarningMessage: (warning: string) => void;
 		replaceTickets: () => void;
 		replaceConsultations: () => void;
@@ -1784,7 +1768,7 @@ function applySourceSettlement(
 		for (const warning of outcome.warnings ?? []) fields.setFaultWarningMessage(warning);
 	// While the load stands, the list, the consultations, and the
 	// observation loop all wait on the settle (ADR 0154).
-	if (fields.loadStanding.current) return;
+	if (fields.hold.loadStanding) return;
 	fields.replaceTickets();
 	fields.replaceConsultations();
 	// A fetch may have made a ticket actionable: let the observation loop
@@ -1796,20 +1780,28 @@ function applySourceSettlement(
  * The shell's held list move (ADR 0154): the flag that stands while the load
  * stands, and the one list replacement the settle makes: the tickets the
  * settled sources carry, joined with the tickets the state held, and the
- * consultations beside them.
+ * consultations beside them. The disposed run moves no list, so a settle that
+ * lands on an unmounted or re-run plane reads no state that is closing.
  */
 function holdListUntilSettle(
 	initialLoad: InitialLoad,
 	replaceTickets: () => void,
 	replaceConsultations: () => void,
-): { current: boolean } {
-	const loadStanding = { current: true };
+): ListHold {
+	let disposed = false;
+	const hold: ListHold = {
+		loadStanding: true,
+		dispose: () => {
+			disposed = true;
+		},
+	};
 	void initialLoad.promise.then(() => {
-		loadStanding.current = false;
+		hold.loadStanding = false;
+		if (disposed) return;
 		replaceTickets();
 		replaceConsultations();
 	});
-	return loadStanding;
+	return hold;
 }
 
 /**
@@ -1840,14 +1832,17 @@ function useAppCoordinator(props: AppProps, prev: AppCatalogStage) {
 		setFaultWarningMessage,
 	} = prev;
 	useEffect(() => {
-		const initialLoad = initialLoadOf(initialLoadRef);
-		const loadStanding = holdListUntilSettle(initialLoad, replaceTickets, replaceConsultations);
+		// The load stands on the app-lifetime pair (ADR 0154): a run's stop
+		// settles only a pair the run owns, and the shell settles this pair
+		// in the run's cleanup, on unmount and re-run.
+		const initialLoad = initialLoadRef.current ?? createInitialLoad();
+		const hold = holdListUntilSettle(initialLoad, replaceTickets, replaceConsultations);
 		const coordinator = new RefreshCoordinator(
 			liveSources,
 			props.state,
 			(outcome) =>
 				applySourceSettlement(outcome, {
-					loadStanding,
+					hold,
 					setFaultWarningMessage,
 					replaceTickets,
 					replaceConsultations,
@@ -1855,8 +1850,7 @@ function useAppCoordinator(props: AppProps, prev: AppCatalogStage) {
 				}),
 			{
 				initialLoad,
-				settled: (sourceName) =>
-					appCoordinatorSettled(sourceName, manualRefreshPending, clearWorkingMessage),
+				settled: (name) => appCoordinatorSettled(name, manualRefreshPending, clearWorkingMessage),
 				log: props.logger,
 			},
 		);
@@ -1864,6 +1858,10 @@ function useAppCoordinator(props: AppProps, prev: AppCatalogStage) {
 		coordinatorRef.current = coordinator;
 		return () => {
 			stop();
+			// The run is disposed: its hold handler moves no list, and the
+			// shell settles the app-lifetime pair in this same cleanup (ADR 0154).
+			hold.dispose();
+			initialLoad.resolve();
 			coordinatorRef.current = undefined;
 		};
 	}, [

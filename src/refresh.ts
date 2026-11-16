@@ -17,6 +17,30 @@ export interface RefreshClock {
 
 export const SYSTEM_CLOCK: RefreshClock = { now: () => Date.now(), setTimeout, clearTimeout };
 
+/**
+ * The plane's initial-load-settled fact (ADR 0154): the promise that
+ * resolves when every configured source's first fetch settles, and the
+ * resolver that settles it. The shell creates the pair the run stands on
+ * and settles it on unmount and effect re-run; the refresh coordinator
+ * creates its own pair when the shell supplies none, and settles that pair
+ * on its stop. One shape stands on both ends of the seam.
+ */
+export interface InitialLoad {
+	promise: Promise<void>;
+	resolve: () => void;
+}
+
+/** The one creation site of the load's pair (ADR 0154). */
+export function createInitialLoad(): InitialLoad {
+	let settle: () => void = () => undefined;
+	return {
+		promise: new Promise<void>((resolve) => {
+			settle = resolve;
+		}),
+		resolve: settle,
+	};
+}
+
 /** The aggregates the refresh coordinator reads, as a list (issue #202). */
 export interface RefreshAggregates {
 	sourceFact: SourceFactAggregate;
@@ -46,12 +70,20 @@ export class RefreshCoordinator {
 	 * whether its first fetch succeeded or failed. The shell waits on it to
 	 * replace the ticket list once, and the Observation coordinator waits on
 	 * it to run its first cycle, so the shell and the coordinator share the
-	 * one moment and neither guesses at it. A supplied pair makes the
-	 * coordinator resolve the shell's promise: the same object stands on both
-	 * ends of the seam.
+	 * one moment and neither guesses at it. A supplied pair waits on the
+	 * shell's fact: the coordinator settles its own pair on its stop, and the
+	 * shell settles a supplied pair on unmount and effect re-run, so a
+	 * re-run stands a new load instead of settling the one that stands.
 	 */
 	private readonly initialLoadSettledPromise: Promise<void>;
 	private initialLoadResolve: (() => void) | undefined;
+	/**
+	 * Whether this coordinator owns the fact it settles on its stop
+	 * (ADR 0154): the pair it created for itself. A pair the shell supplies
+	 * the shell settles, so a stopped coordinator never resolves the load a
+	 * surviving run still stands on.
+	 */
+	private readonly ownsInitialLoad: boolean;
 	/** The sources whose first settlement ran: the load's done set. */
 	private readonly firstFetchSettled = new Set<string>();
 
@@ -64,13 +96,13 @@ export class RefreshCoordinator {
 			settled?: (sourceName: string) => void;
 			log?: Logger;
 			/**
-			 * The plane's own initial-load-settled fact (ADR 0154): the promise
-			 * the shell and the Observation coordinator wait on, and the
-			 * resolver this coordinator holds. The shell supplies the pair so the
-			 * one object stands on all three ends. Omitted: the coordinator owns
-			 * its own fact.
+			 * The plane's initial-load-settled fact (ADR 0154): the pair the shell
+			 * creates and settles on unmount and effect re-run. The coordinator
+			 * waits on the shell's promise and never resolves it, so a stopped
+			 * coordinator settles no load the shell still stands on. Omitted: the
+			 * coordinator owns its own fact and settles it on its stop.
 			 */
-			initialLoad?: { promise: Promise<void>; resolve: () => void };
+			initialLoad?: InitialLoad;
 		} = {},
 	) {
 		this.sources = sources;
@@ -82,6 +114,7 @@ export class RefreshCoordinator {
 		if (fields.initialLoad !== undefined) {
 			this.initialLoadSettledPromise = fields.initialLoad.promise;
 			this.initialLoadResolve = fields.initialLoad.resolve;
+			this.ownsInitialLoad = false;
 			if (sources.length === 0) {
 				// No configured source: the load settles the moment it stands,
 				// so the shell's promise resolves now, not on a fetch that
@@ -91,12 +124,12 @@ export class RefreshCoordinator {
 		} else if (sources.length === 0) {
 			// No configured source: the load settles the moment it stands.
 			this.initialLoadSettledPromise = Promise.resolve();
+			this.ownsInitialLoad = false;
 		} else {
-			let settle: () => void = () => undefined;
-			this.initialLoadSettledPromise = new Promise<void>((resolve) => {
-				settle = resolve;
-			});
-			this.initialLoadResolve = settle;
+			const load = createInitialLoad();
+			this.initialLoadSettledPromise = load.promise;
+			this.initialLoadResolve = load.resolve;
+			this.ownsInitialLoad = true;
 		}
 	}
 
@@ -290,11 +323,15 @@ export class RefreshCoordinator {
 	}
 
 	/**
-	 * Settle the load on the coordinator's stop (ADR 0154): the probe the
-	 * plane held and the shell's held list move must not hold the shutdown
-	 * open, so the fact resolves whether or not the load had.
+	 * Settle the load the coordinator owns on its stop (ADR 0154): the probe
+	 * the plane held and the shell's held list move must not hold the
+	 * shutdown open, so the fact resolves whether or not the load had. A pair
+	 * the shell supplies is the shell's to settle: it settles it on unmount
+	 * and effect re-run, so a stopped coordinator never resolves the load a
+	 * surviving run still stands on.
 	 */
 	private settleInitialLoad(): void {
+		if (!this.ownsInitialLoad) return;
 		const resolve = this.initialLoadResolve;
 		if (resolve === undefined) return;
 		this.initialLoadResolve = undefined;

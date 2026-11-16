@@ -339,7 +339,7 @@ export interface Rig {
 	/** Wait until the module's in-flight work settles into the ledger. */
 	settle: () => Promise<void>;
 	/** Close the state file and take the temp directory with it. */
-	close: () => void;
+	close: () => Promise<void>;
 }
 
 /** The temp directories the open fixtures hold, cleaned when the run ends. */
@@ -718,7 +718,7 @@ export function rig(options: RigOptions): Rig {
 		close: () => {
 			// A settlement tick that the test never settled stands down before
 			// the state closes: it must not answer into the closed ledger.
-			void Promise.allSettled([...refreshTicks]).finally(() => {
+			return Promise.allSettled([...refreshTicks]).then(() => {
 				state.close();
 				rmSync(home, { recursive: true, force: true });
 				untrack(home);

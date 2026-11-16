@@ -186,3 +186,16 @@ stands on it.
   records: this decision names the order the shell already runs and holds the
   two moments it stands on, and it moves neither the probe nor the settlement
   nor the mounts.
+
+## Addendum: the seeded plane runs no probe on the settle
+
+The held-loop-policy bullet of the decision states that on the frame rig the
+stub sources settle and the first probe runs on the settle. The statement
+stands for the polled plane: its Observation coordinator runs, and its first
+probe lands on the settle, after the sources' boot reads. The seeded plane
+of ADR 0129 stands under the held loop policy, and the shell stands no
+Observation coordinator on it: the plane runs no Observation cycle at all.
+On the seeded settle the list moves exactly once, and no probe runs. The
+frame rig's seeded-plane frame pins the zero probe on the settle, and its
+polled-plane frames pin the first probe landing on the settle, so the rig
+pins both orders on the one fact the decision names.

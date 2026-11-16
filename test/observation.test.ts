@@ -532,7 +532,7 @@ describe("the held terminals behind the cycle (ADR 0152)", () => {
 			}),
 		]);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("the batch is a no-op where the probe is one list call", async () => {
@@ -548,7 +548,7 @@ describe("the held terminals behind the cycle (ADR 0152)", () => {
 		expect(lists).toHaveLength(3);
 		expect(gets).toHaveLength(0);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("a roster the host does not answer holds the observation on the herdr-core host", async () => {
@@ -562,7 +562,7 @@ describe("the held terminals behind the cycle (ADR 0152)", () => {
 		expect(report).not.toBeNull();
 		expect(report?.agents).toBeNull();
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 });
 
@@ -601,7 +601,7 @@ describe("the observation cycle's held period (ADR 0152)", () => {
 		// The grid stands on the start, not on the end: it drifts not at all.
 		expect(probeTimes(fake)).toEqual([epoch(), epoch() + 5000, epoch() + 10000]);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("a slow cycle runs the next at its completion, not at the completion plus the interval", async () => {
@@ -628,7 +628,7 @@ describe("the observation cycle's held period (ADR 0152)", () => {
 		// that start's completion, never at the completion plus the interval.
 		expect(probeTimes(fake)).toEqual([epoch(), epoch() + 12000, epoch() + 24000]);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("a cycle that finishes inside its slot stands the next on the grid, and the period returns to the interval", async () => {
@@ -661,7 +661,7 @@ describe("the observation cycle's held period (ADR 0152)", () => {
 		// The period returns to exactly the interval: the grid stands.
 		expect(probeTimes(fake)).toEqual([epoch(), epoch() + 12000, epoch() + 17000, epoch() + 22000]);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("a timer fire that meets a wake in flight holds the wake's start as the grid anchor", async () => {
@@ -693,7 +693,7 @@ describe("the observation cycle's held period (ADR 0152)", () => {
 		await fake.advance(4000);
 		expect(probeTimes(fake)).toEqual([epoch(), epoch() + 1000, epoch() + 6000, epoch() + 11000]);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 });
 
@@ -755,7 +755,7 @@ describe("the agent's wake wait (ADR 0084)", () => {
 		await fake.advance(1000);
 		expect(probeTimes(fake)).toEqual([epoch(), epoch() + 4000, epoch() + 5000]);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("the wait arms on the working report only: a booted idle agent holds no wait", async () => {
@@ -782,7 +782,7 @@ describe("the agent's wake wait (ADR 0084)", () => {
 			)} --until idle --until done --until blocked`,
 		]);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("a missing agent holds no wait", async () => {
@@ -794,7 +794,7 @@ describe("the agent's wake wait (ADR 0084)", () => {
 			fake.runner.commands().filter((command) => command.startsWith("herdr agent wait ")),
 		).toHaveLength(0);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("one wait per agent across cycles, and a settled ticket drops its arm", async () => {
@@ -818,7 +818,7 @@ describe("the agent's wake wait (ADR 0084)", () => {
 		await fake.coordinator.tick();
 		expect(waitCommands()).toHaveLength(1);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("a failed wait wakes nothing, and the next cycle re-arms it", async () => {
@@ -847,7 +847,7 @@ describe("the agent's wake wait (ADR 0084)", () => {
 		).toHaveLength(2);
 		expect(probeTimes(fake).length).toBe(before + 1);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("the herdr-core host's wait pins the budget, and the host's timeout answer wakes nothing", async () => {
@@ -869,7 +869,7 @@ describe("the agent's wake wait (ADR 0084)", () => {
 		// ticket stands in flight on the record the poll lists.
 		expect(inFlight(fake.state)).toBe(true);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 });
 
@@ -906,7 +906,7 @@ describe("the Missing agent's flow (ADR 0152)", () => {
 			}),
 		]);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("auto mode restarts a missing herdr agent once per episode, on the probe that meets it", async () => {
@@ -932,7 +932,7 @@ describe("the Missing agent's flow (ADR 0152)", () => {
 		await fake.coordinator.tick();
 		expect(restarts()).toHaveLength(1);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 });
 
@@ -995,7 +995,46 @@ describe("the first probe held on the settled load (issue #431, ADR 0154)", () =
 		expect(restarts()).toHaveLength(0);
 		expect(inFlight(fake.state)).toBe(true);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
+	});
+
+	test("the settled fact stands until the last source's first fetch settles, on a set where one fails its first read", async () => {
+		const world = new FakeSource(
+			"issues",
+			"github-issues",
+			fetchSuccess([fetchedTicket({ identity })]),
+		);
+		const pulls = new FakeSource("pulls", "github-pull-request", {
+			status: "failed",
+			reason: "the source did not answer",
+		});
+		const fake = rig({ config, agents: [], refreshSources: [world, pulls] });
+		const refresh = fake.refresh;
+		if (refresh === undefined) throw new Error("the rig named its sources");
+		// The pin of the fact at the coordinator's interface (story 20): it
+		// stands while any source's first fetch stands, and it resolves
+		// exactly when the last one settles.
+		let settled = false;
+		void refresh.initialLoadSettled.then(() => {
+			settled = true;
+		});
+		fake.coordinator.start();
+		// The start runs the sources' boot reads: yield so the reads are in
+		// flight before the test settles them.
+		await fake.settle();
+		// One source's first fetch settles: the fact stands, the other
+		// source's first read still in flight.
+		world.settleCurrent();
+		await fake.settle();
+		expect(settled).toBe(false);
+		// The failed source settles last: the failed first read settles the
+		// load the way a successful one does, and the fact resolves on the
+		// last settlement, exactly.
+		pulls.settleCurrent();
+		await fake.settle();
+		expect(settled).toBe(true);
+		fake.coordinator.stop();
+		await fake.close();
 	});
 
 	test("a failed first fetch settles the load, so a bad source holds no probe open", async () => {
@@ -1033,7 +1072,7 @@ describe("the first probe held on the settled load (issue #431, ADR 0154)", () =
 			1,
 		);
 		fake.coordinator.stop();
-		fake.close();
+		await fake.close();
 	});
 
 	test("a stop settles the load, so a shutdown does not wait on a load that will not finish", async () => {
@@ -1054,6 +1093,6 @@ describe("the first probe held on the settled load (issue #431, ADR 0154)", () =
 		// does not hold the shutdown open.
 		await refresh.initialLoadSettled;
 		expect(fake.runner.commands()).toHaveLength(0);
-		fake.close();
+		await fake.close();
 	});
 });
