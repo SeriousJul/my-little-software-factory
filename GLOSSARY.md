@@ -279,6 +279,7 @@ _Avoid_: status, phase
 **Awaiting**:
 The ticket state where the agent has settled its turn, the last message is captured, and no completion decision is made yet.
 A route ask leaves this state for `open` with an incremented cycle number in the same write that lands the decision: the turn routed its work, and the cycle ends behind the decision (ADR 0067, corrected by ADR 0072).
+The ticket's terminal stays in the merged list's bound while it awaits, so a recovered agent that reports working reopens the turn for `running`, and the turn's next settle refreshes the same completion trace (ADR 0163).
 _Avoid_: finished, pending review
 
 

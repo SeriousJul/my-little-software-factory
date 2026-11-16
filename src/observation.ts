@@ -463,7 +463,10 @@ export interface MergedAgentReaderOptions {
  * plane holds: the roster carries no status word, so the status of each held
  * terminal comes from its record, and the terminal names the plane's own
  * Agents stand under are the bound, so the poll never reads every terminal
- * on the machine (ADR 0142). A terminal that exits with a code reads `done`,
+ * on the machine (ADR 0142). The bound keeps the awaiting Tickets' terminals
+ * too, so a recovered Agent standing in a held turn's terminal is the
+ * revival the cycle sees (ADR 0163). A terminal that exits with a code reads
+ * `done`,
  * the settle herdr's `done` is. A terminal the host lost - killed or
  * crashed, with no exit code - is the lost Agent the `--no-keep` start stands
  * for, and the row is dropped so it reads Missing, not as a completed turn
@@ -525,7 +528,8 @@ export class MergedAgentReader implements AgentReader {
 
 	/**
 	 * The core half of the merged list (ADR 0142): one unscoped roster read,
-	 * and the record of every terminal the plane's own Agents stand under.
+	 * and the record of every terminal the plane's own Agents stand under,
+	 * awaiting Tickets' terminals among them (ADR 0163).
 	 * The roster decides which terminals matter, so the poll never reads every
 	 * terminal on the machine. A terminal that exits with a code reads `done`,
 	 * the settle herdr's `done` is. A terminal the host lost - killed or

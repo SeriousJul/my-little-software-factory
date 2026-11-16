@@ -39,7 +39,7 @@ import {
 	type ObservationReport,
 	SESSION_TURN_LOGS,
 } from "./observation.ts";
-import { TICKET_SEAT_STATES } from "./parallel.ts";
+import { TICKET_LIST_STATES } from "./parallel.ts";
 import { type RefreshClock, RefreshCoordinator } from "./refresh.ts";
 import type { ConsultationRecordAggregate } from "./state/consultation-record.ts";
 import type { TicketWorkCycleAggregate } from "./state/ticket-work-cycle.ts";
@@ -134,8 +134,10 @@ export interface BootSequence {
 /**
  * The names the plane's herdr-core Agents hold (issue #410, ADR 0142): the
  * in-flight Tickets' and Consultations' recorded names on the herdr-core
- * host. The merged poll's roster read is unscoped, and the per-Agent read
- * runs only over these names, so the poll never reads every terminal on the
+ * host, and the awaiting Tickets' names, so a recovered Agent standing in
+ * the terminal of a held turn is the revival the cycle sees (ADR 0163).
+ * The merged poll's roster read is unscoped, and the per-Agent read runs
+ * only over these names, so the poll never reads every terminal on the
  * machine.
  */
 function coreTerminalNames(state: {
@@ -143,7 +145,7 @@ function coreTerminalNames(state: {
 	consultationRecord: ConsultationRecordAggregate;
 }): readonly string[] {
 	const names: string[] = [];
-	for (const ticket of state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES))
+	for (const ticket of state.ticketWorkCycle.ticketsByState(TICKET_LIST_STATES))
 		if (ticket.host === "herdr-core" && ticket.paneId !== null) names.push(ticket.paneId);
 	// The set the Consultation close's own verification reads stands beside it:
 	// a close marks its record `closing` before it verifies the Agent, so the

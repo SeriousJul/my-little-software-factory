@@ -90,14 +90,22 @@ body is the same body the plane reads on the herdr host's visible screen. No
 synthesized ANSI and no replay of an old capture dressed as a live stream
 stand anywhere for the styled read the host does not answer, and the Stale
 Agent output and the Live view's stale note keep their current meaning: they
-name a record or a read that truly cannot be had.
+name a record or a read that truly cannot be had. ADR 0163 lands beside them
+on 2026-11-16, from the operator's own report of a held session that never
+updated in the control plane: the list's bound keeps an awaiting Ticket's
+terminal, so a recovered Agent is the revival the cycle sees, and a kept
+terminal whose program is lost reads Missing beside the shell or the wait the
+host stands in it. The operator's report stands as the real-host evidence for
+the bound gap, and the kept-terminal walk on the live host stands below as
+the record's open item.
 
 See [ADR 0141](../adr/0141-the-plane-resolves-its-agent-host-herdr-or-herdr-core.md),
 [ADR 0142](../adr/0142-one-run-holds-agents-on-both-hosts-and-the-host-stands-on-the-handoff.md),
 [ADR 0143](../adr/0143-on-the-herdr-core-host-the-plane-owns-the-worktree-lifecycle.md),
 [ADR 0144](../adr/0144-on-the-herdr-core-host-the-plane-derives-the-agent-session-record-path.md),
+[ADR 0161](../adr/0161-the-herdr-core-derivation-bounds-the-session-record-by-the-hosts-terminal-creation-time.md),
 and
-[ADR 0161](../adr/0161-the-herdr-core-derivation-bounds-the-session-record-by-the-hosts-terminal-creation-time.md)
+[ADR 0163](../adr/0163-a-kept-terminals-status-keeps-moving-in-the-plane.md)
 for the decisions, and
 [the Stub herdr world verification](./stub-herdr-world.md) for the answer-shape
 rule this file follows.
@@ -394,6 +402,13 @@ it stands below, each one owed by the change that lands it:
   [the shared-controls verification record](./shared-controls.md) states, and
   the terminal walks on the theme-inherited paint stay open there. This change
   makes no accessibility claim.
+- The kept-terminal walk of ADR 0163 on the live host: the operator's report
+  of 2026-11-16 stands as the real-host evidence for the bound gap (a kept
+  terminal whose ticket settled held, then recovered, showed no status move
+  in the control plane), and the loss read of a kept terminal whose program
+  dies - the Missing marker, the auto-mode restart, and the recovery
+  re-attach on a program restarted in the kept terminal - stands in the suite
+  only, unmeasured on the live host.
 - No styled read was ever attempted against herdr-core, in the probes and in
   the suite: herdr-core reads a screen as text and answers no styled read
   at all, so the read the Live view would ask does not exist for that host.
@@ -479,6 +494,17 @@ one entry per behavior, each beside the behavior's home module.
 | The automatic routes take the run's host, not the record's: the top-up's open add resolves the run's host beside a ticket whose last handoff recorded the other host, and the Work queue's pickup starts the run's host, never the host the ticket's handoff recorded | `test/observation.test.ts`, the open-dispatch suite, and `test/handoff-dispatch.test.ts`, the route's host block |
 | The V31 migration: the handoff and Consultation tables gain one host column each, and the old rows take the host their runs resolved, stated, not guessed | `test/state/consultationRecord.test.ts`, the V30-to-V31 walk |
 | The closed surface: no `herdr` or `hc` argument outside the module, and the Stub world answers the dialects the module builds | `test/agent-host.test.ts` and the closed-surface walk in `test/herdr-world.test.ts` |
+
+## What ADR 0163 stands on, in the suite
+
+ADR 0163's behaviors run against the Stub herdr world in this suite; one entry
+per behavior, each beside the behavior's home module.
+
+| Behavior the ADR lands | Where it stands in the suite |
+| --- | --- |
+| A recovered Agent revives the awaiting Ticket's turn: the held turn settles, the awaiting Ticket's terminal stays in the list's bound, the Agent's working report reopens the turn to `running`, and the turn's next settle refreshes the same completion trace and returns the Ticket to `awaiting` | `test/observation.test.ts`, the held turn's recovery suite |
+| A kept terminal whose program is lost reads Missing, and auto mode restarts it once past the startup grace: the live record carries a loss reason beside no process id, the row drops, and the restart stands in the Work queue | `test/observation.test.ts`, the Missing agent's flow |
+| The reader's loss mapping: the loss reasons beside no process id, and beside a program that has reported no status, drop the row; a restarted program that reports a status stands present on it; a loss reason beside no process fact reads as present, and `spawn_pending` stays present | `test/observation.test.ts`, the merged reader's case table |
 
 ## Issue and version pins
 

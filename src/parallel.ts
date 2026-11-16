@@ -40,6 +40,14 @@ export const CONSULTATION_SEAT_STATES: readonly ConsultationState[] = ["opening"
 /** The ticket states that can hold a Parallel limit seat. */
 export const TICKET_SEAT_STATES: readonly TicketState[] = ["handed-off", "running"];
 
+/**
+ * The ticket states whose herdr-core terminals the merged Agent list keeps
+ * reading: the seats, and the awaiting tickets whose held turn a recovered
+ * Agent revives. Awaiting stays out of the seat count, so the list's states
+ * are a superset of the seats' (ADR 0163).
+ */
+export const TICKET_LIST_STATES: readonly TicketState[] = [...TICKET_SEAT_STATES, "awaiting"];
+
 /** What one in-flight ticket holds for the seat count. */
 export interface ParallelSeatTicketFact {
 	ticketIdentity: string;

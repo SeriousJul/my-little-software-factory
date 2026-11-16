@@ -27,7 +27,7 @@ import {
 	ObservationCoordinator,
 	type ObservationReport,
 } from "../src/observation.ts";
-import { TICKET_SEAT_STATES } from "../src/parallel.ts";
+import { TICKET_LIST_STATES } from "../src/parallel.ts";
 import type { RefreshClock } from "../src/refresh.ts";
 import { RefreshCoordinator } from "../src/refresh.ts";
 import type { CommandRunner } from "../src/runner.ts";
@@ -579,7 +579,7 @@ export function rig(options: RigOptions): Rig {
 	// App derives them.
 	const coreTerminalNames = (): string[] => {
 		const names: string[] = [];
-		for (const ticket of state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES))
+		for (const ticket of state.ticketWorkCycle.ticketsByState(TICKET_LIST_STATES))
 			if (ticket.host === "herdr-core" && ticket.paneId !== null) names.push(ticket.paneId);
 		for (const consultation of state.consultationRecord.consultationsByState([
 			"opening",

@@ -143,7 +143,9 @@ function handOut(state: FactoryState, id: string): void {
 
 /**
  * One in-flight ticket on the herdr-core host: the seat is the terminal the
- * run's handoff named, and the name is the terminal's name (ADR 0141).
+ * run's handoff named, and the name the handoff recorded is the terminal's
+ * name (ADR 0141), so the cycle's own-Agent rule stands on the identity it
+ * expects.
  */
 function coreHandOut(state: FactoryState, id: string, terminalName: string): void {
 	const claim = state.handoff.claimHandoff(id, { ...handoffChoice, host: "herdr-core" }, "open");
@@ -152,6 +154,7 @@ function coreHandOut(state: FactoryState, id: string, terminalName: string): voi
 		paneId: terminalName,
 		tabId: terminalName,
 		workspaceId: terminalName,
+		agentName: terminalName,
 	});
 }
 
@@ -1207,6 +1210,57 @@ describe("the first probe held on the settled load (issue #431, ADR 0154)", () =
 		// does not hold the shutdown open.
 		await refresh.initialLoadSettled;
 		expect(fake.runner.commands()).toHaveLength(0);
+		await fake.close();
+	});
+});
+
+describe("the held turn's recovery", () => {
+	test("a recovered agent revives the awaiting ticket's turn, and the next settle refreshes it", async () => {
+		const fake = rig({
+			config,
+			agentHost: CORE_HOST,
+			autoOn: false,
+			startupGraceMs: 1000,
+			// The settled turn's log stands on the record the host derives:
+			// the turn ends without completing, so its settle holds.
+			turnLogs: async () => ({
+				kind: "ended" as const,
+				turnEnd: {
+					log: [{ kind: "text" as const, text: "the turn held" }],
+					cause: "aborted" as const,
+					detail: "",
+				},
+			}),
+			sessionRecord: () => ({ kind: "path" as const, path: "/fake/session.jsonl" }),
+		});
+		coreHandOut(fake.state, identity, "t2n");
+		coreSeat(fake.runner, "t2n");
+		// The agent works: the tick moves the handoff to running.
+		await fake.coordinator.tick();
+		expect(fake.state.ticketWorkCycle.ticketState(identity)).toBe("running");
+		// The turn ends without completing: the settle holds it, and the
+		// ticket rests at awaiting.
+		fake.runner.set("hc", ["get", "--json", "t2n"], {
+			stdout: coreRecordJson({ address: "t2n", name: "t2n", state: "live", status: "idle" }),
+		});
+		await fake.advance(1001);
+		await fake.coordinator.tick();
+		expect(fake.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+		// The operator re-prompts the Agent: it works again, and the next
+		// cycle revives the ticket's turn, so the status moves.
+		fake.runner.set("hc", ["get", "--json", "t2n"], {
+			stdout: coreRecordJson({ address: "t2n", name: "t2n", state: "live", status: "working" }),
+		});
+		await fake.coordinator.tick();
+		expect(fake.state.ticketWorkCycle.ticketState(identity)).toBe("running");
+		// The recovered turn ends the same way: the ticket rests at awaiting
+		// again, on the refreshed turn's facts.
+		fake.runner.set("hc", ["get", "--json", "t2n"], {
+			stdout: coreRecordJson({ address: "t2n", name: "t2n", state: "live", status: "idle" }),
+		});
+		await fake.coordinator.tick();
+		expect(fake.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
+		fake.coordinator.stop();
 		await fake.close();
 	});
 });
