@@ -638,7 +638,12 @@ describe("the merged Main view", () => {
 				expect(markerRowOf(moved)).toBe(9);
 			},
 			planeRecord,
-			{ width: WIDTH, height: 32 },
+			// The held policy: the list-wrap pin the test walks needs no active
+			// Observation cycle, and the production policy's first probe re-derives
+			// the Consultation rows under the cursor, which raced the walk's key
+			// steps. The held plane settles the same load and moves no list behind
+			// the cursor, so the walk stands deterministic.
+			{ width: WIDTH, height: 32, loopPolicy: { kind: "held" } },
 		);
 	});
 

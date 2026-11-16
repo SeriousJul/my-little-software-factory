@@ -46,6 +46,7 @@ import {
 	normalizeAgentStatus,
 } from "../agent-host.ts";
 import { AttentionService } from "../attention.ts";
+import { type BootSequenceFields, startBootSequence } from "../boot-sequence.ts";
 import type { FactoryConfig, GitHubAuthentication, TransitionOutcome } from "../config.ts";
 import {
 	type ConfigWriteFact,
@@ -104,9 +105,7 @@ import {
 	type HerdrAgentReader,
 	MergedAgentReader,
 	matchConsultationAgent,
-	ObservationCoordinator,
-	type ObservationReport,
-	SESSION_TURN_LOGS,
+	type ObservationCoordinator,
 	STARTUP_GRACE_MS,
 } from "../observation.ts";
 import {
@@ -125,12 +124,7 @@ import {
 	planeActionSettingOf,
 } from "../plane-action-registry.ts";
 import { closeCycleEndDraftPullRequest } from "../pull-request.ts";
-import {
-	createInitialLoad,
-	type InitialLoad,
-	RefreshCoordinator,
-	SYSTEM_CLOCK,
-} from "../refresh.ts";
+import { type RefreshCoordinator, SYSTEM_CLOCK } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
 import { repositoryInitCheckoutPath } from "../repo.ts";
 import {
@@ -171,10 +165,10 @@ import type { TicketListViews, TicketWorkCycleAggregate } from "../state/ticket-
 import type { WorkQueueAggregate, WorkQueueItem } from "../state/work-queue.ts";
 import { workQueueIdentityOf } from "../state/work-queue.ts";
 import { currentThemeResolution } from "../theme-source.ts";
-import type { FetchOutcome, TicketSource } from "../ticket-source.ts";
+import type { TicketSource } from "../ticket-source.ts";
 import { createTicketSource, GhAuthenticator } from "../ticket-source.ts";
 import { readSessionExchange, type SessionEntry, type TurnEndCause } from "../turn-log.ts";
-import { deriveNextStep, fireTransition, refireRecordedSkips } from "../workflow.ts";
+import { deriveNextStep, fireTransition } from "../workflow.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
 import { consultationClosePanel, consultationDeletePanel } from "./consultation-close-panel.ts";
@@ -842,15 +836,6 @@ function useAppOpsRefs(prev: AppModelListStage) {
 	const refireInFlightRef = useRef<string | null>(null);
 	const ticketOpsFieldsRef = useRef<AppTicketOpsFields | null>(null);
 	const handoffStartFieldsRef = useRef<AppHandoffStartFields | null>(null);
-	// The plane's initial-load-settled fact (ADR 0154): the one promise the
-	// shell's first list move and the Observation coordinator's first cycle
-	// wait on. It stands beside the other refs in this early stage, so the
-	// observation stage, whose effect runs before the coordinator stage's
-	// effect, already holds the pair the coordinator settles later. The pair
-	// outlives every coordinator run: a run's stop settles only a pair the
-	// run owns, and the shell settles this pair on unmount and re-run.
-	const initialLoadRef = useRef<InitialLoad | null>(null);
-	if (initialLoadRef.current === null) initialLoadRef.current = createInitialLoad();
 	// The log's read holder every turn log stands on (ADR 0147): the
 	// Decision modal's log and the Live view's decision sub-mode read the
 	// same ticket's log through it, so the two surfaces hold the same
@@ -867,7 +852,6 @@ function useAppOpsRefs(prev: AppModelListStage) {
 		refireInFlightRef,
 		ticketOpsFieldsRef,
 		handoffStartFieldsRef,
-		initialLoadRef,
 		turnLogReads: turnLogReads.current,
 	};
 }
@@ -1545,106 +1529,98 @@ function useAppConsultationSessionRead(appProps: AppProps, o: AppRenderModesStag
 	useEffect(() => appConsultationSessionRefresh(sessionFields), [sessionFields]);
 }
 
-/** The fields the observation loop reads and writes (ADR 0034). */
-function observationLoopFields(props: AppProps, prev: AppKeyHandlersStage): AppObservationFields {
+/** The fields the boot-sequence module reads and writes (ADR 0155): the shell's live sources and time seam, the report sinks the module reports onto, and the dispatch operations whose stops the teardown runs. */
+function bootSequenceFields(prev: AppKeyHandlersStage): BootSequenceFields {
+	const {
+		attention,
+		clearOperationMessage,
+		clearWorkingMessage,
+		closeCycleEndDraft,
+		configRef,
+		consultationOperations,
+		handoffDispatch,
+		liveSources,
+		manualRefreshPending,
+		refreshPullRequestSources,
+		refreshTicketSources,
+		replaceConsultations,
+		replaceTickets,
+		setAgents,
+		setBell,
+		setFaultWarningMessage,
+		setQueuePaused,
+		setStatus,
+	} = prev;
 	return {
-		state: props.state,
-		handoffDispatch: prev.handoffDispatch,
-		loopPolicy: props.loopPolicy,
-		commandRunner: prev.commandRunner,
-		sessionRecord: props.sessionRecord,
-		configRef: prev.configRef,
-		autoModeRef: prev.autoModeRef,
-		replaceTickets: prev.replaceTickets,
-		replaceConsultations: prev.replaceConsultations,
-		setAgents: prev.setAgents,
-		setBell: prev.setBell,
-		attention: prev.attention,
-		onReady: props.onReady,
-		clearOperationMessage: prev.clearOperationMessage,
-		setStatus: prev.setStatus,
-		refreshTicketSources: prev.refreshTicketSources,
-		closeCycleEndDraft: prev.closeCycleEndDraft,
-		refreshPullRequestSources: prev.refreshPullRequestSources,
-		logger: props.logger,
-		observationRef: prev.observationRef,
-		coordinatorRef: prev.coordinatorRef,
-		handoffDispatchRef: prev.handoffDispatchRef,
-		consultationOperationsRef: prev.consultationOperationsRef,
-		initialLoadRef: prev.initialLoadRef,
+		sources: liveSources,
+		clock: SYSTEM_CLOCK,
+		config: () => configRef.current,
+		replaceTickets,
+		replaceConsultations,
+		setQueuePaused,
+		setFaultWarningMessage,
+		setStatus,
+		clearOperationMessage,
+		clearWorkingMessage,
+		setAgents,
+		setBell,
+		attention,
+		refreshTicketSources,
+		closeCycleEndDraft,
+		refreshPullRequestSources,
+		manualRefreshPending,
+		handoffDispatch,
+		consultationOperations,
 	};
 }
 
-/** The observation loop's fields: the poll's inputs and the writes its tick makes (ADR 0034). */
-function useAppObservationFields(props: AppProps, prev: AppKeyHandlersStage) {
-	// biome-ignore lint/correctness/useExhaustiveDependencies: the fields below are listed one by one; `prev` is a stage object rebuilt each render, and the memo must track its fields, not the object
-	const observationFields = useMemo<AppObservationFields>(
-		() => observationLoopFields(props, prev),
-		[
-			props.state,
-			prev.handoffDispatch,
-			props.loopPolicy,
-			prev.commandRunner,
-			props.sessionRecord,
-			prev.configRef,
-			prev.autoModeRef,
-			prev.replaceTickets,
-			prev.replaceConsultations,
-			prev.setAgents,
-			prev.setBell,
-			prev.attention,
-			props.onReady,
-			prev.clearOperationMessage,
-			prev.setStatus,
-			prev.refreshTicketSources,
-			prev.closeCycleEndDraft,
-			prev.refreshPullRequestSources,
-			props.logger,
-			prev.observationRef,
-			prev.coordinatorRef,
-			prev.handoffDispatchRef,
-			prev.consultationOperationsRef,
-			prev.initialLoadRef,
-		],
-	);
-	return { ...prev, observationFields };
-}
-type AppObservationFieldsStage = ReturnType<typeof useAppObservationFields>;
-
-/**
- * The observation loop: the poll, the seats, and the dispatch's tick (ADR
- * 0034). The run's host rides beside the stage, not inside its memo, the way
- * the fields stand: the cycle asks for starts on the run's host, never on a
- * host a previous handoff recorded (issue #409).
- */
-function useAppObservation(prev: AppObservationFieldsStage, agentHost: AgentHostResolution) {
-	useEffect(
-		() => appObservationCoordinator(prev.observationFields, agentHost),
-		[prev.observationFields, agentHost],
-	);
-	return prev;
-}
-type AppObservationStage = ReturnType<typeof useAppObservation>;
-
-/** The boot read: the state's tickets and Consultations, and the queue's brake the factory state holds (ADR 0052). */
-function useAppInitBoot(props: AppProps, prev: AppObservationStage) {
-	const { replaceConsultations, replaceTickets, setQueuePaused } = prev;
-	const { state } = props;
-	// A state may already hold tickets when the app boots: read them once at
-	// mount, before any refresh or observation cycle runs.
+/** The boot-sequence stage (ADR 0155): the shell calls the module once per run, stands the report sinks the module reports onto, and publishes the coordinators the shell's surfaces read: the key handler's refresh now, and the roster the seat facts stand beside. */
+function useAppBootSequence(props: AppProps, prev: AppKeyHandlersStage) {
+	const { observationRef, coordinatorRef } = prev;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the deps below are the fields bootSequenceFields reads, one by one; `prev` is a stage object rebuilt each render, and the effect must track its fields, not the object
 	useEffect(() => {
-		replaceTickets();
-		replaceConsultations();
-		// The queue pause is factory state (ADR 0052): a restart finds the
-		// brake where the operator left it.
-		setQueuePaused(state.workQueue.queuePaused());
-	}, [state, replaceTickets, replaceConsultations, setQueuePaused]);
+		const sequence = startBootSequence(props, bootSequenceFields(prev));
+		coordinatorRef.current = sequence.refresh;
+		observationRef.current = sequence.cycle;
+		return () => {
+			// The run is disposed: its loops stop and its hold on the list
+			// moves no list after it, and the run's dispatch operations
+			// stand on, the way the run's own stop stands on them (ADR 0155).
+			sequence.dispose();
+			coordinatorRef.current = undefined;
+			observationRef.current = undefined;
+		};
+	}, [
+		props.state,
+		props.loopPolicy,
+		props.sessionRecord,
+		props.logger,
+		props.agentHostResolution,
+		props.runner,
+		prev.liveSources,
+		prev.replaceTickets,
+		prev.replaceConsultations,
+		prev.setQueuePaused,
+		prev.clearWorkingMessage,
+		prev.clearOperationMessage,
+		prev.setFaultWarningMessage,
+		prev.setStatus,
+		prev.setAgents,
+		prev.setBell,
+		prev.attention,
+		prev.configRef,
+		prev.manualRefreshPending,
+		prev.consultationOperations,
+		prev.handoffDispatch,
+		observationRef,
+		coordinatorRef,
+	]);
 	return { ...prev };
 }
-type AppInitBootStage = ReturnType<typeof useAppInitBoot>;
+type AppBootSequenceStage = ReturnType<typeof useAppBootSequence>;
 
 /** The one-time init note on the Message line (ADR 0075, story 20): the operator learns the uninit or drift once per run. */
-function useAppInitNote(props: AppProps, prev: AppInitBootStage) {
+function useAppInitNote(props: AppProps, prev: AppBootSequenceStage) {
 	const { config, groupingAxis, initNoteShownRef, machineTickets, setNoticeMessage } = prev;
 	const { state } = props;
 	// The one-time note on the Message line at the first sight of an
@@ -1723,167 +1699,8 @@ function useAppCatalog(prev: AppInitNoteStage) {
 }
 type AppCatalogStage = ReturnType<typeof useAppCatalog>;
 
-/** The refresh's settled hook: the pending source leaves the refresh's set.
- */
-function appCoordinatorSettled(
-	sourceName: string,
-	pending: { current: Set<string> },
-	clearWorkingMessage: (owner: ProgressOwner) => void,
-): void {
-	if (!pending.current.has(sourceName)) return;
-	pending.current.delete(sourceName);
-	if (pending.current.size === 0) clearWorkingMessage("refresh");
-}
-
-/**
- * The shell's hold on the list (ADR 0154): the load still stands, and the run
- * that stands the load is alive. The settle flips the flag; the run's cleanup
- * disposes the hold, so a settle that lands after it moves no list.
- */
-interface ListHold {
-	/** The load still stands: the per-settlement moves are suppressed. */
-	loadStanding: boolean;
-	/** Mark the run disposed: a settle that lands now moves no list. */
-	dispose: () => void;
-}
-
-/** The plane's per-settlement work (ADR 0154): the warnings of the read surface while the load stands, and the list, the consultations, and the observation loop wait on the settle, so none of them moves on a partial snapshot. */
-function applySourceSettlement(
-	outcome: FetchOutcome | undefined,
-	fields: {
-		hold: ListHold;
-		setFaultWarningMessage: (warning: string) => void;
-		replaceTickets: () => void;
-		replaceConsultations: () => void;
-		observationTick: () => void;
-	},
-): void {
-	// The pull request source's one warning line surfaces on the Message
-	// line (ADR 0023). The warnings a successful source read carries: a
-	// security source the read skipped. The plane met them on its own, so
-	// they are Faults (ADR 0118), and the dedup on the same fact keeps the
-	// record quiet while they stand. They surface while the load stands as
-	// well: a warning is a fact of the read, not a move of the list.
-	if (outcome?.status === "success")
-		for (const warning of outcome.warnings ?? []) fields.setFaultWarningMessage(warning);
-	// While the load stands, the list, the consultations, and the
-	// observation loop all wait on the settle (ADR 0154).
-	if (fields.hold.loadStanding) return;
-	fields.replaceTickets();
-	fields.replaceConsultations();
-	// A fetch may have made a ticket actionable: let the observation loop
-	// act on it now instead of on the next poll.
-	fields.observationTick();
-}
-
-/**
- * The shell's held list move (ADR 0154): the flag that stands while the load
- * stands, and the one list replacement the settle makes: the tickets the
- * settled sources carry, joined with the tickets the state held, and the
- * consultations beside them. The disposed run moves no list, so a settle that
- * lands on an unmounted or re-run plane reads no state that is closing.
- */
-function holdListUntilSettle(
-	initialLoad: InitialLoad,
-	replaceTickets: () => void,
-	replaceConsultations: () => void,
-): ListHold {
-	let disposed = false;
-	const hold: ListHold = {
-		loadStanding: true,
-		dispose: () => {
-			disposed = true;
-		},
-	};
-	void initialLoad.promise.then(() => {
-		hold.loadStanding = false;
-		if (disposed) return;
-		replaceTickets();
-		replaceConsultations();
-	});
-	return hold;
-}
-
-/**
- * Start the coordinator per the loop policy (issue #366): held stands the
- * one-shot boot read and no schedule, and the other policies run the
- * plane's own schedule. Returns the stop the effect's cleanup runs.
- */
-function startAppCoordinator(
-	coordinator: RefreshCoordinator,
-	loopPolicy: AppLoopPolicy,
-): () => void {
-	if (loopPolicy.kind === "held") coordinator.startOnce();
-	else coordinator.start();
-	return () => coordinator.stop();
-}
-
-/** The refresh coordinator: the startup's poll, the sources, and the dispatch the key handler holds in a ref (ADR 0034). */
-function useAppCoordinator(props: AppProps, prev: AppCatalogStage) {
-	const {
-		clearWorkingMessage,
-		coordinatorRef,
-		initialLoadRef,
-		liveSources,
-		manualRefreshPending,
-		observationRef,
-		replaceConsultations,
-		replaceTickets,
-		setFaultWarningMessage,
-	} = prev;
-	useEffect(() => {
-		// The load stands on the app-lifetime pair (ADR 0154): a run's stop
-		// settles only a pair the run owns, and the shell settles this pair
-		// in the run's cleanup, on unmount and re-run.
-		const initialLoad = initialLoadRef.current ?? createInitialLoad();
-		const hold = holdListUntilSettle(initialLoad, replaceTickets, replaceConsultations);
-		const coordinator = new RefreshCoordinator(
-			liveSources,
-			props.state,
-			(outcome) =>
-				applySourceSettlement(outcome, {
-					hold,
-					setFaultWarningMessage,
-					replaceTickets,
-					replaceConsultations,
-					observationTick: () => observationRef.current?.tick(),
-				}),
-			{
-				initialLoad,
-				settled: (name) => appCoordinatorSettled(name, manualRefreshPending, clearWorkingMessage),
-				log: props.logger,
-			},
-		);
-		const stop = startAppCoordinator(coordinator, props.loopPolicy);
-		coordinatorRef.current = coordinator;
-		return () => {
-			stop();
-			// The run is disposed: its hold handler moves no list, and the
-			// shell settles the app-lifetime pair in this same cleanup (ADR 0154).
-			hold.dispose();
-			initialLoad.resolve();
-			coordinatorRef.current = undefined;
-		};
-	}, [
-		props.state,
-		liveSources,
-		replaceTickets,
-		replaceConsultations,
-		clearWorkingMessage,
-		setFaultWarningMessage,
-		props.logger,
-		props.loopPolicy,
-		observationRef,
-		coordinatorRef,
-		initialLoadRef,
-		manualRefreshPending,
-	]);
-	return { ...prev };
-}
-type AppCoordinatorStage = ReturnType<typeof useAppCoordinator>;
-
 /** The open panel's own facts: the panel's kind, its Ticket, and its Consultation copies. */
-function useAppOpenPanel(prev: AppCoordinatorStage) {
+function useAppOpenPanel(prev: AppCatalogStage) {
 	const { consultationsRef, findTicket, panel } = prev;
 	// The ticket panels are the closed set: the decision on a settled turn, the
 	// live view over an in-flight agent, the missing-agent choice, and the Close
@@ -2413,13 +2230,10 @@ function useAppOpsStages(
 	// stream) live in the screen tree under the stack (ADR 0150), not in this
 	// chain: a suspended screen unmounts, and its timer stops with it. The
 	// plane's loops keep their cadence through every transition.
-	const o29a = useAppObservationFields(props, o27);
-	const o29 = useAppObservation(o29a, props.agentHostResolution);
-	const o30 = useAppInitBoot(props, o29);
-	const o31 = useAppInitNote(props, o30);
+	const o29 = useAppBootSequence(props, o27);
+	const o31 = useAppInitNote(props, o29);
 	const o32 = useAppCatalog(o31);
-	const o33 = useAppCoordinator(props, o32);
-	const o34 = useAppOpenPanel(o33);
+	const o34 = useAppOpenPanel(o32);
 	const o35 = useAppPanelDecision(o34);
 	const o36 = useAppPanelRelease(o35);
 	const o38 = useAppRenderMessages(props, o36);
@@ -5931,263 +5745,6 @@ function appConsultationSessionRefresh(f: AppConsultationSessionFields): (() => 
 	};
 }
 
-/** The fields the observation coordinator effect reads and writes. */
-interface AppObservationFields {
-	state: AppAggregates;
-	handoffDispatch: HandoffDispatch;
-	loopPolicy: AppLoopPolicy;
-	commandRunner: CommandRunner;
-	sessionRecord: SessionRecordLookup;
-	configRef: RefObject<FactoryConfig>;
-	autoModeRef: RefObject<boolean>;
-	replaceTickets: () => void;
-	replaceConsultations: () => void;
-	setAgents: Dispatch<SetStateAction<readonly HerdrAgent[] | null>>;
-	setBell: (value: boolean) => void;
-	attention: AttentionService;
-	onReady: (ready: AppTeardown) => void;
-	clearOperationMessage: (owner: ProgressOwner) => void;
-	setStatus: (next: StatusMessage | null) => void;
-	refreshTicketSources: (identity: string) => void;
-	closeCycleEndDraft: (identity: string) => void;
-	refreshPullRequestSources: () => Promise<void>;
-	logger: Logger;
-	observationRef: RefObject<ObservationCoordinator | undefined>;
-	coordinatorRef: RefObject<RefreshCoordinator | undefined>;
-	handoffDispatchRef: RefObject<
-		{ state: HandoffDispatchAggregates; dispatch: HandoffDispatch } | undefined
-	>;
-	consultationOperationsRef: RefObject<ConsultationOperations | undefined>;
-	initialLoadRef: RefObject<InitialLoad | null>;
-}
-
-/** The coordinator's base options: the plane's reads and the report lines. */
-type AppObservationOptions = ConstructorParameters<typeof ObservationCoordinator>[0];
-
-/**
- * The names the plane's herdr-core Agents hold (issue #410, ADR 0142): the
- * in-flight Tickets' and Consultations' recorded names on the herdr-core host.
- * The merged poll's roster read is unscoped, and the per-Agent read runs only
- * over these names, so the poll never reads every terminal on the machine.
- */
-function coreTerminalNames(state: AppAggregates): readonly string[] {
-	const names: string[] = [];
-	for (const ticket of state.ticketWorkCycle.ticketsByState(TICKET_SEAT_STATES))
-		if (ticket.host === "herdr-core" && ticket.paneId !== null) names.push(ticket.paneId);
-	// The set the Consultation close's own verification reads stands beside it:
-	// a close marks its record `closing` before it verifies the Agent, so the
-	// cycle keeps the closing Consultation's terminal in the list the close
-	// reads (issue #410, ADR 0142).
-	for (const consultation of state.consultationRecord.consultationsByState([
-		"opening",
-		"working",
-		"awaiting-response",
-		"closing",
-	]))
-		if (consultation.host === "herdr-core" && consultation.paneId !== null)
-			names.push(consultation.paneId);
-	return names;
-}
-
-function observationCoordinatorBase(
-	f: AppObservationFields,
-	state: AppAggregates,
-	dispatch: HandoffDispatch,
-	agentHost: AgentHostResolution,
-): Omit<AppObservationOptions, "fireCompleted" | "refireRecordedSkips"> {
-	// The merged Agent reader the cycle reads (issue #410, ADR 0142): both
-	// hosts in one list, and a wake wait routed to the host the last poll
-	// recorded for its name. The read's host answer is the poll's own, and the
-	// cycle arms no wait before its first poll answers.
-	const hostByReference = { current: new Map<string, AgentHost>() };
-	// The report the plane last applied (issue #422, ADR 0146): the identity
-	// check the report's standing earns. On the same object the cycle writes
-	// nothing - no state write, no commit, no paint; on a new one, the plane
-	// writes the facts the report names: the roster into the screen state, the
-	// host facts re-derived from it, and the Ticket and Consultation lists
-	// re-derived where the report names the movement.
-	let lastAppliedReport: ObservationReport | null = null;
-	const herdr = new MergedAgentReader({
-		runner: f.commandRunner,
-		runHost: agentHost.host,
-		coreNames: () => coreTerminalNames(state),
-		hostOf: (reference) => hostByReference.current.get(reference) ?? agentHost.host,
-	});
-	return {
-		state,
-		herdr,
-		config: () => f.configRef.current,
-		// The host the run resolved (issue #409): the automatic starts the cycle
-		// asks for run on the run's host, never on a host a previous handoff
-		// recorded.
-		agentHost,
-		// The Handoff dispatch module the cycle runs: the claim and its hard
-		// start checks, the Work queue's pickup, the plane action's ask, and
-		// the Close cleanup, through the narrow port the cycle may cross.
-		dispatch,
-		// The one time seam of the run: the state file, the refresh
-		// coordinator, and the cycle answer from the same clock.
-		clock: SYSTEM_CLOCK,
-		// The loop policy's poll: the named interval where the policy names one,
-		// and the config's agent-poll-interval-seconds otherwise, and the cycle
-		// derives it each cycle.
-		pollIntervalMs: f.loopPolicy.kind === "polled" ? f.loopPolicy.intervalMs : undefined,
-		// The cycle's end may have changed the ticket's source item (a merged
-		// pull request, a closed issue): re-read the sources now, so the
-		// ticket is re-verified - or drops off the list - before the next
-		// automatic dispatch of it.
-		onCycleEnd: (identity) => {
-			f.refreshTicketSources(identity);
-			f.closeCycleEndDraft(identity);
-		},
-		onReport: (report) => {
-			// On the report the plane already applied, the cycle writes nothing.
-			if (report === lastAppliedReport) return;
-			lastAppliedReport = report;
-			// The poll's own host answer: a wait the cycle arms routes to the
-			// host the agent stands on, by the name and the handle the record
-			// names it by (issue #410).
-			const hosts = new Map<string, AgentHost>();
-			for (const agent of report.agents ?? []) {
-				hosts.set(agent.paneId, agent.host);
-				if (agent.name !== undefined) hosts.set(agent.name, agent.host);
-			}
-			hostByReference.current = hosts;
-			f.setAgents(report.agents);
-			if (report.ticketsMoved) f.replaceTickets();
-			if (report.consultationsMoved) f.replaceConsultations();
-		},
-		onConsultationAttention: (_id) => {
-			// The flash stays here; the bell write and its attention-bell gate
-			// live in the shared attention service (ADR 0080).
-			f.setBell(true);
-			setTimeout(() => f.setBell(false), 250);
-			f.attention.ring();
-		},
-		// The cycle's record lines: each hold its automatic walks take
-		// (issue #223). The App supplies the adapter it holds, the boot record's
-		// logger: the file logger in production, and the no-op logger where the
-		// boot keeps the loops silent.
-		log: f.logger,
-		// The settled turn's log: the session record reader, supplied here
-		// rather than constructed inside the cycle.
-		turnLogs: SESSION_TURN_LOGS,
-		// The derived session record path on the host that reports none
-		// (ADR 0144): the per-kind table's lookup, supplied here the way the
-		// reader is.
-		sessionRecord: f.sessionRecord,
-		// The plane's initial-load-settled fact (ADR 0154): the cycle holds
-		// its first cycle until the load settles, so the first probe lands on
-		// the roster the settled sources make, not on an empty one.
-		initialLoadSettled: f.initialLoadRef.current?.promise,
-		onStatus: (kind, text, topic) => {
-			// Both sections read the same observation events: an outcome is
-			// a fact for the one Message line, whichever section is expanded.
-			// `setStatus` maps the observation's kinds onto that line: info
-			// becomes a notice, warning a warning, and error an error. The
-			// observation sends only the facts an operator acts on, so the
-			// Message line stays a statement of the plane and not a log.
-			f.setStatus({ kind, text });
-			// The recovery topic is the structured signal that a stale
-			// operation fact can clear; the text stays human-facing. The
-			// observation writes no progress line of its own.
-			if (topic === "herdr-recovered") f.clearOperationMessage("none");
-		},
-	};
-}
-
-/** The coordinator's transition flows: the fire and the re-fire. */
-function observationCoordinatorFlows(
-	f: AppObservationFields,
-	state: AppAggregates,
-): Pick<AppObservationOptions, "fireCompleted" | "refireRecordedSkips"> {
-	return {
-		// The transition fire of a completed settle (ADR 0027): pull the
-		// pull request sources fresh - the agent's new pull request must
-		// be in the list before the machine can find it - and fire the
-		// task type's transition through the command runner.
-		fireCompleted: async (ticket) => {
-			return await fireTransition({
-				config: f.configRef.current,
-				state,
-				runner: f.commandRunner,
-				ticketIdentity: ticket.ticketIdentity,
-				taskType: ticket.taskType,
-				refresh: f.refreshPullRequestSources,
-			});
-		},
-		// The re-fire of the recorded skips (ADR 0042): a refresh that found
-		// the fixing pull request re-fires the transition the ticket's
-		// newest completion trace recorded as the skip. The sweep reads the
-		// projection the refresh just landed, so it takes no refresh of its
-		// own, but the fire it runs carries the settle-time fire's refresh
-		// (ADR 0076), so the publish it runs lands the pull request the
-		// fire's position resolves on, and the fire writes through the
-		// command runner, the way the settle-time fire does.
-		refireRecordedSkips: () =>
-			refireRecordedSkips({
-				config: f.configRef.current,
-				state,
-				runner: f.commandRunner,
-				refresh: f.refreshPullRequestSources,
-			}),
-	};
-}
-
-/**
- * The observation loop, and the teardown handle every boot hands the owner.
- *
- * The observation loop runs on `production` and `polled` alone: `held` is
- * the deterministic frame, where nothing moves until a key press or a settle
- * does, and a frame test must not race a poll. The poll interval stands
- * where the policy names one, and the config's agent-poll-interval-seconds
- * elsewhere, the way the base options state it. The refresh schedule keeps
- * its own gate at the coordinator's start (issue #366): the policy names
- * which loops the plane starts, and each loop reads the policy at its own
- * seam.
- *
- * The teardown handle stands on every branch, the held one included: the
- * owner's shutdown ordering - stop before the state closes - is one rule,
- * and a stop that runs where no loop started changes nothing. The handle
- * lands once per mount, and the owner's second boot replaces it.
- */
-function appObservationCoordinator(
-	f: AppObservationFields,
-	agentHost: AgentHostResolution,
-): (() => void) | undefined {
-	f.onReady({
-		stop: () => {
-			f.coordinatorRef.current?.stop();
-			f.observationRef.current?.stop();
-			// The handoff dispatch is the one background loop that outlives the
-			// state: its run settles asynchronously, so stop it before the
-			// owner closes the state, or the settlement reads a closed database.
-			f.handoffDispatchRef.current?.dispatch.stop();
-			// The Consultation operations settle the same way: an opening that
-			// stands mid-flight at the stop runs its remaining commands but
-			// settles nothing into the record the owner closes beside it
-			// (issue #398).
-			f.consultationOperationsRef.current?.stop();
-		},
-	});
-	if (f.loopPolicy.kind === "held") return undefined;
-	const dispatch = f.handoffDispatch;
-	const state = f.state;
-	const coordinator = new ObservationCoordinator({
-		...observationCoordinatorBase(f, state, dispatch, agentHost),
-		...observationCoordinatorFlows(f, state),
-	});
-	f.observationRef.current = coordinator;
-	coordinator.start();
-	return () => {
-		// Only the loop this run made. The dispatch module outlives it: the
-		// effect re-runs on a config write-back, and a stopped module is a
-		// plane that starts nothing for the rest of the run.
-		coordinator.stop();
-		f.observationRef.current = undefined;
-	};
-}
-
 /** The fields the App's operations read and write. */
 interface AppOpsFields {
 	state: AppAggregates;
@@ -6408,16 +5965,17 @@ function appHandoffDispatchOptions(f: AppOpsFields, state: AppAggregates): Hando
 }
 
 /** The Consultation operations of the run, created once per state. */
-function appConsultationOperations(f: AppOpsFields): void {
+function appConsultationOperations(f: AppOpsFields): ConsultationOperations {
 	// Capture state, replaceConsultations, and persistMapping once per mount.
 	// The state is created once by factory.ts, and the other callbacks read
 	// the current config and projections through refs. The dispatch block above
 	// runs first on purpose (issue #315, ADR 0109): the operations cross the
 	// dispatch's Shared checkout hold through the seam it exposes, and the
 	// dispatch is built on this same state.
-	if (f.consultationOperationsRef.current !== undefined) return;
+	let entry = f.consultationOperationsRef.current;
+	if (entry !== undefined) return entry;
 	const state = f.state;
-	f.consultationOperationsRef.current = createConsultationOperations({
+	entry = createConsultationOperations({
 		state,
 		runner: f.commandRunner,
 		config: () => f.configRef.current,
@@ -6461,6 +6019,8 @@ function appConsultationOperations(f: AppOpsFields): void {
 			},
 		},
 	});
+	f.consultationOperationsRef.current = entry;
+	return entry;
 }
 
 /**
@@ -6470,7 +6030,7 @@ function appConsultationOperations(f: AppOpsFields): void {
  * ADR 0109).
  */
 function appHandoffDispatches(f: AppOpsFields): {
-	consultationOperations: ConsultationOperations | undefined;
+	consultationOperations: ConsultationOperations;
 	handoffDispatch: HandoffDispatch;
 } {
 	let entry = f.handoffDispatchRef.current;
@@ -6481,9 +6041,9 @@ function appHandoffDispatches(f: AppOpsFields): {
 		};
 		f.handoffDispatchRef.current = entry;
 	}
-	appConsultationOperations(f);
+	const consultationOperations = appConsultationOperations(f);
 	return {
-		consultationOperations: f.consultationOperationsRef.current,
+		consultationOperations,
 		handoffDispatch: entry.dispatch,
 	};
 }

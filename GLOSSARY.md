@@ -891,11 +891,17 @@ The fact of which background loops a run starts: production polls the Ticket sou
 The policy stands in the Plane boot, so a run never settles its loops by which fields were left out.
 _Avoid_: poll interval flag, no-state mode, projection mode
 
+**Boot-sequence module**:
+The deep module that owns the plane's boot order and the teardown that reverses it. It takes the Plane boot record and the Loop policy, and it runs the sequence in full: the state's boot read that stands the ticket list, the consultations, and the queue pause, the refresh coordinator's start - the one-shot boot read under the held policy, and the sources' first reads plus the polling schedule under the polled policy - the list's one move on the settled load, and the Observation cycle that lands on the same settle with the schedule armed behind it.
+It gives back the ordered start and the one teardown that reverses it: the loops stop, the Handoff dispatch and the Consultation operations stop behind them, and a run's second stop changes nothing.
+The shell calls it once at mount and keeps the paint, the keys, and the screen stack; the entry and the frame rig stand on the same record, policy, and handle, so a reorganization of the shell's stages moves no step of the boot (ADR 0155).
+_Avoid_: boot hook chain, mount order, shell sequence, startup stages
+
 **Initial load**:
 The plane's first read of every ticket source it has been told to read: the first fetch the refresh coordinator runs on each configured source, on the Plane boot record.
 The load settles when every configured source's first fetch settles, success or failure: a source that fails its boot read settles the load the way a success does, so a source that cannot answer holds neither the list nor the first probe open, and a run that stops settles the load, so a shutdown does not wait on a load that will not finish.
 The fact that the load has settled is one promise the refresh coordinator owns: the shell and the Observation coordinator both wait on it, so the two share the moment and neither guesses at it.
-While the load stands, the shell holds the ticket list on the state's boot read, and the plane runs no Observation cycle: the shell's one list move and the plane's first herdr probe both land on the load that has settled (ADR 0154).
+While the load stands, the ticket list stands on the state's boot read, and the plane runs no Observation cycle: the boot-sequence module's one list move and the plane's first herdr probe both land on the load that has settled (ADR 0154).
 _Avoid_: first poll, boot fetch, initial refresh
 
 **Documentation site**:
