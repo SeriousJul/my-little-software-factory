@@ -105,9 +105,12 @@ describe("the shared frame harness boots the Seeded plane", () => {
 	test("a boot that names a poll interval runs the observation loop", async () => {
 		// The rig names the interval, the way the old test-only slot used to,
 		// through the named policy instead of a field the plane's interface
-		// called test-only. The poll lands in the runner's record.
+		// called test-only. The load settles through the named operation, and
+		// the first poll runs on the settle (ADR 0154). The poll lands in the
+		// runner's record.
 		await withApp(
 			async (setup) => {
+				await setup.plane.settleFirstFetch();
 				await frameUntil(setup, "the observation poll", () =>
 					setup.plane.fakeRunner
 						.commands()
@@ -129,6 +132,9 @@ describe("the shared frame harness boots the Seeded plane", () => {
 		const named = await plane({ pollIntervalMs: 25 });
 		await withApp(
 			async (setup) => {
+				// The load settles through the named operation, and the first
+				// poll runs on the settle (ADR 0154).
+				await setup.plane.settleFirstFetch();
 				await frameUntil(setup, "the observation poll", () =>
 					setup.plane.fakeRunner.commands().some((command) => command.startsWith("hc ls")),
 				);

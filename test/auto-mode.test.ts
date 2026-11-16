@@ -932,7 +932,15 @@ describe("the mode cell and the a key", () => {
 			app,
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
-				const frame = await waitFor(setup, { shows: "● manual 1" });
+				// The mode cell stands from the seat the state holds, and the
+				// row's agent face stands on the first probe, which runs on the
+				// settle (ADR 0154): the wait stands on the frame where the two
+				// facts stand together.
+				const frame = await frameUntil(
+					setup,
+					"the mode cell beside the blocked row",
+					(f) => f.includes("● manual 1") && ticketRow(f).includes("blocked"),
+				);
 				// The count stands without a limit after it: no `/0` anywhere.
 				expect(frame).toContain("● manual 1");
 				expect(frame).not.toContain("/0");
@@ -1213,8 +1221,17 @@ describe("the failure markers", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await frameUntil(setup, "the handoff limit marker", (f) =>
-					ticketRow(f).includes("handoff limit"),
+				// The marker stands from the state the boot read holds, and the
+				// row's missing face stands on the first probe, which runs on the
+				// settle (ADR 0154): the wait stands on the frame where both
+				// facts stand on the row.
+				const frame = await frameUntil(
+					setup,
+					"the handoff limit marker beside the missing face",
+					(f) => {
+						const row = frameText(ticketRow(f).slice(0, Math.floor(WIDTH / 2)));
+						return row.includes("handoff limit") && row.includes("missing");
+					},
 				);
 				// The marker rides at the end of the list row. The terminal row
 				// also carries the detail pane, so check only the list half.
@@ -4270,10 +4287,12 @@ describe("the auto decision", () => {
 
 	/**
 	 * The hold's reader (ADR 0092). In auto mode the Decision screen never opens on
-	 * a settled turn, so the Message line is where a held Next step stands: the
-	 * test reads the line the running loop reports, in the app's own frames.
+	 * a settled turn: the settle's one cycle (ADR 0154) takes the top-up start in
+	 * the same cycle, so the start's line stands last on the Message line, and the
+	 * hold's line stands in the plane's record, the outlet that keeps it (issue
+	 * #223). The test reads the line the running loop records.
 	 */
-	test("auto mode states a held Next step on the Message line", async () => {
+	test("auto mode states a held Next step in the plane's record", async () => {
 		// The seeded turn's fire derived its review on the ticket, and the source's
 		// own labels still offer the implement task: the step stands held, and the
 		// turn rests awaiting.
@@ -4283,22 +4302,33 @@ describe("the auto decision", () => {
 			environment: "live-worktree",
 			detail: { transition: reviewRoute() },
 		});
+		const lines: RecordedLine[] = [];
 		// No Agent works: the cycle's only fact is the settled turn it resolves.
 		const planeRecord = await appOnSeeded(
 			app,
 			async (setup, _planeRecord) => {
 				app.src.settle(pairSuccess);
-				await frameUntil(setup, "the held Next step on the Message line", (f) =>
-					messageRowOf(f).includes(
-						`ticket ${identity} holds its Next step review: the position no longer offers the task`,
-					),
+				// The settle's one cycle (ADR 0154) resolves the settled turn and
+				// takes the top-up start in the same cycle: the start's line stands
+				// last on the Message line, so the hold's line stands in the
+				// plane's record, the outlet that keeps it (issue #223).
+				await waitCommands(
+					() => lines.map((line) => line.message),
+					(log) =>
+						log.some(
+							(message) =>
+								message.includes("next step held:") &&
+								message.includes("review") &&
+								message.includes("the position no longer offers the task"),
+						),
+					"the held Next step in the plane's record",
 				);
 				const frame = await settle(setup);
 				expect(frame).not.toContain("Decision:");
 				expect(app.state.ticketWorkCycle.ticketState(identity)).toBe("awaiting");
 				expect(app.state.ticketWorkCycle.lastCompletion(identity)?.decision).toBeNull();
 			},
-			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S },
+			{ width: WIDTH, height: HEIGHT, loopPolicy: LOOP_60S, logger: recordLogger(lines) },
 		);
 		planeRecord.close();
 	});
@@ -5204,15 +5234,27 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 			app,
 			async (setup, _planeRecord) => {
 				app.src.settle(success);
+				// The load settles on every configured source's first read
+				// (ADR 0154): the pull source's boot read settles with the
+				// pull request's absence, the way the world stood at the boot,
+				// and the first cycle runs on the settle.
+				pull.settleCurrent();
 				// The awaiting rule reads the skip: it derives no position,
 				// so the cycle auto-closes the ticket. It rests open behind
 				// the closed cycle, and the trace records the skip.
 				await frameUntil(setup, "the auto-close of the skip", (f) =>
 					ticketRow(f).includes("[open]"),
 				);
-				// The refresh lands the fixing pull request. The cycle
-				// re-fires the skip: the pull request's facts were left
-				// unwritten by it, and the fire writes them now.
+				// The refresh lands the fixing pull request. The boot read
+				// settled with the pull request's absence (ADR 0154), so the
+				// operator's refresh is the read that finds it: the refresh's
+				// settlement runs the cycle that re-fires the skip, and the
+				// pull request's facts the skip left unwritten, the fire writes
+				// them now.
+				const before = pull.calls;
+				await pressControl(setup, "refresh", { quiet: true });
+				await frameUntil(setup, "the refresh to reach the source", () => pull.calls > before);
+				app.src.settle(success);
 				pull.settle({
 					status: "success",
 					fetchedAt: "2026-08-31T10:02:00Z",
@@ -5221,9 +5263,11 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 				await waitFor(setup, { shows: "Persist source facts in state" });
 				// The re-fire's fire re-reads the pull request source before it
 				// writes (ADR 0076): the read is its own fetch, and the fetch
-				// the test settles is that one. The label has not landed in the
-				// projection, so the write is the plane's own.
-				await frameUntil(setup, "the re-fire's source read", () => pull.calls === 2);
+				// the test settles is that one. It is the third of the source's
+				// fetches - the boot read, the refresh, and the re-fire's own
+				// read. The label has not landed in the projection, so the
+				// write is the plane's own.
+				await frameUntil(setup, "the re-fire's source read", () => pull.calls === before + 2);
 				pull.settle({
 					status: "success",
 					fetchedAt: "2026-08-31T10:03:00Z",

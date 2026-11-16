@@ -891,6 +891,13 @@ The fact of which background loops a run starts: production polls the Ticket sou
 The policy stands in the Plane boot, so a run never settles its loops by which fields were left out.
 _Avoid_: poll interval flag, no-state mode, projection mode
 
+**Initial load**:
+The plane's first read of every ticket source it has been told to read: the first fetch the refresh coordinator runs on each configured source, on the Plane boot record.
+The load settles when every configured source's first fetch settles, success or failure: a source that fails its boot read settles the load the way a success does, so a source that cannot answer holds neither the list nor the first probe open, and a run that stops settles the load, so a shutdown does not wait on a load that will not finish.
+The fact that the load has settled is one promise the refresh coordinator owns: the shell and the Observation coordinator both wait on it, so the two share the moment and neither guesses at it.
+While the load stands, the shell holds the ticket list on the state's boot read, and the plane runs no Observation cycle: the shell's one list move and the plane's first herdr probe both land on the load that has settled (ADR 0154).
+_Avoid_: first poll, boot fetch, initial refresh
+
 **Documentation site**:
 The static site that GitHub Pages publishes from the `docs/` folder.
 It shows the published subset (the ADRs, the standards, and the guides) and keeps the agent instruction, verification, and research folders out of the build.

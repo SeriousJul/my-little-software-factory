@@ -896,6 +896,19 @@ interface ObservationOptions {
 	 */
 	startupGraceMs?: number;
 	/**
+	 * The fact that the plane's initial load has settled (ADR 0154): the
+	 * promise the refresh coordinator resolves when every configured
+	 * source's first fetch settles, success or failure. Named: start() runs
+	 * no cycle while the load stands. It holds the first cycle, the grid
+	 * stands unarmed, and a tick that lands while the load stands runs no
+	 * cycle of its own: the held cycle does that work on the state that
+	 * stands when the load settles, on the settle. The first probe then
+	 * lands on the roster the settled sources make, and no cycle probes
+	 * herdr or starts the dispatch on a partial snapshot. Omitted: the first
+	 * cycle runs immediately, the way it always has.
+	 */
+	initialLoadSettled?: Promise<void>;
+	/**
 	 * The completed cycle's report (issue #422, ADR 0146), the seam's one
 	 * fact about a cycle: the probe's roster, null while the probe is
 	 * failing; the Agents that moved between the two consecutive probes; and
@@ -986,9 +999,17 @@ export class ObservationCoordinator {
 	private readonly clock: RefreshClock;
 	private readonly pollIntervalMs?: number;
 	private readonly startupGraceMs: number;
+	private readonly initialLoadSettled?: Promise<void>;
 	private readonly onReport: (report: ObservationReport) => void;
 	private readonly onConsultationAttention?: (consultationId: string) => void;
 	private startupReconciliation = true;
+	/**
+	 * Whether start() found the load standing (ADR 0154): the first cycle is
+	 * held, the grid is unarmed, and no tick runs a cycle of its own until
+	 * the settle. The held first cycle runs on the settle, on the state that
+	 * stands then.
+	 */
+	private holdingInitialLoad = false;
 	private suppressConsultationAttention = false;
 	private readonly onStatus: (
 		kind: "info" | "warning" | "error",
@@ -1129,6 +1150,7 @@ export class ObservationCoordinator {
 		this.clock = options.clock;
 		this.pollIntervalMs = options.pollIntervalMs;
 		this.startupGraceMs = options.startupGraceMs ?? STARTUP_GRACE_MS;
+		this.initialLoadSettled = options.initialLoadSettled;
 		this.onReport = options.onReport;
 		this.onConsultationAttention = options.onConsultationAttention;
 		this.onStatus = options.onStatus;
@@ -1164,9 +1186,32 @@ export class ObservationCoordinator {
 		);
 	}
 
-	/** Begin polling. The first cycle runs immediately. */
+	/**
+	 * Begin polling. The first cycle runs immediately - on the plane's
+	 * initial load when one stands (ADR 0154): the load holds the first
+	 * cycle and the grid stands unarmed, and the held cycle runs on the
+	 * settle, on the state that stands then.
+	 */
 	start(): void {
 		if (this.timer !== null || this.stopped) return;
+		if (this.initialLoadSettled !== undefined) {
+			// The load stands: no cycle runs on a partial snapshot. The held
+			// first cycle runs on the settle: it reads the roster the sources
+			// stand on, and it is the first herdr probe, so the probe lands on
+			// the roster the settled sources make, not on an empty one.
+			this.holdingInitialLoad = true;
+			void this.initialLoadSettled.then(() => {
+				this.holdingInitialLoad = false;
+				if (this.stopped) return;
+				// The settle is the grid's anchor: the next cycle stands at the
+				// settle's start plus the interval, whatever the settle cycle
+				// costs.
+				this.gridAnchor = this.clock.now();
+				void this.safeCycle();
+				this.armGrid();
+			});
+			return;
+		}
 		// The boot's start is the grid's anchor: the next cycle stands at the
 		// boot's start plus the interval, whatever the boot cycle costs.
 		this.gridAnchor = this.clock.now();
@@ -1231,6 +1276,11 @@ export class ObservationCoordinator {
 
 	/** Run one cycle when one is not already running. Returns when it is done. */
 	async tick(): Promise<void> {
+		// A tick that lands while the load stands runs no cycle of its own
+		// (ADR 0154): the held first cycle does that work on the state that
+		// stands when the load settles, so a per-settlement tick never probes
+		// herdr or starts the dispatch on a partial snapshot.
+		if (this.holdingInitialLoad) return;
 		// A wake: the cycle runs beside the grid and reschedules nothing, the
 		// poll stays the single source of truth (ADR 0084).
 		await this.safeCycle();

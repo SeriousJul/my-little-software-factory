@@ -831,6 +831,10 @@ describe("the obligation gate", () => {
 		});
 		await withApp(
 			async (setup) => {
+				// The first probe runs on the settle (ADR 0154): settle the
+				// source's boot read, so the probe lands and the missing badge
+				// stands on it.
+				planeRecord.settleFirstFetch();
 				// The poll lists no Agent in the recorded pane: the row wears
 				// `missing`, and the restart-or-abandon is the operator's choice.
 				const frame = await frameUntil(setup, "the missing badge", (f) =>

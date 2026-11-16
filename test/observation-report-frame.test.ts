@@ -176,6 +176,9 @@ describe("the observation report at the plane's seam (issue #422, ADR 0146)", ()
 					frames += 1;
 				};
 				setup.renderer.on(CliRenderEvents.FRAME, countFrame);
+				// The load settles: the source's first fetch settles, and the
+				// held first cycle runs on the settle (ADR 0154).
+				await planeRecord.settleFirstFetch();
 				const base = await settle(setup);
 				// A grace past the poll's interval: every one-shot paint the
 				// boot owes lands before the window the assertion measures.
@@ -208,6 +211,10 @@ describe("the observation report at the plane's seam (issue #422, ADR 0146)", ()
 		const { planeRecord, failProbe, recoverProbe } = await heldPlane();
 		await withApp(
 			async (setup) => {
+				// The load settles: the source's first fetch settles, and the
+				// held first cycle runs on the settle, on the roster the
+				// sources stand on (ADR 0154).
+				await planeRecord.settleFirstFetch();
 				const base = await settle(setup);
 				failProbe();
 				const failed = await frameUntil(setup, "the failure marker on the Message line", (frame) =>

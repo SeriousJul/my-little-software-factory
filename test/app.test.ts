@@ -194,12 +194,17 @@ describe("the control plane", () => {
 				groupingAxis: "none",
 				sources: [{ config: sourceConfig, tickets: [] }],
 				config: { ...BASE_CONFIG, sources: [sourceConfig] },
+				// The state stands pre-seeded: the plane does not seed its rows
+				// on the boot read.
 				settledReads: false,
 				runner: () => runner,
 				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
+					// The source's boot read settles: the load settles, and
+					// the first probe runs on the settle (ADR 0154).
+					planeRecord.settleFirstFetch();
 					// The row wears the missing badge, not the [running] state badge:
 					// the agent the last poll listed in the pane is not the
 					// ticket's own.
@@ -307,12 +312,17 @@ describe("the control plane", () => {
 				groupingAxis: "none",
 				sources: [{ config: sourceConfig, tickets: [] }],
 				config: { ...BASE_CONFIG, sources: [sourceConfig] },
+				// The state stands pre-seeded: the plane does not seed its rows
+				// on the boot read.
 				settledReads: false,
 				runner: () => runner,
 				agentHostEnv: { herdrEnv: "1" },
 			});
 			await withApp(
 				async (setup) => {
+					// The source's boot read settles: the load settles, and
+					// the first probe runs on the settle (ADR 0154).
+					planeRecord.settleFirstFetch();
 					await waitFor(setup, { shows: "[awaiting]" });
 					// The base key refuses: the recorded pane holds a live agent
 					// that is not the ticket's own, so the focus never runs.
