@@ -29,11 +29,13 @@ import {
 } from "../src/observation.ts";
 import { TICKET_SEAT_STATES } from "../src/parallel.ts";
 import type { RefreshClock } from "../src/refresh.ts";
+import { RefreshCoordinator } from "../src/refresh.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { type SessionRecordLookup, UNAVAILABLE_SESSION_RECORD } from "../src/session-record.ts";
 import type { HandoffTicket } from "../src/state/handoff.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
+import type { TicketSource } from "../src/ticket-source.ts";
 import type { SessionTurnRead } from "../src/turn-log.ts";
 import { fireTransition, type RefiredSkip, refireRecordedSkips } from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -190,6 +192,17 @@ function stubDefaultHerdr(runner: FakeRunner, checkout: string): void {
 	runner.setDefault({ code: 0, stdout: "" });
 }
 
+/** The handoff the in-flight seed settles: the ticket's pane, on the herdr host. */
+const bootHandoffChoice = {
+	agentType: "pi",
+	environment: "worktree" as const,
+	taskType: "implement" as const,
+	host: "herdr" as const,
+	model: "",
+	thinking: "",
+	contextWindow: "",
+};
+
 export interface RigOptions {
 	/** The agents the herdr half lists; absent: the herdr half lists none. */
 	agents?: ListedAgent[];
@@ -233,6 +246,22 @@ export interface RigOptions {
 	onCycleEnd?: (identity: string) => void;
 	/** The completed cycle's report, the seam's one fact about the cycle. */
 	onReport?: (report: ObservationReport) => void;
+	/**
+	 * The ticket sources the refresh coordinator feeds; absent: no
+	 * coordinator, and the coordinator's start runs its first cycle at once.
+	 * Present: the fixture starts the coordinator at boot, the way the shell
+	 * does, and the coordinator holds its first cycle until every source's
+	 * first fetch settles (issue #431, ADR 0154), the way the App holds it.
+	 * Each settlement also ticks the coordinator, the way the shell's does.
+	 */
+	refreshSources?: readonly TicketSource[];
+	/**
+	 * The identities the state's boot read holds in flight, the way a run
+	 * that booted on a previous run's handoff does (issue #431). The fixture
+	 * settles the handoff before the refresh coordinator's first read resets
+	 * the source facts, so the claim reads the boot read's source data.
+	 */
+	inFlightAtBoot?: string[];
 	/** A Consultation the shared monitor names for attention. */
 	onConsultationAttention?: (consultationId: string) => void;
 	/** The loop's own calls and dispatches in order. */
@@ -253,6 +282,11 @@ export interface Rig {
 	/** The real dispatch module the fixture wires the cycle to. */
 	dispatch: HandoffDispatch;
 	coordinator: ObservationCoordinator;
+	/**
+	 * The refresh coordinator the rig runs the load on, started at boot; absent
+	 * when the rig names no sources.
+	 */
+	refresh: RefreshCoordinator | undefined;
 	config: FactoryConfig;
 	/** The home the fixture holds. */
 	home: string;
@@ -350,6 +384,102 @@ async function drain(state: FactoryState, runner: FakeRunner): Promise<void> {
  * Build one fixture: the real module, the real reader, the real state file,
  * on the shared base config the suite builds.
  */
+/**
+ * The ticket the previous run handed off: the state's boot read stands it
+ * in flight, and the plane boots on that read.
+ */
+function seedInFlightOnBoot(state: FactoryState, identities: readonly string[]): void {
+	for (const ticketIdentity of identities) {
+		const claim = state.handoff.claimHandoff(ticketIdentity, bootHandoffChoice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-implement",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+	}
+}
+
+/**
+ * The rig's settle stands on the module's work and the settlement ticks a
+ * settlement fires: a tick's start settles into the ledger, and the settle
+ * loops until neither stands work.
+ */
+async function settleSettlementTicks(
+	drain: () => Promise<void>,
+	ticks: ReadonlySet<Promise<void>>,
+): Promise<void> {
+	await drain();
+	for (;;) {
+		const pending = [...ticks];
+		if (pending.length === 0) return;
+		await Promise.allSettled(pending);
+		await drain();
+	}
+}
+
+/**
+ * The per-settlement callback the shell fires: the rig owns the fire-and-
+ * forget tick it starts, so the rig's settle and close stand on it settling,
+ * the way they stand on the commands asked.
+ */
+function refreshTickCallback(
+	coordinator: ObservationCoordinator,
+	ticks: Set<Promise<void>>,
+): () => void {
+	return () => {
+		const tick = coordinator.tick();
+		ticks.add(tick);
+		void tick.finally(() => ticks.delete(tick));
+	};
+}
+
+/**
+ * The tick the rig's coordinator answers: the tick's start settles into the
+ * ledger before the tick's caller reads the state, and the starts a tick
+ * fired settle there too, so the test stands on the work done.
+ */
+function wrapCoordinator(
+	inner: ObservationCoordinator,
+	state: FactoryState,
+	runner: FakeRunner,
+): ObservationCoordinator {
+	return {
+		tick: async (): Promise<void> => {
+			const before = new Set(state.handoff.openAttemptTickets());
+			await inner.tick();
+			await drain(state, runner);
+			const end = Date.now() + 5_000;
+			for (;;) {
+				const open = state.handoff.openAttemptTickets().filter((id) => !before.has(id));
+				if (open.length === 0) return;
+				if (Date.now() > end) throw new Error("the module's starts never settled");
+				await new Promise((resolve) => setTimeout(resolve, 1));
+			}
+		},
+		start: inner.start.bind(inner),
+		stop: inner.stop.bind(inner),
+		decideAwaiting: inner.decideAwaiting.bind(inner),
+		lastAgents: inner.lastAgents.bind(inner),
+	} as unknown as ObservationCoordinator;
+}
+
+/**
+ * The refresh coordinator the fixture's plane runs, when the rig names its
+ * sources: it starts on the build, the way the shell starts it.
+ */
+function startRefreshCoordinator(
+	sources: readonly TicketSource[] | undefined,
+	state: FactoryState,
+	changed: () => void,
+	clock: VirtualClock,
+): RefreshCoordinator | undefined {
+	if (sources === undefined) return undefined;
+	const coordinator = new RefreshCoordinator(sources, state, changed, { clock });
+	coordinator.start();
+	return coordinator;
+}
+
 export function rig(options: RigOptions): Rig {
 	const clock = new VirtualClock();
 	const config: FactoryConfig = { ...BASE_CONFIG, ...options.config };
@@ -385,6 +515,24 @@ export function rig(options: RigOptions): Rig {
 	state.sourceFact.applyFetch(
 		issuesSource,
 		fetchSuccess([fetchedTicket({ identity: "github:github.com:I_5" })]),
+	);
+	// The ticket the previous run handed off: the state's boot read stands
+	// it in flight, and the plane boots on that read.
+	if (options.inFlightAtBoot !== undefined) seedInFlightOnBoot(state, options.inFlightAtBoot);
+
+	// The load's one fact the cycle waits on (issue #431, ADR 0154): the
+	// refresh coordinator's initial-load-settled promise, wired the way the
+	// App wires it, so the fixture's plane holds its first probe until every
+	// source's first fetch settles. The per-settlement callback stands down
+	// while the load stands, then ticks the coordinator on each settlement,
+	// the way the shell's does.
+	const refreshTicks = new Set<Promise<void>>();
+	let refreshChanged: () => void = () => undefined;
+	const refresh = startRefreshCoordinator(
+		options.refreshSources,
+		state,
+		() => refreshChanged(),
+		clock,
 	);
 
 	const intents: HandoffIntent[] = [];
@@ -490,6 +638,7 @@ export function rig(options: RigOptions): Rig {
 		clock,
 		pollIntervalMs: options.pollIntervalMs,
 		startupGraceMs: options.startupGraceMs,
+		initialLoadSettled: refresh?.initialLoadSettled,
 		onReport: (report) => {
 			reports.push(report);
 			options.onReport?.(report);
@@ -527,24 +676,11 @@ export function rig(options: RigOptions): Rig {
 	// after the ask. The snapshot before the tick keeps the wait to the
 	// starts the tick itself fired, so a claim a test planted stands for its
 	// own scenario.
-	const coordinator = {
-		tick: async (): Promise<void> => {
-			const before = new Set(state.handoff.openAttemptTickets());
-			await innerCoordinator.tick();
-			await drain(state, runner);
-			const end = Date.now() + 5_000;
-			for (;;) {
-				const open = state.handoff.openAttemptTickets().filter((id) => !before.has(id));
-				if (open.length === 0) return;
-				if (Date.now() > end) throw new Error("the module's starts never settled");
-				await new Promise((resolve) => setTimeout(resolve, 1));
-			}
-		},
-		start: innerCoordinator.start.bind(innerCoordinator),
-		stop: innerCoordinator.stop.bind(innerCoordinator),
-		decideAwaiting: innerCoordinator.decideAwaiting.bind(innerCoordinator),
-		lastAgents: innerCoordinator.lastAgents.bind(innerCoordinator),
-	} as unknown as ObservationCoordinator;
+	const coordinator = wrapCoordinator(innerCoordinator, state, runner);
+
+	if (refresh !== undefined) {
+		refreshChanged = refreshTickCallback(coordinator, refreshTicks);
+	}
 
 	track(home);
 
@@ -554,6 +690,7 @@ export function rig(options: RigOptions): Rig {
 		clock,
 		dispatch,
 		coordinator,
+		refresh,
 		config,
 		home,
 		checkout,
@@ -569,7 +706,7 @@ export function rig(options: RigOptions): Rig {
 		commandTimes,
 		advance: async (ms: number) => {
 			clock.advance(ms);
-			await drain(state, runner);
+			await settleSettlementTicks(() => drain(state, runner), refreshTicks);
 		},
 		setAutoMode: (next: boolean) => {
 			state.handoff.setAutoHandoffMode(next);
@@ -577,11 +714,15 @@ export function rig(options: RigOptions): Rig {
 		setAgents: (next: ListedAgent[]) => {
 			runner.set("herdr", ["agent", "list"], { stdout: agentListJson(next) });
 		},
-		settle: () => drain(state, runner),
+		settle: () => settleSettlementTicks(() => drain(state, runner), refreshTicks),
 		close: () => {
-			state.close();
-			rmSync(home, { recursive: true, force: true });
-			untrack(home);
+			// A settlement tick that the test never settled stands down before
+			// the state closes: it must not answer into the closed ledger.
+			void Promise.allSettled([...refreshTicks]).finally(() => {
+				state.close();
+				rmSync(home, { recursive: true, force: true });
+				untrack(home);
+			});
 		},
 	};
 }

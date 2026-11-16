@@ -21,7 +21,9 @@ import type { FactoryConfig } from "../src/config.ts";
 import { MergedAgentReader } from "../src/observation.ts";
 import type { FactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { fetchedTicket, fetchSuccess } from "./fact-fixtures.ts";
 import { agentListJson, FakeRunner, type ListedAgent } from "./fake-runner.ts";
+import { FakeSource } from "./fake-source.ts";
 import { type Rig, rig, VirtualClock } from "./observation-fixture.ts";
 
 const identity = "github:github.com:I_5";
@@ -930,6 +932,128 @@ describe("the Missing agent's flow (ADR 0152)", () => {
 		await fake.coordinator.tick();
 		expect(restarts()).toHaveLength(1);
 		fake.coordinator.stop();
+		fake.close();
+	});
+});
+
+describe("the first probe held on the settled load (issue #431, ADR 0154)", () => {
+	test("the first probe lands on the settle, and the correction lands on the probe that sees the agent", async () => {
+		const world = new FakeSource(
+			"issues",
+			"github-issues",
+			fetchSuccess([fetchedTicket({ identity })]),
+		);
+		const pulls = new FakeSource("pulls", "github-pull-request", fetchSuccess([]));
+		const fake = rig({
+			config,
+			autoOn: true,
+			startupGraceMs: 1000,
+			pollIntervalMs: 2000,
+			agents: [],
+			refreshSources: [world, pulls],
+			// The state's boot read stands the ticket in flight, the way the
+			// run booted on the previous run's handoff: the just-started
+			// agent the first probe's roster lacks.
+			inFlightAtBoot: [identity],
+		});
+		const probeTimes = () => {
+			const times: number[] = [];
+			fake.runner.commands().forEach((command, index) => {
+				if (command === "herdr agent list") times.push(fake.commandTimes[index]);
+			});
+			return times;
+		};
+		const restarts = () => fake.intents.filter((intent) => intent.origin === "restart");
+
+		fake.coordinator.start();
+		// The start runs the sources' boot reads: yield so the reads are in
+		// flight before the test settles them.
+		await fake.settle();
+		// The load stands: both boot reads are in flight, and the coordinator
+		// holds its first cycle on the load's fact. One source settles while
+		// the load still stands: the result records, and the suppressed
+		// per-settlement tick runs no probe and sends no report.
+		pulls.settleCurrent();
+		await fake.settle();
+		expect(fake.runner.commands()).toHaveLength(0);
+		expect(fake.reports).toHaveLength(0);
+		// The last source settles: the load settles, and the first probe
+		// runs on it, after the sources' boot reads.
+		world.settleCurrent();
+		await fake.settle();
+		expect(probeTimes()).toEqual([epoch()]);
+		expect(fake.reports).toHaveLength(1);
+		// The first probe's roster lacks the just-started agent. Inside the
+		// startup grace the row keeps its Starting face: no Missing marker,
+		// no restart, the grace pins standing on the probe that met it.
+		expect(restarts()).toHaveLength(0);
+		// The next probe's roster sees the agent: the correction lands on
+		// the probe that sees it, without a restart and without a reland.
+		fake.setAgents([agent("pane-implement")]);
+		await fake.advance(2001);
+		expect(probeTimes()).toEqual([epoch(), epoch() + 2000]);
+		expect(restarts()).toHaveLength(0);
+		expect(inFlight(fake.state)).toBe(true);
+		fake.coordinator.stop();
+		fake.close();
+	});
+
+	test("a failed first fetch settles the load, so a bad source holds no probe open", async () => {
+		const world = new FakeSource(
+			"issues",
+			"github-issues",
+			fetchSuccess([fetchedTicket({ identity })]),
+		);
+		const pulls = new FakeSource("pulls", "github-pull-request", {
+			status: "failed",
+			reason: "the source did not answer",
+		});
+		const fake = rig({
+			config,
+			autoOn: true,
+			pollIntervalMs: 2000,
+			agents: [],
+			refreshSources: [world, pulls],
+		});
+		fake.coordinator.start();
+		// The start runs the sources' boot reads: yield so the reads are in
+		// flight before the test settles them.
+		await fake.settle();
+		// The failed source settles first: its failed read records, and the
+		// load advances, so the failed first fetch marks its source done.
+		pulls.settleCurrent();
+		await fake.settle();
+		expect(fake.runner.commands()).toHaveLength(0);
+		// The good source settles: the last to settle resolves the fact, and
+		// the first probe runs on the load that settled, the failed source's
+		// failure standing in the state it left.
+		world.settleCurrent();
+		await fake.settle();
+		expect(fake.runner.commands().filter((command) => command === "herdr agent list")).toHaveLength(
+			1,
+		);
+		fake.coordinator.stop();
+		fake.close();
+	});
+
+	test("a stop settles the load, so a shutdown does not wait on a load that will not finish", async () => {
+		const world = new FakeSource(
+			"issues",
+			"github-issues",
+			fetchSuccess([fetchedTicket({ identity })]),
+		);
+		const fake = rig({ config, agents: [], refreshSources: [world] });
+		fake.coordinator.start();
+		// The source will not answer: the load stands, and no probe runs.
+		expect(fake.runner.commands()).toHaveLength(0);
+		fake.coordinator.stop();
+		const refresh = fake.refresh;
+		if (refresh === undefined) throw new Error("the rig named its sources");
+		refresh.stop();
+		// The fact resolves on the stop: a held probe or a held list move
+		// does not hold the shutdown open.
+		await refresh.initialLoadSettled;
+		expect(fake.runner.commands()).toHaveLength(0);
 		fake.close();
 	});
 });

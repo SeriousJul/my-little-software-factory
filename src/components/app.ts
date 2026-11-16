@@ -166,7 +166,7 @@ import type { TicketListViews, TicketWorkCycleAggregate } from "../state/ticket-
 import type { WorkQueueAggregate, WorkQueueItem } from "../state/work-queue.ts";
 import { workQueueIdentityOf } from "../state/work-queue.ts";
 import { currentThemeResolution } from "../theme-source.ts";
-import type { TicketSource } from "../ticket-source.ts";
+import type { FetchOutcome, TicketSource } from "../ticket-source.ts";
 import { createTicketSource, GhAuthenticator } from "../ticket-source.ts";
 import { readSessionExchange, type SessionEntry, type TurnEndCause } from "../turn-log.ts";
 import { deriveNextStep, fireTransition, refireRecordedSkips } from "../workflow.ts";
@@ -837,6 +837,21 @@ function useAppOpsRefs(prev: AppModelListStage) {
 	const refireInFlightRef = useRef<string | null>(null);
 	const ticketOpsFieldsRef = useRef<AppTicketOpsFields | null>(null);
 	const handoffStartFieldsRef = useRef<AppHandoffStartFields | null>(null);
+	// The plane's initial-load-settled fact (ADR 0154): the one promise the
+	// shell's first list move and the Observation coordinator's first cycle
+	// both wait on. It stands beside the other refs from this early stage, so
+	// the observation stage that runs before the coordinator stage already
+	// holds the object the coordinator resolves later.
+	const initialLoadRef = useRef<InitialLoad | null>(null);
+	if (initialLoadRef.current === null) {
+		let settle: () => void = () => undefined;
+		initialLoadRef.current = {
+			promise: new Promise<void>((resolve) => {
+				settle = resolve;
+			}),
+			resolve: settle,
+		};
+	}
 	// The log's read holder every turn log stands on (ADR 0147): the
 	// Decision modal's log and the Live view's decision sub-mode read the
 	// same ticket's log through it, so the two surfaces hold the same
@@ -853,6 +868,7 @@ function useAppOpsRefs(prev: AppModelListStage) {
 		refireInFlightRef,
 		ticketOpsFieldsRef,
 		handoffStartFieldsRef,
+		initialLoadRef,
 		turnLogReads: turnLogReads.current,
 	};
 }
@@ -1556,6 +1572,7 @@ function observationLoopFields(props: AppProps, prev: AppKeyHandlersStage): AppO
 		coordinatorRef: prev.coordinatorRef,
 		handoffDispatchRef: prev.handoffDispatchRef,
 		consultationOperationsRef: prev.consultationOperationsRef,
+		initialLoadRef: prev.initialLoadRef,
 	};
 }
 
@@ -1588,6 +1605,7 @@ function useAppObservationFields(props: AppProps, prev: AppKeyHandlersStage) {
 			prev.coordinatorRef,
 			prev.handoffDispatchRef,
 			prev.consultationOperationsRef,
+			prev.initialLoadRef,
 		],
 	);
 	return { ...prev, observationFields };
@@ -1718,11 +1736,102 @@ function appCoordinatorSettled(
 	if (pending.current.size === 0) clearWorkingMessage("refresh");
 }
 
+/**
+ * The plane's initial-load-settled fact (ADR 0154): the one promise the
+ * shell's first list move and the Observation coordinator's first cycle
+ * wait on, and the resolver the refresh coordinator holds. The shell and
+ * the coordinator share the one object, so they wait on the same moment and
+ * neither guesses at it.
+ */
+interface InitialLoad {
+	promise: Promise<void>;
+	resolve: () => void;
+}
+
+/** The load fact the ref holds, created on the first read if the ref is still empty. */
+function initialLoadOf(ref: RefObject<InitialLoad | null>): InitialLoad {
+	const load = ref.current;
+	if (load !== null) return load;
+	let settle: () => void = () => undefined;
+	const created: InitialLoad = {
+		promise: new Promise<void>((resolve) => {
+			settle = resolve;
+		}),
+		resolve: settle,
+	};
+	ref.current = created;
+	return created;
+}
+
+/** The plane's per-settlement work (ADR 0154): the warnings of the read surface while the load stands, and the list, the consultations, and the observation loop wait on the settle, so none of them moves on a partial snapshot. */
+function applySourceSettlement(
+	outcome: FetchOutcome | undefined,
+	fields: {
+		loadStanding: { current: boolean };
+		setFaultWarningMessage: (warning: string) => void;
+		replaceTickets: () => void;
+		replaceConsultations: () => void;
+		observationTick: () => void;
+	},
+): void {
+	// The pull request source's one warning line surfaces on the Message
+	// line (ADR 0023). The warnings a successful source read carries: a
+	// security source the read skipped. The plane met them on its own, so
+	// they are Faults (ADR 0118), and the dedup on the same fact keeps the
+	// record quiet while they stand. They surface while the load stands as
+	// well: a warning is a fact of the read, not a move of the list.
+	if (outcome?.status === "success")
+		for (const warning of outcome.warnings ?? []) fields.setFaultWarningMessage(warning);
+	// While the load stands, the list, the consultations, and the
+	// observation loop all wait on the settle (ADR 0154).
+	if (fields.loadStanding.current) return;
+	fields.replaceTickets();
+	fields.replaceConsultations();
+	// A fetch may have made a ticket actionable: let the observation loop
+	// act on it now instead of on the next poll.
+	fields.observationTick();
+}
+
+/**
+ * The shell's held list move (ADR 0154): the flag that stands while the load
+ * stands, and the one list replacement the settle makes: the tickets the
+ * settled sources carry, joined with the tickets the state held, and the
+ * consultations beside them.
+ */
+function holdListUntilSettle(
+	initialLoad: InitialLoad,
+	replaceTickets: () => void,
+	replaceConsultations: () => void,
+): { current: boolean } {
+	const loadStanding = { current: true };
+	void initialLoad.promise.then(() => {
+		loadStanding.current = false;
+		replaceTickets();
+		replaceConsultations();
+	});
+	return loadStanding;
+}
+
+/**
+ * Start the coordinator per the loop policy (issue #366): held stands the
+ * one-shot boot read and no schedule, and the other policies run the
+ * plane's own schedule. Returns the stop the effect's cleanup runs.
+ */
+function startAppCoordinator(
+	coordinator: RefreshCoordinator,
+	loopPolicy: AppLoopPolicy,
+): () => void {
+	if (loopPolicy.kind === "held") coordinator.startOnce();
+	else coordinator.start();
+	return () => coordinator.stop();
+}
+
 /** The refresh coordinator: the startup's poll, the sources, and the dispatch the key handler holds in a ref (ADR 0034). */
 function useAppCoordinator(props: AppProps, prev: AppCatalogStage) {
 	const {
 		clearWorkingMessage,
 		coordinatorRef,
+		initialLoadRef,
 		liveSources,
 		manualRefreshPending,
 		observationRef,
@@ -1730,55 +1839,45 @@ function useAppCoordinator(props: AppProps, prev: AppCatalogStage) {
 		replaceTickets,
 		setFaultWarningMessage,
 	} = prev;
-	const { logger, state } = props;
-	// A ref lets the key handler use the startup coordinator without making
-	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
+		const initialLoad = initialLoadOf(initialLoadRef);
+		const loadStanding = holdListUntilSettle(initialLoad, replaceTickets, replaceConsultations);
 		const coordinator = new RefreshCoordinator(
 			liveSources,
-			state,
-			(outcome) => {
-				// The pull request source's one warning line surfaces on the
-				// Message line (ADR 0023).
-				if (outcome?.status === "success")
-					// The warnings a successful source read carries: a security
-					// source the read skipped. The plane met them on its own, so
-					// they are Faults (ADR 0118), and the dedup on the same
-					// fact keeps the record quiet while they stand.
-					for (const warning of outcome.warnings ?? []) setFaultWarningMessage(warning);
-				replaceTickets();
-				replaceConsultations();
-				// A fetch may have made a ticket actionable: let the observation
-				// loop act on it now instead of on the next poll.
-				observationRef.current?.tick();
-			},
+			props.state,
+			(outcome) =>
+				applySourceSettlement(outcome, {
+					loadStanding,
+					setFaultWarningMessage,
+					replaceTickets,
+					replaceConsultations,
+					observationTick: () => observationRef.current?.tick(),
+				}),
 			{
+				initialLoad,
 				settled: (sourceName) =>
 					appCoordinatorSettled(sourceName, manualRefreshPending, clearWorkingMessage),
-				log: logger,
+				log: props.logger,
 			},
 		);
+		const stop = startAppCoordinator(coordinator, props.loopPolicy);
 		coordinatorRef.current = coordinator;
-		// The policy names the refresh schedule the plane starts (issue #366):
-		// held stands the one-shot boot read and no schedule, and the other
-		// policies run the plane's own schedule.
-		if (props.loopPolicy.kind === "held") coordinator.startOnce();
-		else coordinator.start();
 		return () => {
-			coordinator.stop();
+			stop();
 			coordinatorRef.current = undefined;
 		};
 	}, [
-		state,
+		props.state,
 		liveSources,
 		replaceTickets,
 		replaceConsultations,
 		clearWorkingMessage,
 		setFaultWarningMessage,
-		logger,
+		props.logger,
 		props.loopPolicy,
 		observationRef,
 		coordinatorRef,
+		initialLoadRef,
 		manualRefreshPending,
 	]);
 	return { ...prev };
@@ -5861,6 +5960,7 @@ interface AppObservationFields {
 		{ state: HandoffDispatchAggregates; dispatch: HandoffDispatch } | undefined
 	>;
 	consultationOperationsRef: RefObject<ConsultationOperations | undefined>;
+	initialLoadRef: RefObject<InitialLoad | null>;
 }
 
 /** The coordinator's base options: the plane's reads and the report lines. */
@@ -5978,6 +6078,10 @@ function observationCoordinatorBase(
 		// (ADR 0144): the per-kind table's lookup, supplied here the way the
 		// reader is.
 		sessionRecord: f.sessionRecord,
+		// The plane's initial-load-settled fact (ADR 0154): the cycle holds
+		// its first cycle until the load settles, so the first probe lands on
+		// the roster the settled sources make, not on an empty one.
+		initialLoadSettled: f.initialLoadRef.current?.promise,
 		onStatus: (kind, text, topic) => {
 			// Both sections read the same observation events: an outcome is
 			// a fact for the one Message line, whichever section is expanded.

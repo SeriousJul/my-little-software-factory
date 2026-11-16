@@ -40,6 +40,20 @@ export class RefreshCoordinator {
 	private readonly clock: RefreshClock;
 	private readonly settled?: (sourceName: string) => void;
 	private readonly log?: Logger;
+	/**
+	 * The one promise that resolves when the plane's initial load settles
+	 * (ADR 0154): the first fetch of every configured source has settled,
+	 * whether its first fetch succeeded or failed. The shell waits on it to
+	 * replace the ticket list once, and the Observation coordinator waits on
+	 * it to run its first cycle, so the shell and the coordinator share the
+	 * one moment and neither guesses at it. A supplied pair makes the
+	 * coordinator resolve the shell's promise: the same object stands on both
+	 * ends of the seam.
+	 */
+	private readonly initialLoadSettledPromise: Promise<void>;
+	private initialLoadResolve: (() => void) | undefined;
+	/** The sources whose first settlement ran: the load's done set. */
+	private readonly firstFetchSettled = new Set<string>();
 
 	constructor(
 		sources: readonly TicketSource[],
@@ -49,6 +63,14 @@ export class RefreshCoordinator {
 			clock?: RefreshClock;
 			settled?: (sourceName: string) => void;
 			log?: Logger;
+			/**
+			 * The plane's own initial-load-settled fact (ADR 0154): the promise
+			 * the shell and the Observation coordinator wait on, and the
+			 * resolver this coordinator holds. The shell supplies the pair so the
+			 * one object stands on all three ends. Omitted: the coordinator owns
+			 * its own fact.
+			 */
+			initialLoad?: { promise: Promise<void>; resolve: () => void };
 		} = {},
 	) {
 		this.sources = sources;
@@ -57,6 +79,25 @@ export class RefreshCoordinator {
 		this.clock = fields.clock ?? SYSTEM_CLOCK;
 		this.settled = fields.settled;
 		this.log = fields.log;
+		if (fields.initialLoad !== undefined) {
+			this.initialLoadSettledPromise = fields.initialLoad.promise;
+			this.initialLoadResolve = fields.initialLoad.resolve;
+			if (sources.length === 0) {
+				// No configured source: the load settles the moment it stands,
+				// so the shell's promise resolves now, not on a fetch that
+				// will never run.
+				this.initialLoadResolve();
+			}
+		} else if (sources.length === 0) {
+			// No configured source: the load settles the moment it stands.
+			this.initialLoadSettledPromise = Promise.resolve();
+		} else {
+			let settle: () => void = () => undefined;
+			this.initialLoadSettledPromise = new Promise<void>((resolve) => {
+				settle = resolve;
+			});
+			this.initialLoadResolve = settle;
+		}
 	}
 
 	start(): void {
@@ -185,6 +226,7 @@ export class RefreshCoordinator {
 					const timer = this.clock.setTimeout(() => this.refresh(source), source.refreshIntervalMs);
 					this.timers.set(source.name, timer);
 				}
+				this.markInitialSettled(source.name);
 			});
 	}
 
@@ -216,14 +258,54 @@ export class RefreshCoordinator {
 		this.log.warn(`${sourceName}: refresh failed after ${durationMs} ms: ${result.reason}`);
 	}
 
+	/**
+	 * The initial load's fact (ADR 0154): the one promise the shell and the
+	 * Observation coordinator wait on, resolving when the first fetch of
+	 * every configured source settles, success or failure, or when the
+	 * coordinator stops.
+	 */
+	get initialLoadSettled(): Promise<void> {
+		return this.initialLoadSettledPromise;
+	}
+
 	isFetching(sourceName: string): boolean {
 		return this.inFlight.has(sourceName);
+	}
+
+	/**
+	 * Mark one source's first settlement against the load (ADR 0154). A
+	 * failed first fetch marks its source the way a success does: it
+	 * recorded the source's failed read and fired the callback, and the load
+	 * advances, so a source that fails its boot read settles the load and
+	 * holds neither the shell's list move nor the first probe open. The last
+	 * source to mark resolves the fact.
+	 */
+	private markInitialSettled(sourceName: string): void {
+		const resolve = this.initialLoadResolve;
+		if (resolve === undefined) return;
+		this.firstFetchSettled.add(sourceName);
+		if (this.firstFetchSettled.size < this.sources.length) return;
+		this.initialLoadResolve = undefined;
+		resolve();
+	}
+
+	/**
+	 * Settle the load on the coordinator's stop (ADR 0154): the probe the
+	 * plane held and the shell's held list move must not hold the shutdown
+	 * open, so the fact resolves whether or not the load had.
+	 */
+	private settleInitialLoad(): void {
+		const resolve = this.initialLoadResolve;
+		if (resolve === undefined) return;
+		this.initialLoadResolve = undefined;
+		resolve();
 	}
 
 	stop(): void {
 		this.stopped = true;
 		for (const timer of this.timers.values()) this.clock.clearTimeout(timer);
 		this.timers.clear();
+		this.settleInitialLoad();
 	}
 }
 
