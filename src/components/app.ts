@@ -1596,6 +1596,7 @@ function useAppBootSequence(props: AppProps, prev: AppKeyHandlersStage) {
 		props.sessionRecord,
 		props.logger,
 		props.agentHostResolution,
+		props.runner,
 		prev.liveSources,
 		prev.replaceTickets,
 		prev.replaceConsultations,

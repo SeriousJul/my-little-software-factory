@@ -532,4 +532,93 @@ describe("the boot-sequence module owns the plane's boot order and its teardown 
 		expect(world.events.filter((event) => event === "ticket-list")).toHaveLength(2);
 		expect(probesOf(world)).toBe(1);
 	});
+
+	test("a re-run of the shell's fields disposes the run, and the module re-arms the load and the first probe on the new run", async () => {
+		const world = makeWorld({ kind: "polled", intervalMs: 1_000 });
+		// Run one: the boot read, the sources' first reads, the settle, and the
+		// first probe on the settle.
+		const first = world.start();
+		await settleTurns();
+		world.sources[0].settle();
+		world.sources[1].settle();
+		await settleTurns();
+		expect(world.events.filter((event) => event === "ticket-list")).toHaveLength(2);
+		expect(probesOf(world)).toBe(1);
+
+		// The re-run: the shell disposes the run it replaces. The dispose stops
+		// the run's loops and disposes the run's hold on the list, and it stands
+		// the dispatch operations on, the way the run's own stop stands on them.
+		first.dispose();
+		await settleTurns();
+		expect(world.events.filter((event) => event === "ticket-list")).toHaveLength(2);
+
+		// The module called again on the same record re-arms the load and the
+		// first probe: the list re-stands on the new run's boot read, and the
+		// new first probe holds on the new settle, so no probe lands while the
+		// new load stands.
+		world.start();
+		await settleTurns();
+		expect(world.events.filter((event) => event === "ticket-list")).toHaveLength(3);
+		expect(probesOf(world)).toBe(1);
+		// The new run re-reads the sources on its own first reads.
+		expect(world.sources.map((source) => source.fetchCalls)).toEqual([2, 2]);
+
+		// The new run's load settles: the list moves once, and the first probe
+		// re-arms and lands on the new settle, the way the first run's did.
+		world.sources[0].settle();
+		world.sources[1].settle();
+		await settleTurns();
+		expect(world.events.filter((event) => event === "ticket-list")).toHaveLength(4);
+		expect(probesOf(world)).toBe(2);
+
+		// The re-run replaced the run's stop handle, and the dispatch operations
+		// stood on through the dispose and the re-run alike.
+		expect(world.teardown.ready).not.toBeNull();
+		expect(world.events).not.toContain("dispatch-stopped");
+		expect(world.events).not.toContain("operations-stopped");
+	});
+
+	test("a bare dispose stops the loops and holds the list, without stopping the dispatch operations", async () => {
+		const world = makeWorld({ kind: "polled", intervalMs: 1_000 });
+		const sequence = world.start();
+		await settleTurns();
+		// One source settles: the load still stands on the last source's first
+		// fetch, so the list stands and the first probe holds on the settle.
+		world.sources[0].settle();
+		await settleTurns();
+		expect(world.events.filter((event) => event === "ticket-list")).toHaveLength(1);
+		expect(probesOf(world)).toBe(0);
+
+		// The bare dispose: the unmount path the run's own stop does not run. It
+		// stops the run's loops and disposes the run's hold on the list, and it
+		// stands the dispatch operations on.
+		sequence.dispose();
+		await settleTurns();
+
+		// The source that settles after the dispose moves no list and probes no
+		// Agent: the run's hold on the list is disposed, and the held first cycle
+		// the run owed never runs on a stopped loop.
+		world.sources[1].settle();
+		await settleTurns();
+		expect(world.events.filter((event) => event === "ticket-list")).toHaveLength(1);
+		expect(probesOf(world)).toBe(0);
+		// The dispatch operations stand on: the bare dispose stops the loops, not
+		// the run's operations.
+		expect(world.events).not.toContain("dispatch-stopped");
+		expect(world.events).not.toContain("operations-stopped");
+
+		// Nothing runs behind the dispose: advancing the clock arms no new cycle
+		// and no new fetch, so the timer history the clock holds stands still.
+		const timersAtDispose = world.clock.clockTimers.length;
+		world.clock.advance(100_000);
+		await settleTurns();
+		expect(probesOf(world)).toBe(0);
+		expect(world.sources.map((source) => source.fetchCalls)).toEqual([1, 1]);
+		expect(world.clock.clockTimers).toHaveLength(timersAtDispose);
+
+		// A second dispose changes nothing.
+		const afterFirst = [...world.events];
+		sequence.dispose();
+		expect(world.events).toEqual(afterFirst);
+	});
 });
