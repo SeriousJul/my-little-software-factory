@@ -1286,6 +1286,19 @@ export class ObservationCoordinator {
 	): Promise<boolean> {
 		let changed = false;
 		const inFlight = this.state.ticketWorkCycle.ticketsByState(["handed-off", "running"]);
+		// The side-by-side settlement (ADR 0153): the walk starts the
+		// settlement chain of every ticket that settles in the cycle - the
+		// read of the turn's end, the settle, and the fire the settle takes
+		// on a completed turn - and joins the chains it started, instead of
+		// closing one turn out before it reads the next. The walk returns
+		// when the last chain settles, so the cycle's later steps run on
+		// the state every settlement has written, in the order they run.
+		// A chain that settles no ticket - a working report, a turn that
+		// ends no turn - costs the read it takes and nothing more. The
+		// state writes the chains commit take the file's one write
+		// transaction in turn, and none of them spans the refresh a fire
+		// awaits, the way the sequential walk's writes did.
+		const chains: Array<Promise<boolean>> = [];
 		for (const ticket of inFlight) {
 			if (ticket.paneId === null) continue;
 			// The one missing-Agent rule: the id of a closed pane is handed out
@@ -1297,15 +1310,18 @@ export class ObservationCoordinator {
 				ticket.paneId,
 				inFlightNames.get(ticket.ticketIdentity) ?? "",
 			);
-			if (own === null) {
-				// The missing path is the auto mode's: manual mode leaves the
-				// missing ticket for the operator's panel.
-				if (autoOn) {
-					changed = (await this.handleMissing(ticket)) || changed;
-				}
-			} else {
-				changed = (await this.settlePhase(ticket, own)) || changed;
-			}
+			// The missing path is the auto mode's: manual mode leaves the
+			// missing ticket for the operator's panel.
+			chains.push(
+				own === null
+					? autoOn
+						? this.handleMissing(ticket)
+						: Promise.resolve(false)
+					: this.settlePhase(ticket, own),
+			);
+		}
+		for (const chain of chains) {
+			changed = (await chain) || changed;
 			if (this.stopped) return changed;
 		}
 		return changed;
@@ -2336,6 +2352,11 @@ export class ObservationCoordinator {
 		if (this.clock.now() - Date.parse(ticket.startedAt) < this.startupGraceMs) return false;
 		const handoffCount = this.state.handoff.handoffCount(ticket.ticketIdentity);
 		if (handoffLimitReached(handoffCount, config.maxHandoffsPerTicket)) {
+			// The stop that lands over the walk the chain runs on: the
+			// abandon write lands behind the stop's state close, so the
+			// chain writes nothing after the stop, the way the settle chain's
+			// fire stands (ADR 0153).
+			if (this.stopped) return true;
 			const applied = this.state.ticketWorkCycle.applyCompletionDecision({
 				ticketIdentity: ticket.ticketIdentity,
 				handoffId: ticket.handoffAttemptId,

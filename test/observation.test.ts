@@ -18,10 +18,15 @@ import { describe, expect, test } from "bun:test";
 
 import type { AgentHost, AgentHostResolution } from "../src/agent-host.ts";
 import type { FactoryConfig } from "../src/config.ts";
+import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { MergedAgentReader } from "../src/observation.ts";
+import { RefreshCoordinator } from "../src/refresh.ts";
 import type { FactoryState } from "../src/state.ts";
+import { fireTransition, refireRecordedSkips } from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { fetchedTicket, fetchSuccess } from "./fact-fixtures.ts";
 import { agentListJson, FakeRunner, type ListedAgent } from "./fake-runner.ts";
+import { FakeSource } from "./fake-source.ts";
 import { type Rig, rig, VirtualClock } from "./observation-fixture.ts";
 
 const identity = "github:github.com:I_5";
@@ -123,11 +128,135 @@ const inFlight = (state: FactoryState) =>
  * One in-flight ticket on the herdr host: the handoff settles its seat on
  * the ticket's pane.
  */
-function handOut(state: FactoryState, id: string): void {
+/** The pull request ticket identities the fire's refresh tests stand on. */
+const pullIdentity = "github:github.com:P_12";
+const secondPullIdentity = "github:github.com:P_22";
+
+/**
+ * The sources the fire's refresh stands on: the ticket's own membership
+ * sources, narrowed to the pull request kind (ADR 0153).
+ */
+const fireSources = [
+	{ name: "issues", kind: "github-issues" as const },
+	{ name: "pulls", kind: "github-pull-requests" as const },
+];
+const pullSourceNames = new Set(
+	fireSources
+		.filter((source) => source.kind === "github-pull-requests")
+		.map((source) => source.name),
+);
+
+/**
+ * The config the fire's walk reasons over: the implement turn fires to the
+ * State the operator decides, so the position the fire lands holds the
+ * ticket without starting a new handoff.
+ */
+const fireConfig: FactoryConfig = {
+	...config,
+	workflowStates: [
+		{ name: "ready-for-review", taskType: "park", match: { labelsAny: ["ready-for-review"] } },
+	],
+	taskTypes: {
+		...config.taskTypes,
+		implement: {
+			template: "implement",
+			thinking: "high",
+			transition: { ticketFacts: ["ready-for-review"], pullRequestFacts: [] },
+		},
+	},
+};
+
+/** The fetched pull request a fire refreshes over. */
+function pulledPull(identity: string, number: string): FetchedTicket {
+	return fetchedTicket({
+		identity,
+		sourceKind: "github-pull-request",
+		externalKey: `#${number}`,
+		url: `https://github.com/acme/factory/pull/${number}`,
+		labels: ["queued"],
+	});
+}
+
+interface FireRig {
+	fake: Rig;
+	pulls: FakeSource;
+	/** Stop the fire's refresh coordinator, so a stop over a fetch closes it. */
+	stopRefresh: () => void;
+}
+
+/**
+ * A rig whose fires refresh the way the plane binds the refresh (ADR 0153):
+ * the ticket's own pull request membership sources, through the refresh
+ * coordinator's one fetch per source. The source's fetches hold until the
+ * test settles them, so a test reads the fetch the fire asked for.
+ */
+function fireRig(options: { pullTickets: FetchedTicket[]; issueTicket?: boolean }): FireRig {
+	const box: { fake?: Rig } = {};
+	const pulls = new FakeSource("pulls", "github-pull-requests", fetchSuccess([]));
+	let refreshCoordinator: RefreshCoordinator | undefined;
+	const scopedRefresh = (ticketIdentity: string) => async () => {
+		const fake = box.fake!;
+		refreshCoordinator ??= new RefreshCoordinator([pulls], fake.state, () => undefined, {
+			clock: fake.clock,
+		});
+		for (const name of fake.state.sourceFact.membershipSourceNames(ticketIdentity))
+			if (pullSourceNames.has(name)) await refreshCoordinator.refreshAndWait(name);
+	};
+	const fake = rig({
+		config: fireConfig,
+		pollIntervalMs: 5000,
+		startupGraceMs: 1000,
+		// The settled turn's log: the settle the wake's cycle takes can read a
+		// turn end, so the fire settles the turn to its standing.
+		turnLogs: async () => ({
+			kind: "ended" as const,
+			turnEnd: {
+				log: [{ kind: "text" as const, text: "settled the turn" }],
+				cause: "completed" as const,
+				detail: "",
+			},
+		}),
+		fireCompleted: (ticket) =>
+			fireTransition({
+				config: box.fake!.config,
+				state: box.fake!.state,
+				runner: box.fake!.runner,
+				ticketIdentity: ticket.ticketIdentity,
+				taskType: ticket.taskType,
+				refresh: scopedRefresh(ticket.ticketIdentity),
+			}),
+		refireRecordedSkips: () =>
+			refireRecordedSkips({
+				config: box.fake!.config,
+				state: box.fake!.state,
+				runner: box.fake!.runner,
+				refresh: (ticketIdentity) => scopedRefresh(ticketIdentity)(),
+			}),
+	});
+	box.fake = fake;
+	// The sources the fire's refresh asks: the rig's issue source, plus the
+	// pull request source the membership lists.
+	fake.state.sourceFact.initializeSources(fireSources);
+	fake.state.sourceFact.applyFetch(
+		fireSources[0],
+		fetchSuccess(options.issueTicket ? [fetchedTicket({ identity, labels: ["queued"] })] : []),
+	);
+	fake.state.sourceFact.applyFetch(fireSources[1], fetchSuccess(options.pullTickets));
+	return { fake, pulls, stopRefresh: () => refreshCoordinator?.stop() };
+}
+
+/** Pin the agent's settle-state wait, and hold it on the clock for the named milliseconds. */
+function pinWait(fake: Rig, name: string, holdMs: number): void {
+	const args = ["agent", "wait", name, "--until", "idle", "--until", "done", "--until", "blocked"];
+	fake.runner.set("herdr", args, { code: 0, stdout: "" });
+	fake.runner.setDelay("herdr", args, holdMs);
+}
+
+function handOut(state: FactoryState, id: string, paneId = "pane-implement"): void {
 	const claim = state.handoff.claimHandoff(id, handoffChoice, "open");
 	if (!claim.ok) throw new Error(claim.reason);
 	state.handoff.settleHandoff(claim.claim.attemptId, true, undefined, {
-		paneId: "pane-implement",
+		paneId,
 		tabId: "tab-1",
 		workspaceId: "ws-1",
 	});
@@ -931,5 +1060,216 @@ describe("the Missing agent's flow (ADR 0152)", () => {
 		expect(restarts()).toHaveLength(1);
 		fake.coordinator.stop();
 		fake.close();
+	});
+});
+
+describe("the settling tickets' fires (issue #430, ADR 0153)", () => {
+	test("the settling tickets' fires start side by side over the held refresh", async () => {
+		const { fake, pulls, stopRefresh } = fireRig({
+			pullTickets: [pulledPull(pullIdentity, "12")],
+			issueTicket: true,
+		});
+		const issueName = fake.state.ticketWorkCycle.agentNameForTicket(identity);
+		const pullName = fake.state.ticketWorkCycle.agentNameForTicket(pullIdentity);
+		const working = [
+			agent("pane-implement", { agent: issueName, sessionId: `${issueName}.jsonl` }),
+			agent("pane-pull", { agent: pullName, sessionId: `${pullName}.jsonl` }),
+		];
+		const idle = [
+			agent("pane-implement", {
+				agent: issueName,
+				status: "idle",
+				sessionId: `${issueName}.jsonl`,
+			}),
+			agent("pane-pull", {
+				agent: pullName,
+				status: "idle",
+				sessionId: `${pullName}.jsonl`,
+			}),
+		];
+		fake.runner.set("hc", ["ls", "--json", "--all"], {
+			stdout: coreRosterJson([
+				{ address: issueName, name: issueName, state: "live" },
+				{ address: pullName, name: pullName, state: "live" },
+			]),
+		});
+		fake.setAgents(working);
+		pinWait(fake, issueName, 3000);
+		pinWait(fake, pullName, 3000);
+		// The issue ticket's fire write holds on the clock: the walk that settles
+		// ticket by ticket holds the ticket's chain until the write answers, so
+		// the pull request ticket's refresh cannot start before it. The side by
+		// side walk starts it beside the write.
+		const issueWrite = [
+			"issue",
+			"edit",
+			"#5",
+			"--repo",
+			"github.com/acme/factory",
+			"--add-label",
+			"ready-for-review",
+		];
+		fake.runner.set("gh", issueWrite, { code: 0, stdout: "" });
+		fake.runner.setDelay("gh", issueWrite, 2000);
+		fake.runner.set(
+			"gh",
+			["pr", "edit", "#12", "--repo", "github.com/acme/factory", "--add-label", "ready-for-review"],
+			{ code: 0, stdout: "" },
+		);
+		handOut(fake.state, identity);
+		handOut(fake.state, pullIdentity, "pane-pull");
+		fake.coordinator.start();
+		await fake.advance(1000);
+		fake.setAgents(idle);
+		await fake.advance(3000);
+		// The wait answered: the wake's cycle settles both tickets in one walk.
+		// The pull request ticket's own refresh is in flight beside the issue
+		// ticket's fire, whose held write has not answered yet.
+		expect(pulls.calls).toBe(1);
+		expect(fake.runner.commands().some((c) => c.startsWith("gh issue edit #5"))).toBe(true);
+		expect(fake.runner.settledCommands().some((c) => c.startsWith("gh issue edit #5"))).toBe(false);
+		expect(fake.runner.commands().some((c) => c.startsWith("gh pr edit #12"))).toBe(false);
+		// The write answers: the issue ticket's fire settles beside the pull
+		// request ticket's still held refresh.
+		await fake.advance(2000);
+		pulls.settle(fetchSuccess([pulledPull(pullIdentity, "12")]));
+		await tick();
+		await tick();
+		// Both fires settled, both tickets stand on the operator's position, and
+		// the refresh paid for the source's one fetch.
+		expect(fake.runner.settledCommands().some((c) => c.startsWith("gh pr edit #12"))).toBe(true);
+		expect(pulls.calls).toBe(1);
+		expect(fake.state.ticketWorkCycle.ticketsByState(["handed-off", "running"])).toHaveLength(0);
+		stopRefresh();
+		fake.coordinator.stop();
+		fake.close();
+	});
+
+	test("two settling tickets sharing a pull request source pay for one fetch", async () => {
+		const { fake, pulls, stopRefresh } = fireRig({
+			pullTickets: [pulledPull(pullIdentity, "12"), pulledPull(secondPullIdentity, "22")],
+		});
+		const first = fake.state.ticketWorkCycle.agentNameForTicket(pullIdentity);
+		const second = fake.state.ticketWorkCycle.agentNameForTicket(secondPullIdentity);
+		const working = [
+			agent("pane-pull", { agent: first, sessionId: `${first}.jsonl` }),
+			agent("pane-pull2", { agent: second, sessionId: `${second}.jsonl` }),
+		];
+		const idle = [
+			agent("pane-pull", { agent: first, status: "idle", sessionId: `${first}.jsonl` }),
+			agent("pane-pull2", { agent: second, status: "idle", sessionId: `${second}.jsonl` }),
+		];
+		fake.runner.set("hc", ["ls", "--json", "--all"], {
+			stdout: coreRosterJson([
+				{ address: first, name: first, state: "live" },
+				{ address: second, name: second, state: "live" },
+			]),
+		});
+		fake.setAgents(working);
+		pinWait(fake, first, 3000);
+		pinWait(fake, second, 3000);
+		for (const number of ["12", "22"]) {
+			fake.runner.set(
+				"gh",
+				[
+					"pr",
+					"edit",
+					`#${number}`,
+					"--repo",
+					"github.com/acme/factory",
+					"--add-label",
+					"ready-for-review",
+				],
+				{ code: 0, stdout: "" },
+			);
+		}
+		handOut(fake.state, pullIdentity, "pane-pull");
+		handOut(fake.state, secondPullIdentity, "pane-pull2");
+		fake.coordinator.start();
+		await fake.advance(1000);
+		fake.setAgents(idle);
+		await fake.advance(3000);
+		// Both tickets settle in the same walk: the side by side walk joins both
+		// fires to the one in flight fetch the shared source holds. The refresh
+		// holds, so neither write has run.
+		expect(pulls.calls).toBe(1);
+		expect(fake.runner.commands().some((c) => c.startsWith("gh pr edit"))).toBe(false);
+		// The fetch answers: the refresh coordinator's one fetch per source
+		// settles both fires' refreshes in the same fetch.
+		pulls.settle(
+			fetchSuccess([pulledPull(pullIdentity, "12"), pulledPull(secondPullIdentity, "22")]),
+		);
+		await tick();
+		await tick();
+		const settled = fake.runner.settledCommands();
+		expect(settled.some((c) => c.startsWith("gh pr edit #12"))).toBe(true);
+		expect(settled.some((c) => c.startsWith("gh pr edit #22"))).toBe(true);
+		expect(pulls.calls).toBe(1);
+		expect(fake.state.ticketWorkCycle.ticketsByState(["handed-off", "running"])).toHaveLength(0);
+		stopRefresh();
+		fake.coordinator.stop();
+		fake.close();
+	});
+
+	test("a quiet cycle takes no fire's refresh", async () => {
+		const { fake, pulls, stopRefresh } = fireRig({ pullTickets: [], issueTicket: true });
+		const name = fake.state.ticketWorkCycle.agentNameForTicket(identity);
+		fake.runner.set("hc", ["ls", "--json", "--all"], {
+			stdout: coreRosterJson([{ address: name, name, state: "live" }]),
+		});
+		fake.setAgents([agent("pane-implement", { agent: name })]);
+		pinWait(fake, name, 60_000);
+		handOut(fake.state, identity);
+		fake.coordinator.start();
+		// The agent's turn stays open across the grid's landings: the cycles
+		// meet the working agent, take no settle, and no fire runs.
+		await fake.advance(5000);
+		await fake.advance(5000);
+		expect(pulls.calls).toBe(0);
+		stopRefresh();
+		fake.coordinator.stop();
+		fake.close();
+	});
+
+	test("a stop over a settling fire closes the state behind it and writes nothing after", async () => {
+		const { fake, pulls, stopRefresh } = fireRig({
+			pullTickets: [pulledPull(pullIdentity, "12")],
+		});
+		const name = fake.state.ticketWorkCycle.agentNameForTicket(pullIdentity);
+		fake.runner.set("hc", ["ls", "--json", "--all"], {
+			stdout: coreRosterJson([{ address: name, name, state: "live" }]),
+		});
+		fake.setAgents([agent("pane-pull", { agent: name, sessionId: `${name}.jsonl` })]);
+		pinWait(fake, name, 3000);
+		fake.runner.set(
+			"gh",
+			["pr", "edit", "#12", "--repo", "github.com/acme/factory", "--add-label", "ready-for-review"],
+			{ code: 0, stdout: "" },
+		);
+		handOut(fake.state, pullIdentity, "pane-pull");
+		fake.coordinator.start();
+		await fake.advance(1000);
+		fake.setAgents([
+			agent("pane-pull", { agent: name, status: "idle", sessionId: `${name}.jsonl` }),
+		]);
+		await fake.advance(3000);
+		// The wake settled the turn: the fire's refresh is in flight, held by
+		// the source, and the write has not run.
+		expect(pulls.calls).toBe(1);
+		expect(fake.runner.commands().some((c) => c.startsWith("gh pr edit #12"))).toBe(false);
+		// The stop lands over the settling fire: it closes the state behind the
+		// in flight fetch, and the fire reads nothing after.
+		const afterStop = fake.runner.commands().length;
+		fake.coordinator.stop();
+		stopRefresh();
+		fake.close();
+		// The held fetch answers into the stop: the stopped refresh applies
+		// nothing to the closed state, and the fire's read of it is the closed
+		// database the stop closed.
+		pulls.settle(fetchSuccess([pulledPull(pullIdentity, "12")]));
+		await tick();
+		await tick();
+		expect(fake.runner.commands()).toHaveLength(afterStop);
+		expect(fake.statuses.some((s) => s.text.startsWith("observation cycle failed"))).toBe(false);
 	});
 });

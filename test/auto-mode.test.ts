@@ -5219,16 +5219,11 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 					tickets: [pullFetched()],
 				});
 				await waitFor(setup, { shows: "Persist source facts in state" });
-				// The re-fire's fire re-reads the pull request source before it
-				// writes (ADR 0076): the read is its own fetch, and the fetch
-				// the test settles is that one. The label has not landed in the
-				// projection, so the write is the plane's own.
-				await frameUntil(setup, "the re-fire's source read", () => pull.calls === 2);
-				pull.settle({
-					status: "success",
-					fetchedAt: "2026-08-31T10:03:00Z",
-					tickets: [pullFetched()],
-				});
+				// The re-fired fire refreshes none (ADR 0153): the skip's ticket
+				// is the issue, and it lists no pull request source, so the
+				// fire answers from the projection the refresh just landed.
+				// The label has not landed in the projection, so the write is
+				// the plane's own.
 				// The rule routes the position's task on the pull request. The
 				// route only runs off the re-fired trace, so a frame that shows
 				// the route proves the re-fire ran and recorded first.
@@ -5252,6 +5247,11 @@ describe("the re-fire of a recorded skip (ADR 0042)", () => {
 						),
 					"the re-fire's label write",
 				);
+				// The re-fired fire answered from the projection: the skip's
+				// ticket lists no pull request source, so the fire's scoped
+				// refresh started no fetch of its own (ADR 0153) - the one pull
+				// fetch the world ran is the boot's.
+				expect(pull.calls).toBe(1);
 				// The frame the route painted can stand ahead of the start it
 				// runs, the way the re-fire's frame stands ahead of its label
 				// write: the prompt the start records is waited for, not read

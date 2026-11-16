@@ -266,6 +266,12 @@ The ticket work cycle aggregate's read for one ticket identity: the ticket's own
 The read answers from targeted reads on the one identity, in a constant number of statements that does not grow with the record's size, and it answers the same row value the full projection makes for the identity, before the list rule withholds it (ADR 0151). The per-ticket name, the claim, the cancellation, the merge, and the fire read it. The operator's ticket list keeps the full projection, because its rule is cross-ticket (ADR 0042).
 _Avoid_: ticket lookup, partial projection, ticket fetch
 
+**The fire's refresh scope**:
+The pull request sources the settled turn's fire refreshes before it reads the projection and writes the position: the ticket's own pull request sources.
+The scope is read at the moment the refresh runs from the same source membership fact the cycle end's re-read asks, narrowed to the pull request sources: a ticket that lists a pull request source refreshes those sources and never fewer, and a ticket whose sources list no pull request source refreshes none and stands on the projection the scheduled refresh has landed.
+Every fire the plane runs carries the scope: the settle-time fire carries the ticket the turn settled on, the operator's manual re-fire carries the ticket the operator named, and the re-fire sweep's per-skip fire carries the ticket the skip records, so a sweep over several skips refreshes the union of the skips' own sources. The plane action's fire runs no refresh (ADR 0153).
+_Avoid_: refresh sweep, full refresh, refresh all sources
+
 **Ticket's row**:
 The ticket value the full projection makes for one identity: the title, the state, the memberships, the repository, the handoff, and the row's counts and facts.
 The row stands before the list rule withholds a covered ticket, and a ticket the sources stopped listing answers as no row. The scoped ticket read answers the same value from the identity's own rows, so a scoped read and a projection row never name the ticket apart (ADR 0151).
@@ -374,6 +380,12 @@ _Avoid_: terminal handoff, attach mode
 The poll the control plane runs over its own in-flight work: it reads the Agents herdr lists, settles the turns the Agent's session record shows ended, fires each completed turn's Transition, decides each settled turn, runs the Work queue's Pickup, and makes the one automatic Top-up add.
 It runs whether Auto-handoff mode stands or not: the mode decides what the cycle may start, never whether it runs. Its own brakes - the Dispatch pause, the Startup grace, the Attempt hold, the Failed-start park - are derived on every cycle and never stored.
 _Avoid_: observation loop, agent poll, watcher, scheduler
+
+**The side-by-side settlement**:
+The way the Observation cycle's in-flight walk closes the turns that settle in one cycle: it starts the settlement chain of every ticket that settles - the read of the turn's end, the settle, and the fire the settle takes on a completed turn - without awaiting one chain before it starts the next, and it joins the chains.
+The walk returns when the last chain settles, so the cycle's later steps run on the state every settlement has written, in the order they run, and a slow refresh of one ticket holds no other ticket's fire.
+Each state write a settlement makes opens and commits its own write transaction under the store's one-transaction rule, so the side-by-side settlements commit the same facts the sequential walk commits (ADR 0153).
+_Avoid_: parallel settlement, concurrent closeout, sequential settlement
 
 **Blocked**:
 The observation that an Agent shows an approval or question UI.

@@ -1292,12 +1292,15 @@ export interface RefireRecordedSkipsRequest {
 	state: WorkflowAggregates;
 	runner: CommandRunner;
 	/**
-	 * The forced refresh of the pull request sources; omitted in tests. The
-	 * fire the sweep runs is the settle-time fire's kind: it refreshes before
-	 * it reads, and the publish it runs lands the pull request the refresh
-	 * then lists.
+	 * The forced refresh of the pull request sources the ticket's own
+	 * membership lists (ADR 0153); omitted in tests. The fire the sweep runs
+	 * is the settle-time fire's kind: it refreshes the ticket's own pull
+	 * request sources before it reads, and the publish it runs lands the
+	 * pull request the refresh then lists. A sweep over several skips
+	 * refreshes the union of the skips' own sources, not every pull request
+	 * source per skip.
 	 */
-	refresh?: () => Promise<void>;
+	refresh?: (ticketIdentity: string) => Promise<void>;
 }
 
 /**
@@ -1333,7 +1336,8 @@ export interface RefiredSkip {
  *
  * The sweep reads the projection the loop's refresh just landed, so it takes
  * no refresh of its own: the projection it walks is fresh. The fire it runs
- * carries the refresh the caller gives it, the way the settle-time fire does
+ * carries the refresh the caller gives it, scoped per skip to the ticket the
+ * skip records (ADR 0153), the way the settle-time fire does
  * (ADR 0076): the publish the fire runs makes the pull request listable, and
  * the refresh the fire's position waits on lists it, so the position stands
  * on the identity the source gives it.
@@ -1382,13 +1386,17 @@ async function refireTicketSkip(
 	if (!request.state.sourceFact.stillListed(ticket.identity)) return null;
 	const stands = await refireTargetStands(request, tickets, ticket, completion.taskType);
 	if (!stands) return null;
+	const refresh = request.refresh;
 	const outcome = await fireTransition({
 		config: request.config,
 		state: request.state,
 		runner: request.runner,
 		ticketIdentity: ticket.identity,
 		taskType: completion.taskType,
-		refresh: request.refresh,
+		// The per-skip fire carries the scope of the ticket the skip records
+		// (ADR 0153): it refreshes the ticket's own pull request sources, the
+		// sweep over several skips the union of the skips' own sources.
+		...(refresh === undefined ? {} : { refresh: () => refresh(ticket.identity) }),
 	});
 	if (outcome === null) return null;
 	const recorded: TransitionOutcome = { ...outcome, refired: true };

@@ -1021,11 +1021,14 @@ function useAppHandoffCallbacks(prev: AppMainFactsStage) {
 		},
 		[ticketOpsFieldsRef],
 	);
-	const refreshPullRequestSources = useCallback(() => {
-		const f = ticketOpsFieldsRef.current;
-		if (f !== null) return appRefreshPullRequestSources(f);
-		return Promise.resolve();
-	}, [ticketOpsFieldsRef]);
+	const refreshPullRequestSources = useCallback(
+		(identity: string) => {
+			const f = ticketOpsFieldsRef.current;
+			if (f !== null) return appRefreshPullRequestSources(f, identity);
+			return Promise.resolve();
+		},
+		[ticketOpsFieldsRef],
+	);
 	return {
 		...prev,
 		startHandoff,
@@ -5853,7 +5856,7 @@ interface AppObservationFields {
 	setStatus: (next: StatusMessage | null) => void;
 	refreshTicketSources: (identity: string) => void;
 	closeCycleEndDraft: (identity: string) => void;
-	refreshPullRequestSources: () => Promise<void>;
+	refreshPullRequestSources: (identity: string) => Promise<void>;
 	logger: Logger;
 	observationRef: RefObject<ObservationCoordinator | undefined>;
 	coordinatorRef: RefObject<RefreshCoordinator | undefined>;
@@ -6000,10 +6003,14 @@ function observationCoordinatorFlows(
 	state: AppAggregates,
 ): Pick<AppObservationOptions, "fireCompleted" | "refireRecordedSkips"> {
 	return {
-		// The transition fire of a completed settle (ADR 0027): pull the
-		// pull request sources fresh - the agent's new pull request must
-		// be in the list before the machine can find it - and fire the
-		// task type's transition through the command runner.
+		// The transition fire of a completed settle (ADR 0027): refresh the
+		// ticket's own pull request sources - the agent's new pull request
+		// must be in the list before the machine can find it - and fire the
+		// task type's transition through the command runner. The refresh is
+		// scoped to the ticket the turn settled on (ADR 0153): the sources
+		// the ticket's source membership lists, narrowed to the pull request
+		// kind, read from the same membership fact the cycle end's re-read
+		// asks, and no others.
 		fireCompleted: async (ticket) => {
 			return await fireTransition({
 				config: f.configRef.current,
@@ -6011,7 +6018,7 @@ function observationCoordinatorFlows(
 				runner: f.commandRunner,
 				ticketIdentity: ticket.ticketIdentity,
 				taskType: ticket.taskType,
-				refresh: f.refreshPullRequestSources,
+				refresh: () => f.refreshPullRequestSources(ticket.ticketIdentity),
 			});
 		},
 		// The re-fire of the recorded skips (ADR 0042): a refresh that found
@@ -6021,13 +6028,16 @@ function observationCoordinatorFlows(
 		// own, but the fire it runs carries the settle-time fire's refresh
 		// (ADR 0076), so the publish it runs lands the pull request the
 		// fire's position resolves on, and the fire writes through the
-		// command runner, the way the settle-time fire does.
+		// command runner, the way the settle-time fire does. The per-skip
+		// fire carries the scope of the ticket the skip records (ADR 0153):
+		// a sweep over several skips refreshes the union of the skips' own
+		// sources, not every pull request source per skip.
 		refireRecordedSkips: () =>
 			refireRecordedSkips({
 				config: f.configRef.current,
 				state,
 				runner: f.commandRunner,
-				refresh: f.refreshPullRequestSources,
+				refresh: (ticketIdentity) => f.refreshPullRequestSources(ticketIdentity),
 			}),
 	};
 }
@@ -6874,14 +6884,33 @@ function appRunDecisionAction(f: AppTicketOpsFields, ticket: Ticket, key: string
 	appRunRouteHandoff(f, ticket, ticket.lastCompletion?.transition ?? null, choice);
 }
 
-// The forced refresh of the pull request sources, the one seam the fires
-// read the projection through (ADR 0027, ADR 0076): the settle-time fire,
-// the manual re-fire, and the recorded skip's sweep all pull the pull
-// request sources the way this answers it.
-async function appRefreshPullRequestSources(f: AppTicketOpsFields): Promise<void> {
-	for (const source of f.configRef.current.sources) {
-		if (source.kind === "github-pull-requests")
-			await f.coordinatorRef.current?.refreshAndWait(source.name);
+/**
+ * The forced refresh the fires take, scoped to the ticket (ADR 0027,
+ * ADR 0076, ADR 0153): the settle-time fire, the manual re-fire, and the
+ * recorded skip's sweep all pull the pull request sources the way this
+ * answers it. The refresh asks the ticket's own pull request sources -
+ * the sources the ticket's source membership lists, narrowed to the pull
+ * request kind, read from the same membership fact the cycle end's re-read
+ * asks, at the moment the refresh runs - and no others. A ticket that
+ * lists a pull request source refreshes exactly those, through the
+ * refresh coordinator, awaiting the refresh of each; a ticket that lists
+ * none refreshes none, and the fire stands on the projection the
+ * scheduled refresh has landed, the answer the fire already gives when
+ * the config lists no pull request source.
+ */
+async function appRefreshPullRequestSources(
+	f: AppTicketOpsFields,
+	identity: string,
+): Promise<void> {
+	const coordinator = f.coordinatorRef.current;
+	if (coordinator === undefined) return;
+	const pullRequestNames = new Set(
+		f.configRef.current.sources
+			.filter((source) => source.kind === "github-pull-requests")
+			.map((source) => source.name),
+	);
+	for (const sourceName of f.state.sourceFact.membershipSourceNames(identity)) {
+		if (pullRequestNames.has(sourceName)) await coordinator.refreshAndWait(sourceName);
 	}
 }
 
@@ -6898,7 +6927,11 @@ function appRefireFireOptions(
 		runner: f.commandRunner,
 		ticketIdentity: ticket.identity,
 		taskType: completion.taskType,
-		refresh: () => appRefreshPullRequestSources(f),
+		// The manual re-fire carries the scope of the ticket the operator
+		// named on the Decision modal's re-fire row (ADR 0153): it answers
+		// from the sources as they stand now, the way the settle-time fire
+		// does.
+		refresh: () => appRefreshPullRequestSources(f, ticket.identity),
 	};
 }
 
